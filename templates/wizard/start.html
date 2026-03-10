@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Assessment starten{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="v19-glass-card">
+      <div>
+        <h1>Assessment starten</h1>
+        <p class="text-muted">Wähle den fachlich richtigen Modus. Sektor und Länder steuern Betroffenheit, Schwerpunktdomänen, Maßnahmen, Roadmap und regulatorische Hinweise.</p>
+        <form method="post">
+          {% csrf_token %}
+          {{ form.as_p }}
+          <button class="btn btn-primary">Assessment starten</button>
+        </form>
+      </div>
+    </div>
+    <div class="v19-glass-card mt-4"><div>
+      <h3>Assessment-Modi</h3>
+      <div class="row g-3">
+        {% for mode in mode_options %}
+        <div class="col-md-4"><div class="card h-100 border-0 shadow-sm"><div class="card-body">
+          <h5>{{ mode.title }}</h5>
+          <p class="small text-muted">{{ mode.summary }}</p>
+          <ul class="small mb-0">{% for step in mode.steps %}<li>{{ step }}</li>{% endfor %}</ul>
+        </div></div></div>
+        {% endfor %}
+      </div>
+    </div></div>
+  </div>
+  <div class="col-lg-4">
+    {% if sector_context %}
+    <div class="v19-glass-card mb-4"><div>
+      <h4>Aktueller Unternehmenskontext</h4>
+      <p><strong>{{ tenant.name }}</strong></p>
+      <p class="mb-1"><strong>Sektor:</strong> {{ sector_context.label }}</p>
+      <p class="mb-1"><strong>Länder:</strong> {{ country_context.display }}</p>
+      <p class="small text-muted mb-0">{{ sector_context.downstream_impact }}</p>
+    </div></div>
+    {% endif %}
+    {% if product_matrix %}
+    <div class="v19-glass-card"><div>
+      <h4>Cyber Security Management System</h4>
+      <p class="small text-muted">Zusätzliche Produkt-/Secure-Development-Schicht für Softwareentwicklungsunternehmen.</p>
+      <ul class="mb-3">
+        <li>CRA für Produkte mit digitalen Elementen</li>
+        <li>AI Act für AI-Systeme/Funktionen</li>
+        <li>IEC 62443 für OT-/IACS-/Industriekontexte</li>
+        <li>ISO/SAE 21434 für Automotive-/Fahrzeugkontexte</li>
+      </ul>
+      <p class="mb-0"><strong>Status:</strong> {{ product_matrix.summary }}</p>
+    </div></div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

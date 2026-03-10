@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Prozesse{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1 style="font-weight:800; letter-spacing:-.02em;">Prozessregister</h1>
+    <p style="color:#64748b;" class="mb-0">Erfasste Geschaeftsprozesse mit Status und Verantwortlichkeiten.</p>
+  </div>
+  <a class="btn btn-primary btn-sm" href="{% url 'processes:create' %}" style="border-radius:12px;">Neuer Prozess</a>
+</div>
+<div class="v19-glass-card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0" style="font-size:.88rem;">
+      <thead><tr><th>Name</th><th>Status</th><th>Owner</th><th>Dokumentiert</th><th>Umgesetzt</th><th>Evidenz</th><th></th></tr></thead>
+      <tbody>
+      {% for process in processes %}
+        <tr>
+          <td><a href="{% url 'processes:detail' process.pk %}" style="font-weight:600;">{{ process.name }}</a></td>
+          <td><span class="v19-meta-pill">{{ process.get_status_display }}</span></td>
+          <td>{{ process.owner|default:"–" }}</td>
+          <td>{% if process.documented %}✓{% else %}–{% endif %}</td>
+          <td>{% if process.implemented %}✓{% else %}–{% endif %}</td>
+          <td>{% if process.evidenced %}✓{% else %}–{% endif %}</td>
+          <td><a href="{% url 'processes:detail' process.pk %}" class="btn btn-sm btn-outline-secondary" style="border-radius:8px; font-size:.75rem;">Details</a></td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="7" style="color:#94a3b8;">Noch keine Prozesse erfasst.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

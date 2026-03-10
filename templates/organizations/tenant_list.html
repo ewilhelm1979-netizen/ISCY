@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Organisationen{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1 style="font-weight:800; letter-spacing:-.02em;">Organisationen</h1>
+    <p style="color:#64748b;" class="mb-0">Mandanten, Gesellschaften und Standorte.</p>
+  </div>
+  <a class="btn btn-primary btn-sm" href="{% url 'organizations:create' %}" style="border-radius:12px;">Neue Organisation</a>
+</div>
+<div class="v19-glass-card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0" style="font-size:.88rem;">
+      <thead><tr><th>Name</th><th>Laender</th><th>Sektor</th><th>NIS2</th><th>KRITIS</th></tr></thead>
+      <tbody>
+      {% for tenant in tenants %}
+        <tr>
+          <td style="font-weight:600;">{{ tenant.name }}</td>
+          <td>{{ tenant.countries_display }}</td>
+          <td>{{ tenant.sector_label|default:"–" }}</td>
+          <td>{% if tenant.nis2_relevant %}<span style="color:#dc2626; font-weight:700;">Ja</span>{% else %}<span style="color:#94a3b8;">Nein</span>{% endif %}</td>
+          <td>{% if tenant.kritis_relevant %}<span style="color:#dc2626; font-weight:700;">Ja</span>{% else %}<span style="color:#94a3b8;">Nein</span>{% endif %}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" style="color:#94a3b8;">Noch keine Organisationen.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

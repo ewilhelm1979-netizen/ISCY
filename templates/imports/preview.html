@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Import-Vorschau{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1>Import-Vorschau</h1>
+    <p class="text-muted mb-0">Prüfe die Zuordnung Feld für Feld, bevor Daten übernommen werden.</p>
+  </div>
+  <a class="btn btn-outline-secondary" href="{% url 'imports:center' %}">Zurück</a>
+</div>
+{% if preview %}
+<div class="v19-glass-card mb-4">
+  <div>
+    <h2 class="h5">Zuordnung für {{ preview.import_type }}</h2>
+    <p class="small text-muted">Erkannt: {{ preview.matched }}/{{ preview.mapping_rows|length }} erwartete Felder</p>
+    <form method="post">
+      {% csrf_token %}
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead><tr><th>Erwartetes Feld</th><th>Quelldatei-Spalte</th><th>Status</th><th>Synonyme</th></tr></thead>
+          <tbody>
+            {% for row in preview.mapping_rows %}
+            <tr>
+              <td><strong>{{ row.expected }}</strong>{% if row.required %} <span class="badge text-bg-danger">Pflicht</span>{% endif %}</td>
+              <td>
+                <select class="form-select" name="map_{{ row.expected }}">
+                  <option value="">-- nicht zuordnen --</option>
+                  {% for header in headers %}
+                  <option value="{{ header }}" {% if selected_mapping|get_item:row.expected == header %}selected{% endif %}>{{ header }}</option>
+                  {% endfor %}
+                </select>
+              </td>
+              <td>{% if row.status == 'ok' %}<span class="badge text-bg-success">zugeordnet</span>{% else %}<span class="badge text-bg-warning">fehlt</span>{% endif %}</td>
+              <td class="small text-muted">{{ row.synonyms|join:", "|default:"–" }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if preview.extra_headers %}
+      <div class="alert alert-info">Nicht verwendete Spalten: {{ preview.extra_headers|join:", " }}</div>
+      {% endif %}
+      <div class="d-flex gap-2">
+        <button class="btn btn-outline-primary" name="action" value="update">Zuordnung aktualisieren</button>
+        <button class="btn btn-primary" name="action" value="confirm">Import bestätigen</button>
+      </div>
+    </form>
+  </div>
+</div>
+<div class="v19-glass-card">
+  <div>
+    <h2 class="h5">Beispieldaten</h2>
+    <div class="table-responsive">
+      <table class="table table-sm align-middle">
+        <thead>
+          <tr>{% for header in headers %}<th>{{ header }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {% for row in sample_rows %}
+          <tr>{% for header in headers %}<td>{{ row|get_item:header }}</td>{% endfor %}</tr>
+          {% empty %}<tr><td>Keine Zeilen vorhanden.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-warning">Keine Vorschau vorhanden.</div>
+{% endif %}
+{% endblock %}

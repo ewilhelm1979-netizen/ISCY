@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Import Center{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-7">
+    <div class="v19-glass-card">
+      <div>
+        <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+          <div>
+            <h1>Import Center</h1>
+            <p class="text-muted mb-0">Importiere Geschäftsbereiche, Prozesse, Lieferanten oder Informationswerte per CSV/XLSX. In V11 wird vor dem Schreiben zuerst eine Import-Vorschau erzeugt.</p>
+          </div>
+          <div class="d-flex gap-2">
+            <a class="btn btn-outline-secondary" href="{% url 'imports:guide' %}">Import-Guide</a>
+            <a class="btn btn-outline-primary" href="{% url 'imports:mapping' %}">Mapping-Assistent</a>
+          </div>
+        </div>
+        <form method="post" enctype="multipart/form-data">
+          {% csrf_token %}
+          {{ form.as_p }}
+          <button class="btn btn-primary">Import prüfen</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="v19-glass-card mb-4">
+      <div>
+        <h4>Excel-/CSV-Templates</h4>
+        <p class="small text-muted">Lade fertige Vorlagen herunter und befülle sie in Excel oder per CSV-Export aus deinen Bestandslisten.</p>
+        <div class="d-grid gap-2">
+          {% for key, cols in examples.items %}
+          <div class="border rounded p-2">
+            <div class="fw-semibold">{{ key }}</div>
+            <div class="small text-muted mb-2">{{ cols|join:', ' }}</div>
+            <div class="d-flex gap-2 flex-wrap">
+              <a class="btn btn-sm btn-outline-primary" href="{% url 'imports:template-download' key 'xlsx' %}">XLSX</a>
+              <a class="btn btn-sm btn-outline-secondary" href="{% url 'imports:template-download' key 'csv' %}">CSV</a>
+              <a class="btn btn-sm btn-outline-dark" href="{% url 'imports:mapping' %}?type={{ key }}">Mapping</a>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <div class="v19-glass-card">
+      <div>
+        <h4>Fachliche Wirkung</h4>
+        <ul>
+          <li>Import-Vorschau zeigt erkannte Spalten, Synonyme und Beispielzeilen vor dem Schreiben.</li>
+          <li>Prozess- und Asset-Import verbessert Scope, Transparenz und Gap-Analyse.</li>
+          <li>Lieferanten-Import stärkt Third-Party- und NIS2-Lieferkettenbetrachtung.</li>
+        </ul>
+        <p class="mb-0"><strong>Mandant:</strong> {{ tenant.name }}</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

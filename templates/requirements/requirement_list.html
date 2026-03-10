@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Requirement Library{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1 style="font-weight:800; letter-spacing:-.02em;">Requirement Library</h1>
+    <p style="color:#64748b;" class="mb-0">ISO 27001:2022 Annex-A Controls und NIS2 Art. 21 Anforderungen.</p>
+  </div>
+</div>
+<div class="v19-glass-card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0" style="font-size:.86rem;">
+      <thead><tr><th>Framework</th><th>Code</th><th>Titel</th><th>Domaene</th><th>Evidenz</th></tr></thead>
+      <tbody>
+      {% for req in requirements %}
+        <tr>
+          <td><span class="v19-meta-pill" style="{% if req.framework == 'ISO27001' %}color:#1e40af; border-color:#bfdbfe; background:#eff6ff;{% else %}color:#9333ea; border-color:#d8b4fe; background:#faf5ff;{% endif %}">{{ req.framework }}</span></td>
+          <td style="font-weight:600;">{{ req.code }}</td>
+          <td>{{ req.title }}</td>
+          <td style="color:#64748b;">{{ req.domain }}</td>
+          <td>{% if req.evidence_required %}✓{% else %}–{% endif %}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" style="color:#94a3b8;">Noch keine Requirements. Bitte <code>seed_requirements</code> ausfuehren.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

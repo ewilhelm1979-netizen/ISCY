@@ -1,0 +1,57 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-isms}
+      POSTGRES_USER: ${POSTGRES_USER:-isms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-isms}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-isms} -d ${POSTGRES_DB:-isms}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      args:
+        INSTALL_LOCAL_LLM: ${INSTALL_LOCAL_LLM:-false}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DEBUG: ${DEBUG:-False}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://isms:isms@db:5432/isms}
+      WAIT_FOR_DB: ${WAIT_FOR_DB:-1}
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
+      RUN_COLLECTSTATIC: ${RUN_COLLECTSTATIC:-0}
+      RUN_SEEDS: ${RUN_SEEDS:-0}
+      DJANGO_CHECK: ${DJANGO_CHECK:-1}
+      APP_SERVER: ${APP_SERVER:-gunicorn}
+      PORT: "8000"
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
+      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
+    expose:
+      - "8000"
+    volumes:
+      - media_data:/app/media
+      - static_data:/app/staticfiles
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready/', timeout=5)\""]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  media_data:
+  static_data:

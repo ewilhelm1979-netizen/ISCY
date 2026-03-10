@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Kanban – {{ plan.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <div class="text-uppercase small fw-semibold mb-2" style="color:#94a3b8; letter-spacing:.08em; font-size:.7rem;">Delivery Board</div>
+    <h1 class="mb-1" style="font-weight:800; letter-spacing:-.02em;">Kanban-Board</h1>
+    <p style="color:#64748b;" class="mb-0">{{ plan.title }}</p>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="{% url 'roadmap:detail' plan.id %}" style="border-radius:12px;">Zur Roadmap</a>
+</div>
+<div class="v19-kanban-grid">
+  {% for choice, tasks in kanban_columns.items %}
+  <div class="v19-kanban-col">
+    <div class="v19-kanban-col-header">
+      <h3>{{ choice.1 }}</h3>
+      <span class="v19-kanban-count">{{ tasks|length }}</span>
+    </div>
+    {% for task in tasks %}
+    <div class="v19-kanban-card">
+      <div class="d-flex justify-content-between gap-2 align-items-start mb-1">
+        <strong>{{ task.title }}</strong>
+        <span class="v19-meta-pill" style="flex-shrink:0;">{{ task.priority }}</span>
+      </div>
+      <div class="small mb-1" style="color:#94a3b8;">{{ task.phase.name }}</div>
+      <div class="small mb-1" style="color:#64748b;">{{ task.owner_role|default:'Owner offen' }}</div>
+      <div class="small mb-1" style="color:#475569;">Deadline: {{ task.due_date|date:"d.m.Y" }}</div>
+      {% if task.incoming_dependencies.count %}
+        <div class="small mt-1" style="color:#ef4444; font-weight:600;">{{ task.incoming_dependencies.count }} Abhängigkeit(en)</div>
+      {% endif %}
+      <a class="btn btn-sm btn-outline-primary mt-2" href="{% url 'roadmap:task-edit' task.id %}" style="border-radius:10px; font-size:.78rem;">Bearbeiten</a>
+    </div>
+    {% empty %}
+    <p class="small mb-0" style="color:#94a3b8;">Keine Aufgaben.</p>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

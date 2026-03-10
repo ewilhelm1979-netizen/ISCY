@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  django-core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install app dependencies
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-prod.txt
+      - name: Django checks and smoke setup
+        env:
+          SECRET_KEY: ci-secret-key
+          DEBUG: 'True'
+          DATABASE_URL: sqlite:///db.sqlite3
+        run: |
+          source .venv/bin/activate
+          mkdir -p static media
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python manage.py seed_demo || true
+          python manage.py seed_catalog || true
+          python manage.py seed_requirements || true
+          python manage.py seed_product_security || true
+          python manage.py check
+          python manage.py test apps.core
+
+  llm-runtime-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install system packages for llama-cpp-python
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config python3-dev clang libopenblas-dev g++-14 libstdc++-14-dev
+      - name: Build llama-cpp-python runtime
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip setuptools wheel
+          export CC=/usr/bin/clang
+          export CXX=/usr/bin/clang++
+          export CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF"
+          export FORCE_CMAKE=1
+          pip install --no-cache-dir --force-reinstall --no-binary=llama-cpp-python llama-cpp-python
+          python -c "import llama_cpp; print('llama-cpp-python OK')"
+
+  docker-config:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker compose files
+        run: |
+          docker compose -f docker-compose.yml config
+          docker compose -f docker-compose.yml -f docker-compose.llm.yml config
+          docker compose -f docker-compose.yml -f docker-compose.stage.yml config
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml config

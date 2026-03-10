@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Assessment-Ergebnis{% endblock %}
+{% block content %}
+<div class="p-4 p-md-5 mb-4 wizard-hero">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">
+    <div>
+      <h1>Ergebnisübersicht</h1>
+      <p class="lead mb-1">{{ mode_context.title }} · {{ session.applicability_result }}</p>
+      <p class="mb-0">{{ session.executive_summary }}</p>
+    </div>
+    {% if report %}
+    <div class="d-flex gap-2">
+      <a class="btn btn-light" href="{% url 'reports:detail' report.id %}">Bericht öffnen</a>
+      <a class="btn btn-outline-light" href="{% url 'reports:pdf' report.id %}">PDF</a>
+      {% if plan %}<a class="btn btn-outline-light" href="{% url 'roadmap:pdf' plan.id %}">Roadmap-PDF</a>{% endif %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+<div class="row g-4 mb-4">
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>ISO</h5><p class="display-6 mb-0">{{ report.iso_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>NIS2</h5><p class="display-6 mb-0">{{ report.nis2_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>CRA</h5><p class="display-6 mb-0">{{ report.cra_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>AI Act</h5><p class="display-6 mb-0">{{ report.ai_act_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>IEC 62443</h5><p class="display-6 mb-0">{{ report.iec62443_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>21434</h5><p class="display-6 mb-0">{{ report.iso_sae_21434_readiness_percent }}%</p></div></div></div>
+</div>
+<div class="row g-4 mb-4">
+  <div class="col-lg-7">
+    <div class="v19-glass-card h-100"><div><h3>Domänen-Radar</h3><canvas id="resultsRadarChart" height="240"></canvas></div></div>
+  </div>
+  <div class="col-lg-5">
+    <div class="v19-glass-card h-100"><div>
+      <h3>Management Summary</h3>
+      <p><strong>Sektor:</strong> {{ sector_context.label }}</p>
+      <p><strong>Operative Länder:</strong> {{ country_context.display }}</p>
+      <p><strong>Modus:</strong> {{ mode_context.title }}</p>
+      <p><strong>Einordnung:</strong> {{ session.applicability_result }}</p>
+      <p><strong>Begründung:</strong> {{ session.applicability_reasoning }}</p>
+      <p><strong>Nächster Fokus:</strong> {{ sector_context.roadmap_focus|join:", " }}</p>
+      <div class="d-grid gap-2 mt-3">
+        <a class="btn btn-outline-primary" href="{% url 'roadmap:detail' plan.id %}">Roadmap öffnen</a>
+        <a class="btn btn-outline-primary" href="{% url 'evidence:create' %}?session={{ session.id }}">Evidenz anlegen</a>
+      </div>
+    </div></div>
+  </div>
+</div>
+<div class="row g-4 mb-4">
+  <div class="col-lg-6"><div class="v19-glass-card"><div>
+    <h3>Heatmap / Gap-Matrix</h3>
+    <div class="heatmap-grid">
+      {% for item in report.domain_scores_json %}
+      <div class="heat-cell {{ item.score_percent|heat_class }}"><strong>{{ item.domain }}</strong><span>{{ item.score_percent }}%</span><small>{{ item.maturity_level }}</small></div>
+      {% endfor %}
+    </div>
+  </div></div></div>
+  <div class="col-lg-6"><div class="v19-glass-card"><div>
+    <h3>Größte Lücken</h3>
+    <ul class="mb-0">{% for gap in gaps %}<li><strong>{{ gap.domain.name }}:</strong> {{ gap.title }}</li>{% empty %}<li>Keine Gaps generiert.</li>{% endfor %}</ul>
+  </div></div></div>
+</div>
+<div class="v19-glass-card mb-4"><div>
+  <h3>Sektor-Auswirkung auf den weiteren Prozess</h3>
+  <p><strong>{{ sector_context.label }}</strong> · {{ sector_context.nis2_group }} · {{ sector_context.indicative_classification }}</p>
+  <p>{{ sector_context.downstream_impact }}</p>
+  <p class="mb-1"><strong>Fokusdomänen:</strong> {{ sector_context.key_domains|join:", " }}</p>
+  <p class="mb-1"><strong>Länder-Kontext:</strong> {{ country_context.geo_impact }}</p>
+  {% if session.assessment_type == 'ISO_READINESS' %}<p class="mb-1"><strong>Bewertungshinweis:</strong> In diesem Modus beeinflusst der Sektor Prioritäten und Roadmap, aber nicht die regulatorische Einstufung.</p>{% endif %}
+  {% if sector_context.special_regime and session.assessment_type != 'ISO_READINESS' %}<p class="mb-0"><strong>Zusatzprüfung:</strong> {{ sector_context.special_regime }}</p>{% endif %}
+</div></div>
+{% if product_matrix %}
+<div class="v19-glass-card mb-4"><div>
+  <h3>Cyber Security Management System für das Softwareentwicklungsunternehmen</h3>
+  <p class="text-muted">Zusätzliche Product-Security-/Secure-Development-Schicht auf Basis der Angaben im Unternehmensprofil.</p>
+  <div class="row g-3 mb-3">
+    {% for key, item in report.regulatory_matrix_json.items %}
+      {% if key != 'summary' %}
+      <div class="col-md-3"><div class="card h-100 border-0 shadow-sm"><div class="card-body">
+        <div class="d-flex justify-content-between align-items-start"><strong>{{ item.label }}</strong><span class="badge {% if item.applicable %}text-bg-primary{% else %}text-bg-light{% endif %}">{% if item.applicable %}aktiv{% else %}nicht im Fokus{% endif %}</span></div>
+        <p class="small text-muted mt-2 mb-0">{{ item.reason }}</p>
+      </div></div></div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <p class="mb-1"><strong>Zusammenfassung:</strong> {{ report.regulatory_matrix_json.summary }}</p>
+  {% if report.product_security_json.product_security_scope %}<p class="mb-0"><strong>Product-Security-Scope:</strong> {{ report.product_security_json.product_security_scope }}</p>{% endif %}
+</div></div>
+{% endif %}
+<div class="row g-4 mb-4">
+  <div class="col-lg-6"><div class="v19-glass-card"><div>
+    <h3>Priorisierte Maßnahmen</h3>
+    <ul class="mb-0">{% for measure in measures %}<li><strong>{{ measure.title }}</strong> – <span class="badge {{ measure.priority|priority_badge }}">{{ measure.get_priority_display }}</span> / {{ measure.target_phase }}</li>{% empty %}<li>Keine Maßnahmen generiert.</li>{% endfor %}</ul>
+  </div></div></div>
+  <div class="col-lg-6"><div class="v19-glass-card"><div>
+    <h3>Maßnahmen-Abhängigkeiten</h3>
+    <ul class="mb-0">{% for dep in report.next_steps_json.dependencies %}<li><strong>{{ dep.predecessor }}</strong> → {{ dep.successor }} <span class="text-muted">({{ dep.type }})</span><br><small>{{ dep.rationale }}</small></li>{% empty %}<li>Keine Abhängigkeiten dokumentiert.</li>{% endfor %}</ul>
+  </div></div></div>
+</div>
+<div class="row g-4 mb-4">
+  <div class="col-lg-4"><div class="v19-glass-card"><div><h4>Nächste 30 Tage</h4><ul>{% for item in report.next_steps_json.next_30_days %}<li>{{ item.title }}</li>{% empty %}<li>Keine kritischen Aufgaben.</li>{% endfor %}</ul></div></div></div>
+  <div class="col-lg-4"><div class="v19-glass-card"><div><h4>Nächste 60 Tage</h4><ul>{% for item in report.next_steps_json.next_60_days %}<li>{{ item.title }}</li>{% empty %}<li>Keine priorisierten Aufgaben.</li>{% endfor %}</ul></div></div></div>
+  <div class="col-lg-4"><div class="v19-glass-card"><div><h4>Nächste 90 Tage</h4><ul>{% for item in report.next_steps_json.next_90_days %}<li>{{ item.title }}</li>{% empty %}<li>Keine zusätzlichen Aufgaben.</li>{% endfor %}</ul></div></div></div>
+</div>
+{% if plan %}
+<div class="v19-glass-card mb-4"><div>
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div><h3 class="mb-1">Automatischer Projektplan / Roadmap</h3><p class="text-muted mb-0">Die Phasen wurden direkt aus Betroffenheit, Reifegrad, Product Security, Maßnahmen und der Sektorauswahl abgeleitet.</p></div>
+    <div class="d-flex gap-2"><a class="btn btn-outline-primary" href="{% url 'roadmap:detail' plan.id %}">Volle Roadmap</a><a class="btn btn-outline-primary" href="{% url 'roadmap:pdf' plan.id %}">Roadmap-PDF</a></div>
+  </div>
+  <div class="roadmap-shell mb-4"><h3 class="mb-3">Grafische Roadmap-Vorschau</h3><div class="timeline-axis"><span>Scope</span><span>Gap-Analyse</span><span>Product Security</span><span>Audit</span></div><div class="timeline-track compact-track">{% for phase in plan.phases.all %}<div class="timeline-phase-bar" style="left: {{ forloop.counter0|add:0 }}0%; width: 14%; top: {{ forloop.counter0|add:1 }}0px; background: {% cycle '#0b3d91' '#2f6fb6' '#19a974' '#5f8d37' '#6c757d' '#7b4ab2' %};"><strong>{{ phase.name }}</strong><small>{{ phase.duration_weeks }} Wochen</small></div>{% endfor %}</div></div>
+  <div class="row g-3">{% for phase in plan.phases.all %}<div class="col-lg-4"><div class="card border-primary phase-card"><div><h5>{{ phase.name }}</h5><p class="small-muted">{{ phase.duration_weeks }} Wochen{% if phase.planned_start %} · {{ phase.planned_start|date:"d.m.Y" }} bis {{ phase.planned_end|date:"d.m.Y" }}{% endif %}</p><p>{{ phase.objective }}</p><ul>{% for task in phase.tasks.all|slice:":3" %}<li>{{ task.title }}</li>{% empty %}<li>Derzeit keine Aufgaben</li>{% endfor %}</ul></div></div></div>{% endfor %}</div>
+</div></div>
+{% endif %}
+<div class="d-flex gap-2 flex-wrap">
+  <a class="btn btn-primary" href="{% url 'reports:list' %}">Berichte</a>
+  <a class="btn btn-outline-secondary" href="{% url 'product_security:list' %}">Product Security</a>
+  <a class="btn btn-outline-secondary" href="{% url 'evidence:list' %}?session={{ session.id }}">Evidenzen</a>
+  <a class="btn btn-outline-secondary" href="{% url 'roadmap:list' %}">Roadmaps</a>
+  <a class="btn btn-outline-secondary" href="{% url 'imports:center' %}">Import Center</a>
+  <a class="btn btn-outline-secondary" href="/">Neues Assessment starten</a>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  const radarCtx = document.getElementById('resultsRadarChart');
+  if (radarCtx) {
+    const domainData = {{ report.domain_scores_json|to_json|safe }};
+    new Chart(radarCtx, {
+      type: 'radar',
+      data: {labels: domainData.map(item => item.domain), datasets: [{label: 'Domänenscore %', data: domainData.map(item => item.score_percent), fill: true, tension: 0.25, borderWidth: 2}]},
+      options: { scales: { r: { suggestedMin: 0, suggestedMax: 100 } } }
+    });
+  }
+</script>
+{% endblock %}

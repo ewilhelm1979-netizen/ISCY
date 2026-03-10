@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ audit.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div><h1 style="font-weight:800;">{{ audit.title }}</h1><p style="color:#64748b;">{{ audit.get_audit_type_display }} · {{ audit.get_status_display }}</p></div>
+  <div class="d-flex gap-2"><a class="btn btn-outline-primary btn-sm" href="{% url 'assessments:audit_edit' audit.pk %}" style="border-radius:12px;">Bearbeiten</a><a class="btn btn-outline-secondary btn-sm" href="{% url 'assessments:audit_list' %}" style="border-radius:12px;">Zurueck</a></div>
+</div>
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg-3"><div class="v19-metric"><div class="v19-metric-label">Findings</div><div class="v19-metric-value">{{ findings.count }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="v19-metric"><div class="v19-metric-label" style="color:#dc2626;">Major NC</div><div class="v19-metric-value" style="color:#dc2626;">{{ major_count }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="v19-metric"><div class="v19-metric-label" style="color:#ea580c;">Minor NC</div><div class="v19-metric-value" style="color:#ea580c;">{{ minor_count }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="v19-metric"><div class="v19-metric-label" style="color:#f59e0b;">Offen</div><div class="v19-metric-value" style="color:#f59e0b;">{{ open_count }}</div></div></div>
+</div>
+<div class="row g-4 mb-4">
+  <div class="col-lg-5">
+    <div class="v19-glass-card h-100">
+      <div class="eyebrow">Audit-Details</div>
+      {% if audit.lead_auditor %}<p class="mb-1"><strong>Lead Auditor:</strong> {{ audit.lead_auditor }}</p>{% endif %}
+      {% if audit.scope %}<p class="mb-1"><strong>Scope:</strong> {{ audit.scope }}</p>{% endif %}
+      {% if audit.planned_start %}<p class="mb-1"><strong>Zeitraum:</strong> {{ audit.planned_start|date:"d.m.Y" }} – {{ audit.planned_end|date:"d.m.Y"|default:"offen" }}</p>{% endif %}
+      {% if audit.conclusion %}<p class="mb-1"><strong>Fazit:</strong> {{ audit.conclusion }}</p>{% endif %}
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="v19-glass-card h-100">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <div class="eyebrow mb-0">Findings</div>
+        <a class="btn btn-primary btn-sm" href="{% url 'assessments:finding_create' audit.pk %}" style="border-radius:10px; font-size:.78rem;">+ Finding</a>
+      </div>
+      {% for finding in findings %}
+      <div style="border:1px solid rgba(148,163,184,.12); border-radius:14px; padding:.75rem .85rem; margin-bottom:.5rem; background:{% if finding.severity == 'MAJOR_NC' %}#fef2f2{% elif finding.severity == 'MINOR_NC' %}#fff7ed{% else %}#f8fafc{% endif %};">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <strong style="font-size:.9rem;">{{ finding.finding_number }}: {{ finding.title }}</strong>
+            <div class="mt-1"><span class="v19-meta-pill">{{ finding.get_severity_display }}</span> <span class="v19-meta-pill">{{ finding.get_status_display }}</span>{% if finding.due_date %} <span class="v19-meta-pill">Faellig: {{ finding.due_date|date:"d.m.Y" }}</span>{% endif %}</div>
+          </div>
+          <a href="{% url 'assessments:finding_edit' finding.pk %}" class="btn btn-sm btn-outline-secondary" style="border-radius:8px; font-size:.72rem;">Edit</a>
+        </div>
+      </div>
+      {% empty %}
+      <p style="color:#94a3b8; font-size:.88rem;">Noch keine Findings erfasst.</p>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

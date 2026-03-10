@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Schritt 3 – Scope & Struktur{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="v19-glass-card">
+      <div>
+        <h1>Schritt 3 – Scope, Prozesse und Lieferanten</h1>
+        <p class="text-muted">Erfasse die zentralen Geschäftsbereiche, kritischen Prozesse und wichtigsten Dienstleister. Die App nutzt diese Angaben, um Maßnahmen nicht abstrakt, sondern organisatorisch anschlussfähig abzuleiten.</p>
+        <form method="post">
+          {% csrf_token %}
+          {{ form.as_p }}
+          <button class="btn btn-primary">Weiter zur Reifegradanalyse</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4">
+    <div class="v19-glass-card">
+      <div>
+        <h4>Definition of Done</h4>
+        <ul>
+          <li>Scope-Statement gepflegt</li>
+          <li>mindestens 3 Kernprozesse erfasst</li>
+          <li>Geschäftsbereiche benannt</li>
+          <li>kritische Lieferanten aufgenommen</li>
+        </ul>
+        <h5>Nächster Schritt</h5>
+        <p>Danach bewertet die App je Domäne den Reifegrad und leitet Maßnahmen sowie Projektphasen ab.</p>
+        <p><a class='btn btn-sm btn-outline-primary' href='{% url "imports:center" %}'>Register per CSV/XLSX importieren</a></p>
+        {% if country_context %}<p class="mb-0"><strong>Länder-Kontext:</strong> {{ country_context.geo_impact }}</p>{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

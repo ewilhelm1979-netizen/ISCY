@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Roadmaps{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 style="font-weight:800; letter-spacing:-.02em;">Roadmaps</h1>
+    <p style="color:#64748b;" class="mb-0">Grafische Projektpläne mit Phasen, Meilensteinen und Kanban-Status.</p>
+  </div>
+  <a class="btn btn-primary btn-sm" href="/" style="border-radius:12px;">Neues Assessment</a>
+</div>
+<div class="row g-4">
+  {% for plan in plans %}
+  <div class="col-lg-6">
+    <div class="v19-glass-card h-100" style="transition:all .3s ease;">
+      <div class="eyebrow">{{ plan.overall_priority|default:'–' }} Priorität</div>
+      <h4 style="font-size:1.2rem;">{{ plan.title }}</h4>
+      <p class="small mb-2" style="color:#94a3b8;">{{ plan.tenant.name }} · Start {{ plan.planned_start|date:"d.m.Y" }}</p>
+      <p style="color:#475569; font-size:.9rem; line-height:1.5;">{{ plan.summary|truncatechars:180 }}</p>
+      <div class="d-flex gap-2 mb-3">
+        <span class="v19-meta-pill">{{ plan.phases.count }} Phasen</span>
+      </div>
+      <a class="btn btn-primary btn-sm" href="{% url 'roadmap:detail' plan.id %}" style="border-radius:12px;">Öffnen</a>
+    </div>
+  </div>
+  {% empty %}
+  <div class="col-12">
+    <div class="v19-glass-card text-center py-5">
+      <p style="color:#94a3b8; font-size:1.1rem; margin:0;">Noch keine Roadmaps vorhanden. Starten Sie ein neues Assessment.</p>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

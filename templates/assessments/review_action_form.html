@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Massnahme erfassen{% endblock %}
+{% block content %}
+<h1 class="mb-4" style="font-weight:800;">Review-Massnahme erfassen</h1>
+<div class="v19-glass-card" style="max-width:700px;">
+  <form method="post">{% csrf_token %}
+    {% for field in form %}<div class="mb-3"><label class="form-label fw-semibold">{{ field.label }}</label>{{ field }}</div>{% endfor %}
+    <button class="btn btn-primary" style="border-radius:12px;">Speichern</button>
+  </form>
+</div>
+{% endblock %}

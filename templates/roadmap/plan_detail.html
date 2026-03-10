@@ -1,0 +1,302 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}{{ plan.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <div class="text-uppercase small fw-semibold mb-2" style="color:#94a3b8; letter-spacing:.08em;">Programm-Roadmap</div>
+    <h1 class="mb-1" style="font-weight:800; letter-spacing:-.02em;">{{ plan.title }}</h1>
+    <p class="mb-2" style="color:#64748b;">{{ plan.tenant.name }} · Gesamtpriorität {{ plan.overall_priority|default:"–" }}</p>
+    <p class="mb-0" style="color:#475569; max-width:680px; line-height:1.55;">{{ plan.summary }}</p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a class="btn btn-outline-primary btn-sm" href="{% url 'roadmap:kanban' plan.id %}" style="border-radius:12px;">Kanban-Board</a>
+    <a class="btn btn-outline-primary btn-sm" href="{% url 'roadmap:pdf' plan.id %}" style="border-radius:12px;">PDF</a>
+    <a class="btn btn-outline-primary btn-sm" href="{% url 'roadmap:png' plan.id %}" style="border-radius:12px;">PNG</a>
+    <a class="btn btn-outline-secondary btn-sm" href="{% url 'roadmap:list' %}" style="border-radius:12px;">Übersicht</a>
+  </div>
+</div>
+
+<div class="v19-metrics">
+  <div class="v19-metric" style="animation-delay:.05s"><div class="v19-metric-label">Zeitraum</div><div class="v19-metric-value">{{ timeline_total_weeks }}W</div><div class="v19-metric-sub">{{ timeline_start|date:"d.m.Y" }} – {{ timeline_end|date:"d.m.Y" }}</div></div>
+  <div class="v19-metric" style="animation-delay:.1s"><div class="v19-metric-label">Phasen</div><div class="v19-metric-value">{{ plan.phases.count }}</div><div class="v19-metric-sub">Governance bis Audit-Readiness</div></div>
+  <div class="v19-metric" style="animation-delay:.15s"><div class="v19-metric-label">Aufgaben</div><div class="v19-metric-value">{{ total_tasks }}</div><div class="v19-metric-sub">Priorisierte Arbeitspakete</div></div>
+  <div class="v19-metric" style="animation-delay:.2s"><div class="v19-metric-label">Abhängigkeiten</div><div class="v19-metric-value">{{ total_dependencies }}</div><div class="v19-metric-sub">Sequenzen und Vorbedingungen</div></div>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-lg-4">
+    <div class="v19-glass-card h-100">
+      <div class="eyebrow">Sektorbezug</div>
+      <h4>{{ plan.tenant.sector_label }}</h4>
+      <p>{{ plan.tenant.sector_profile.downstream_impact }}</p>
+      <p class="small mb-0" style="color:#94a3b8;">{{ plan.tenant.sector_profile.indicative_classification }}</p>
+    </div>
+  </div>
+  <div class="col-lg-8">
+    <div class="v19-glass-card h-100">
+      <div class="eyebrow">Roadmap-Fokus</div>
+      <h4>Schwerpunkte dieser Umsetzungsreise</h4>
+      <div class="d-flex flex-wrap gap-2 mt-3">
+        {% for item in plan.tenant.sector_profile.roadmap_focus %}
+          <span class="v19-focus-badge">{{ item }}</span>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="roadmap-shell roadmap-shell-v19 {{ theme_class }} mb-4">
+  <div class="roadmap-toolbar-v19">
+    <div>
+      <h3>Programmsteuerung</h3>
+      <p class="mb-0" style="max-width:520px; font-size:.88rem;">Gantt-Darstellung mit Meilensteinen, Phasenbalken und operativen Arbeitspaketen pro Phase.</p>
+    </div>
+    <div class="d-flex flex-column gap-2" style="min-width:min(100%, 520px);">
+      <div class="d-flex gap-2 align-items-center flex-wrap">
+        <span style="font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:#94a3b8; font-weight:750; min-width:52px;">Ansicht</span>
+        <div class="v19-chip-bar">
+          <a class="v19-chip {% if current_view == 'boardroom' %}is-active{% endif %}" href="?view=boardroom&zoom={{ current_zoom }}&theme={{ current_theme }}">Boardroom</a>
+          <a class="v19-chip {% if current_view == 'executive' %}is-active{% endif %}" href="?view=executive&zoom={{ current_zoom }}&theme={{ current_theme }}">Executive</a>
+          <a class="v19-chip {% if current_view == 'delivery' %}is-active{% endif %}" href="?view=delivery&zoom={{ current_zoom }}&theme={{ current_theme }}">Delivery</a>
+          <a class="v19-chip {% if current_view == 'combined' %}is-active{% endif %}" href="?view=combined&zoom={{ current_zoom }}&theme={{ current_theme }}">Beide</a>
+        </div>
+      </div>
+      <div class="d-flex gap-2 align-items-center flex-wrap">
+        <span style="font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:#94a3b8; font-weight:750; min-width:52px;">Zoom</span>
+        <div class="v19-chip-bar">
+          <a class="v19-chip {% if current_zoom == 'month' %}is-active{% endif %}" href="?view={{ current_view }}&zoom=month&theme={{ current_theme }}">Monat</a>
+          <a class="v19-chip {% if current_zoom == 'quarter' %}is-active{% endif %}" href="?view={{ current_view }}&zoom=quarter&theme={{ current_theme }}">Quartal</a>
+        </div>
+        <span style="font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:#94a3b8; font-weight:750; min-width:52px; margin-left:.5rem;">Theme</span>
+        <div class="v19-chip-bar">
+          <a class="v19-chip {% if current_theme == 'ocean' %}is-active{% endif %}" href="?view={{ current_view }}&zoom={{ current_zoom }}&theme=ocean">Ocean</a>
+          <a class="v19-chip {% if current_theme == 'forest' %}is-active{% endif %}" href="?view={{ current_view }}&zoom={{ current_zoom }}&theme=forest">Forest</a>
+          <a class="v19-chip {% if current_theme == 'slate' %}is-active{% endif %}" href="?view={{ current_view }}&zoom={{ current_zoom }}&theme=slate">Slate</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if current_view == 'boardroom' %}
+  <section>
+    <div class="v19-summary-grid mb-3">
+      <div class="v19-glass-card is-hero">
+        <div class="eyebrow">Vorstandssicht</div>
+        <h4>Programm in {{ plan.phases.count }} Phasen</h4>
+        <p>{{ timeline_total_weeks }} Wochen von {{ timeline_start|date:"d.m.Y" }} bis {{ timeline_end|date:"d.m.Y" }}.</p>
+      </div>
+      <div class="v19-glass-card">
+        <div class="eyebrow">Top-Phasen</div>
+        {% for row in boardroom_top_phases %}
+          <div class="v19-list-row"><strong>{{ row.phase.name }}</strong><span>{{ row.task_count }} Aufgaben</span></div>
+        {% endfor %}
+      </div>
+      <div class="v19-glass-card">
+        <div class="eyebrow">Kritische Arbeitspakete</div>
+        {% for task in critical_tasks|slice:":4" %}
+          <div class="v19-list-row"><strong>{{ task.title|truncatechars:42 }}</strong><span>{% if task.due_date %}{{ task.due_date|date:"d.m.Y" }}{% else %}–{% endif %}</span></div>
+        {% empty %}
+          <div class="small" style="color:#94a3b8;">Keine kritischen Pakete identifiziert.</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# ── Milestone Flags über der Timeline ── #}
+    <div class="v19-milestone-lane">
+      {% for item in milestone_feed %}
+        <div class="v19-flag is-{{ item.priority|lower }}" style="left: {{ item.left_pct|default:'50' }}%;">
+          <div class="v19-flag-label">{{ item.title|truncatechars:30 }}</div>
+          <div class="v19-flag-date">{{ item.date|date:"d.m" }}</div>
+          <div class="v19-flag-icon">🚩</div>
+          <div class="v19-flag-stem"></div>
+        </div>
+      {% endfor %}
+    </div>
+
+    {# ── Month Axis ── #}
+    <div style="display:grid; grid-template-columns: 240px minmax(0,1fr); gap:0; margin-bottom:0;">
+      <div style="background:rgba(55,65,81,.08); padding:.55rem .85rem; border-radius:8px 0 0 0; border:1px solid rgba(148,163,184,.12); border-bottom:none;">
+        <span style="font-size:.72rem; text-transform:uppercase; letter-spacing:.08em; color:#94a3b8; font-weight:800;">Phase</span>
+      </div>
+      <div class="v19-month-axis" style="margin-bottom:0; border-radius:0 8px 0 0;">
+        {% for month in timeline_month_segments %}
+          <span style="width: {{ month.width }}%;">{{ month.label }}</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# ── Gantt Lanes (like VamiSec) ── #}
+    <div class="v19-timeline">
+      {% for row in timeline_rows %}
+      <article class="v19-lane" style="--phase-accent: {{ row.color }}; animation-delay: {{ forloop.counter0 }}50ms;">
+        <div class="v19-phase-label">
+          <div class="v19-phase-accent"></div>
+          <div class="v19-phase-text">
+            <h5>{{ row.phase.name }}</h5>
+            <small>{{ row.phase.duration_weeks }}W · {{ row.task_count }} Aufgaben</small>
+          </div>
+        </div>
+        <div class="v19-track-area">
+          <div class="v19-track">
+            {% for pos in timeline_grid %}<i style="left: {{ pos }}%;"></i>{% endfor %}
+            <div class="v19-bar" style="left: {{ row.left }}%; width: {{ row.width }}%;">
+              <span class="v19-bar-label">{{ row.phase.name }}</span>
+            </div>
+          </div>
+          {# ── Inline Tasks (like VamiSec sub-items) ── #}
+          <div class="v19-inline-tasks">
+            {% for task in row.tasks|slice:":3" %}
+              <div class="v19-inline-task">
+                <span class="v19-inline-task-dates">{% if task.planned_start %}{{ task.planned_start|date:"d.m" }}{% endif %}{% if task.due_date %} - {{ task.due_date|date:"d.m" }}{% endif %}</span>
+                <span class="v19-inline-task-dot is-{{ task.priority|lower }}"></span>
+                <span class="v19-inline-task-title">{{ task.title|truncatechars:55 }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+
+    <div class="v19-panels">
+      <div class="v19-glass-card">
+        <div class="eyebrow">Nächste Meilensteine</div>
+        <div class="v19-feed">
+          {% for item in milestone_feed %}
+            <div class="v19-feed-item">
+              <div>
+                <strong>{{ item.title|truncatechars:48 }}</strong>
+                <small>{{ item.phase }}</small>
+              </div>
+              <span class="date">{{ item.date|date:"d.m.Y" }}</span>
+            </div>
+          {% empty %}
+            <div class="small" style="color:#94a3b8;">Keine Meilensteine verfügbar.</div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="v19-glass-card">
+        <div class="eyebrow">Executive Narrative</div>
+        <p class="mb-2" style="font-size:.9rem; line-height:1.55; color:#475569;">Die Roadmap priorisiert zuerst Governance und Transparenz, anschließend Gap-Schließung, Strukturmaßnahmen und Audit-Readiness.</p>
+        <p class="small mb-0" style="color:#94a3b8;">Die Darstellung zeigt je Phase den Zeitbalken und die operativen Arbeitspakete.</p>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if current_view == 'executive' or current_view == 'combined' %}
+  <section {% if current_view == 'combined' %}class="mt-4"{% endif %}>
+    {# ── Milestone Flags ── #}
+    <div class="v19-milestone-lane">
+      {% for item in milestone_feed %}
+        <div class="v19-flag is-{{ item.priority|lower }}" style="left: {{ item.left_pct|default:'50' }}%;">
+          <div class="v19-flag-label">{{ item.title|truncatechars:28 }}</div>
+          <div class="v19-flag-date">{{ item.date|date:"d.m" }}</div>
+          <div class="v19-flag-icon">🏁</div>
+          <div class="v19-flag-stem"></div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="v19-exec-header">
+      <div class="v19-exec-label">Programmphase</div>
+      <div class="v19-month-axis" style="margin-bottom:0;">
+        {% for month in timeline_month_segments %}
+          <span style="width: {{ month.width }}%;">{{ month.label }}</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    {% for row in timeline_rows %}
+    <div class="v19-exec-row" style="--phase-accent: {{ row.color }}; animation-delay: {{ forloop.counter0 }}00ms;">
+      <div class="v19-phase-info">
+        <div class="eyebrow">Phase {{ forloop.counter }}</div>
+        <h5 style="font-size:1.12rem;">{{ row.phase.name }}</h5>
+        <p>{{ row.phase.objective|truncatechars:140 }}</p>
+        <div class="v19-meta-pills">
+          <span class="v19-meta-pill">{{ row.phase.duration_weeks }} Wochen</span>
+          <span class="v19-meta-pill">{{ row.task_count }} Aufgaben</span>
+        </div>
+      </div>
+      <div class="v19-exec-body">
+        <div class="v19-track" style="height:36px;">
+          {% for pos in timeline_grid %}<i style="left: {{ pos }}%;"></i>{% endfor %}
+          <div class="v19-bar" style="left: {{ row.left }}%; width: {{ row.width }}%;">
+            <span class="v19-bar-label">{{ row.phase.name }}</span>
+          </div>
+        </div>
+        <div class="v19-exec-details">
+          <div class="v19-exec-panel">
+            <div class="panel-title">Meilensteine</div>
+            <div class="v19-pill-list">
+              {% for milestone in row.milestones %}
+                <div class="v19-pill"><strong>{{ milestone.date|date:"d.m.Y" }}</strong><span>{{ milestone.short_title }}</span></div>
+              {% empty %}
+                <div class="small" style="color:#94a3b8;">Keine Meilensteine.</div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="v19-exec-panel">
+            <div class="panel-title">Arbeitspakete</div>
+            <div class="v19-action-list">
+              {% for task in row.key_tasks %}
+                <div class="v19-action-item">
+                  <div>
+                    <strong>{{ task.title|truncatechars:52 }}</strong>
+                    <small>{{ task.priority|default:'–' }} · {{ task.owner_role|default:'Owner offen' }}</small>
+                  </div>
+                  <span class="due">{% if task.due_date %}{{ task.due_date|date:"d.m.Y" }}{% else %}–{% endif %}</span>
+                </div>
+              {% empty %}
+                <div class="small" style="color:#94a3b8;">Keine priorisierten Aufgaben.</div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
+
+  {% if current_view == 'delivery' or current_view == 'combined' %}
+  <section {% if current_view == 'combined' %}class="mt-4"{% endif %}>
+    <div class="d-flex justify-content-between align-items-end mb-3 flex-wrap gap-2">
+      <div>
+        <div class="text-uppercase small fw-semibold mb-1" style="color:#94a3b8; letter-spacing:.08em; font-size:.7rem;">Delivery View</div>
+        <h4 class="mb-1" style="font-weight:750;">Operative Umsetzung nach Phase</h4>
+        <p class="mb-0" style="color:#64748b; font-size:.88rem;">Detailsicht für Arbeitspakete, Owner, Fälligkeiten und Abhängigkeiten.</p>
+      </div>
+      <div class="d-flex gap-2">
+        <span class="v19-meta-pill">{{ total_tasks }} Tasks</span>
+        <span class="v19-meta-pill">{{ total_dependencies }} Abhängigkeiten</span>
+      </div>
+    </div>
+    <div class="v19-delivery-grid">
+      {% for row in timeline_rows %}
+      <div class="v19-delivery-card" style="--phase-accent: {{ row.color }}; animation-delay: {{ forloop.counter0 }}00ms;">
+        <div class="eyebrow" style="margin-top:.3rem;">Phase {{ forloop.counter }}</div>
+        <h5>{{ row.phase.name }}</h5>
+        <p>{{ row.phase.objective }}</p>
+        <div class="v19-meta-pills mb-3">
+          <span class="v19-meta-pill">{{ row.phase.duration_weeks }} Wochen</span>
+          <span class="v19-meta-pill">{{ row.task_count }} Aufgaben</span>
+        </div>
+        <div class="v19-task-list">
+          {% for task in row.tasks|slice:":5" %}
+            <div class="v19-task-item">
+              <strong>{{ task.title|truncatechars:56 }}</strong>
+              <small>{{ task.priority|default:'–' }} · {{ task.owner_role|default:'Owner offen' }}{% if task.due_date %} · fällig {{ task.due_date|date:"d.m.Y" }}{% endif %}</small>
+            </div>
+          {% empty %}
+            <div class="small" style="color:#94a3b8;">Keine Aufgaben.</div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

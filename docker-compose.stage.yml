@@ -1,0 +1,38 @@
+services:
+  app:
+    environment:
+      DEBUG: "False"
+      RUN_SEEDS: "0"
+      RUN_COLLECTSTATIC: "1"
+      APP_SERVER: gunicorn
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+    volumes:
+      - media_data:/app/media
+      - static_data:/app/staticfiles
+      - model_data:/app/models
+
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      NGINX_HOST: ${NGINX_HOST:-stage.localhost}
+      NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-50m}
+      NGINX_PROXY_READ_TIMEOUT: ${NGINX_PROXY_READ_TIMEOUT:-300}
+    ports:
+      - "8080:80"
+    volumes:
+      - ./docker/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - media_data:/var/www/media:ro
+      - static_data:/var/www/static:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health/live/ || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  model_data:

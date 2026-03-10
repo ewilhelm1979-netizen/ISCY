@@ -1,0 +1,16 @@
+services:
+  db:
+    ports:
+      - "5432:5432"
+
+  app:
+    environment:
+      DEBUG: "True"
+      RUN_SEEDS: "1"
+      APP_SERVER: runserver
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - media_data:/app/media
+      - static_data:/app/staticfiles

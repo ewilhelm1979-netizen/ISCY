@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}ISMS-Navigator{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 style="font-weight:800; letter-spacing:-.02em;" class=" mb-1">ISMS-Navigator</h1>
+    {% if tenant %}<p class="text-muted mb-0">Geführte Umsetzung für {{ tenant.name }}</p>{% endif %}
+  </div>
+  <a href="/dashboard/" class="btn btn-outline-secondary">Kennzahlen-Dashboard</a>
+</div>
+
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+{% if state %}
+<div class="row g-4 mb-4">
+  <div class="col-lg-8">
+    <div class="v19-glass-card h-100">
+      <div>
+        <h2 class="h5">Was ist jetzt zu tun?</h2>
+        <div class="progress mb-3" role="progressbar" aria-label="Guidance progress" aria-valuenow="{{ state.progress_percent }}" aria-valuemin="0" aria-valuemax="100" style="height: 22px;">
+          <div class="progress-bar" style="width: {{ state.progress_percent }}%;">{{ state.progress_percent }}%</div>
+        </div>
+        <p class="mb-2"><strong>Zusammenfassung:</strong> {{ state.summary }}</p>
+        <p class="mb-3"><strong>Nächste empfohlene Aktion:</strong> {{ state.next_action_text }}</p>
+        <div class="d-flex gap-2 flex-wrap">
+          {% if state.current_step %}
+          <a class="btn btn-primary" href="{% url 'guidance:step-detail' state.current_step.id %}">Schritt öffnen</a>
+          {% endif %}
+          {% if next_step_url %}
+          <a class="btn btn-outline-primary" href="{{ next_step_url }}">{{ next_step_label|default:'Direkt umsetzen' }}</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4">
+    <div class="v19-glass-card h-100">
+      <div>
+        <h2 class="h5">Warum das wichtig ist</h2>
+        <p class="text-muted mb-3">Die App führt nicht nur durch Formulare, sondern erklärt den fachlichen Zweck jedes Schritts.</p>
+        <ul class="small mb-0">
+          <li>Readiness statt bloßer Dokumentenablage</li>
+          <li>klare Reihenfolge von Betroffenheit bis Maßnahmen</li>
+          <li>sichtbare Lücken und konkrete nächste Schritte</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="v19-glass-card mb-4">
+      <div>
+        <h2 class="h5">Offene To-dos</h2>
+        <ul class="list-group list-group-flush">
+          {% for item in todo_items %}
+          <li class="list-group-item">{{ item }}</li>
+          {% empty %}
+          <li class="list-group-item">Aktuell keine offenen To-dos erkannt.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+
+    <div class="v19-glass-card">
+      <div>
+        <h2 class="h5">Geführte Schritte</h2>
+        <div class="table-responsive">
+          <table class="table align-middle">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Phase</th>
+                <th>Schritt</th>
+                <th>Aktion</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for step in steps %}
+              <tr>
+                <td>{{ step.sort_order }}</td>
+                <td>{{ step.get_phase_display }}</td>
+                <td>
+                  <div class="fw-semibold">{{ step.title }}</div>
+                  <div class="small text-muted">{{ step.description|truncatechars:110 }}</div>
+                </td>
+                <td><a class="btn btn-sm btn-outline-secondary" href="{% url 'guidance:step-detail' step.id %}">Öffnen</a></td>
+              </tr>
+              {% empty %}
+              <tr><td colspan="4">Keine Guidance Steps vorhanden.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="v19-glass-card">
+      <div>
+        <h2 class="h5">Phasenüberblick</h2>
+        <ul class="list-group list-group-flush">
+          {% for phase in phase_progress %}
+          <li class="list-group-item d-flex justify-content-between align-items-center">
+            <span>{{ phase.label }}</span>
+            <span class="badge text-bg-primary">{{ phase.total_steps }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Roadmap-Aufgabe pflegen{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="v19-glass-card">
+      <div>
+        <h1>Roadmap-Aufgabe pflegen</h1>
+        <p class="text-muted">Status, Deadlines und Hinweise können hier manuell verfeinert werden.</p>
+        <div class="alert alert-light">
+          <strong>{{ object.title }}</strong><br>
+          {{ object.description }}
+        </div>
+        <form method="post">
+          {% csrf_token %}
+          {{ form.as_p }}
+          <button class="btn btn-primary">Speichern</button>
+          <a class="btn btn-outline-secondary" href="{% url 'roadmap:detail' object.phase.plan_id %}">Zurück</a>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4">
+    <div class="v19-glass-card">
+      <div>
+        <h4>Warum das hilft</h4>
+        <ul class="mb-0">
+          <li>Projektplan wird operativ nutzbar</li>
+          <li>Deadlines und Status machen Umsetzung messbar</li>
+          <li>Abhängigkeiten und Blocker werden sichtbar</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

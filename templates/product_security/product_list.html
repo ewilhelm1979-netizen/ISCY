@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Product Security{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1 style="font-weight:800; letter-spacing:-.02em;">Product Security</h1>
+    <p class="text-muted mb-0">Produkte, Releases, Threat Models, TARA, PSIRT und Product-Security-Readiness.</p>
+  </div>
+</div>
+{% if matrix %}
+<div class="v19-glass-card mb-4"><div>
+  <h3>Applicability Matrix</h3>
+  <div class="row g-3">
+    {% for key, item in matrix.items %}
+      {% if key != 'summary' %}
+      <div class="col-md-3"><div class="card h-100 border-0 shadow-sm"><div class="card-body">
+        <div class="d-flex justify-content-between align-items-start"><strong>{{ item.label }}</strong><span class="badge {% if item.applicable %}text-bg-primary{% else %}text-bg-light{% endif %}">{% if item.applicable %}aktiv{% else %}derzeit nein{% endif %}</span></div>
+        <p class="small text-muted mt-2 mb-0">{{ item.reason }}</p>
+      </div></div></div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <p class="mt-3 mb-0"><strong>Zusammenfassung:</strong> {{ matrix.summary }}</p>
+</div></div>
+{% endif %}
+{% if posture %}
+<div class="row g-3 mb-4">
+  <div class="col-md-2"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="small text-muted">Produkte</div><div class="display-6 fw-bold">{{ posture.products }}</div></div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="small text-muted">Aktive Releases</div><div class="display-6 fw-bold">{{ posture.active_releases }}</div></div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="small text-muted">Threat Models</div><div class="display-6 fw-bold">{{ posture.threat_models }}</div></div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="small text-muted">TARAs</div><div class="display-6 fw-bold">{{ posture.taras }}</div></div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="small text-muted">Offene Vulns</div><div class="display-6 fw-bold">{{ posture.open_vulnerabilities }}</div></div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm h-100"><div class="card-body"><div class="small text-muted">PSIRT offen</div><div class="display-6 fw-bold">{{ posture.psirt_cases_open }}</div></div></div></div>
+</div>
+{% endif %}
+<div class="row g-4">
+  <div class="col-lg-7">
+    <div class="v19-glass-card"><div>
+      <h3>Produkte</h3>
+      <div class="table-responsive">
+        <table class="table table-sm align-middle mb-0"><thead><tr><th>Produkt</th><th>Familie</th><th>Release/TM/TARA</th><th>Vulns</th><th>Aktion</th></tr></thead><tbody>
+          {% for product in products %}
+          <tr>
+            <td><strong>{{ product.name }}</strong><div class="small text-muted">{{ product.description|default:'-' }}</div></td>
+            <td>{{ product.family.name|default:'-' }}</td>
+            <td class="small">
+              {{ product.releases.count }} Releases<br>
+              {{ product.threat_models.count }} Threat Models<br>
+              {{ product.taras.count }} TARAs
+            </td>
+            <td class="small">
+              {{ product.vulnerabilities.count }} gesamt<br>
+              {{ product.psirt_cases.count }} PSIRT Cases
+            </td>
+            <td>
+              <a href="{% url 'product_security:detail' product.id %}" class="btn btn-sm btn-outline-primary">Detail</a>
+              <a href="{% url 'product_security:roadmap' product.id %}" class="btn btn-sm btn-outline-secondary">Roadmap</a>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5">Noch keine Produktdaten vorhanden.</td></tr>
+          {% endfor %}
+        </tbody></table>
+      </div>
+    </div></div>
+  </div>
+  <div class="col-lg-5">
+    <div class="v19-glass-card"><div>
+      <h3>Letzte Snapshots</h3>
+      <ul class="mb-0">
+      {% for snap in snapshots %}
+        <li class="mb-2"><strong>{{ snap.product.name }}</strong><br><span class="small text-muted">CRA {{ snap.cra_readiness_percent }}% · AI {{ snap.ai_act_readiness_percent }}% · IEC 62443 {{ snap.iec62443_readiness_percent }}% · ISO/SAE 21434 {{ snap.iso_sae_21434_readiness_percent }}%</span><br><span class="small text-muted">Threat Coverage {{ snap.threat_model_coverage_percent }}% · PSIRT {{ snap.psirt_readiness_percent }}%</span></li>
+      {% empty %}
+        <li>Noch keine Product-Security-Snapshots vorhanden.</li>
+      {% endfor %}
+      </ul>
+    </div></div>
+  </div>
+</div>
+{% endblock %}

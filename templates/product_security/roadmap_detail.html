@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Product-Security-Roadmap{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1>{{ roadmap.title }}</h1>
+    <p class="text-muted mb-1">{{ product.name }}</p>
+    <p class="mb-0">{{ roadmap.summary }}</p>
+  </div>
+  <div>
+    <a href="{% url 'product_security:detail' product.id %}" class="btn btn-outline-secondary">Zum Produkt</a>
+  </div>
+</div>
+{% if snapshot %}
+<div class="row g-3 mb-4">
+  <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><div class="small text-muted">CRA</div><div class="display-6 fw-bold">{{ snapshot.cra_readiness_percent }}%</div></div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><div class="small text-muted">AI Act</div><div class="display-6 fw-bold">{{ snapshot.ai_act_readiness_percent }}%</div></div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><div class="small text-muted">IEC 62443</div><div class="display-6 fw-bold">{{ snapshot.iec62443_readiness_percent }}%</div></div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><div class="small text-muted">21434</div><div class="display-6 fw-bold">{{ snapshot.iso_sae_21434_readiness_percent }}%</div></div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><div class="small text-muted">Threat</div><div class="display-6 fw-bold">{{ snapshot.threat_model_coverage_percent }}%</div></div></div></div>
+  <div class="col-md-2"><div class="card border-0 shadow-sm"><div class="card-body"><div class="small text-muted">PSIRT</div><div class="display-6 fw-bold">{{ snapshot.psirt_readiness_percent }}%</div></div></div></div>
+</div>
+{% endif %}
+<div class="row g-4">
+  {% for phase, tasks in grouped_tasks.items %}
+  <div class="col-lg-6">
+    <div class="v19-glass-card h-100"><div>
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0">{{ phase.1 }}</h3>
+        <span class="badge text-bg-light">{{ tasks|length }} Aufgaben</span>
+      </div>
+      {% if tasks %}
+        <div class="d-grid gap-3">
+          {% for task in tasks %}
+          <div class="card border-0 shadow-sm"><div class="card-body">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <strong>{{ task.title }}</strong>
+              <span class="badge {% if task.priority == 'CRITICAL' %}text-bg-danger{% elif task.priority == 'HIGH' %}text-bg-warning{% else %}text-bg-light{% endif %}">{{ task.priority|default:'-' }}</span>
+            </div>
+            <p class="small text-muted mt-2 mb-2">{{ task.description }}</p>
+            <div class="small text-muted">Owner: {{ task.owner_role|default:'-' }} · Ziel: {{ task.due_in_days }} Tage</div>
+            {% if task.dependency_text %}<div class="small text-muted mt-1">Abhängigkeit: {{ task.dependency_text }}</div>{% endif %}
+            {% if task.related_vulnerability %}<div class="small text-muted mt-1">Bezug: {{ task.related_vulnerability.title }}</div>{% endif %}
+          </div></div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="mb-0">Keine Aufgaben in dieser Phase.</p>
+      {% endif %}
+    </div></div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

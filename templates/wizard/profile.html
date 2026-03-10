@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Schritt 1 – Unternehmensprofil{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="v19-glass-card">
+      <div>
+        <h1>Schritt 1 – Unternehmensprofil</h1>
+        <p class="text-muted">Was ist zu tun? Erfasse Grunddaten, Sektor, Länder und – für Softwareentwicklungsunternehmen – den Product-Security-/Secure-Development-Kontext.</p>
+        <form method="post">
+          {% csrf_token %}
+          {{ form.as_p }}
+          <button class="btn btn-primary">Weiter zum Betroffenheitscheck</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4">
+    <div class="v19-glass-card mb-4">
+      <div>
+        <h4>Warum ist das wichtig?</h4>
+        <p>Branche, Größe, kritische Leistungen und Konzernkontext bestimmen, ob ein Unternehmen regulatorisch näher an NIS2/KRITIS liegt. Für Softwareentwicklungsunternehmen beeinflussen zusätzlich Product Security, Secure Development, CRA, AI Act, IEC 62443 und ISO/SAE 21434 den weiteren Prozess.</p>
+        <h5>Ergebnis dieses Schritts</h5>
+        <ul class="mb-0">
+          <li>saubere Ausgangsdaten</li>
+          <li>Grundlage für Betroffenheitscheck</li>
+          <li>Grundlage für Product-Security-Applicability</li>
+          <li>Scope- und Priorisierungskontext</li>
+        </ul>
+      </div>
+    </div>
+    {% if sector_context %}
+    <div class="v19-glass-card mb-4">
+      <div>
+        <h4>Sektor-Auswirkung</h4>
+        <p><strong>{{ sector_context.label }}</strong></p>
+        <p class="small text-muted mb-1">{{ sector_context.nis2_group }} · {{ sector_context.indicative_classification }}</p>
+        <p>{{ sector_context.reasoning }}</p>
+        <p><strong>Einfluss auf den weiteren Prozess:</strong> {{ sector_context.downstream_impact }}</p>
+        <p><strong>Roadmap-Fokus:</strong> {{ sector_context.roadmap_focus|join:", " }}</p>
+        {% if country_context %}<hr><p><strong>Länder-Kontext:</strong> {{ country_context.display }}</p><p class="mb-0">{{ country_context.geo_impact }}</p>{% endif %}
+      </div>
+    </div>
+    {% endif %}
+    {% if product_matrix %}
+    <div class="v19-glass-card">
+      <div>
+        <h4>Product Security / Cyber Security Management System</h4>
+        <p class="small text-muted">Zusätzliche Applicability-Logik für Software- und Produktentwicklung.</p>
+        <ul class="mb-0">
+          <li>CRA: {% if product_matrix.cra.applicable %}relevant{% else %}derzeit nicht im Fokus{% endif %}</li>
+          <li>AI Act: {% if product_matrix.ai_act.applicable %}relevant{% else %}derzeit nicht im Fokus{% endif %}</li>
+          <li>IEC 62443: {% if product_matrix.iec62443.applicable %}relevant{% else %}derzeit nicht im Fokus{% endif %}</li>
+          <li>ISO/SAE 21434: {% if product_matrix.iso_sae_21434.applicable %}relevant{% else %}derzeit nicht im Fokus{% endif %}</li>
+        </ul>
+        <p class="mt-3 mb-0"><strong>Zusammenfassung:</strong> {{ product_matrix.summary }}</p>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

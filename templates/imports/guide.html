@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Import-Guide{% endblock %}
+{% block content %}
+<div class="v19-glass-card">
+  <div>
+    <div class="d-flex justify-content-between align-items-start mb-3 flex-wrap gap-2">
+      <div>
+        <h1>Import-Guide</h1>
+        <p class="text-muted mb-0">Hier siehst du die erwarteten Spalten je Registertyp und welche alternativen Spaltennamen ebenfalls erkannt werden.</p>
+      </div>
+      <a class="btn btn-outline-secondary" href="{% url 'imports:center' %}">Zurück</a>
+    </div>
+    {% for key, cols in examples.items %}
+      <div class="mb-4">
+        <h3 class="h5">{{ key }}</h3>
+        <table class="table table-sm">
+          <thead><tr><th>Erwartete Spalte</th><th>Erkannte Alternativen</th></tr></thead>
+          <tbody>
+          {% for col in cols %}
+            <tr>
+              <td><code>{{ col }}</code></td>
+              <td>{% if synonyms|get_item:col %}{{ synonyms|get_item:col|join:', ' }}{% else %}<span class="text-muted">–</span>{% endif %}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

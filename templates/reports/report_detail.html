@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}{{ report.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1>{{ report.title }}</h1>
+    <p class="text-muted mb-1">{{ report.tenant.name }}</p>
+    <p class="mb-1"><strong>Länder / Präsenz:</strong> {{ report.tenant.countries_display }}</p>
+    <p class="mb-0"><strong>Betroffenheit:</strong> {{ report.applicability_result }}</p>
+  </div>
+  <div class="d-flex gap-2">
+    <a class="btn btn-outline-secondary" href="{% url 'reports:pdf' report.id %}">PDF (einfach)</a>
+    <a class="btn btn-primary" href="{% url 'reports:pdf_pro' report.id %}">PDF Audit-Report</a>
+    {% if report.session.roadmap_plans.first %}<a class="btn btn-outline-primary" href="{% url 'roadmap:pdf' report.session.roadmap_plans.first.id %}">Roadmap-PDF</a>{% endif %}
+  </div>
+</div>
+<div class="row g-4 mb-4">
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>ISO</h5><p class="display-6 mb-0">{{ report.iso_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>NIS2</h5><p class="display-6 mb-0">{{ report.nis2_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>CRA</h5><p class="display-6 mb-0">{{ report.cra_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>AI Act</h5><p class="display-6 mb-0">{{ report.ai_act_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>IEC 62443</h5><p class="display-6 mb-0">{{ report.iec62443_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>21434</h5><p class="display-6 mb-0">{{ report.iso_sae_21434_readiness_percent }}%</p></div></div></div>
+</div>
+<div class="v19-glass-card mb-4"><div>
+  <h3>Regulatory / Product Security Matrix</h3>
+  <div class="row g-3">
+    {% for key, item in report.regulatory_matrix_json.items %}
+      {% if key != 'summary' %}
+      <div class="col-md-3"><div class="card h-100 border-0 shadow-sm"><div class="card-body"><div class="d-flex justify-content-between align-items-start"><strong>{{ item.label }}</strong><span class="badge {% if item.applicable %}text-bg-primary{% else %}text-bg-light{% endif %}">{% if item.applicable %}aktiv{% else %}nein{% endif %}</span></div><p class="small text-muted mt-2 mb-0">{{ item.reason }}</p></div></div></div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <p class="mt-3 mb-0"><strong>Zusammenfassung:</strong> {{ report.regulatory_matrix_json.summary }}</p>
+</div></div>
+<div class="row g-4 mb-4">
+  <div class="col-lg-7"><div class="v19-glass-card h-100"><div><h3>Domänen-Radar</h3><canvas id="reportRadarChart" height="240"></canvas></div></div></div>
+  <div class="col-lg-5"><div class="v19-glass-card h-100"><div><h3>Heatmap / Gap-Matrix</h3><div class="heatmap-grid">{% for item in report.domain_scores_json %}<div class="heat-cell {{ item.score_percent|heat_class }}"><strong>{{ item.domain }}</strong><span>{{ item.score_percent }}%</span><small>{{ item.maturity_level }}</small></div>{% endfor %}</div></div></div></div>
+</div>
+<div class="v19-glass-card mb-4"><div><h3>Executive Summary</h3><p>{{ report.executive_summary }}</p></div></div>
+<div class="row g-4 mb-4">
+  <div class="col-lg-6"><div class="v19-glass-card"><div><h3>Top Gaps</h3><ul>{% for item in report.top_gaps_json %}<li>{{ item.title }}{% if item.severity %} – <span class="badge {% if item.severity == 'CRITICAL' %}text-bg-danger{% elif item.severity == 'HIGH' %}text-bg-warning{% else %}text-bg-primary{% endif %}">{{ item.severity }}</span>{% endif %}</li>{% empty %}<li>Keine Einträge.</li>{% endfor %}</ul></div></div></div>
+  <div class="col-lg-6"><div class="v19-glass-card"><div><h3>Top Maßnahmen / Pakete</h3><ul>{% for item in report.top_measures_json %}<li>{{ item.title }}{% if item.priority %} – <span class="badge {{ item.priority|priority_badge }}">{{ item.priority }}</span>{% endif %}</li>{% empty %}<li>Keine Einträge.</li>{% endfor %}</ul></div></div></div>
+</div>
+<div class="v19-glass-card mb-4"><div><h3>Maßnahmen mit Evidenzpflichten</h3><div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Maßnahme</th><th>Offen</th><th>Teilweise</th><th>Abgedeckt</th><th>Beispielhafte Nachweise</th></tr></thead><tbody>{% for row in measure_evidence_rows %}<tr><td><strong>{{ row.measure.title }}</strong><div class="small text-muted">{{ row.measure.domain.name|default:'Allgemein' }}</div></td><td>{{ row.summary.open }}</td><td>{{ row.summary.partial }}</td><td>{{ row.summary.covered }}</td><td class="small">{% for need in row.summary.items %}<div>{{ need.requirement.framework }} {{ need.requirement.code }} – {{ need.get_status_display }}</div>{% empty %}Keine verknüpften Evidenzpflichten.{% endfor %}</td></tr>{% empty %}<tr><td colspan="5">Noch keine Maßnahmen vorhanden.</td></tr>{% endfor %}</tbody></table></div></div></div>
+<div class="v19-glass-card mt-4 mb-4"><div><h3>Evidenzpflichten je Requirement</h3><div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Requirement</th><th>Status</th><th>Leitfaden</th><th></th></tr></thead><tbody>{% for need in evidence_needs %}<tr><td><strong>{{ need.requirement.framework }} {{ need.requirement.code }}</strong><div class="small text-muted">{{ need.requirement.title }}</div></td><td><span class="badge {% if need.status == 'OPEN' %}text-bg-danger{% elif need.status == 'PARTIAL' %}text-bg-warning{% else %}text-bg-success{% endif %}">{{ need.get_status_display }}</span><div class="small text-muted">{{ need.covered_count }} Evidenz(en)</div></td><td class="small">{{ need.description|default:need.rationale }}</td><td><a class="btn btn-sm btn-outline-primary" href="/evidence/new/?session={{ report.session.id }}&requirement={{ need.requirement.id }}">Nachweis anlegen</a></td></tr>{% empty %}<tr><td colspan="4">Noch keine Evidenzpflichten generiert.</td></tr>{% endfor %}</tbody></table></div></div></div>
+<div class="v19-glass-card mt-4"><div><h3>Roadmap</h3><ul>{% for item in report.roadmap_summary %}<li><strong>{{ item.name }}</strong> – {{ item.duration_weeks }} Wochen – {{ item.objective }}</li>{% empty %}<li>Keine Roadmap vorhanden.</li>{% endfor %}</ul></div></div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  const reportChart = document.getElementById('reportRadarChart');
+  if (reportChart) {
+    const domainData = {{ report.domain_scores_json|to_json|safe }};
+    new Chart(reportChart, {
+      type: 'radar',
+      data: {labels: domainData.map(item => item.domain), datasets: [{label: 'Domänenscore %', data: domainData.map(item => item.score_percent), fill: true, tension: 0.25, borderWidth: 2}]},
+      options: { scales: { r: { suggestedMin: 0, suggestedMax: 100 } } }
+    });
+  }
+</script>
+{% endblock %}

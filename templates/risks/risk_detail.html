@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ risk.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div><h1 style="font-weight:800;">{{ risk.title }}</h1><p style="color:#64748b;">{{ risk.tenant.name }} · {{ risk.get_status_display }}</p></div>
+  <div class="d-flex gap-2"><a class="btn btn-outline-primary btn-sm" href="{% url 'risks:edit' risk.pk %}" style="border-radius:12px;">Bearbeiten</a><a class="btn btn-outline-secondary btn-sm" href="{% url 'risks:list' %}" style="border-radius:12px;">Zurück</a></div>
+</div>
+<div class="row g-4">
+  <div class="col-lg-4">
+    <div class="v19-glass-card h-100">
+      <div class="eyebrow">Risikobewertung</div>
+      <div class="d-flex gap-3 mt-2 mb-3">
+        <div class="text-center"><div style="font-size:2rem; font-weight:800; color:{% if risk.risk_level == 'CRITICAL' %}#dc2626{% elif risk.risk_level == 'HIGH' %}#ea580c{% elif risk.risk_level == 'MEDIUM' %}#f59e0b{% else %}#22c55e{% endif %};">{{ risk.score }}</div><div style="font-size:.72rem; color:#94a3b8; font-weight:700;">BRUTTO</div></div>
+        {% if risk.residual_score %}<div style="font-size:1.5rem; color:#94a3b8; align-self:center;">→</div>
+        <div class="text-center"><div style="font-size:2rem; font-weight:800; color:#3b82f6;">{{ risk.residual_score }}</div><div style="font-size:.72rem; color:#94a3b8; font-weight:700;">NETTO</div></div>{% endif %}
+      </div>
+      <p class="mb-1"><strong>Auswirkung:</strong> {{ risk.get_impact_display }}</p>
+      <p class="mb-1"><strong>Wahrscheinlichkeit:</strong> {{ risk.get_likelihood_display }}</p>
+      <p class="mb-1"><strong>Risikolevel:</strong> {{ risk.risk_level_label }}</p>
+      {% if risk.treatment_strategy %}<p class="mb-1"><strong>Behandlung:</strong> {{ risk.get_treatment_strategy_display }}</p>{% endif %}
+    </div>
+  </div>
+  <div class="col-lg-8">
+    <div class="v19-glass-card h-100">
+      <div class="eyebrow">Details</div>
+      <p class="mb-2"><strong>Beschreibung:</strong> {{ risk.description }}</p>
+      {% if risk.threat %}<p class="mb-2"><strong>Bedrohung:</strong> {{ risk.threat }}</p>{% endif %}
+      {% if risk.vulnerability %}<p class="mb-2"><strong>Schwachstelle:</strong> {{ risk.vulnerability }}</p>{% endif %}
+      {% if risk.treatment_plan %}<p class="mb-2"><strong>Behandlungsplan:</strong> {{ risk.treatment_plan }}</p>{% endif %}
+      <div class="d-flex gap-3 flex-wrap mt-3">
+        {% if risk.owner %}<span class="v19-meta-pill">Owner: {{ risk.owner }}</span>{% endif %}
+        {% if risk.process %}<span class="v19-meta-pill">Prozess: {{ risk.process }}</span>{% endif %}
+        {% if risk.review_date %}<span class="v19-meta-pill">Review: {{ risk.review_date|date:"d.m.Y" }}</span>{% endif %}
+        {% if risk.treatment_due_date %}<span class="v19-meta-pill">Fällig: {{ risk.treatment_due_date|date:"d.m.Y" }}</span>{% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

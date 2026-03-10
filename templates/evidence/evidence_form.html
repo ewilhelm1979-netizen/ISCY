@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Evidenz erfassen{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="v19-glass-card">
+      <h1 style="font-weight:800; font-size:1.5rem; margin-bottom:.5rem;">Evidenz erfassen</h1>
+      <p style="color:#64748b; margin-bottom:1.25rem;">Dokumentiere Nachweise fuer Kontrollen, Massnahmen und Reviews.</p>
+      <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        {% for field in form %}
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:.88rem;">{{ field.label }}</label>
+          {{ field }}
+          {% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}
+          {% for error in field.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+        </div>
+        {% endfor %}
+        <button class="btn btn-primary" style="border-radius:12px;">Speichern</button>
+        <a class="btn btn-outline-secondary ms-2" href="{% url 'evidence:list' %}" style="border-radius:12px;">Abbrechen</a>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-4">
+    <div class="v19-glass-card">
+      <div class="eyebrow mb-2">Warum ist das wichtig?</div>
+      <p style="font-size:.88rem; color:#475569; line-height:1.55;">Nachweise belegen Umsetzungsstand und Wirksamkeit. Audits brauchen belastbare Evidenzen, nicht nur Aussagen. Jede Evidenz kann direkt einer Massnahme und einer Anforderung zugeordnet werden.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}

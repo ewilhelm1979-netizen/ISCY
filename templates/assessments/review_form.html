@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}{% if form.instance.pk %}Review bearbeiten{% else %}Neue Management Review{% endif %}{% endblock %}
+{% block content %}
+<h1 class="mb-2" style="font-weight:800;">{% if form.instance.pk %}Management Review bearbeiten{% else %}Neue Management Review{% endif %}</h1>
+<p class="mb-4" style="color:#64748b;">Felder nach ISO 27001 Kap. 9.3 strukturiert: Inputs, Session-Daten, Outputs.</p>
+<div class="v19-glass-card" style="max-width:900px;">
+  <form method="post">{% csrf_token %}
+    <h4 class="mb-3" style="font-size:1rem; font-weight:700;">Allgemein</h4>
+    {% for field in form %}
+      {% if field.name == 'input_isms_status' %}<hr class="my-4"><h4 class="mb-3" style="font-size:1rem; font-weight:700;">Inputs (ISO 9.3.2)</h4>{% endif %}
+      {% if field.name == 'output_decisions' %}<hr class="my-4"><h4 class="mb-3" style="font-size:1rem; font-weight:700;">Outputs / Entscheidungen (ISO 9.3.3)</h4>{% endif %}
+      {% if field.name == 'protocol_summary' %}<hr class="my-4"><h4 class="mb-3" style="font-size:1rem; font-weight:700;">Protokoll</h4>{% endif %}
+      <div class="mb-3"><label class="form-label fw-semibold">{{ field.label }}</label>{{ field }}{% if field.help_text %}<div class="form-text">{{ field.help_text }}</div>{% endif %}</div>
+    {% endfor %}
+    <button class="btn btn-primary" style="border-radius:12px;">Speichern</button>
+  </form>
+</div>
+{% endblock %}

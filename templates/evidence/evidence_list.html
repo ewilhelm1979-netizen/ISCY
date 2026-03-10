@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Evidenzen{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1 style="font-weight:800; letter-spacing:-.02em;">Evidenzen & Nachweise</h1>
+    <p style="color:#64748b;" class="mb-0">Nachweisablage mit Status-Tracking und Requirement-Zuordnung.</p>
+  </div>
+  <a class="btn btn-primary btn-sm" href="{% url 'evidence:create' %}" style="border-radius:12px;">Neue Evidenz</a>
+</div>
+{% if evidence_needs %}
+<div class="v19-glass-card mb-4">
+  <div class="eyebrow mb-3">Offene Nachweispflichten</div>
+  <div class="table-responsive">
+    <table class="table table-hover mb-0" style="font-size:.86rem;">
+      <thead><tr><th>Requirement</th><th>Beschreibung</th><th>Status</th><th>Abgedeckt</th></tr></thead>
+      <tbody>
+      {% for need in evidence_needs %}
+        <tr>
+          <td><strong>{{ need.requirement.framework }} {{ need.requirement.code }}</strong></td>
+          <td style="max-width:300px;">{{ need.title|truncatechars:60 }}</td>
+          <td><span class="v19-meta-pill" style="{% if need.status == 'OPEN' %}color:#dc2626; border-color:#fca5a5; background:#fef2f2;{% elif need.status == 'PARTIAL' %}color:#f59e0b; border-color:#fde68a; background:#fffbeb;{% else %}color:#22c55e; border-color:#86efac; background:#f0fdf4;{% endif %}">{{ need.get_status_display }}</span></td>
+          <td>{{ need.covered_count }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+<div class="v19-glass-card">
+  <div class="eyebrow mb-3">Hochgeladene Evidenzen</div>
+  <div class="table-responsive">
+    <table class="table table-hover mb-0" style="font-size:.86rem;">
+      <thead><tr><th>Titel</th><th>Requirement</th><th>Status</th><th>Owner</th><th>Aktualisiert</th></tr></thead>
+      <tbody>
+      {% for item in evidence_items %}
+        <tr>
+          <td style="font-weight:600;">{{ item.title }}</td>
+          <td>{{ item.requirement_display|default:"–" }}</td>
+          <td><span class="v19-meta-pill">{{ item.get_status_display }}</span></td>
+          <td>{{ item.owner|default:"–" }}</td>
+          <td style="font-size:.82rem; color:#94a3b8;">{{ item.updated_at|date:"d.m.Y" }}</td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="5" style="color:#94a3b8;">Noch keine Evidenzen hochgeladen.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

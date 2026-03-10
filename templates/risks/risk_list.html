@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Risikoregister{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1 style="font-weight:800; letter-spacing:-.02em;">Risikoregister</h1>
+    <p style="color:#64748b;" class="mb-0">Identifizierte Risiken mit 5×5-Bewertungsmatrix und Behandlungsstatus.</p>
+  </div>
+  <a class="btn btn-primary btn-sm" href="{% url 'risks:create' %}" style="border-radius:12px;">Neues Risiko</a>
+</div>
+
+{# ── Summary Cards ── #}
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg-3"><div class="v19-metric" style="animation-delay:.05s"><div class="v19-metric-label">Gesamt</div><div class="v19-metric-value">{{ summary.total }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="v19-metric" style="animation-delay:.1s; --top-color:#dc2626;"><div class="v19-metric-label" style="color:#dc2626;">Kritisch</div><div class="v19-metric-value" style="color:#dc2626;">{{ summary.critical }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="v19-metric" style="animation-delay:.15s"><div class="v19-metric-label" style="color:#ea580c;">Hoch</div><div class="v19-metric-value" style="color:#ea580c;">{{ summary.high }}</div></div></div>
+  <div class="col-6 col-lg-3"><div class="v19-metric" style="animation-delay:.2s"><div class="v19-metric-label" style="color:#22c55e;">Mittel / Niedrig</div><div class="v19-metric-value" style="color:#22c55e;">{{ summary.medium|add:summary.low }}</div></div></div>
+</div>
+
+{# ── 5×5 Risk Heatmap ── #}
+<div class="v19-glass-card mb-4" style="overflow-x:auto;">
+  <div class="eyebrow mb-3">5×5 Risikomatrix – Auswirkung × Eintrittswahrscheinlichkeit</div>
+  <table style="border-collapse:separate; border-spacing:4px; width:100%; min-width:600px;">
+    <thead>
+      <tr>
+        <th style="width:140px; text-align:right; padding:.4rem .6rem; font-size:.72rem; color:#94a3b8; font-weight:700; vertical-align:bottom;">Wahrscheinlichkeit ↓ / Auswirkung →</th>
+        {% for label in impact_labels %}
+          <th style="text-align:center; padding:.4rem; font-size:.75rem; font-weight:700; color:#475569;">{{ label }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in matrix %}
+      <tr>
+        <td style="text-align:right; padding:.4rem .6rem; font-size:.75rem; font-weight:700; color:#475569;">{{ likelihood_labels|cut:" "|truncatechars:20 }}{% with idx=row.likelihood %}{% if idx == 5 %}Sehr wahrscheinlich{% elif idx == 4 %}Wahrscheinlich{% elif idx == 3 %}Moeglich{% elif idx == 2 %}Selten{% else %}Unwahrscheinlich{% endif %}{% endwith %}</td>
+        {% for cell in row.cells %}
+        <td style="
+          background: {{ cell.bg_color }};
+          border: 2px solid {{ cell.color }}40;
+          border-radius: 12px;
+          text-align: center;
+          padding: .65rem .4rem;
+          min-width: 80px;
+          cursor: {% if cell.count %}pointer{% else %}default{% endif %};
+          transition: all .2s ease;
+        " {% if cell.count %}title="{% for r in cell.risks %}{{ r.title }}&#10;{% endfor %}"{% endif %}>
+          <div style="font-size:1.3rem; font-weight:800; color:{{ cell.color }};">{% if cell.count %}{{ cell.count }}{% else %}&nbsp;{% endif %}</div>
+          <div style="font-size:.65rem; font-weight:700; color:{{ cell.color }}80;">{{ cell.score }}</div>
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# ── Risk Table ── #}
+<div class="v19-glass-card">
+  <div class="eyebrow mb-3">Risikoliste</div>
+  <div class="table-responsive">
+    <table class="table table-hover mb-0" style="font-size:.88rem;">
+      <thead><tr>
+        <th>Risiko</th><th>Kategorie</th><th>Auswirkung</th><th>Wahrscheinl.</th><th>Score</th><th>Level</th><th>Status</th><th>Owner</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for risk in risks %}
+        <tr>
+          <td><a href="{% url 'risks:detail' risk.pk %}" style="font-weight:600;">{{ risk.title|truncatechars:45 }}</a></td>
+          <td>{{ risk.category|default:"–" }}</td>
+          <td>{{ risk.get_impact_display }}</td>
+          <td>{{ risk.get_likelihood_display }}</td>
+          <td><strong>{{ risk.score }}</strong></td>
+          <td>
+            <span style="
+              display:inline-block; padding:.2rem .55rem; border-radius:999px; font-size:.72rem; font-weight:700;
+              background:{% if risk.risk_level == 'CRITICAL' %}#fef2f2; color:#dc2626;{% elif risk.risk_level == 'HIGH' %}#fff7ed; color:#ea580c;{% elif risk.risk_level == 'MEDIUM' %}#fffbeb; color:#f59e0b;{% else %}#f0fdf4; color:#22c55e;{% endif %}
+            ">{{ risk.risk_level_label }}</span>
+          </td>
+          <td>{{ risk.get_status_display }}</td>
+          <td>{{ risk.owner|default:"–" }}</td>
+          <td><a href="{% url 'risks:edit' risk.pk %}" class="btn btn-sm btn-outline-secondary" style="border-radius:8px; font-size:.75rem;">Edit</a></td>
+        </tr>
+      {% empty %}
+        <tr><td colspan="9" style="color:#94a3b8;">Noch keine Risiken erfasst.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

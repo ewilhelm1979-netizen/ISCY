@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ process.name }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1 style="font-weight:800;">{{ process.name }}</h1>
+    <p style="color:#64748b;">{{ process.tenant.name }} · {{ process.get_status_display }}</p>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="{% url 'processes:list' %}" style="border-radius:12px;">Zurueck</a>
+</div>
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="v19-glass-card h-100">
+      <div class="eyebrow mb-2">Details</div>
+      {% if process.scope %}<p class="mb-2"><strong>Scope:</strong> {{ process.scope }}</p>{% endif %}
+      {% if process.description %}<p class="mb-2"><strong>Beschreibung:</strong> {{ process.description }}</p>{% endif %}
+      {% if process.owner %}<p class="mb-2"><strong>Owner:</strong> {{ process.owner }}</p>{% endif %}
+      {% if process.reviewed_at %}<p class="mb-0"><strong>Letzter Review:</strong> {{ process.reviewed_at|date:"d.m.Y" }}</p>{% endif %}
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="v19-glass-card h-100">
+      <div class="eyebrow mb-3">10-Dimensionen-Bewertung</div>
+      <div class="row g-2">
+        {% for label, value in dimensions %}
+        <div class="col-6 col-md-4">
+          <div style="border:1px solid rgba(148,163,184,.12); border-radius:12px; padding:.6rem .75rem; text-align:center; background:{% if value %}rgba(34,197,94,.06){% else %}rgba(241,245,249,.5){% endif %};">
+            <div style="font-size:1.3rem;">{% if value %}✅{% else %}⬜{% endif %}</div>
+            <div style="font-size:.78rem; font-weight:650; color:{% if value %}#22c55e{% else %}#94a3b8{% endif %}; margin-top:.2rem;">{{ label }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

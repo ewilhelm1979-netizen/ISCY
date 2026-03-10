@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}{{ soa.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div><h1 style="font-weight:800;">{{ soa.title }}</h1><p style="color:#64748b;">Version {{ soa.version }} · {{ soa.get_status_display }} · {{ soa.tenant.name }}</p></div>
+  <a class="btn btn-outline-secondary btn-sm" href="{% url 'assessments:soa_list' %}" style="border-radius:12px;">Zurueck</a>
+</div>
+<div class="row g-3 mb-4">
+  <div class="col-4"><div class="v19-metric"><div class="v19-metric-label">Anwendbar</div><div class="v19-metric-value" style="color:#22c55e;">{{ applicable_count }}</div></div></div>
+  <div class="col-4"><div class="v19-metric"><div class="v19-metric-label">Umgesetzt</div><div class="v19-metric-value" style="color:#2563eb;">{{ implemented_count }}</div></div></div>
+  <div class="col-4"><div class="v19-metric"><div class="v19-metric-label">Ausgeschlossen</div><div class="v19-metric-value" style="color:#94a3b8;">{{ excluded_count }}</div></div></div>
+</div>
+<div class="v19-glass-card">
+  <div class="eyebrow mb-3">Annex-A Controls</div>
+  <div class="table-responsive"><table class="table table-hover mb-0" style="font-size:.86rem;">
+    <thead><tr><th>Code</th><th>Control</th><th>Anwendbar</th><th>Status</th><th>Owner</th><th>Begruendung</th><th></th></tr></thead>
+    <tbody>
+    {% for entry in entries %}
+    <tr style="{% if not entry.is_applicable %}opacity:.55;{% endif %}">
+      <td><strong>{{ entry.requirement.code }}</strong></td>
+      <td>{{ entry.requirement.title }}</td>
+      <td>{% if entry.is_applicable %}<span style="color:#22c55e; font-weight:700;">Ja</span>{% else %}<span style="color:#94a3b8;">Nein</span>{% endif %}</td>
+      <td><span class="v19-meta-pill">{{ entry.get_implementation_status_display }}</span></td>
+      <td>{{ entry.control_owner|default:"–" }}</td>
+      <td style="max-width:200px; font-size:.82rem; color:#64748b;">{{ entry.justification|truncatechars:80|default:"–" }}</td>
+      <td><a href="{% url 'assessments:soa_entry_edit' entry.pk %}" class="btn btn-sm btn-outline-secondary" style="border-radius:8px; font-size:.72rem;">Edit</a></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</div>
+{% endblock %}

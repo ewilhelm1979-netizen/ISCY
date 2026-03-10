@@ -1,0 +1,372 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block content %}
+<style>
+  .dashboard-viewport{width:min(1520px,calc(100vw - 40px));margin-left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:1.5rem;}
+  .mgmt-topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;}
+  .mgmt-topbar h1{font-weight:850;letter-spacing:-.03em;margin-bottom:.35rem;font-size:clamp(2rem,2vw + 1rem,3rem);}
+  .mgmt-topbar p{color:#64748b;max-width:860px;margin:0;}
+  .mgmt-actions{display:flex;gap:.75rem;flex-wrap:wrap;}
+  .kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:1rem;}
+  .kpi-card{background:linear-gradient(180deg,#fff,#f8fbff);border:1px solid #dbe4f0;border-radius:24px;padding:1.15rem 1.2rem;box-shadow:0 12px 24px rgba(15,23,42,.06);min-height:132px;}
+  .kpi-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;font-weight:800;margin-bottom:.6rem;}
+  .kpi-value{font-size:2rem;line-height:1;font-weight:850;color:#0f172a;margin-bottom:.4rem;}
+  .kpi-sub{font-size:.86rem;color:#64748b;line-height:1.4;}
+  .dashboard-filter{background:linear-gradient(180deg,#ffffff,#f8fbff);border:1px solid #dbe4f0;border-radius:26px;padding:1.25rem;box-shadow:0 12px 24px rgba(15,23,42,.05);}
+  .dashboard-main{display:grid;grid-template-columns:minmax(0,1.8fr) minmax(320px,.95fr);gap:1.25rem;align-items:start;}
+  .dashboard-left,.dashboard-right{display:flex;flex-direction:column;gap:1.25rem;}
+  .panel-card{background:#fff;border:1px solid #dbe4f0;border-radius:26px;padding:1.25rem;box-shadow:0 12px 24px rgba(15,23,42,.06);}
+  .panel-head{display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;flex-wrap:wrap;margin-bottom:1rem;}
+  .panel-head h2{font-size:1.18rem;font-weight:800;margin:0 0 .25rem;}
+  .panel-sub{font-size:.93rem;color:#64748b;max-width:820px;}
+  .heat-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;}
+  .heat-card{padding:1rem;border-radius:22px;color:#fff;min-height:154px;display:flex;flex-direction:column;justify-content:space-between;box-shadow:0 12px 26px rgba(15,23,42,.1);}
+  .heat-card strong{font-size:1rem;line-height:1.3;display:block;}
+  .heat-score{font-size:2rem;font-weight:850;line-height:1;margin:.4rem 0;}
+  .heat-meta{font-size:.83rem;opacity:.96;line-height:1.35;}
+  .heat-low{background:linear-gradient(135deg,#f97316,#ea580c);}
+  .heat-mid{background:linear-gradient(135deg,#0284c7,#2563eb);}
+  .heat-high{background:linear-gradient(135deg,#15803d,#059669);}
+  .comparison-shell{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);gap:1rem;align-items:start;}
+  .table-shell{overflow:auto;border:1px solid #e5edf7;border-radius:20px;}
+  .comparison-table{margin:0;min-width:900px;}
+  .comparison-table thead th{position:sticky;top:0;background:#f8fbff;font-size:.74rem;text-transform:uppercase;letter-spacing:.06em;color:#64748b;border-bottom-color:#dbe4f0;z-index:1;}
+  .comparison-table tbody tr:hover{background:#f8fbff;}
+  .comparison-sidebar{display:flex;flex-direction:column;gap:1rem;}
+  .mini-panel{background:#f8fbff;border:1px solid #e5edf7;border-radius:20px;padding:1rem;}
+  .mini-panel h3{font-size:.97rem;font-weight:800;margin:0 0 .75rem;}
+  .summary-list{display:flex;flex-direction:column;gap:.75rem;}
+  .summary-row{padding:.85rem .95rem;border-radius:18px;background:#fff;border:1px solid #e5edf7;}
+  .summary-row .title{font-weight:750;color:#0f172a;}
+  .summary-row .meta{font-size:.86rem;color:#64748b;margin-top:.18rem;line-height:1.35;}
+  .bar-list{display:flex;flex-direction:column;gap:.8rem;}
+  .bar-row{display:grid;grid-template-columns:170px minmax(0,1fr) 58px;gap:.75rem;align-items:center;}
+  .bar-row .label{font-size:.9rem;font-weight:700;color:#0f172a;}
+  .bar-track{height:12px;border-radius:999px;background:#eaf0f7;overflow:hidden;position:relative;}
+  .bar-fill{position:absolute;inset:0 auto 0 0;border-radius:999px;background:linear-gradient(90deg,#2563eb,#38bdf8);}
+  .bar-fill.iso{background:linear-gradient(90deg,#1d4ed8,#60a5fa);}
+  .bar-fill.nis2{background:linear-gradient(90deg,#0f766e,#34d399);}
+  .bar-value{font-size:.84rem;font-weight:800;color:#475569;text-align:right;}
+  .insight-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem;}
+  .insight-card{background:#f8fbff;border:1px solid #e5edf7;border-radius:20px;padding:1rem;}
+  .insight-card h3{font-size:.94rem;font-weight:800;margin:0 0 .75rem;}
+  .insight-list{display:flex;flex-direction:column;gap:.7rem;}
+  .insight-item{padding:.8rem .9rem;background:#fff;border:1px solid #e5edf7;border-radius:16px;}
+  .insight-item strong{display:block;font-size:.9rem;line-height:1.3;margin-bottom:.2rem;}
+  .insight-item small{color:#64748b;display:block;line-height:1.35;}
+  .drill-grid{display:grid;grid-template-columns:1.2fr .9fr .9fr;gap:1rem;}
+  .empty-state{padding:1rem;border:1px dashed #cbd5e1;border-radius:16px;color:#64748b;background:#f8fbff;}
+  @media (max-width: 1400px){.kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr));}.heat-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.insight-grid{grid-template-columns:1fr;}}
+  @media (max-width: 1199.98px){.dashboard-main,.comparison-shell,.drill-grid{grid-template-columns:1fr;}.dashboard-viewport{width:min(100%,calc(100vw - 24px));}.bar-row{grid-template-columns:140px 1fr 52px;}}
+  @media (max-width: 767.98px){.kpi-grid,.heat-grid{grid-template-columns:1fr;}.bar-row{grid-template-columns:1fr;}.bar-value{text-align:left;}}
+</style>
+
+<div class="dashboard-viewport">
+  <div class="mgmt-topbar">
+    <div>
+      <h1>Management-Dashboard</h1>
+      <p>Executive-Portfolioansicht für Sektoren, Länder und Mandanten mit klarer KPI-Zeile, Heatmaps, Vergleichsansicht und fokussierten Management-Insights.</p>
+    </div>
+    <div class="mgmt-actions">
+      <a href="{% url 'dashboard:portfolio-pdf' %}{% if selected_sector or selected_country or selected_tenant %}?{% if selected_sector %}sector={{ selected_sector }}{% endif %}{% if selected_country %}{% if selected_sector %}&{% endif %}country={{ selected_country }}{% endif %}{% if selected_tenant %}{% if selected_sector or selected_country %}&{% endif %}tenant={{ selected_tenant }}{% endif %}{% endif %}" class="btn btn-outline-secondary">Portfolio-PDF</a>
+      <a href="/" class="btn btn-outline-primary">Zum Wizard</a>
+    </div>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi-card">
+      <div class="kpi-label">Portfolio Ø ISO</div>
+      <div class="kpi-value">{{ portfolio_avg_iso }}%</div>
+      <div class="kpi-sub">Durchschnittliche ISO-Readiness über die gefilterten Mandanten.</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Portfolio Ø NIS2</div>
+      <div class="kpi-value">{{ portfolio_avg_nis2 }}%</div>
+      <div class="kpi-sub">Durchschnittliche regulatorische Readiness über das aktuelle Portfolio.</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Mandanten im Scope</div>
+      <div class="kpi-value">{{ total_tenants }}</div>
+      <div class="kpi-sub">Anzahl der aktuell gefilterten Gesellschaften / Business Units im Portfolio.</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Offene Roadmap-Aufgaben</div>
+      <div class="kpi-value">{{ open_task_count }}</div>
+      <div class="kpi-sub">Noch nicht geschlossene Arbeitspakete im aktuellen Default-Mandanten.</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Kritische / hohe Risiken</div>
+      <div class="kpi-value">{{ critical_risk_count }}/{{ high_risk_count }}</div>
+      <div class="kpi-sub">Kritische sowie erhöhte Risiken im fokussierten Mandantenkontext.</div>
+    </div>
+    <div class="kpi-card">
+      <div class="kpi-label">Evidenzen</div>
+      <div class="kpi-value">{{ evidence_count }}</div>
+      <div class="kpi-sub">Vorhandene Nachweise für Assessments, Maßnahmen und Requirements.</div>
+    </div>
+  </div>
+
+  <div class="dashboard-filter">
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-xl-3 col-md-6">
+        <label class="form-label">Sektor filtern</label>
+        <select name="sector" class="form-select">
+          <option value="">Alle Sektoren</option>
+          {% for code, label in available_sectors %}
+          <option value="{{ code }}" {% if selected_sector == code %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-xl-3 col-md-6">
+        <label class="form-label">Land filtern</label>
+        <select name="country" class="form-select">
+          <option value="">Alle Länder</option>
+          {% for label in available_countries %}
+          <option value="{{ label }}" {% if selected_country == label %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-xl-4 col-md-8">
+        <label class="form-label">Drilldown-Mandant</label>
+        <select name="tenant" class="form-select">
+          <option value="">Kein Drilldown</option>
+          {% for item in all_tenants %}
+          <option value="{{ item.id }}" {% if selected_tenant == item.id|stringformat:'s' %}selected{% endif %}>{{ item.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-xl-2 col-md-4 d-grid">
+        <button class="btn btn-primary">Filter anwenden</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="dashboard-main">
+    <div class="dashboard-left">
+      <div class="panel-card">
+        <div class="panel-head">
+          <div>
+            <h2>Sektor- und Länder-Heatmaps</h2>
+            <div class="panel-sub">Visuelle Schwerpunktanalyse für Portfolio-Steuerung. Die Karten zeigen Readiness, Konzentrationen und operative Last in einer managementtauglichen Hauptfläche statt in einer schmalen Seitenleiste.</div>
+          </div>
+        </div>
+        <div class="heat-grid">
+          {% for item in sector_heatmap %}
+          <div class="heat-card {% if item.score >= 70 %}heat-high{% elif item.score >= 45 %}heat-mid{% else %}heat-low{% endif %}">
+            <div>
+              <strong>{{ item.label }}</strong>
+              <div class="heat-score">{{ item.score }}%</div>
+              <div class="heat-meta">NIS2 Ø {{ item.score }}% · ISO Ø {{ item.subscore }}%</div>
+            </div>
+            <div class="heat-meta">{{ item.meta }}</div>
+          </div>
+          {% empty %}
+          <div class="empty-state">Noch keine Sektordaten vorhanden.</div>
+          {% endfor %}
+          {% for item in country_heatmap %}
+          <div class="heat-card {% if item.score >= 70 %}heat-high{% elif item.score >= 45 %}heat-mid{% else %}heat-low{% endif %}">
+            <div>
+              <strong>{{ item.label }}</strong>
+              <div class="heat-score">{{ item.score }}%</div>
+              <div class="heat-meta">ISO Ø {{ item.score }}% · NIS2 Ø {{ item.subscore }}%</div>
+            </div>
+            <div class="heat-meta">{{ item.meta }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="panel-card">
+        <div class="panel-head">
+          <div>
+            <h2>Portfolio-Vergleich</h2>
+            <div class="panel-sub">Mandantenvergleich mit direkter Gegenüberstellung von Sektor, Ländern, Readiness, offenen Tasks und Evidenzen.</div>
+          </div>
+        </div>
+        <div class="comparison-shell">
+          <div class="table-shell">
+            <table class="table comparison-table align-middle">
+              <thead>
+                <tr>
+                  <th>Mandant</th>
+                  <th>Sektor</th>
+                  <th>Länder</th>
+                  <th>ISO</th>
+                  <th>NIS2</th>
+                  <th>Offene Tasks</th>
+                  <th>Evidenzen</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in comparison_rows %}
+                <tr>
+                  <td><strong>{{ row.tenant.name }}</strong></td>
+                  <td>{{ row.sector }}</td>
+                  <td class="small text-muted">{{ row.countries }}</td>
+                  <td><span class="badge {{ row.iso|ampel_class }}">{{ row.iso }}%</span></td>
+                  <td><span class="badge {{ row.nis2|ampel_class }}">{{ row.nis2 }}%</span></td>
+                  <td>{{ row.open_tasks }}</td>
+                  <td>{{ row.evidence }}</td>
+                  <td class="text-nowrap">
+                    <a class="btn btn-sm btn-outline-primary" href="?tenant={{ row.tenant.id }}{% if selected_sector %}&sector={{ selected_sector }}{% endif %}{% if selected_country %}&country={{ selected_country }}{% endif %}">Drilldown</a>
+                    {% if row.report_id %}<a class="btn btn-sm btn-outline-secondary" href="/reports/{{ row.report_id }}/">Bericht</a>{% endif %}
+                  </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="8" class="text-muted">Noch keine Mandanten vorhanden.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <div class="comparison-sidebar">
+            <div class="mini-panel">
+              <h3>Sektorvergleich</h3>
+              <div class="bar-list">
+                {% for item in sector_summary %}
+                <div class="bar-row">
+                  <div class="label">{{ item.sector|truncatechars:24 }}</div>
+                  <div class="bar-track"><div class="bar-fill nis2" style="width: {{ item.avg_nis2 }}%;"></div></div>
+                  <div class="bar-value">{{ item.avg_nis2 }}%</div>
+                </div>
+                {% empty %}<div class="empty-state">Noch keine Sektordaten vorhanden.</div>{% endfor %}
+              </div>
+            </div>
+            <div class="mini-panel">
+              <h3>Ländervergleich</h3>
+              <div class="bar-list">
+                {% for item in country_summary %}
+                <div class="bar-row">
+                  <div class="label">{{ item.country|truncatechars:20 }}</div>
+                  <div class="bar-track"><div class="bar-fill iso" style="width: {{ item.avg_iso }}%;"></div></div>
+                  <div class="bar-value">{{ item.avg_iso }}%</div>
+                </div>
+                {% empty %}<div class="empty-state">Noch keine Länderdaten vorhanden.</div>{% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {% if drilldown_tenant %}
+      <div class="panel-card">
+        <div class="panel-head">
+          <div>
+            <h2>Drilldown: {{ drilldown_tenant.name }}</h2>
+            <div class="panel-sub">Detaillierte Sicht auf einen einzelnen Mandanten mit Bericht, Aufgaben und Evidenzpflichten.</div>
+          </div>
+        </div>
+        <div class="drill-grid">
+          <div class="summary-row">
+            <div class="title">Mandantenprofil</div>
+            <div class="meta">Sektor: {{ drilldown_tenant.sector_label }}</div>
+            <div class="meta">Länder: {{ drilldown_tenant.countries_display }}</div>
+            {% if drilldown_report %}
+            <div class="meta mt-2"><strong>ISO:</strong> {{ drilldown_report.iso_readiness_percent }}% · <strong>NIS2:</strong> {{ drilldown_report.nis2_readiness_percent }}%</div>
+            <p class="mt-3 mb-3">{{ drilldown_report.executive_summary|truncatechars:240 }}</p>
+            <a class="btn btn-outline-primary btn-sm" href="/reports/{{ drilldown_report.id }}/">Bericht öffnen</a>
+            {% endif %}
+          </div>
+          <div class="summary-row">
+            <div class="title">Offene Aufgaben</div>
+            <div class="summary-list mt-3">
+              {% for item in drilldown_open_tasks %}
+              <div class="insight-item">
+                <strong>{{ item.title }}</strong>
+                <small>Status: {{ item.get_status_display }}{% if item.due_date %} · Fällig {{ item.due_date }}{% endif %}</small>
+              </div>
+              {% empty %}
+              <div class="empty-state">Keine offenen Aufgaben.</div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="summary-row">
+            <div class="title">Evidenzpflichten</div>
+            <div class="meta mt-3">Offen: {{ drilldown_need_summary.open }}</div>
+            <div class="meta">Teilweise: {{ drilldown_need_summary.partial }}</div>
+            <div class="meta">Abgedeckt: {{ drilldown_need_summary.covered }}</div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="dashboard-right">
+      <div class="panel-card">
+        <div class="panel-head">
+          <div>
+            <h2>Management-Insights</h2>
+            <div class="panel-sub">Priorisierte Sicht auf Risiken, Gaps und Maßnahmen für die Steuerung auf C-Level- und Programm-Ebene.</div>
+          </div>
+        </div>
+        <div class="insight-grid">
+          <div class="insight-card">
+            <h3>Top Risiken</h3>
+            <div class="insight-list">
+              {% for risk in top_risks %}
+              <div class="insight-item">
+                <strong>{{ risk.title }}</strong>
+                <small>{{ risk.risk_level_label }} · Score {{ risk.score }}{% if risk.process %} · Prozess {{ risk.process.name }}{% endif %}</small>
+              </div>
+              {% empty %}
+              <div class="empty-state">Keine offenen Risiken vorhanden.</div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="insight-card">
+            <h3>Top Gaps</h3>
+            <div class="insight-list">
+              {% for gap in top_gaps %}
+              <div class="insight-item">
+                <strong>{{ gap.title|default:gap.domain }}</strong>
+                <small>{{ gap.description|default:gap.reason|default:'Gap aus der letzten Auswertung'|truncatechars:120 }}</small>
+              </div>
+              {% empty %}
+              <div class="empty-state">Keine Gaps aus dem letzten Report vorhanden.</div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="insight-card">
+            <h3>Top Maßnahmen</h3>
+            <div class="insight-list">
+              {% for item in top_measures %}
+              <div class="insight-item">
+                <strong>{{ item.title }}</strong>
+                <small>{{ item.priority|default:'PRIO' }}{% if item.owner_role %} · {{ item.owner_role }}{% endif %}{% if item.target_phase %} · {{ item.target_phase }}{% endif %}</small>
+              </div>
+              {% empty %}
+              <div class="empty-state">Keine priorisierten Maßnahmen aus dem letzten Report vorhanden.</div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-card">
+        <div class="panel-head">
+          <div>
+            <h2>Portfolio-Zusammenfassung</h2>
+            <div class="panel-sub">Verdichtete Sicht auf Verteilung, Schwerpunktländer und Sektorcluster.</div>
+          </div>
+        </div>
+        <div class="summary-list">
+          {% for item in sector_summary|slice:":4" %}
+          <div class="summary-row">
+            <div class="title">{{ item.sector }}</div>
+            <div class="meta">{{ item.tenant_count }} Mandant(en) · Ø ISO {{ item.avg_iso }}% · Ø NIS2 {{ item.avg_nis2 }}%</div>
+          </div>
+          {% empty %}
+          <div class="empty-state">Noch keine sektorale Portfolio-Sicht vorhanden.</div>
+          {% endfor %}
+          {% for item in country_summary|slice:":4" %}
+          <div class="summary-row">
+            <div class="title">{{ item.country }}</div>
+            <div class="meta">{{ item.tenant_count }} Mandant(en) · Ø ISO {{ item.avg_iso }}% · Ø NIS2 {{ item.avg_nis2 }}%</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

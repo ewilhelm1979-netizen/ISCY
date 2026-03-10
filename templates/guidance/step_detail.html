@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ step.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 style="font-weight:800; letter-spacing:-.02em;" class=" mb-1">{{ step.title }}</h1>
+    <p class="text-muted mb-0">{{ step.get_phase_display }}</p>
+  </div>
+  <a href="{% url 'guidance:dashboard' %}" class="btn btn-outline-secondary">Zurück zum Navigator</a>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="v19-glass-card mb-3"><div><h2 class="h5">Was ist zu tun?</h2><p class="mb-0">{{ step.description|linebreaks }}</p></div></div>
+    <div class="v19-glass-card mb-3"><div><h2 class="h5">Warum ist das wichtig?</h2><p class="mb-0">{{ step.why_it_matters|linebreaks }}</p></div></div>
+    <div class="v19-glass-card mb-3"><div><h2 class="h5">Welche Informationen werden benötigt?</h2><p class="mb-0">{{ step.required_inputs|linebreaks }}</p></div></div>
+    <div class="v19-glass-card mb-3"><div><h2 class="h5">Welches Ergebnis entsteht?</h2><p class="mb-0">{{ step.expected_outputs|linebreaks }}</p></div></div>
+    <div class="v19-glass-card"><div><h2 class="h5">Definition of Done</h2><p class="mb-0">{{ step.definition_of_done|linebreaks }}</p></div></div>
+  </div>
+  <div class="col-lg-4">
+    {% if state %}
+    <div class="v19-glass-card mb-3"><div>
+      <h2 class="h5">Mandantenstatus</h2>
+      <p><strong>Fortschritt:</strong> {{ state.progress_percent }}%</p>
+      <p><strong>Nächste Aktion:</strong> {{ state.next_action_text }}</p>
+      {% if next_step_url %}<a class="btn btn-primary w-100" href="{{ next_step_url }}">{{ next_step_label|default:'Direkt umsetzen' }}</a>{% endif %}
+    </div></div>
+    {% endif %}
+    <div class="v19-glass-card"><div>
+      <h2 class="h5">Hinweis</h2>
+      <p class="mb-0">Dieser Schritt übersetzt den Prompt in konkrete Arbeit: Was ist zu tun, warum ist es relevant und welches Ergebnis wird erwartet.</p>
+    </div></div>
+  </div>
+</div>
+{% endblock %}

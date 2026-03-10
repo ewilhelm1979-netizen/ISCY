@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Fragenkatalog{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1>Fragenkatalog</h1>
+    <p class="text-muted mb-0">Vordefinierte Domänen und Fragen für Betroffenheit, Reifegrad und Maßnahmenableitung.</p>
+  </div>
+  <span class="badge bg-primary">{{ question_count }} Fragen</span>
+</div>
+{% for domain in domains %}
+<div class="card mb-3">
+  <div>
+    <h4>{{ domain.name }}</h4>
+    <p class="text-muted">{{ domain.description }}</p>
+    <ul class="mb-0">
+      {% for question in domain.questions.all %}
+      <li>{{ question.text }}</li>
+      {% empty %}
+      <li>Keine Fragen gepflegt.</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Statement of Applicability{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div><h1 style="font-weight:800;">Statement of Applicability (SoA)</h1><p style="color:#64748b;" class="mb-0">ISO 27001 Pflichtdokument – Anwendbarkeit aller Annex-A-Controls.</p></div>
+  <form method="post" action="{% url 'assessments:soa_generate' %}">{% csrf_token %}<button class="btn btn-primary btn-sm" style="border-radius:12px;">Neues SoA generieren</button></form>
+</div>
+{% for doc in documents %}
+<div class="v19-glass-card mb-3">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h4 style="font-size:1.1rem; font-weight:700;">{{ doc.title }} <span class="v19-meta-pill">v{{ doc.version }}</span> <span class="v19-meta-pill">{{ doc.get_status_display }}</span></h4>
+      <p class="mb-0" style="color:#64748b; font-size:.88rem;">{{ doc.applicable_count }} anwendbar · {{ doc.not_applicable_count }} ausgeschlossen · {{ doc.implemented_count }} umgesetzt · erstellt {{ doc.created_at|date:"d.m.Y" }}</p>
+    </div>
+    <a class="btn btn-outline-primary btn-sm" href="{% url 'assessments:soa_detail' doc.pk %}" style="border-radius:12px;">Oeffnen</a>
+  </div>
+</div>
+{% empty %}
+<div class="v19-glass-card text-center py-4"><p style="color:#94a3b8; margin:0;">Noch kein SoA vorhanden. Generieren Sie eins aus den ISO-27001-Requirements.</p></div>
+{% endfor %}
+{% endblock %}

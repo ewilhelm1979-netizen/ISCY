@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% load core_extras %}
+{% block title %}Schritt 2 – Betroffenheitscheck{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="v19-glass-card">
+      <div>
+        <h1>Schritt 2 – NIS2-/KRITIS-Betroffenheit prüfen</h1>
+        <p class="text-muted">Beantworte die vordefinierten Leitfragen. Daraus wird eine strukturierte Relevanz-Indikation erzeugt – keine Rechtsberatung, sondern eine belastbare fachliche Vorprüfung.</p>
+        <form method="post">
+          {% csrf_token %}
+          {% for question in questions %}
+          <div class="mb-4">
+            <h5>{{ forloop.counter }}. {{ question.text }}</h5>
+            <p class="small-muted">Warum wichtig? {{ question.why_it_matters }}</p>
+            {% for option in question.options.all %}
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="question_{{ question.id }}" value="{{ option.id }}" {% if existing|get_item:question.id == option.id %}checked{% endif %} required>
+                <label class="form-check-label">{{ option.label }}</label>
+              </div>
+            {% endfor %}
+          </div>
+          {% endfor %}
+          <button class="btn btn-primary">Weiter zu Scope & Struktur</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4">
+    <div class="v19-glass-card mb-4">
+      <div>
+        <h4>Was entsteht daraus?</h4>
+        <ul>
+          <li>Indikation: wichtig / besonders wichtig / indirekt relevant / ISO-first</li>
+          <li>Begründung für Management und Projektstart</li>
+          <li>Risikobasierte Fokussierung des Folge-Assessments</li>
+        </ul>
+      </div>
+    </div>
+    {% if sector_context %}
+    <div class="v19-glass-card">
+      <div>
+        <h4>Gewählter Sektor</h4>
+        <p><strong>{{ sector_context.label }}</strong></p>
+        <p class="small text-muted mb-1">{{ sector_context.nis2_group }} · {{ sector_context.indicative_classification }}</p>
+        <p>{{ sector_context.reasoning }}</p>
+        <p><strong>Auswirkung:</strong> {{ sector_context.downstream_impact }}</p>
+        {% if country_context %}<p><strong>Länder-Kontext:</strong> {{ country_context.geo_impact }}</p>{% endif %}
+        {% if sector_context.special_regime %}
+        <p class="mb-0"><strong>Zusatzprüfung:</strong> {{ sector_context.special_regime }}</p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

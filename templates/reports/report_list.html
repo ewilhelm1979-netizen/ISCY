@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Berichte{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1>Berichte</h1>
+    <p class="text-muted mb-0">Management-Berichte aus abgeschlossenen Assessments mit Exportmöglichkeit.</p>
+  </div>
+</div>
+<div class="v19-glass-card">
+  <div>
+    <div class="table-responsive">
+      <table class="table align-middle">
+        <thead><tr><th>Titel</th><th>Mandant</th><th>ISO</th><th>NIS2</th><th></th></tr></thead>
+        <tbody>
+          {% for report in reports %}
+          <tr>
+            <td>{{ report.title }}</td>
+            <td>{{ report.tenant.name }}</td>
+            <td>{{ report.iso_readiness_percent }}%</td>
+            <td>{{ report.nis2_readiness_percent }}%</td>
+            <td>
+              <a class="btn btn-sm btn-primary" href="{% url 'reports:detail' report.id %}">Öffnen</a>
+              <a class="btn btn-sm btn-outline-secondary" href="{% url 'reports:pdf' report.id %}">PDF</a>
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="5">Noch keine Berichte vorhanden.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

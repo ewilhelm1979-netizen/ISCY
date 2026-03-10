@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}{{ review.title }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div><h1 style="font-weight:800;">{{ review.title }}</h1><p style="color:#64748b;">{{ review.get_status_display }}{% if review.review_date %} · {{ review.review_date|date:"d.m.Y" }}{% endif %}</p></div>
+  <div class="d-flex gap-2"><a class="btn btn-outline-primary btn-sm" href="{% url 'assessments:review_edit' review.pk %}" style="border-radius:12px;">Bearbeiten</a><a class="btn btn-outline-secondary btn-sm" href="{% url 'assessments:review_list' %}" style="border-radius:12px;">Zurueck</a></div>
+</div>
+
+<div class="row g-4 mb-4">
+  {# ── Inputs (ISO 9.3.2) ── #}
+  <div class="col-lg-6">
+    <div class="v19-glass-card h-100">
+      <div class="eyebrow mb-3">Review-Inputs (ISO 27001 Kap. 9.3.2)</div>
+      {% if review.input_isms_status %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">ISMS-Status</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.input_isms_status }}</p></div>{% endif %}
+      {% if review.input_audit_results %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Audit-Ergebnisse</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.input_audit_results }}</p></div>{% endif %}
+      {% if review.input_risk_status %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Risikostatus</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.input_risk_status }}</p></div>{% endif %}
+      {% if review.input_incidents %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Sicherheitsvorfaelle</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.input_incidents }}</p></div>{% endif %}
+      {% if review.input_metrics %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Kennzahlen</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.input_metrics }}</p></div>{% endif %}
+      {% if review.input_feedback %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Feedback</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.input_feedback }}</p></div>{% endif %}
+      {% if review.input_improvement %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Verbesserungsmoeglichkeiten</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.input_improvement }}</p></div>{% endif %}
+    </div>
+  </div>
+  {# ── Outputs (ISO 9.3.3) ── #}
+  <div class="col-lg-6">
+    <div class="v19-glass-card h-100">
+      <div class="eyebrow mb-3">Review-Outputs / Entscheidungen (ISO 27001 Kap. 9.3.3)</div>
+      {% if review.output_decisions %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Entscheidungen</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.output_decisions }}</p></div>{% endif %}
+      {% if review.output_actions %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Beschlossene Massnahmen</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.output_actions }}</p></div>{% endif %}
+      {% if review.output_resource_needs %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Ressourcenbedarf</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.output_resource_needs }}</p></div>{% endif %}
+      {% if review.output_improvement %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Verbesserungsmassnahmen</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.output_improvement }}</p></div>{% endif %}
+      {% if review.protocol_summary %}<div class="mb-3"><strong style="font-size:.82rem; color:#475569;">Protokoll-Zusammenfassung</strong><p style="font-size:.88rem; margin-top:.2rem;">{{ review.protocol_summary }}</p></div>{% endif %}
+    </div>
+  </div>
+</div>
+
+{# ── Massnahmen aus Review ── #}
+<div class="v19-glass-card mb-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div class="eyebrow mb-0">Massnahmen aus dieser Review</div>
+    <a class="btn btn-primary btn-sm" href="{% url 'assessments:review_action_create' review.pk %}" style="border-radius:10px; font-size:.78rem;">+ Massnahme</a>
+  </div>
+  {% for action in actions %}
+  <div style="border:1px solid rgba(148,163,184,.12); border-radius:14px; padding:.75rem .85rem; margin-bottom:.5rem; background:rgba(248,250,252,.5);">
+    <div class="d-flex justify-content-between"><strong style="font-size:.9rem;">{{ action.title }}</strong><span class="v19-meta-pill">{{ action.get_status_display }}</span></div>
+    {% if action.description %}<p class="mt-1 mb-1" style="font-size:.84rem; color:#64748b;">{{ action.description }}</p>{% endif %}
+    <div class="d-flex gap-2 mt-1">{% if action.responsible %}<span style="font-size:.76rem; color:#94a3b8;">{{ action.responsible }}</span>{% endif %}{% if action.due_date %}<span style="font-size:.76rem; color:#94a3b8;">Faellig: {{ action.due_date|date:"d.m.Y" }}</span>{% endif %}</div>
+  </div>
+  {% empty %}<p style="color:#94a3b8; font-size:.88rem;">Noch keine Massnahmen erfasst.</p>{% endfor %}
+</div>
+{% endblock %}

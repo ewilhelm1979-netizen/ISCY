@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Mapping-Assistent{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h1>Import-Mapping-Assistent</h1>
+    <p class="text-muted mb-0">Wähle den Registertyp und prüfe, welche Quellspalten von der App erkannt werden. So reduzierst du Nacharbeit bei Excel-/CSV-Importen.</p>
+  </div>
+  <a class="btn btn-outline-secondary" href="{% url 'imports:center' %}">Zurück zum Import Center</a>
+</div>
+<div class="v19-glass-card mb-4">
+  <div>
+    <form method="get" class="row g-3 align-items-end">
+      <div class="col-md-6">
+        <label class="form-label">Registertyp</label>
+        <select class="form-select" name="type">
+          {% for key, cols in all_types.items %}
+            <option value="{{ key }}" {% if selected_type == key %}selected{% endif %}>{{ key }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-primary">Anzeigen</button>
+      </div>
+    </form>
+  </div>
+</div>
+<div class="v19-glass-card">
+  <div>
+    <h3 class="h5">Erwartete Felder</h3>
+    <table class="table align-middle">
+      <thead><tr><th>Erwartete Spalte</th><th>Alternativen</th><th>Pflicht</th></tr></thead>
+      <tbody>
+        {% for row in mapping_rows %}
+          <tr>
+            <td><code>{{ row.expected }}</code></td>
+            <td>{% if row.synonyms %}{{ row.synonyms|join:', ' }}{% else %}<span class="text-muted">–</span>{% endif %}</td>
+            <td>{% if row.required %}<span class="badge text-bg-danger">Pflicht</span>{% else %}<span class="badge text-bg-secondary">Optional</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
