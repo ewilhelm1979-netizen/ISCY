@@ -22,6 +22,7 @@ Django-basierte ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-U
 - Product Security / CRA / AI Act / IEC 62443 / ISO-SAE 21434
 - CVE- und Vulnerability-Intelligence
 - lokales LLM-Enrichment mit Qwen3 GGUF
+- EPSS-/KEV-/NIS2-kontextualisierte CVE-Bewertung mit Git-/Repository-Vorbereitung
 - Reporting, Dashboard, Roadmap, Evidence, Risks, Requirements
 
 ## Betriebsmodi
@@ -91,6 +92,31 @@ Danach kann weiter wie gewohnt gestartet werden:
 ```bash
 AUTO_YES=1 INSTALL_LOCAL_LLM=1 DOWNLOAD_LOCAL_LLM=1 VERIFY_LOCAL_LLM=1 ./start.sh
 ```
+
+## Lokale Vulnerability-Feeds
+
+Für lokale EPSS-/KEV-Anreicherung und Git-/Scanner-Vorbereitung stehen Management-Commands bereit:
+
+```bash
+python3 manage.py import_epss_feed /pfad/zu/epss_scores.csv
+python3 manage.py import_kev_catalog /pfad/zu/known_exploited_vulnerabilities.json --reset-missing
+python3 manage.py import_cve_context_csv <tenant-slug> /pfad/zu/cve_context.csv --user-id <id>
+```
+
+`import_cve_context_csv` ist für externe Git-/SBOM-/Scanner-Pipelines gedacht. Wichtige CSV-Spalten sind z. B.:
+`cve_id`, `product`, `release`, `component`, `repository_name`, `repository_url`, `git_ref`, `source_package`, `source_package_version`, `exposure`, `asset_criticality`, `nis2_relevant`.
+
+## Handbuch
+
+Ein fachliches Handbuch fuer ISCY liegt in `docs/ISCY_Handbuch.md`.
+
+PDF-Export:
+
+```bash
+make handbook-pdf
+```
+
+Das Skript erzeugt `docs/ISCY_Handbuch.pdf`.
 
 ## CI
 

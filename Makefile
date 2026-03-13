@@ -3,7 +3,7 @@ COMPOSE_STAGE=docker compose -f docker-compose.yml -f docker-compose.stage.yml
 COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
 COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 
-.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health
+.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health handbook-pdf
 
 dev-up:
 	$(COMPOSE_DEV) up --build
@@ -39,3 +39,6 @@ restore:
 
 health:
 	curl -fsS http://127.0.0.1/health/ready/
+
+handbook-pdf:
+	python3 scripts/export_iscy_handbook_pdf.py
