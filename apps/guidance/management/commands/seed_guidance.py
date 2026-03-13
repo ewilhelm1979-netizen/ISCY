@@ -36,7 +36,7 @@ class Command(BaseCommand):
             {
                 'code': 'requirements_available',
                 'phase': 'mapping',
-                'title': 'Requirement Library bereitstellen',
+                'title': 'ISCY Requirement Library bereitstellen',
                 'description': 'Stellen Sie sicher, dass ISO-27001- und NIS2-nahe Anforderungen vorhanden sind.',
                 'why_it_matters': 'Ohne Anforderungen ist kein Gap-Mapping möglich.',
                 'required_inputs': 'Requirement-Katalog.',

@@ -5,6 +5,7 @@ import dj_database_url
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
+APP_DISPLAY_NAME = 'ISCY'
 
 # --- F13: Kein unsicherer Default-Key. In Production MUSS SECRET_KEY gesetzt sein. ---
 _secret = os.getenv('SECRET_KEY', '')
@@ -70,6 +71,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'apps.core.context_processors.app_metadata',
             ],
         },
     },

@@ -1,138 +1,729 @@
-"""Seed ISO 27001, NIS2 and product-security related requirements."""
+"""Seed versioned ISO 27001, NIS2, KRITIS and CRA requirements plus mapping traceability."""
+
+from datetime import date
 
 from django.core.management.base import BaseCommand
-from apps.requirements_app.models import Requirement
+
+from apps.catalog.models import AssessmentQuestion
+from apps.requirements_app.models import (
+    MappingVersion,
+    RegulatorySource,
+    Requirement,
+    RequirementQuestionMapping,
+)
 
 
 class Command(BaseCommand):
-    help = 'Seed ISO 27001:2022 Annex A, NIS2 and product-security requirements.'
+    help = 'Seed versioned regulatory requirements, sources and question mappings for ISCY.'
 
     def handle(self, *args, **options):
-        iso_reqs = [
-            ('A.5.1', 'Informationssicherheitsrichtlinien', 'Governance', 'Richtlinien fuer Informationssicherheit muessen definiert, genehmigt und kommuniziert werden.', 'Freigegebene IS-Policy, Kommunikationsnachweis', 'ALL'),
-            ('A.5.2', 'Rollen und Verantwortlichkeiten', 'Governance', 'Rollen und Verantwortlichkeiten fuer Informationssicherheit muessen zugewiesen und kommuniziert werden.', 'RACI-Matrix, Stellenbeschreibungen', 'ALL'),
-            ('A.5.9', 'Inventar der Informationen und zugehoeriger Assets', 'Asset-Management', 'Ein Inventar der Informationen und zugehoeriger Assets muss gefuehrt werden.', 'Asset-Register, Prozessregister', 'ALL'),
-            ('A.5.12', 'Klassifizierung von Informationen', 'Asset-Management', 'Informationen muessen nach Schutzbedarf klassifiziert werden.', 'Klassifizierungsschema, Handhabungsrichtlinie', 'ALL'),
-            ('A.5.15', 'Zugangssteuerung', 'IAM', 'Regeln fuer physischen und logischen Zugang muessen basierend auf Geschaeftsanforderungen definiert werden.', 'Zugangsrichtlinie, Berechtigungskonzept', 'ALL'),
-            ('A.5.19', 'Informationssicherheit in Lieferantenbeziehungen', 'Lieferkette', 'Anforderungen an die Sicherheit muessen in Lieferantenbeziehungen beruecksichtigt werden.', 'Lieferantenbewertung, Vertragsklauseln', 'ALL'),
-            ('A.5.23', 'Informationssicherheit bei Cloud-Diensten', 'Cloud', 'Prozesse fuer Beschaffung, Nutzung und Beendigung von Cloud-Diensten muessen definiert werden.', 'Cloud-Register, Shared-Responsibility-Dokumentation', 'DIGITAL'),
-            ('A.5.24', 'Incident Management Planung', 'Incident', 'Vorgehensweisen fuer das Management von Informationssicherheitsereignissen muessen geplant werden.', 'IR-Plan, Eskalationsmatrix', 'ALL'),
-            ('A.5.29', 'Informationssicherheit bei Stoerungen', 'BCM', 'Anforderungen an die Aufrechterhaltung der IS bei Stoerungen muessen geplant werden.', 'BIA, BCM-Plan', 'ALL'),
-            ('A.5.31', 'Rechtliche und regulatorische Anforderungen', 'Governance', 'Anwendbare Anforderungen muessen identifiziert und dokumentiert werden.', 'Rechtsregister, Compliance-Status', 'ALL'),
-            ('A.5.37', 'Dokumentierte Betriebsablaeufe', 'Dokumentation', 'Betriebsablaeufe muessen dokumentiert und zugaenglich gemacht werden.', 'Betriebshandbuch, SOPs', 'ALL'),
-            ('A.6.3', 'Informationssicherheitsbewusstsein und -schulung', 'Awareness', 'Alle Mitarbeitenden muessen geschult werden.', 'Schulungsnachweise, Awareness-Plan', 'ALL'),
-            ('A.7.2', 'Physische Zugangssteuerung', 'Physische Sicherheit', 'Sichere Bereiche muessen durch angemessene Zugangskontrollen geschuetzt werden.', 'Zutrittsprotokoll, Zugangsrichtlinie', 'ALL'),
-            ('A.8.2', 'Privilegierte Zugriffsrechte', 'IAM', 'Zuweisung und Nutzung privilegierter Rechte muss eingeschraenkt und gesteuert werden.', 'PAM-Konzept, privilegierte Konten-Liste', 'ALL'),
-            ('A.8.5', 'Sichere Authentifizierung', 'IAM', 'Sichere Authentifizierungsverfahren muessen eingerichtet werden.', 'MFA-Nachweis, Passwort-Policy', 'ALL'),
-            ('A.8.7', 'Schutz gegen Schadsoftware', 'Cyber', 'Schutz gegen Schadsoftware muss implementiert werden.', 'Endpoint-Protection-Nachweis', 'ALL'),
-            ('A.8.8', 'Management technischer Schwachstellen', 'Cyber', 'Informationen ueber technische Schwachstellen muessen beschafft und bewertet werden.', 'Schwachstellen-Reports, Patch-Status', 'ALL'),
-            ('A.8.13', 'Sicherung von Informationen', 'BCM', 'Sicherungskopien muessen erstellt und regelmaessig getestet werden.', 'Backup-Konzept, Restore-Tests', 'ALL'),
-            ('A.8.15', 'Protokollierung', 'Detect', 'Aktivitaeten, Ausnahmen und IS-Ereignisse muessen protokolliert werden.', 'Log-Policy, SIEM-Konfiguration', 'ALL'),
-            ('A.8.24', 'Einsatz von Kryptografie', 'Kryptografie', 'Regeln fuer den Einsatz von Kryptografie muessen definiert werden.', 'Kryptografie-Policy, Schluesselmanagement', 'ALL'),
-            ('A.8.25', 'Sichere Entwicklung', 'SDLC', 'Regeln fuer die sichere Entwicklung von Software muessen etabliert werden.', 'Secure-SDLC-Richtlinie, Code-Review-Nachweis', 'DIGITAL'),
-            ('A.8.29', 'Sicherheitstests in Entwicklung und Abnahme', 'SDLC', 'Sicherheitstests sollen in Entwicklung und Abnahme beruecksichtigt werden.', 'SAST/DAST/Pentest-Nachweise', 'DIGITAL'),
-            ('A.8.32', 'Aenderungsmanagement', 'SDLC', 'Aenderungen muessen kontrolliert durchgefuehrt werden.', 'Change-Prozess, Freigabeprotokolle', 'ALL'),
-        ]
-        for code, title, domain, desc, evidence, pkg in iso_reqs:
-            Requirement.objects.update_or_create(
-                framework=Requirement.Framework.ISO27001,
-                code=code,
-                defaults={
-                    'title': title, 'domain': domain, 'description': desc,
-                    'evidence_guidance': evidence, 'evidence_required': True,
-                    'is_active': True, 'sector_package': pkg,
-                },
-            )
-
-        nis2_reqs = [
-            ('NIS2-21-2a', 'Risikoanalyse und Sicherheit von Informationssystemen', 'Governance', 'Betroffene Einrichtungen muessen ein Konzept fuer Risikoanalyse und Sicherheit ihrer Informationssysteme einfuehren.', 'Risikoanalyse-Methodik, Risikobericht', 'ALL'),
-            ('NIS2-21-2b', 'Bewertung der Wirksamkeit von Risikomanagemassnahmen', 'Governance', 'Die Wirksamkeit der getroffenen Massnahmen muss bewertet werden.', 'Wirksamkeitsbericht, KPI-Dashboard', 'ALL'),
-            ('NIS2-21-2c', 'Sicherheit der Lieferkette', 'Lieferkette', 'Sicherheitsaspekte in der Lieferkette muessen beruecksichtigt werden.', 'Lieferantenbewertung, Risikoanalyse Lieferkette', 'ALL'),
-            ('NIS2-21-2d', 'Sicherheit bei Erwerb, Entwicklung und Wartung', 'SDLC', 'Sicherheit bei Erwerb, Entwicklung und Wartung von Netz- und Informationssystemen.', 'SDLC-Richtlinie, Schwachstellenmanagement', 'ALL'),
-            ('NIS2-21-2e', 'Konzepte und Verfahren zur Bewertung der Wirksamkeit', 'Governance', 'Konzepte und Verfahren fuer die Bewertung der Wirksamkeit von Risikomanagemassnahmen.', 'Audit-Bericht, Review-Protokolle', 'ALL'),
-            ('NIS2-21-2f', 'Cyberhygiene und Schulung', 'Awareness', 'Grundlegende Verfahren der Cyberhygiene und Schulungen muessen sichergestellt werden.', 'Schulungsnachweise, Awareness-Berichte', 'ALL'),
-            ('NIS2-21-2g', 'Kryptografie und Verschluesselung', 'Kryptografie', 'Konzepte und Verfahren fuer den Einsatz von Kryptografie und ggf. Verschluesselung.', 'Kryptografie-Policy, Verschluesselungsnachweis', 'ALL'),
-            ('NIS2-21-2h', 'Sicherheit des Personals, Zugangssteuerung und Asset-Management', 'IAM', 'Sicherheit des Personals, Zugangssteuerung und Asset-Management.', 'HR-Security-Policy, Zugangsrichtlinie', 'ALL'),
-            ('NIS2-21-2i', 'Multi-Faktor-Authentifizierung', 'IAM', 'Verwendung von MFA oder kontinuierlicher Authentifizierung.', 'MFA-Nachweis, Konfigurationsdokumentation', 'ALL'),
-            ('NIS2-21-2j', 'Sichere Kommunikation', 'Kryptografie', 'Gesicherte Sprach-, Video- und Textkommunikation sowie Notfallkommunikation.', 'Kommunikationsrichtlinie, Tool-Inventar', 'ALL'),
-            ('NIS2-23', 'Meldepflichten bei erheblichen Sicherheitsvorfaellen', 'Incident', 'Erhebliche Sicherheitsvorfaelle muessen fristgerecht gemeldet werden.', 'Meldeprozess, Kontaktregister BSI/CSIRT', 'ALL'),
-        ]
-        for code, title, domain, desc, evidence, pkg in nis2_reqs:
-            Requirement.objects.update_or_create(
-                framework=Requirement.Framework.NIS2,
-                code=code,
-                defaults={
-                    'title': title, 'domain': domain, 'description': desc,
-                    'evidence_guidance': evidence, 'evidence_required': True,
-                    'is_active': True, 'sector_package': pkg,
-                },
-            )
-
-        cra_reqs = [
-            ('CRA-SEC-BY-DESIGN', 'Secure by Design / Default', 'Product Security', 'Produkte mit digitalen Elementen sollen Security by Design und Security by Default umsetzen.', 'Security Requirements, Architekturentscheidungen, Default-Konfigurationen', 'DIGITAL'),
-            ('CRA-VULN-HANDLING', 'Vulnerability Handling', 'PSIRT', 'Schwachstellen muessen aufgenommen, bewertet, behoben und kommuniziert werden.', 'PSIRT-Prozess, Advisorys, Patch-Tracking', 'DIGITAL'),
-            ('CRA-SUPPORT-LIFECYCLE', 'Support und Patch-Lifecycle', 'Product Security', 'Support, Updates und Patch-Management muessen ueber den Produktlebenszyklus organisiert werden.', 'Support-Policy, Release-/Patch-Prozess', 'DIGITAL'),
-            ('CRA-DOC', 'Technische Security-Dokumentation', 'Product Security', 'Sicherheitsdokumentation und Konformitaetsunterlagen muessen vorbereitet werden.', 'Produktdokumentation, Testnachweise, Compliance-Artefakte', 'DIGITAL'),
-        ]
-        for code, title, domain, desc, evidence, pkg in cra_reqs:
-            Requirement.objects.update_or_create(
-                framework=Requirement.Framework.CRA,
-                code=code,
-                defaults={
-                    'title': title, 'domain': domain, 'description': desc,
-                    'evidence_guidance': evidence, 'evidence_required': True,
-                    'is_active': True, 'sector_package': pkg,
-                },
-            )
-
-        ai_reqs = [
-            ('AI-QMS', 'AI Governance / QMS', 'AI Governance', 'Fuer relevante AI-Systeme muss eine belastbare Governance/QMS-Struktur vorhanden sein.', 'AI-Register, Governance-Dokumente, Rollen', 'DIGITAL'),
-            ('AI-RISK-CLASS', 'AI-Risikoklassifizierung', 'AI Governance', 'AI-Systeme und Use Cases muessen klassifiziert und dokumentiert werden.', 'Klassifizierungsdokumente, Use-Case-Register', 'DIGITAL'),
-            ('AI-HUMAN-OVERSIGHT', 'Human Oversight und Monitoring', 'AI Governance', 'Oversight, Monitoring und Logging muessen fuer relevante AI-Funktionen geregelt werden.', 'Oversight-Prozess, Logs, Monitoring-Nachweise', 'DIGITAL'),
-        ]
-        for code, title, domain, desc, evidence, pkg in ai_reqs:
-            Requirement.objects.update_or_create(
-                framework=Requirement.Framework.AI_ACT,
-                code=code,
-                defaults={
-                    'title': title, 'domain': domain, 'description': desc,
-                    'evidence_guidance': evidence, 'evidence_required': True,
-                    'is_active': True, 'sector_package': pkg,
-                },
-            )
-
-        iec_reqs = [
-            ('IEC62443-ZONES', 'Zonen / Conduits / Segmentierung', 'Industrial Security', 'OT-/IACS-Systeme sollten in Zonen und Kommunikationsbeziehungen segmentiert werden.', 'Zonen-/Conduit-Modell, Netzplan', 'CRITICAL_INFRA'),
-            ('IEC62443-COMP', 'Komponenten- und Integrator-Sicherheit', 'Industrial Security', 'Komponenten, Integrator- und Supplier-Verantwortungen sind sicherheitsbezogen zu steuern.', 'Komponentenregister, Integrationsvorgaben', 'CRITICAL_INFRA'),
-            ('IEC62443-SL', 'Security Levels und industrielle Schutzanforderungen', 'Industrial Security', 'Sicherheitsniveaus und industrielle Schutzanforderungen sind zu definieren.', 'Security-Level-Konzept, Schutzbedarfsanalyse', 'CRITICAL_INFRA'),
-        ]
-        for code, title, domain, desc, evidence, pkg in iec_reqs:
-            Requirement.objects.update_or_create(
-                framework=Requirement.Framework.IEC62443,
-                code=code,
-                defaults={
-                    'title': title, 'domain': domain, 'description': desc,
-                    'evidence_guidance': evidence, 'evidence_required': True,
-                    'is_active': True, 'sector_package': pkg,
-                },
-            )
-
-        auto_reqs = [
-            ('21434-TARA', 'Threat Analysis and Risk Assessment', 'Automotive Security', 'Eine TARA ist fuer relevante Fahrzeug-/E/E-/Software-Kontexte erforderlich.', 'TARA-Artefakte, Risikoentscheidungen', 'DIGITAL'),
-            ('21434-TRACE', 'Cybersecurity-Traceability', 'Automotive Security', 'Cybersecurity-Ziele, Anforderungen, Tests und Nachweise muessen rueckverfolgbar sein.', 'Traceability-Matrix, Testnachweise', 'DIGITAL'),
-            ('21434-FIELD', 'Field Monitoring und Updateability', 'Automotive Security', 'Betrieb, Monitoring, Incident Handling und Updates sind ueber den Lebenszyklus abzusichern.', 'Field-Monitoring-Prozess, Update-Konzept', 'DIGITAL'),
-        ]
-        for code, title, domain, desc, evidence, pkg in auto_reqs:
-            Requirement.objects.update_or_create(
-                framework=Requirement.Framework.ISO_SAE_21434,
-                code=code,
-                defaults={
-                    'title': title, 'domain': domain, 'description': desc,
-                    'evidence_guidance': evidence, 'evidence_required': True,
-                    'is_active': True, 'sector_package': pkg,
-                },
-            )
+        versions = self._seed_versions()
+        sources = self._seed_sources(versions)
+        requirements = self._seed_requirements(versions, sources)
+        self._seed_question_mappings(versions, requirements)
 
         counts = {fw: Requirement.objects.filter(framework=fw).count() for fw, _ in Requirement.Framework.choices}
+        mapping_count = RequirementQuestionMapping.objects.count()
+        source_count = RegulatorySource.objects.count()
         summary = ', '.join(f'{fw}={count}' for fw, count in counts.items())
-        self.stdout.write(self.style.SUCCESS(f'Requirements seeded: {summary}.'))
+        self.stdout.write(self.style.SUCCESS(f'Requirements seeded: {summary}; sources={source_count}; question_mappings={mapping_count}.'))
+
+    def _seed_versions(self):
+        definitions = [
+            {
+                'framework': Requirement.Framework.ISO27001,
+                'slug': 'iscy-iso27001-2022-v2-0',
+                'title': 'ISCY Mapping Baseline ISO/IEC 27001:2022 und ISO/IEC 27002:2022',
+                'version': '2.0',
+                'effective_on': date(2026, 3, 13),
+                'notes': 'Versionierte Referenzbasis fuer Annex-A-Controls und deren Nutzung in ISCY.',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'slug': 'iscy-nis2-eu-de-v2-0',
+                'title': 'ISCY Mapping Baseline NIS2 EU/DE',
+                'version': '2.0',
+                'effective_on': date(2026, 3, 13),
+                'notes': 'Basierend auf Richtlinie (EU) 2022/2555, Durchfuehrungsverordnung (EU) 2024/2690 und aktueller BSI-Information zur Umsetzung in Deutschland.',
+            },
+            {
+                'framework': Requirement.Framework.KRITIS,
+                'slug': 'iscy-kritis-de-v2-0',
+                'title': 'ISCY Mapping Baseline KRITIS Deutschland',
+                'version': '2.0',
+                'effective_on': date(2026, 3, 13),
+                'notes': 'Basierend auf BSIG, BSI-KritisV und BSI-Informationen fuer KRITIS-Betreiber.',
+            },
+            {
+                'framework': Requirement.Framework.CRA,
+                'slug': 'iscy-cra-eu-v2-0',
+                'title': 'ISCY Mapping Baseline Cyber Resilience Act',
+                'version': '2.0',
+                'effective_on': date(2026, 3, 13),
+                'notes': 'Basierend auf Verordnung (EU) 2024/2847 und der offiziellen EU-Kommunikation zum Cyber Resilience Act.',
+            },
+        ]
+        versions = {}
+        for definition in definitions:
+            version, _ = MappingVersion.objects.update_or_create(
+                slug=definition['slug'],
+                defaults={
+                    'framework': definition['framework'],
+                    'title': definition['title'],
+                    'version': definition['version'],
+                    'program_name': 'ISCY',
+                    'status': MappingVersion.Status.ACTIVE,
+                    'effective_on': definition['effective_on'],
+                    'notes': definition['notes'],
+                },
+            )
+            versions[definition['framework']] = version
+            MappingVersion.objects.filter(framework=definition['framework']).exclude(pk=version.pk).update(status=MappingVersion.Status.SUPERSEDED)
+        return versions
+
+    def _seed_sources(self, versions):
+        source_defs = {
+            Requirement.Framework.ISO27001: [
+                {
+                    'code': 'ISO27001-2022',
+                    'title': 'ISO/IEC 27001:2022 Information security, cybersecurity and privacy protection',
+                    'authority': 'ISO',
+                    'citation': 'ISO/IEC 27001:2022',
+                    'url': 'https://www.iso.org/standard/27001',
+                    'source_type': RegulatorySource.SourceType.STANDARD,
+                    'published_on': date(2022, 10, 25),
+                    'effective_on': date(2022, 10, 25),
+                },
+                {
+                    'code': 'ISO27002-2022',
+                    'title': 'ISO/IEC 27002:2022 Information security controls',
+                    'authority': 'ISO',
+                    'citation': 'ISO/IEC 27002:2022',
+                    'url': 'https://www.iso.org/standard/75652.html',
+                    'source_type': RegulatorySource.SourceType.STANDARD,
+                    'published_on': date(2022, 2, 15),
+                    'effective_on': date(2022, 2, 15),
+                },
+            ],
+            Requirement.Framework.NIS2: [
+                {
+                    'code': 'NIS2-DIR',
+                    'title': 'Directive (EU) 2022/2555',
+                    'authority': 'EUR-Lex',
+                    'citation': 'Richtlinie (EU) 2022/2555',
+                    'url': 'https://eur-lex.europa.eu/eli/dir/2022/2555/oj',
+                    'source_type': RegulatorySource.SourceType.PRIMARY,
+                    'published_on': date(2022, 12, 27),
+                    'effective_on': date(2023, 1, 16),
+                },
+                {
+                    'code': 'NIS2-IR-2024-2690',
+                    'title': 'Implementing Regulation (EU) 2024/2690',
+                    'authority': 'EUR-Lex',
+                    'citation': 'Durchfuehrungsverordnung (EU) 2024/2690',
+                    'url': 'https://eur-lex.europa.eu/eli/reg_impl/2024/2690/oj',
+                    'source_type': RegulatorySource.SourceType.PRIMARY,
+                    'published_on': date(2024, 10, 17),
+                    'effective_on': date(2024, 10, 18),
+                },
+                {
+                    'code': 'BSI-NIS2-2025',
+                    'title': 'BSI Information NIS2-Registrierung und Umsetzung',
+                    'authority': 'BSI',
+                    'citation': 'BSI Informationsseite, Stand nach Inkrafttreten 06.12.2025',
+                    'url': 'https://mip2.bsi.bund.de/de/info-nis2-registrierung/',
+                    'source_type': RegulatorySource.SourceType.OFFICIAL_GUIDANCE,
+                    'published_on': date(2025, 12, 6),
+                    'effective_on': date(2025, 12, 6),
+                },
+            ],
+            Requirement.Framework.KRITIS: [
+                {
+                    'code': 'BSIG-8A',
+                    'title': 'BSIG § 8a Sicherheit in der Informationstechnik Kritischer Infrastrukturen',
+                    'authority': 'Gesetze im Internet',
+                    'citation': 'BSIG § 8a',
+                    'url': 'https://www.gesetze-im-internet.de/bsig_2009/__8a.html',
+                    'source_type': RegulatorySource.SourceType.PRIMARY,
+                },
+                {
+                    'code': 'BSI-KRITISV',
+                    'title': 'BSI-Kritisverordnung',
+                    'authority': 'Gesetze im Internet',
+                    'citation': 'BSI-KritisV',
+                    'url': 'https://www.gesetze-im-internet.de/bsi-kritisv/',
+                    'source_type': RegulatorySource.SourceType.PRIMARY,
+                },
+                {
+                    'code': 'BSI-KRITIS',
+                    'title': 'BSI KRITIS Betreiber Informationen',
+                    'authority': 'BSI',
+                    'citation': 'BSI KRITIS Betreiber',
+                    'url': 'https://www.bsi.bund.de/DE/Themen/KRITIS/kritis_node.html',
+                    'source_type': RegulatorySource.SourceType.OFFICIAL_GUIDANCE,
+                },
+            ],
+            Requirement.Framework.CRA: [
+                {
+                    'code': 'CRA-REG-2024-2847',
+                    'title': 'Regulation (EU) 2024/2847 Cyber Resilience Act',
+                    'authority': 'EUR-Lex',
+                    'citation': 'Verordnung (EU) 2024/2847',
+                    'url': 'https://eur-lex.europa.eu/eli/reg/2024/2847/oj',
+                    'source_type': RegulatorySource.SourceType.PRIMARY,
+                    'published_on': date(2024, 11, 20),
+                    'effective_on': date(2024, 12, 10),
+                },
+                {
+                    'code': 'EU-CRA-POLICY',
+                    'title': 'European Commission Cyber Resilience Act policy page',
+                    'authority': 'European Commission',
+                    'citation': 'EU Digital Strategy Cyber Resilience Act',
+                    'url': 'https://digital-strategy.ec.europa.eu/en/policies/cyber-resilience-act',
+                    'source_type': RegulatorySource.SourceType.OFFICIAL_GUIDANCE,
+                },
+            ],
+        }
+        sources = {}
+        for framework, definitions in source_defs.items():
+            version = versions[framework]
+            sources[framework] = {}
+            for definition in definitions:
+                source, _ = RegulatorySource.objects.update_or_create(
+                    mapping_version=version,
+                    framework=framework,
+                    code=definition['code'],
+                    defaults={
+                        'title': definition['title'],
+                        'authority': definition['authority'],
+                        'citation': definition.get('citation', ''),
+                        'url': definition.get('url', ''),
+                        'source_type': definition['source_type'],
+                        'published_on': definition.get('published_on'),
+                        'effective_on': definition.get('effective_on'),
+                        'notes': definition.get('notes', ''),
+                    },
+                )
+                sources[framework][definition['code']] = source
+        return sources
+
+    def _seed_requirements(self, versions, sources):
+        definitions = [
+            {
+                'framework': Requirement.Framework.ISO27001,
+                'code': 'A.5.1',
+                'title': 'Informationssicherheitsrichtlinien',
+                'domain': 'Governance',
+                'description': 'Richtlinien fuer Informationssicherheit muessen definiert, genehmigt und kommuniziert werden.',
+                'evidence_guidance': 'Freigegebene IS-Policy, Kommunikationsnachweis',
+                'sector_package': 'ALL',
+                'legal_reference': 'Annex A.5.1',
+                'mapped_controls': ['A.5.1'],
+                'mapping_rationale': 'Baseline-Control fuer Governance, Policies und nachgelagerte regulatorische Mappings in ISCY.',
+                'source_code': 'ISO27001-2022',
+            },
+            {
+                'framework': Requirement.Framework.ISO27001,
+                'code': 'A.5.2',
+                'title': 'Rollen und Verantwortlichkeiten',
+                'domain': 'Governance',
+                'description': 'Rollen und Verantwortlichkeiten fuer Informationssicherheit muessen zugewiesen und kommuniziert werden.',
+                'evidence_guidance': 'RACI-Matrix, Stellenbeschreibungen',
+                'sector_package': 'ALL',
+                'legal_reference': 'Annex A.5.2',
+                'mapped_controls': ['A.5.2'],
+                'mapping_rationale': 'Governance-Control fuer regulatorische Verantwortlichkeiten und Management-Zuordnung.',
+                'source_code': 'ISO27001-2022',
+            },
+            {
+                'framework': Requirement.Framework.ISO27001,
+                'code': 'A.5.9',
+                'title': 'Inventar der Informationen und zugehoeriger Assets',
+                'domain': 'Asset-Management',
+                'description': 'Ein Inventar der Informationen und zugehoeriger Assets muss gefuehrt werden.',
+                'evidence_guidance': 'Asset-Register, Prozessregister',
+                'sector_package': 'ALL',
+                'legal_reference': 'Annex A.5.9',
+                'mapped_controls': ['A.5.9'],
+                'mapping_rationale': 'Querschnitts-Control fuer NIS2, KRITIS und CRA-bezogene Asset- und Scope-Transparenz.',
+                'source_code': 'ISO27001-2022',
+            },
+            {
+                'framework': Requirement.Framework.ISO27001,
+                'code': 'A.5.19',
+                'title': 'Informationssicherheit in Lieferantenbeziehungen',
+                'domain': 'Lieferkette',
+                'description': 'Anforderungen an die Sicherheit muessen in Lieferantenbeziehungen beruecksichtigt werden.',
+                'evidence_guidance': 'Lieferantenbewertung, Vertragsklauseln',
+                'sector_package': 'ALL',
+                'legal_reference': 'Annex A.5.19-A.5.23',
+                'mapped_controls': ['A.5.19', 'A.5.20', 'A.5.22', 'A.5.23'],
+                'mapping_rationale': 'Wird von ISCY fuer NIS2- und KRITIS-Lieferkettenmappings wiederverwendet.',
+                'source_code': 'ISO27002-2022',
+            },
+            {
+                'framework': Requirement.Framework.ISO27001,
+                'code': 'A.5.24',
+                'title': 'Incident Management Planung',
+                'domain': 'Incident',
+                'description': 'Vorgehensweisen fuer das Management von Informationssicherheitsereignissen muessen geplant werden.',
+                'evidence_guidance': 'IR-Plan, Eskalationsmatrix',
+                'sector_package': 'ALL',
+                'legal_reference': 'Annex A.5.24-A.5.28',
+                'mapped_controls': ['A.5.24', 'A.5.25', 'A.5.26', 'A.5.27', 'A.5.28'],
+                'mapping_rationale': 'Kontrollfamilie fuer Vorfallmanagement, Meldewege und Lessons Learned.',
+                'source_code': 'ISO27002-2022',
+            },
+            {
+                'framework': Requirement.Framework.ISO27001,
+                'code': 'A.5.31',
+                'title': 'Rechtliche und regulatorische Anforderungen',
+                'domain': 'Governance',
+                'description': 'Anwendbare Anforderungen muessen identifiziert und dokumentiert werden.',
+                'evidence_guidance': 'Rechtsregister, Compliance-Status',
+                'sector_package': 'ALL',
+                'legal_reference': 'Annex A.5.31',
+                'mapped_controls': ['A.5.31'],
+                'mapping_rationale': 'Schafft die fachliche Basis fuer versionierte Regulatory-Mappings in ISCY.',
+                'source_code': 'ISO27001-2022',
+            },
+            {
+                'framework': Requirement.Framework.ISO27001,
+                'code': 'A.8.25',
+                'title': 'Sichere Entwicklung',
+                'domain': 'SDLC',
+                'description': 'Regeln fuer die sichere Entwicklung von Software muessen etabliert werden.',
+                'evidence_guidance': 'Secure-SDLC-Richtlinie, Code-Review-Nachweis',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'Annex A.8.25-A.8.32',
+                'mapped_controls': ['A.8.25', 'A.8.29', 'A.8.32'],
+                'mapping_rationale': 'Wird direkt fuer CRA- und NIS2-Mappings zur sicheren Entwicklung genutzt.',
+                'source_code': 'ISO27002-2022',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-21-2a',
+                'title': 'Risikoanalyse und Sicherheit von Netz- und Informationssystemen',
+                'domain': 'Governance',
+                'description': 'Betroffene Einrichtungen muessen ein Konzept fuer Risikoanalyse und Sicherheit ihrer Netz- und Informationssysteme einfuehren.',
+                'evidence_guidance': 'Risikoanalyse-Methodik, Risikobericht',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 21 Abs. 2 lit. a NIS2',
+                'mapped_controls': ['A.5.1', 'A.5.2', 'A.5.9', 'A.5.31'],
+                'mapping_rationale': 'ISCY stuetzt diese Pflicht ueber Governance-, Scope- und Asset-Fragen; die Zuordnung ist in der Mapping-Version dokumentiert.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-21-2b',
+                'title': 'Wirksamkeitsbewertung von Risikomanagementmassnahmen',
+                'domain': 'Governance',
+                'description': 'Die Wirksamkeit der getroffenen Massnahmen muss bewertet und nachvollziehbar gemacht werden.',
+                'evidence_guidance': 'Wirksamkeitsbericht, KPI-Dashboard',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 21 Abs. 2 lit. b NIS2',
+                'mapped_controls': ['A.5.27', 'A.5.37'],
+                'mapping_rationale': 'Bewertung ueber Reviews, Tests und Lessons Learned statt ueber einen losen Framework-Bool in der Frage.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-21-2c',
+                'title': 'Sicherheit der Lieferkette',
+                'domain': 'Lieferkette',
+                'description': 'Sicherheitsaspekte in der Lieferkette und in Dienstleisterbeziehungen muessen beruecksichtigt werden.',
+                'evidence_guidance': 'Lieferantenbewertung, Risikoanalyse Lieferkette',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 21 Abs. 2 lit. c NIS2',
+                'mapped_controls': ['A.5.19', 'A.5.20', 'A.5.22', 'A.5.23'],
+                'mapping_rationale': 'Versionierte Lieferkettenpflicht inklusive Cloud- und Third-Party-Sicht.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-21-2d',
+                'title': 'Sicherheit bei Erwerb, Entwicklung und Wartung',
+                'domain': 'SDLC',
+                'description': 'Sicherheit bei Erwerb, Entwicklung und Wartung von Netz- und Informationssystemen einschliesslich Schwachstellenbehandlung.',
+                'evidence_guidance': 'SDLC-Richtlinie, Schwachstellenmanagement',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 21 Abs. 2 lit. d NIS2',
+                'mapped_controls': ['A.8.25', 'A.8.29', 'A.8.32', 'A.8.8'],
+                'mapping_rationale': 'ISCY mappt diese Pflicht explizit auf SDLC- und Vulnerability-Fragen.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-21-2e',
+                'title': 'Konzepte und Verfahren zur Bewertung der Wirksamkeit',
+                'domain': 'Governance',
+                'description': 'Konzepte und Verfahren fuer die Bewertung der Wirksamkeit von Cybersicherheitsmassnahmen muessen bestehen.',
+                'evidence_guidance': 'Audit-Bericht, Review-Protokolle',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 21 Abs. 2 lit. e NIS2',
+                'mapped_controls': ['A.5.27', 'A.5.37'],
+                'mapping_rationale': 'Ergaenzt lit. b um dokumentierte Bewertungs- und Review-Verfahren.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-21-2f',
+                'title': 'Cyberhygiene und Schulung',
+                'domain': 'Awareness',
+                'description': 'Grundlegende Verfahren der Cyberhygiene und Schulungen muessen sichergestellt werden.',
+                'evidence_guidance': 'Schulungsnachweise, Awareness-Berichte',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 21 Abs. 2 lit. f NIS2',
+                'mapped_controls': ['A.6.3', 'A.8.7', 'A.8.8', 'A.8.9'],
+                'mapping_rationale': 'ISCY bewertet diese Pflicht ueber Awareness- und Cyberhygiene-Fragen.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-21-2g',
+                'title': 'Kryptografie und Verschluesselung',
+                'domain': 'Kryptografie',
+                'description': 'Konzepte und Verfahren fuer den Einsatz von Kryptografie und gegebenenfalls Verschluesselung muessen bestehen.',
+                'evidence_guidance': 'Kryptografie-Policy, Verschluesselungsnachweis',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 21 Abs. 2 lit. g NIS2',
+                'mapped_controls': ['A.8.24'],
+                'mapping_rationale': 'Versionierte Ableitung auf definierte Krypto- und Uebertragungsfragen.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-21-2h',
+                'title': 'Personalsicherheit, Zugangssteuerung und Asset-Management',
+                'domain': 'IAM',
+                'description': 'Personalsicherheit, Zugangssteuerung und Asset-Management muessen angemessen adressiert werden.',
+                'evidence_guidance': 'HR-Security-Policy, Zugangsrichtlinie',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 21 Abs. 2 lit. h NIS2',
+                'mapped_controls': ['A.5.9', 'A.5.15', 'A.5.16', 'A.5.18', 'A.7.2'],
+                'mapping_rationale': 'Abgedeckt ueber Lifecycle-, Asset- und Zugriffskontrollfragen.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-21-2i',
+                'title': 'Multi-Faktor-Authentifizierung',
+                'domain': 'IAM',
+                'description': 'Verwendung von MFA oder kontinuierlicher Authentifizierung fuer angemessene Systeme und Konten.',
+                'evidence_guidance': 'MFA-Nachweis, Konfigurationsdokumentation',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 21 Abs. 2 lit. i NIS2',
+                'mapped_controls': ['A.8.5'],
+                'mapping_rationale': 'Direkte Abbildung ueber die MFA-Frage statt unspezifischer Sammelbewertung.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-21-2j',
+                'title': 'Sichere Kommunikation',
+                'domain': 'Kryptografie',
+                'description': 'Gesicherte Sprach-, Video- und Textkommunikation sowie Notfallkommunikation muessen sichergestellt werden.',
+                'evidence_guidance': 'Kommunikationsrichtlinie, Tool-Inventar',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 21 Abs. 2 lit. j NIS2',
+                'mapped_controls': ['A.8.24', 'A.5.24'],
+                'mapping_rationale': 'ISCY nutzt dafuer Krypto- und Incident-Kommunikationsfragen mit versionierter Begruendung.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.NIS2,
+                'code': 'NIS2-23',
+                'title': 'Meldepflichten bei erheblichen Sicherheitsvorfaellen',
+                'domain': 'Incident',
+                'description': 'Erhebliche Sicherheitsvorfaelle muessen fristgerecht ueber definierte Meldewege gemeldet werden.',
+                'evidence_guidance': 'Meldeprozess, Kontaktregister BSI/CSIRT',
+                'sector_package': 'ALL',
+                'legal_reference': 'Art. 23 NIS2',
+                'mapped_controls': ['A.5.24', 'A.5.25', 'A.5.26'],
+                'mapping_rationale': 'Versionierte Zuordnung auf Incident-Response-, Notifikations- und Uebungsfragen.',
+                'source_code': 'NIS2-DIR',
+            },
+            {
+                'framework': Requirement.Framework.KRITIS,
+                'code': 'KRITIS-8A-OTV',
+                'title': 'Angemessene organisatorische und technische Vorkehrungen',
+                'domain': 'Governance',
+                'description': 'KRITIS-Betreiber muessen angemessene organisatorische und technische Vorkehrungen zur Vermeidung von Stoerungen treffen.',
+                'evidence_guidance': 'Sicherheitskonzept, Governance- und Betriebsnachweise',
+                'sector_package': 'CRITICAL_INFRA',
+                'legal_reference': 'BSIG § 8a',
+                'mapped_controls': ['A.5.1', 'A.5.2', 'A.5.31', 'A.8.15', 'A.8.24'],
+                'mapping_rationale': 'ISCY stuetzt KRITIS-Grundschutz ueber Governance-, Detection- und Resilienzfragen.',
+                'source_code': 'BSIG-8A',
+            },
+            {
+                'framework': Requirement.Framework.KRITIS,
+                'code': 'KRITIS-8A-NACHWEIS',
+                'title': 'Regelmaessige Nachweise und Pruefungen',
+                'domain': 'Nachweisfuehrung',
+                'description': 'KRITIS-Betreiber muessen geeignete Nachweise ueber ihre Vorkehrungen fuehren und regelmaessig pruefen lassen.',
+                'evidence_guidance': 'Pruefbericht, Auditnachweise, Management-Review',
+                'sector_package': 'CRITICAL_INFRA',
+                'legal_reference': 'BSIG § 8a',
+                'mapped_controls': ['A.5.27', 'A.5.37'],
+                'mapping_rationale': 'Versionierte Zuordnung auf Reviews, Tests und dokumentierte Wirksamkeitsnachweise.',
+                'source_code': 'BSIG-8A',
+            },
+            {
+                'framework': Requirement.Framework.KRITIS,
+                'code': 'KRITIS-8B-KONTAKT',
+                'title': 'Kontaktstelle und Erreichbarkeit',
+                'domain': 'Incident',
+                'description': 'KRITIS-Betreiber muessen eine geeignete Kontaktstelle und belastbare Erreichbarkeit gegenueber dem BSI sicherstellen.',
+                'evidence_guidance': 'Kontaktstellenregister, Eskalationsmatrix',
+                'sector_package': 'CRITICAL_INFRA',
+                'legal_reference': 'BSIG § 8b',
+                'mapped_controls': ['A.5.24', 'A.5.25'],
+                'mapping_rationale': 'Abbildung ueber Incident-Response- und Kommunikationsfragen in ISCY.',
+                'source_code': 'BSI-KRITIS',
+            },
+            {
+                'framework': Requirement.Framework.KRITIS,
+                'code': 'KRITIS-8B-MELDUNG',
+                'title': 'Meldewege fuer Stoerungen und erhebliche IT-Vorfaelle',
+                'domain': 'Incident',
+                'description': 'Stoerungen und erhebliche IT-Vorfaelle muessen ueber belastbare Prozesse an das BSI gemeldet werden koennen.',
+                'evidence_guidance': 'Meldeprozess, Uebungsnachweis, SIEM/Logging-Konzept',
+                'sector_package': 'CRITICAL_INFRA',
+                'legal_reference': 'BSIG § 8b',
+                'mapped_controls': ['A.5.24', 'A.5.26', 'A.8.15'],
+                'mapping_rationale': 'Versionierte Zuordnung auf Meldewege, Erkennung und Uebungsfaehigkeit.',
+                'source_code': 'BSI-KRITIS',
+            },
+            {
+                'framework': Requirement.Framework.CRA,
+                'code': 'CRA-ANNEX-I-PRIMARY',
+                'title': 'Secure by Design und Secure by Default',
+                'domain': 'Product Security',
+                'description': 'Produkte mit digitalen Elementen muessen grundlegende Cybersecurity-Anforderungen ueber Design, Entwicklung und Voreinstellungen erfuellen.',
+                'evidence_guidance': 'Security Requirements, Architekturentscheidungen, Default-Konfigurationen',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'CRA Art. 13, Annex I Part I',
+                'mapped_controls': ['A.8.25', 'A.8.29'],
+                'mapping_rationale': 'ISCY mappt CRA-Kernanforderungen auf Product-Security- und SDLC-Fragen.',
+                'source_code': 'CRA-REG-2024-2847',
+            },
+            {
+                'framework': Requirement.Framework.CRA,
+                'code': 'CRA-ANNEX-I-COMP',
+                'title': 'Komponenten- und Lifecycle-Transparenz',
+                'domain': 'Product Security',
+                'description': 'Komponenten, Abhaengigkeiten, Support- und Lifecycle-Informationen muessen nachvollziehbar gepflegt werden.',
+                'evidence_guidance': 'SBOM, Komponentenregister, Support-/EOL-Policy',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'CRA Annex I Part II',
+                'mapped_controls': ['A.5.9', 'A.8.25'],
+                'mapping_rationale': 'Wird in ISCY ueber SBOM-, Support- und Komponentenfragen versioniert abgebildet.',
+                'source_code': 'CRA-REG-2024-2847',
+            },
+            {
+                'framework': Requirement.Framework.CRA,
+                'code': 'CRA-ANNEX-I-VULN',
+                'title': 'Vulnerability Handling und koordinierte Offenlegung',
+                'domain': 'PSIRT',
+                'description': 'Schwachstellen muessen aufgenommen, priorisiert, behoben und gegenueber Kunden koordiniert kommuniziert werden.',
+                'evidence_guidance': 'PSIRT-Prozess, Advisorys, Patch-Tracking',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'CRA Annex I Part II',
+                'mapped_controls': ['A.8.8', 'A.8.25'],
+                'mapping_rationale': 'Direkte Zuordnung auf PSIRT- und Vulnerability-Handling-Fragen.',
+                'source_code': 'CRA-REG-2024-2847',
+            },
+            {
+                'framework': Requirement.Framework.CRA,
+                'code': 'CRA-POSTMARKET',
+                'title': 'Post-Market Security und Support',
+                'domain': 'Product Security',
+                'description': 'Support-, Patch- und End-of-Life-Prozesse muessen ueber den Produktlebenszyklus definiert sein.',
+                'evidence_guidance': 'Support-Policy, Release-/Patch-Prozess',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'CRA Art. 13, Annex I Part II',
+                'mapped_controls': ['A.8.8', 'A.8.25'],
+                'mapping_rationale': 'ISCY ordnet dies auf Support-, Tracking- und Release-Gate-Fragen zu.',
+                'source_code': 'CRA-REG-2024-2847',
+            },
+            {
+                'framework': Requirement.Framework.AI_ACT,
+                'code': 'AI-QMS',
+                'title': 'AI Governance / QMS',
+                'domain': 'AI Governance',
+                'description': 'Fuer relevante AI-Systeme muss eine belastbare Governance- und QMS-Struktur vorhanden sein.',
+                'evidence_guidance': 'AI-Register, Governance-Dokumente, Rollen',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'EU AI Act Governance/QMS',
+                'mapped_controls': ['AI_INVENTORY', 'AI_RISK_CLASS', 'AI_MONITORING'],
+                'mapping_rationale': 'Bestehendes AI-Act-Framework bleibt in ISCY erhalten.',
+            },
+            {
+                'framework': Requirement.Framework.AI_ACT,
+                'code': 'AI-RISK-CLASS',
+                'title': 'AI-Risikoklassifizierung',
+                'domain': 'AI Governance',
+                'description': 'AI-Systeme und Use Cases muessen klassifiziert und dokumentiert werden.',
+                'evidence_guidance': 'Klassifizierungsdokumente, Use-Case-Register',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'EU AI Act Risikoklassifizierung',
+                'mapped_controls': ['AI_RISK_CLASS'],
+                'mapping_rationale': 'Bestehende AI-Act-Readiness bleibt erhalten.',
+            },
+            {
+                'framework': Requirement.Framework.AI_ACT,
+                'code': 'AI-HUMAN-OVERSIGHT',
+                'title': 'Human Oversight und Monitoring',
+                'domain': 'AI Governance',
+                'description': 'Oversight, Monitoring und Logging muessen fuer relevante AI-Funktionen geregelt werden.',
+                'evidence_guidance': 'Oversight-Prozess, Logs, Monitoring-Nachweise',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'EU AI Act Human Oversight',
+                'mapped_controls': ['AI_MONITORING'],
+                'mapping_rationale': 'Bestehende AI-Act-Readiness bleibt erhalten.',
+            },
+            {
+                'framework': Requirement.Framework.IEC62443,
+                'code': 'IEC62443-ZONES',
+                'title': 'Zonen / Conduits / Segmentierung',
+                'domain': 'Industrial Security',
+                'description': 'OT-/IACS-Systeme sollten in Zonen und Kommunikationsbeziehungen segmentiert werden.',
+                'evidence_guidance': 'Zonen-/Conduit-Modell, Netzplan',
+                'sector_package': 'CRITICAL_INFRA',
+                'legal_reference': 'IEC 62443 Zonen/Conduits',
+                'mapped_controls': ['OT_ZONES'],
+                'mapping_rationale': 'Bestehendes IEC-62443-Framework bleibt erhalten.',
+            },
+            {
+                'framework': Requirement.Framework.IEC62443,
+                'code': 'IEC62443-COMP',
+                'title': 'Komponenten- und Integrator-Sicherheit',
+                'domain': 'Industrial Security',
+                'description': 'Komponenten, Integrator- und Supplier-Verantwortungen sind sicherheitsbezogen zu steuern.',
+                'evidence_guidance': 'Komponentenregister, Integrationsvorgaben',
+                'sector_package': 'CRITICAL_INFRA',
+                'legal_reference': 'IEC 62443 Komponenten/Integrator',
+                'mapped_controls': ['OT_COMPONENTS'],
+                'mapping_rationale': 'Bestehendes IEC-62443-Framework bleibt erhalten.',
+            },
+            {
+                'framework': Requirement.Framework.IEC62443,
+                'code': 'IEC62443-SL',
+                'title': 'Security Levels und industrielle Schutzanforderungen',
+                'domain': 'Industrial Security',
+                'description': 'Sicherheitsniveaus und industrielle Schutzanforderungen sind zu definieren.',
+                'evidence_guidance': 'Security-Level-Konzept, Schutzbedarfsanalyse',
+                'sector_package': 'CRITICAL_INFRA',
+                'legal_reference': 'IEC 62443 Security Levels',
+                'mapped_controls': ['OT_LEVELS'],
+                'mapping_rationale': 'Bestehendes IEC-62443-Framework bleibt erhalten.',
+            },
+            {
+                'framework': Requirement.Framework.ISO_SAE_21434,
+                'code': '21434-TARA',
+                'title': 'Threat Analysis and Risk Assessment',
+                'domain': 'Automotive Security',
+                'description': 'Eine TARA ist fuer relevante Fahrzeug-/E/E-/Software-Kontexte erforderlich.',
+                'evidence_guidance': 'TARA-Artefakte, Risikoentscheidungen',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'ISO/SAE 21434 TARA',
+                'mapped_controls': ['AUTO_TARA'],
+                'mapping_rationale': 'Bestehendes ISO/SAE-21434-Framework bleibt erhalten.',
+            },
+            {
+                'framework': Requirement.Framework.ISO_SAE_21434,
+                'code': '21434-TRACE',
+                'title': 'Cybersecurity-Traceability',
+                'domain': 'Automotive Security',
+                'description': 'Cybersecurity-Ziele, Anforderungen, Tests und Nachweise muessen rueckverfolgbar sein.',
+                'evidence_guidance': 'Traceability-Matrix, Testnachweise',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'ISO/SAE 21434 Traceability',
+                'mapped_controls': ['AUTO_TRACE'],
+                'mapping_rationale': 'Bestehendes ISO/SAE-21434-Framework bleibt erhalten.',
+            },
+            {
+                'framework': Requirement.Framework.ISO_SAE_21434,
+                'code': '21434-FIELD',
+                'title': 'Field Monitoring und Updateability',
+                'domain': 'Automotive Security',
+                'description': 'Betrieb, Monitoring, Incident Handling und Updates sind ueber den Lebenszyklus abzusichern.',
+                'evidence_guidance': 'Field-Monitoring-Prozess, Update-Konzept',
+                'sector_package': 'DIGITAL',
+                'legal_reference': 'ISO/SAE 21434 Field Monitoring',
+                'mapped_controls': ['AUTO_FIELD'],
+                'mapping_rationale': 'Bestehendes ISO/SAE-21434-Framework bleibt erhalten.',
+            },
+        ]
+
+        requirements = {}
+        for definition in definitions:
+            framework = definition['framework']
+            requirement, _ = Requirement.objects.update_or_create(
+                framework=framework,
+                code=definition['code'],
+                defaults={
+                    'title': definition['title'],
+                    'domain': definition['domain'],
+                    'description': definition['description'],
+                    'guidance': f'Versioniertes {framework}-Mapping in ISCY.',
+                    'is_active': True,
+                    'evidence_required': True,
+                    'evidence_guidance': definition['evidence_guidance'],
+                    'evidence_examples': 'Policy, Screenshot, Export, Review-Protokoll, Ticket oder Auditnachweis.',
+                    'sector_package': definition['sector_package'],
+                    'legal_reference': definition['legal_reference'],
+                    'mapped_controls': definition['mapped_controls'],
+                    'mapping_rationale': definition['mapping_rationale'],
+                    'coverage_level': Requirement.Coverage.PRIMARY,
+                    'mapping_version': versions.get(framework),
+                    'primary_source': sources.get(framework, {}).get(definition.get('source_code', '')),
+                },
+            )
+            requirements[definition['code']] = requirement
+        return requirements
+
+    def _seed_question_mappings(self, versions, requirements):
+        question_mappings = {
+            'NIS2-21-2a': ['GOV_SCOPE', 'GOV_ROLES', 'GOV_POLICY', 'GOV_LEGAL', 'PROC_REGISTER'],
+            'NIS2-21-2b': ['GOV_MGMT_REVIEW', 'DOC_REVIEWS', 'INC_LESSONS'],
+            'NIS2-21-2c': ['SUP_REGISTER', 'SUP_CONTRACTS', 'SUP_MONITORING', 'CLOUD_INVENTORY'],
+            'NIS2-21-2d': ['SDLC_SECURE', 'SDLC_TEST', 'SDLC_CHANGE', 'CYBER_PATCH'],
+            'NIS2-21-2e': ['GOV_MGMT_REVIEW', 'DOC_REVIEWS', 'BCM_TEST'],
+            'NIS2-21-2f': ['CYBER_PATCH', 'CYBER_HARDENING', 'CYBER_MALWARE', 'AWARE_TRAINING'],
+            'NIS2-21-2g': ['CRYPTO_POLICY', 'CRYPTO_TRANSIT', 'CRYPTO_REST'],
+            'NIS2-21-2h': ['PROC_REGISTER', 'PROC_OWNER', 'IAM_LIFECYCLE', 'IAM_ACCESS_REVIEW', 'PHYS_ACCESS'],
+            'NIS2-21-2i': ['IAM_MFA'],
+            'NIS2-21-2j': ['CRYPTO_TRANSIT', 'INC_RESPONSE'],
+            'NIS2-23': ['INC_RESPONSE', 'INC_NOTIFY', 'INC_DRILL'],
+            'KRITIS-8A-OTV': ['GOV_POLICY', 'GOV_ROLES', 'GOV_LEGAL', 'DETECT_LOGGING', 'INC_RESPONSE', 'BCM_BACKUP'],
+            'KRITIS-8A-NACHWEIS': ['GOV_MGMT_REVIEW', 'DOC_REVIEWS', 'BCM_TEST', 'INC_DRILL'],
+            'KRITIS-8B-KONTAKT': ['INC_RESPONSE', 'INC_NOTIFY', 'DOC_COMMUNICATION'],
+            'KRITIS-8B-MELDUNG': ['INC_NOTIFY', 'DETECT_LOGGING', 'DETECT_SIEM', 'INC_DRILL'],
+            'CRA-ANNEX-I-PRIMARY': ['PSM_SECURE_BY_DESIGN', 'PSM_RELEASE_GATES', 'SDLC_SECURE', 'SDLC_TEST'],
+            'CRA-ANNEX-I-COMP': ['PSM_SBOM', 'PSM_SUPPORT'],
+            'CRA-ANNEX-I-VULN': ['PSIRT_PROCESS', 'PSIRT_DISCLOSURE', 'PSIRT_TRACKING', 'CYBER_PATCH'],
+            'CRA-POSTMARKET': ['PSM_SUPPORT', 'PSIRT_TRACKING', 'PSM_RELEASE_GATES'],
+        }
+        questions = {
+            question.code: question
+            for question in AssessmentQuestion.objects.filter(code__in={code for codes in question_mappings.values() for code in codes})
+        }
+        for requirement_code, question_codes in question_mappings.items():
+            requirement = requirements.get(requirement_code)
+            if not requirement:
+                continue
+            for question_code in question_codes:
+                question = questions.get(question_code)
+                if not question:
+                    continue
+                RequirementQuestionMapping.objects.update_or_create(
+                    requirement=requirement,
+                    mapping_version=versions[requirement.framework],
+                    question=question,
+                    defaults={
+                        'strength': RequirementQuestionMapping.Strength.PRIMARY,
+                        'rationale': f'ISCY nutzt die Frage {question.code} als versionierten Mapping-Baustein fuer {requirement.code}.',
+                    },
+                )

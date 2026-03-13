@@ -11,6 +11,7 @@ from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
 
 from apps.organizations.sector_catalog import get_sector_definition
 from apps.risks.services import RiskMatrixService
+from apps.evidence.models import RequirementEvidenceNeed
 
 
 # ── Farben ──
@@ -78,7 +79,7 @@ def generate_audit_report_pdf(report, session, tenant):
     buffer = io.BytesIO()
     ss = _styles()
     sector = get_sector_definition(tenant.sector)
-    report_title = f'ISMS Assessment Report – {tenant.name}'
+    report_title = f'ISCY Assessment Report – {tenant.name}'
 
     doc = SimpleDocTemplate(
         buffer, pagesize=A4,
@@ -102,11 +103,22 @@ def generate_audit_report_pdf(report, session, tenant):
         ['Kennzahl', 'Wert'],
         ['ISO-27001-Readiness', f'{report.iso_readiness_percent}%'],
         ['NIS2-Readiness', f'{report.nis2_readiness_percent}%' if report.nis2_readiness_percent else 'n/a'],
+        ['KRITIS-Readiness', f'{report.kritis_readiness_percent}%' if report.kritis_readiness_percent else 'n/a'],
         ['Betroffenheitsindikation', report.applicability_result or '–'],
         ['Sektor', sector.label],
         ['Sektorbezug', sector.indicative_classification],
     ]
     story.append(_kpi_table(kpi_data, col_widths=[200, 280]))
+    if report.compliance_versions_json:
+        version_rows = [['Framework', 'Version', 'Quelle']]
+        for item in report.compliance_versions_json.values():
+            version_rows.append([
+                item.get('framework', ''),
+                f'{item.get("program_name", "ISCY")} v{item.get("version", "")}',
+                item.get('title', ''),
+            ])
+        story.append(Spacer(1, 6 * mm))
+        story.append(_kpi_table(version_rows, col_widths=[80, 110, 290]))
     story.append(PageBreak())
 
     # ── Domain Scores ──
@@ -171,6 +183,28 @@ def generate_audit_report_pdf(report, session, tenant):
                     story.append(Paragraph(f'  • {item.get("title", "")} ({item.get("priority", "")})', ss['BodyText2']))
                 story.append(Spacer(1, 4 * mm))
 
+    story.append(PageBreak())
+    story.append(Paragraph('Evidenzpflichten mit Mapping- und Quellenbezug', ss['SectionHead']))
+    evidence_needs = RequirementEvidenceNeed.objects.filter(
+        tenant=tenant,
+        session=session,
+    ).select_related('requirement__mapping_version', 'requirement__primary_source')[:12]
+    if evidence_needs:
+        evidence_rows = [['Requirement', 'Status', 'Mapping-Version', 'Quelle']]
+        for need in evidence_needs:
+            requirement = need.requirement
+            mapping_version = need.requirement_mapping_version or '-'
+            source_citation = need.requirement_source_citation or '-'
+            evidence_rows.append([
+                f'{requirement.framework} {requirement.code}',
+                need.get_status_display(),
+                Paragraph(mapping_version, ss['CellText']),
+                Paragraph(source_citation, ss['CellText']),
+            ])
+        story.append(_kpi_table(evidence_rows, col_widths=[90, 70, 140, 180]))
+    else:
+        story.append(Paragraph('Keine Evidenzpflichten fuer diese Session verfuegbar.', ss['SmallGray']))
+
     # ── Risk Heatmap (text) ──
     story.append(Paragraph('Risikomatrix-Zusammenfassung', ss['SectionHead']))
     from apps.risks.models import Risk
@@ -199,7 +233,7 @@ def generate_audit_report_pdf(report, session, tenant):
     ))
 
     def on_page(canvas_obj, doc_obj):
-        _header_footer(canvas_obj, doc_obj, tenant.name, 'ISMS Assessment Report')
+        _header_footer(canvas_obj, doc_obj, tenant.name, 'ISCY Assessment Report')
 
     doc.build(story, onFirstPage=on_page, onLaterPages=on_page)
     return buffer.getvalue()

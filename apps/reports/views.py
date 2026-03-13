@@ -26,7 +26,10 @@ class ReportDetailView(TenantAccessMixin, DetailView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         report = self.object
-        context['evidence_needs'] = RequirementEvidenceNeed.objects.filter(tenant=report.tenant, session=report.session).select_related('requirement')[:20]
+        context['evidence_needs'] = RequirementEvidenceNeed.objects.filter(
+            tenant=report.tenant,
+            session=report.session,
+        ).select_related('requirement__mapping_version', 'requirement__primary_source')[:20]
         measures = list(report.session.generated_measures.select_related('domain', 'question').all()[:12])
         context['measure_evidence_rows'] = [
             {'measure': measure, 'summary': EvidenceNeedService.measure_need_summary(measure)}
@@ -40,7 +43,10 @@ class ReportPdfView(TenantAccessMixin, View):
 
     def get(self, request, pk):
         report = self.filter_queryset_for_tenant(ReportSnapshot.objects.select_related('tenant', 'session')).get(pk=pk)
-        evidence_needs = RequirementEvidenceNeed.objects.filter(tenant=report.tenant, session=report.session).select_related('requirement')[:12]
+        evidence_needs = RequirementEvidenceNeed.objects.filter(
+            tenant=report.tenant,
+            session=report.session,
+        ).select_related('requirement__mapping_version', 'requirement__primary_source')[:12]
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), title=report.title)
         styles = getSampleStyleSheet()
@@ -50,6 +56,8 @@ class ReportPdfView(TenantAccessMixin, View):
         story.append(Paragraph(f'Betroffenheit: {report.applicability_result}', styles['Normal']))
         story.append(Paragraph(f'Länder / Präsenz: {report.tenant.countries_display}', styles['Normal']))
         story.append(Paragraph(f'Sektor: {report.tenant.sector_label} ({report.tenant.sector_profile.nis2_group})', styles['Normal']))
+        if report.compliance_versions_json:
+            story.append(Paragraph(f'Mapping-Versionen: {", ".join(f"{key} {value.get("version", "")}" for key, value in report.compliance_versions_json.items())}', styles['Normal']))
         story.append(Paragraph(report.tenant.sector_profile.downstream_impact, styles['BodyText']))
         story.append(Spacer(1, 12))
         story.append(Paragraph('Executive Summary', styles['Heading2']))
@@ -88,6 +96,10 @@ class ReportPdfView(TenantAccessMixin, View):
             story.append(Paragraph('Evidenzpflichten je Requirement', styles['Heading2']))
             for need in evidence_needs:
                 story.append(Paragraph(f"• {need.requirement.framework} {need.requirement.code}: {need.get_status_display()} – {need.description}", styles['BodyText']))
+                if need.requirement_mapping_version:
+                    story.append(Paragraph(f"  Mapping-Version: {need.requirement_mapping_version}", styles['BodyText']))
+                if need.requirement_source_citation:
+                    story.append(Paragraph(f"  Quelle: {need.requirement_source_citation}", styles['BodyText']))
         story.append(Spacer(1, 12))
         story.append(Paragraph('Maßnahmen mit Nachweispflichten', styles['Heading2']))
         for measure in report.session.generated_measures.select_related('domain')[:8]:

@@ -65,10 +65,10 @@ class EvidenceNeedService:
                 status = RequirementEvidenceNeed.Status.OPEN
             defaults = {
                 'title': f'Nachweis für {requirement.framework} {requirement.code}',
-                'description': requirement.evidence_guidance or requirement.description,
+                'description': EvidenceNeedService.requirement_description(requirement),
                 'is_mandatory': requirement.evidence_required,
                 'status': status,
-                'rationale': requirement.evidence_examples or 'Evidenzen, Richtlinien, Screenshots, Freigaben oder Prüfprotokolle hinterlegen.',
+                'rationale': EvidenceNeedService.requirement_rationale(requirement),
                 'covered_count': covered_count,
             }
             obj, was_created = RequirementEvidenceNeed.objects.update_or_create(
@@ -122,3 +122,22 @@ class EvidenceNeedService:
             elif need.status == RequirementEvidenceNeed.Status.COVERED:
                 summary['covered'] += 1
         return summary
+
+    @staticmethod
+    def requirement_description(requirement):
+        parts = [requirement.evidence_guidance or requirement.description]
+        if requirement.mapping_version:
+            parts.append(f'Mapping-Version: {requirement.mapping_version.program_name} {requirement.framework} v{requirement.mapping_version.version}')
+        if requirement.primary_source:
+            citation = requirement.primary_source.citation or requirement.primary_source.title
+            parts.append(f'Quelle: {requirement.primary_source.authority} - {citation}')
+        return ' | '.join(part for part in parts if part)
+
+    @staticmethod
+    def requirement_rationale(requirement):
+        parts = [requirement.evidence_examples or 'Evidenzen, Richtlinien, Screenshots, Freigaben oder Prüfprotokolle hinterlegen.']
+        if requirement.legal_reference:
+            parts.append(f'Referenz: {requirement.legal_reference}')
+        if requirement.primary_source and requirement.primary_source.url:
+            parts.append(f'Quelle: {requirement.primary_source.url}')
+        return ' | '.join(part for part in parts if part)

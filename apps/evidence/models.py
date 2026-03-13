@@ -71,3 +71,19 @@ class RequirementEvidenceNeed(TenantRelationValidationMixin, TimeStampedModel):
 
     def __str__(self):
         return self.title
+
+    @property
+    def requirement_mapping_version(self):
+        requirement = self.requirement
+        if not requirement or not requirement.mapping_version:
+            return ''
+        return f'{requirement.mapping_version.program_name} {requirement.framework} v{requirement.mapping_version.version}'
+
+    @property
+    def requirement_source_citation(self):
+        requirement = self.requirement
+        if not requirement or not requirement.primary_source:
+            return ''
+        source = requirement.primary_source
+        parts = [source.authority, source.citation or source.title]
+        return ' - '.join(part for part in parts if part)

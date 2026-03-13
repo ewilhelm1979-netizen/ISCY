@@ -115,8 +115,8 @@ class JourneyService:
             )
         if code == 'requirements_available':
             return (
-                'Es fehlen Requirement-Grundlagen. Ohne Requirement Library ist kein belastbares Mapping gegen ISO 27001 oder NIS2 möglich.',
-                'Stellen Sie sicher, dass die Requirement Library initial geladen wurde.',
+                'Es fehlen Requirement-Grundlagen. Ohne die ISCY Requirement Library ist kein belastbares Mapping gegen ISO 27001 oder NIS2 moeglich.',
+                'Stellen Sie sicher, dass die ISCY Requirement Library initial geladen wurde.',
             )
         if code == 'initial_processes_captured':
             return (

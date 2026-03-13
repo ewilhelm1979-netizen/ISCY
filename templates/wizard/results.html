@@ -21,11 +21,22 @@
 <div class="row g-4 mb-4">
   <div class="col-md-2"><div class="v19-glass-card"><div><h5>ISO</h5><p class="display-6 mb-0">{{ report.iso_readiness_percent }}%</p></div></div></div>
   <div class="col-md-2"><div class="v19-glass-card"><div><h5>NIS2</h5><p class="display-6 mb-0">{{ report.nis2_readiness_percent }}%</p></div></div></div>
+  <div class="col-md-2"><div class="v19-glass-card"><div><h5>KRITIS</h5><p class="display-6 mb-0">{{ report.kritis_readiness_percent }}%</p></div></div></div>
   <div class="col-md-2"><div class="v19-glass-card"><div><h5>CRA</h5><p class="display-6 mb-0">{{ report.cra_readiness_percent }}%</p></div></div></div>
   <div class="col-md-2"><div class="v19-glass-card"><div><h5>AI Act</h5><p class="display-6 mb-0">{{ report.ai_act_readiness_percent }}%</p></div></div></div>
   <div class="col-md-2"><div class="v19-glass-card"><div><h5>IEC 62443</h5><p class="display-6 mb-0">{{ report.iec62443_readiness_percent }}%</p></div></div></div>
   <div class="col-md-2"><div class="v19-glass-card"><div><h5>21434</h5><p class="display-6 mb-0">{{ report.iso_sae_21434_readiness_percent }}%</p></div></div></div>
 </div>
+{% if report.compliance_versions_json %}
+<div class="v19-glass-card mb-4"><div>
+  <h3>{{ APP_DISPLAY_NAME }} Regulatory Mapping Versions</h3>
+  <div class="row g-3">
+    {% for key, item in report.compliance_versions_json.items %}
+      <div class="col-md-3"><div class="card h-100 border-0 shadow-sm"><div class="card-body"><strong>{{ item.framework }} v{{ item.version }}</strong><div class="small text-muted mt-2">{{ item.title }}</div><div class="small text-muted">{{ item.requirement_count }} Requirements · {{ item.source_count }} Quellen</div></div></div></div>
+    {% endfor %}
+  </div>
+</div></div>
+{% endif %}
 <div class="row g-4 mb-4">
   <div class="col-lg-7">
     <div class="v19-glass-card h-100"><div><h3>Domänen-Radar</h3><canvas id="resultsRadarChart" height="240"></canvas></div></div>

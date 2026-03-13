@@ -1,4 +1,4 @@
-# ISMS Planner V23.4
+# ISCY V23.4
 
 Django-basierte ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstützung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb über `llama-cpp-python`.
 

@@ -19,7 +19,7 @@ class EvidenceListView(TenantAccessMixin, ListView):
 
     def get_queryset(self):
         tenant = WizardService.get_default_tenant(self.request.user)
-        qs = super().get_queryset().select_related('session', 'domain', 'measure', 'requirement')
+        qs = super().get_queryset().select_related('session', 'domain', 'measure', 'requirement__mapping_version', 'requirement__primary_source')
         session_id = self.request.GET.get('session')
         if session_id:
             qs = qs.filter(session_id=session_id)
@@ -30,7 +30,7 @@ class EvidenceListView(TenantAccessMixin, ListView):
         tenant = WizardService.get_default_tenant(self.request.user)
         selected_session = self.request.GET.get('session', '')
         sessions = AssessmentSession.objects.filter(tenant=tenant) if tenant else []
-        needs = RequirementEvidenceNeed.objects.filter(tenant=tenant).select_related('requirement')
+        needs = RequirementEvidenceNeed.objects.filter(tenant=tenant).select_related('requirement__mapping_version', 'requirement__primary_source')
         if selected_session:
             needs = needs.filter(session_id=selected_session)
         context['sessions'] = sessions

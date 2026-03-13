@@ -13,6 +13,8 @@ from apps.core.models import AuditLog
 from apps.organizations.models import BusinessUnit, Supplier, Tenant
 from apps.organizations.sector_catalog import get_sector_definition
 from apps.organizations.country_catalog import EU_EEA_CODES, get_country_labels
+from apps.requirements_app.models import Requirement
+from apps.requirements_app.services import RegulatoryMappingService
 from apps.processes.models import Process
 from apps.reports.models import ReportSnapshot
 from apps.evidence.services import EvidenceNeedService
@@ -843,10 +845,13 @@ class WizardService:
                     'type': dep.dependency_type, 'rationale': dep.rationale,
                 })
 
-        # F16: NIS2-Readiness separat berechnen basierend auf NIS2-relevanten Fragen
+        # Regulatorische Scores aus versionierten Requirement-Mappings ableiten
         nis2_percent = WizardService._calculate_nis2_readiness(session, domain_scores)
+        kritis_percent = RegulatoryMappingService.calculate_framework_readiness(session, Requirement.Framework.KRITIS)
+        cra_percent = RegulatoryMappingService.calculate_framework_readiness(session, Requirement.Framework.CRA)
         product_matrix = ProductSecurityService.get_regime_matrix(session.tenant)
         framework_readiness = ProductSecurityService.calculate_framework_readiness(session)
+        compliance_versions = RegulatoryMappingService.build_version_snapshot()
 
         return ReportSnapshot.objects.create(
             tenant=session.tenant, session=session,
@@ -855,11 +860,13 @@ class WizardService:
             applicability_result=session.applicability_result,
             iso_readiness_percent=average,
             nis2_readiness_percent=nis2_percent,
-            cra_readiness_percent=framework_readiness['cra_readiness_percent'],
+            kritis_readiness_percent=kritis_percent,
+            cra_readiness_percent=cra_percent or framework_readiness['cra_readiness_percent'],
             ai_act_readiness_percent=framework_readiness['ai_act_readiness_percent'],
             iec62443_readiness_percent=framework_readiness['iec62443_readiness_percent'],
             iso_sae_21434_readiness_percent=framework_readiness['iso_sae_21434_readiness_percent'],
             regulatory_matrix_json=product_matrix,
+            compliance_versions_json=compliance_versions,
             product_security_json={
                 'summary': product_matrix['summary'],
                 'product_security_scope': session.tenant.product_security_scope,
@@ -897,17 +904,4 @@ class WizardService:
             max_score = total * 5
             return min(100, int((score / max_score) * 100)) if max_score else 0
 
-        # FULL-Modus: Nur NIS2-relevante Maturity-Fragen heranziehen
-        nis2_answers = session.answers.filter(
-            question__question_kind=AssessmentQuestion.Kind.MATURITY,
-            question__applies_to_nis2=True,
-        ).exclude(
-            # F08: N/A ausschliessen
-            selected_option__is_na=True,
-        )
-        total = nis2_answers.count()
-        if total == 0:
-            return 0
-        score = sum(a.score for a in nis2_answers)
-        max_score = total * 5
-        return min(100, int((score / max_score) * 100)) if max_score else 0
+        return RegulatoryMappingService.calculate_framework_readiness(session, Requirement.Framework.NIS2)
