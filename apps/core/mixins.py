@@ -62,10 +62,7 @@ class TenantAccessMixin(LoginRequiredMixin):
         kwargs = super().get_form_kwargs()
         form_class = self.get_form_class()
         init_signature = inspect.signature(form_class.__init__)
-        accepts_tenant = 'tenant' in init_signature.parameters or any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD
-            for parameter in init_signature.parameters.values()
-        )
+        accepts_tenant = 'tenant' in init_signature.parameters
         if accepts_tenant:
             kwargs.setdefault('tenant', self.get_tenant())
         return kwargs
