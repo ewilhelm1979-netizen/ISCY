@@ -1,12 +1,18 @@
 from django import forms
+from apps.core.forms import TenantScopedModelForm
 from .models import Process
 
 
-class ProcessForm(forms.ModelForm):
+class ProcessForm(TenantScopedModelForm):
+    tenant_scoped_fields = {
+        'business_unit': 'tenant',
+        'owner': 'tenant',
+    }
+
     class Meta:
         model = Process
         fields = [
-            'tenant', 'business_unit', 'owner', 'name', 'scope', 'description', 'status',
+            'business_unit', 'owner', 'name', 'scope', 'description', 'status',
             'documented', 'approved', 'communicated', 'implemented', 'effective', 'evidenced', 'reviewed_at'
         ]
         widgets = {

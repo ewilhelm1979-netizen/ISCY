@@ -1,8 +1,12 @@
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 
 
-class ReportSnapshot(TimeStampedModel):
+class ReportSnapshot(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'session': 'tenant_id',
+    }
+
     tenant = models.ForeignKey('organizations.Tenant', on_delete=models.CASCADE, related_name='report_snapshots')
     session = models.ForeignKey('wizard.AssessmentSession', on_delete=models.CASCADE, related_name='report_snapshots')
     title = models.CharField(max_length=255)

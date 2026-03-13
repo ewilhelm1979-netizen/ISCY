@@ -1,9 +1,9 @@
 """V20: Erweitertes Risikoregister mit 5x5 Matrix."""
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 
 
-class RiskCategory(TimeStampedModel):
+class RiskCategory(TenantRelationValidationMixin, TimeStampedModel):
     tenant = models.ForeignKey('organizations.Tenant', on_delete=models.CASCADE, related_name='risk_categories')
     name = models.CharField(max_length=128)
     description = models.TextField(blank=True)
@@ -17,7 +17,15 @@ class RiskCategory(TimeStampedModel):
         return self.name
 
 
-class Risk(TimeStampedModel):
+class Risk(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'category': 'tenant_id',
+        'process': 'tenant_id',
+        'asset': 'tenant_id',
+        'owner': 'tenant_id',
+        'accepted_by': 'tenant_id',
+    }
+
     IMPACT_CHOICES = [(1, '1 – Unerheblich'), (2, '2 – Gering'), (3, '3 – Mittel'), (4, '4 – Hoch'), (5, '5 – Kritisch')]
     LIKELIHOOD_CHOICES = [(1, '1 – Unwahrscheinlich'), (2, '2 – Selten'), (3, '3 – Moeglich'), (4, '4 – Wahrscheinlich'), (5, '5 – Sehr wahrscheinlich')]
 

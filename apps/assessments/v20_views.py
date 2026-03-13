@@ -6,6 +6,7 @@ from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views.generic import CreateView, DetailView, FormView, ListView, UpdateView, View
 
+from apps.core.mixins import TenantAccessMixin, TenantCreateMixin
 from apps.requirements_app.models import Requirement
 from apps.wizard.services import WizardService
 from .soa_models import SoADocument, SoAEntry
@@ -19,15 +20,10 @@ from .v20_forms import (
 
 # ═══════════════════════ SoA ═══════════════════════
 
-class SoAListView(LoginRequiredMixin, ListView):
+class SoAListView(TenantAccessMixin, ListView):
     model = SoADocument
     template_name = 'assessments/soa_list.html'
     context_object_name = 'documents'
-
-    def get_queryset(self):
-        tenant = WizardService.get_default_tenant(self.request.user)
-        return SoADocument.objects.filter(tenant=tenant) if tenant else SoADocument.objects.none()
-
 
 class SoAGenerateView(LoginRequiredMixin, View):
     """Generiert ein SoA-Dokument aus den aktiven ISO-27001-Requirements."""
@@ -53,7 +49,7 @@ class SoAGenerateView(LoginRequiredMixin, View):
         return redirect('assessments:soa_detail', pk=soa.pk)
 
 
-class SoADetailView(LoginRequiredMixin, DetailView):
+class SoADetailView(TenantAccessMixin, DetailView):
     model = SoADocument
     template_name = 'assessments/soa_detail.html'
     context_object_name = 'soa'
@@ -68,10 +64,11 @@ class SoADetailView(LoginRequiredMixin, DetailView):
         return ctx
 
 
-class SoAEntryUpdateView(LoginRequiredMixin, UpdateView):
+class SoAEntryUpdateView(TenantAccessMixin, UpdateView):
     model = SoAEntry
     form_class = SoAEntryForm
     template_name = 'assessments/soa_entry_form.html'
+    tenant_filter_field = 'soa__tenant'
 
     def get_success_url(self):
         return reverse('assessments:soa_detail', kwargs={'pk': self.object.soa_id})
@@ -79,23 +76,17 @@ class SoAEntryUpdateView(LoginRequiredMixin, UpdateView):
 
 # ═══════════════════════ Audit ═══════════════════════
 
-class AuditListView(LoginRequiredMixin, ListView):
+class AuditListView(TenantAccessMixin, ListView):
     model = Audit
     template_name = 'assessments/audit_list.html'
     context_object_name = 'audits'
 
-    def get_queryset(self):
-        tenant = WizardService.get_default_tenant(self.request.user)
-        return Audit.objects.filter(tenant=tenant) if tenant else Audit.objects.none()
-
-
-class AuditCreateView(LoginRequiredMixin, CreateView):
+class AuditCreateView(TenantCreateMixin, CreateView):
     model = Audit
     form_class = AuditForm
     template_name = 'assessments/audit_form.html'
 
     def form_valid(self, form):
-        form.instance.tenant = WizardService.get_default_tenant(self.request.user)
         form.instance.created_by = self.request.user
         return super().form_valid(form)
 
@@ -103,7 +94,7 @@ class AuditCreateView(LoginRequiredMixin, CreateView):
         return reverse('assessments:audit_detail', kwargs={'pk': self.object.pk})
 
 
-class AuditDetailView(LoginRequiredMixin, DetailView):
+class AuditDetailView(TenantAccessMixin, DetailView):
     model = Audit
     template_name = 'assessments/audit_detail.html'
     context_object_name = 'audit'
@@ -119,7 +110,7 @@ class AuditDetailView(LoginRequiredMixin, DetailView):
         return ctx
 
 
-class AuditUpdateView(LoginRequiredMixin, UpdateView):
+class AuditUpdateView(TenantAccessMixin, UpdateView):
     model = Audit
     form_class = AuditForm
     template_name = 'assessments/audit_form.html'
@@ -128,28 +119,31 @@ class AuditUpdateView(LoginRequiredMixin, UpdateView):
         return reverse('assessments:audit_detail', kwargs={'pk': self.object.pk})
 
 
-class FindingCreateView(LoginRequiredMixin, CreateView):
+class FindingCreateView(TenantAccessMixin, CreateView):
     model = AuditFinding
     form_class = AuditFindingForm
     template_name = 'assessments/finding_form.html'
+    tenant_filter_field = 'audit__tenant'
 
     def form_valid(self, form):
-        form.instance.audit_id = self.kwargs['audit_pk']
+        audit = get_object_or_404(Audit.objects.filter(tenant=self.get_tenant()), pk=self.kwargs['audit_pk'])
+        form.instance.audit = audit
         return super().form_valid(form)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx['audit'] = get_object_or_404(Audit, pk=self.kwargs['audit_pk'])
+        ctx['audit'] = get_object_or_404(Audit.objects.filter(tenant=self.get_tenant()), pk=self.kwargs['audit_pk'])
         return ctx
 
     def get_success_url(self):
         return reverse('assessments:audit_detail', kwargs={'pk': self.kwargs['audit_pk']})
 
 
-class FindingUpdateView(LoginRequiredMixin, UpdateView):
+class FindingUpdateView(TenantAccessMixin, UpdateView):
     model = AuditFinding
     form_class = AuditFindingForm
     template_name = 'assessments/finding_form.html'
+    tenant_filter_field = 'audit__tenant'
 
     def get_success_url(self):
         return reverse('assessments:audit_detail', kwargs={'pk': self.object.audit_id})
@@ -157,30 +151,24 @@ class FindingUpdateView(LoginRequiredMixin, UpdateView):
 
 # ═══════════════════════ Management Review ═══════════════════════
 
-class ReviewListView(LoginRequiredMixin, ListView):
+class ReviewListView(TenantAccessMixin, ListView):
     model = ManagementReview
     template_name = 'assessments/review_list.html'
     context_object_name = 'reviews'
 
-    def get_queryset(self):
-        tenant = WizardService.get_default_tenant(self.request.user)
-        return ManagementReview.objects.filter(tenant=tenant) if tenant else ManagementReview.objects.none()
-
-
-class ReviewCreateView(LoginRequiredMixin, CreateView):
+class ReviewCreateView(TenantCreateMixin, CreateView):
     model = ManagementReview
     form_class = ManagementReviewForm
     template_name = 'assessments/review_form.html'
 
     def form_valid(self, form):
-        form.instance.tenant = WizardService.get_default_tenant(self.request.user)
         return super().form_valid(form)
 
     def get_success_url(self):
         return reverse('assessments:review_detail', kwargs={'pk': self.object.pk})
 
 
-class ReviewDetailView(LoginRequiredMixin, DetailView):
+class ReviewDetailView(TenantAccessMixin, DetailView):
     model = ManagementReview
     template_name = 'assessments/review_detail.html'
     context_object_name = 'review'
@@ -191,7 +179,7 @@ class ReviewDetailView(LoginRequiredMixin, DetailView):
         return ctx
 
 
-class ReviewUpdateView(LoginRequiredMixin, UpdateView):
+class ReviewUpdateView(TenantAccessMixin, UpdateView):
     model = ManagementReview
     form_class = ManagementReviewForm
     template_name = 'assessments/review_form.html'
@@ -200,13 +188,15 @@ class ReviewUpdateView(LoginRequiredMixin, UpdateView):
         return reverse('assessments:review_detail', kwargs={'pk': self.object.pk})
 
 
-class ReviewActionCreateView(LoginRequiredMixin, CreateView):
+class ReviewActionCreateView(TenantAccessMixin, CreateView):
     model = ReviewAction
     form_class = ReviewActionForm
     template_name = 'assessments/review_action_form.html'
+    tenant_filter_field = 'review__tenant'
 
     def form_valid(self, form):
-        form.instance.review_id = self.kwargs['review_pk']
+        review = get_object_or_404(ManagementReview.objects.filter(tenant=self.get_tenant()), pk=self.kwargs['review_pk'])
+        form.instance.review = review
         return super().form_valid(form)
 
     def get_success_url(self):

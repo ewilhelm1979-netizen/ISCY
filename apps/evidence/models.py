@@ -1,9 +1,16 @@
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 from apps.evidence.validators import validate_evidence_file
 
 
-class EvidenceItem(TimeStampedModel):
+class EvidenceItem(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'session': 'tenant_id',
+        'measure': 'session__tenant_id',
+        'owner': 'tenant_id',
+        'reviewed_by': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         DRAFT = 'DRAFT', 'Entwurf'
         SUBMITTED = 'SUBMITTED', 'Zur Prüfung eingereicht'
@@ -38,7 +45,11 @@ class EvidenceItem(TimeStampedModel):
         return self.linked_requirement
 
 
-class RequirementEvidenceNeed(TimeStampedModel):
+class RequirementEvidenceNeed(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'session': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         OPEN = 'OPEN', 'Offen'
         PARTIAL = 'PARTIAL', 'Teilweise abgedeckt'

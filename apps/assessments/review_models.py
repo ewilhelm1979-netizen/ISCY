@@ -1,9 +1,14 @@
 """V20: Management-Review-Workflow mit Agenda und Protokoll."""
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 
 
-class ManagementReview(TimeStampedModel):
+class ManagementReview(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'session': 'tenant_id',
+        'chairperson': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         PLANNED = 'PLANNED', 'Geplant'
         AGENDA_SET = 'AGENDA_SET', 'Agenda erstellt'
@@ -47,7 +52,13 @@ class ManagementReview(TimeStampedModel):
         return f'{self.title} – {self.review_date or "ungeplant"}'
 
 
-class ReviewAction(TimeStampedModel):
+class ReviewAction(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_source = 'review__tenant_id'
+    tenant_relation_fields = {
+        'review': 'tenant_id',
+        'responsible': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         OPEN = 'OPEN', 'Offen'
         IN_PROGRESS = 'IN_PROGRESS', 'In Bearbeitung'

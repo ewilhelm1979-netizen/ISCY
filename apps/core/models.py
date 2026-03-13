@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -8,6 +9,49 @@ class TimeStampedModel(models.Model):
 
     class Meta:
         abstract = True
+
+
+def _resolve_relation_path(obj, path):
+    current = obj
+    for part in path.split('__'):
+        if current is None:
+            return None
+        current = getattr(current, part, None)
+    return current
+
+
+class TenantRelationValidationMixin(models.Model):
+    """Validiert, dass deklarierte Relationen im selben Tenant liegen."""
+
+    tenant_source = 'tenant_id'
+    tenant_relation_fields = {}
+
+    class Meta:
+        abstract = True
+
+    def clean(self):
+        super().clean()
+        tenant_id = _resolve_relation_path(self, self.tenant_source)
+        if tenant_id is None and self.tenant_source.endswith('_id'):
+            tenant = _resolve_relation_path(self, self.tenant_source[:-3])
+            tenant_id = getattr(tenant, 'pk', None)
+        if tenant_id is None:
+            return
+
+        errors = {}
+        for field_name, tenant_path in self.tenant_relation_fields.items():
+            related_obj = getattr(self, field_name, None)
+            if related_obj is None:
+                continue
+            related_tenant_id = _resolve_relation_path(related_obj, tenant_path)
+            if related_tenant_id != tenant_id:
+                errors[field_name] = 'Objekt gehört zu einem anderen Mandanten.'
+        if errors:
+            raise ValidationError(errors)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
 
 
 # --- F09: TenantQuerySet / TenantManager ---
@@ -28,7 +72,7 @@ class TenantManager(models.Manager):
         return self.get_queryset().for_tenant(tenant)
 
 
-class TenantModel(TimeStampedModel):
+class TenantModel(TenantRelationValidationMixin, TimeStampedModel):
     """Abstrakte Basis fuer alle mandantenbezogenen Models.
 
     Stellt sicher, dass ein TenantManager vorhanden ist und der

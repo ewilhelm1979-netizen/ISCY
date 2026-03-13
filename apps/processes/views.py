@@ -1,17 +1,18 @@
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.urls import reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView
+from apps.core.mixins import TenantAccessMixin, TenantCreateMixin
 from .forms import ProcessForm
 from .models import Process
 
 
-class ProcessListView(LoginRequiredMixin, ListView):
+class ProcessListView(TenantAccessMixin, ListView):
     model = Process
     template_name = 'processes/process_list.html'
     context_object_name = 'processes'
 
 
-class ProcessDetailView(LoginRequiredMixin, DetailView):
+class ProcessDetailView(TenantAccessMixin, DetailView):
     model = Process
     template_name = 'processes/process_detail.html'
     context_object_name = 'process'
@@ -34,7 +35,7 @@ class ProcessDetailView(LoginRequiredMixin, DetailView):
         return ctx
 
 
-class ProcessCreateView(LoginRequiredMixin, CreateView):
+class ProcessCreateView(TenantCreateMixin, CreateView):
     model = Process
     form_class = ProcessForm
     template_name = 'shared/form.html'

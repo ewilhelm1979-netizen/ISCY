@@ -1,9 +1,13 @@
-
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 
 
-class InformationAsset(TimeStampedModel):
+class InformationAsset(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'business_unit': 'tenant_id',
+        'owner': 'tenant_id',
+    }
+
     class Criticality(models.TextChoices):
         VERY_HIGH = 'VERY_HIGH', 'Sehr hoch'
         HIGH = 'HIGH', 'Hoch'

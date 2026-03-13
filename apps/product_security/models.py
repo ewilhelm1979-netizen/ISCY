@@ -15,6 +15,10 @@ class ProductFamily(TenantModel):
 
 
 class Product(TenantModel):
+    tenant_relation_fields = {
+        'family': 'tenant_id',
+    }
+
     family = models.ForeignKey(ProductFamily, on_delete=models.SET_NULL, null=True, blank=True, related_name='products')
     name = models.CharField(max_length=255)
     code = models.SlugField(max_length=100, blank=True)
@@ -35,6 +39,10 @@ class Product(TenantModel):
 
 
 class ProductRelease(TenantModel):
+    tenant_relation_fields = {
+        'product': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         PLANNED = 'PLANNED', 'Geplant'
         ACTIVE = 'ACTIVE', 'Aktiv'
@@ -56,6 +64,11 @@ class ProductRelease(TenantModel):
 
 
 class Component(TenantModel):
+    tenant_relation_fields = {
+        'product': 'tenant_id',
+        'supplier': 'tenant_id',
+    }
+
     class Type(models.TextChoices):
         APPLICATION = 'APPLICATION', 'Application'
         LIBRARY = 'LIBRARY', 'Library'
@@ -81,6 +94,10 @@ class Component(TenantModel):
 
 
 class AISystem(TenantModel):
+    tenant_relation_fields = {
+        'product': 'tenant_id',
+    }
+
     class RiskClass(models.TextChoices):
         NONE = 'NONE', 'Keine besondere AI-Risiko-Klasse'
         LIMITED = 'LIMITED', 'Begrenztes Risiko'
@@ -102,6 +119,11 @@ class AISystem(TenantModel):
 
 
 class ThreatModel(TenantModel):
+    tenant_relation_fields = {
+        'product': 'tenant_id',
+        'release': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         DRAFT = 'DRAFT', 'Entwurf'
         REVIEW = 'REVIEW', 'Im Review'
@@ -122,6 +144,11 @@ class ThreatModel(TenantModel):
 
 
 class ThreatScenario(TenantModel):
+    tenant_relation_fields = {
+        'threat_model': 'tenant_id',
+        'component': 'tenant_id',
+    }
+
     class Category(models.TextChoices):
         SPOOFING = 'SPOOFING', 'Spoofing'
         TAMPERING = 'TAMPERING', 'Tampering'
@@ -157,6 +184,12 @@ class ThreatScenario(TenantModel):
 
 
 class TARA(TenantModel):
+    tenant_relation_fields = {
+        'product': 'tenant_id',
+        'release': 'tenant_id',
+        'scenario': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         OPEN = 'OPEN', 'Offen'
         IN_REVIEW = 'IN_REVIEW', 'Im Review'
@@ -186,6 +219,12 @@ class TARA(TenantModel):
 
 
 class Vulnerability(TenantModel):
+    tenant_relation_fields = {
+        'product': 'tenant_id',
+        'release': 'tenant_id',
+        'component': 'tenant_id',
+    }
+
     class Severity(models.TextChoices):
         CRITICAL = 'CRITICAL', 'Kritisch'
         HIGH = 'HIGH', 'Hoch'
@@ -217,6 +256,12 @@ class Vulnerability(TenantModel):
 
 
 class PSIRTCase(TenantModel):
+    tenant_relation_fields = {
+        'product': 'tenant_id',
+        'release': 'tenant_id',
+        'vulnerability': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         NEW = 'NEW', 'Neu'
         TRIAGE = 'TRIAGE', 'Triage'
@@ -244,6 +289,12 @@ class PSIRTCase(TenantModel):
 
 
 class SecurityAdvisory(TenantModel):
+    tenant_relation_fields = {
+        'product': 'tenant_id',
+        'release': 'tenant_id',
+        'psirt_case': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         DRAFT = 'DRAFT', 'Entwurf'
         REVIEW = 'REVIEW', 'Im Review'
@@ -267,6 +318,11 @@ class SecurityAdvisory(TenantModel):
 
 
 class ProductSecurityRoadmap(TenantModel):
+    tenant_relation_fields = {
+        'product': 'tenant_id',
+        'generated_from_snapshot': 'tenant_id',
+    }
+
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='roadmaps')
     title = models.CharField(max_length=255)
     summary = models.TextField(blank=True)
@@ -280,6 +336,12 @@ class ProductSecurityRoadmap(TenantModel):
 
 
 class ProductSecurityRoadmapTask(TenantModel):
+    tenant_relation_fields = {
+        'roadmap': 'tenant_id',
+        'related_release': 'tenant_id',
+        'related_vulnerability': 'tenant_id',
+    }
+
     class Phase(models.TextChoices):
         GOVERNANCE = 'GOVERNANCE', 'Governance'
         MODELING = 'MODELING', 'Threat Modeling / TARA'
@@ -313,6 +375,10 @@ class ProductSecurityRoadmapTask(TenantModel):
 
 
 class ProductSecuritySnapshot(TenantModel):
+    tenant_relation_fields = {
+        'product': 'tenant_id',
+    }
+
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='snapshots')
     cra_applicable = models.BooleanField(default=False)
     ai_act_applicable = models.BooleanField(default=False)

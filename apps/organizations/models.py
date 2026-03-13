@@ -1,5 +1,5 @@
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 from .sector_catalog import SECTOR_CHOICES, get_sector_definition
 from .country_catalog import get_country_labels
 
@@ -65,7 +65,7 @@ class Tenant(TimeStampedModel):
         return 'Aktive Product-Security-Kontexte: ' + ', '.join(active)
 
 
-class LegalEntity(TimeStampedModel):
+class LegalEntity(TenantRelationValidationMixin, TimeStampedModel):
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='legal_entities')
     name = models.CharField(max_length=255)
     country = models.CharField(max_length=100)
@@ -75,7 +75,11 @@ class LegalEntity(TimeStampedModel):
         return self.name
 
 
-class BusinessUnit(TimeStampedModel):
+class BusinessUnit(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'owner': 'tenant_id',
+    }
+
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='business_units')
     name = models.CharField(max_length=255)
     owner = models.ForeignKey('accounts.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='owned_business_units')
@@ -84,7 +88,11 @@ class BusinessUnit(TimeStampedModel):
         return self.name
 
 
-class Site(TimeStampedModel):
+class Site(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'legal_entity': 'tenant_id',
+    }
+
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='sites')
     legal_entity = models.ForeignKey(LegalEntity, on_delete=models.CASCADE, related_name='sites')
     name = models.CharField(max_length=255)
@@ -95,7 +103,11 @@ class Site(TimeStampedModel):
         return self.name
 
 
-class Supplier(TimeStampedModel):
+class Supplier(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'owner': 'tenant_id',
+    }
+
     tenant = models.ForeignKey(Tenant, on_delete=models.CASCADE, related_name='suppliers')
     name = models.CharField(max_length=255)
     service_description = models.TextField(blank=True)

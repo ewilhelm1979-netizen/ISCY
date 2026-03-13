@@ -3,6 +3,7 @@ from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.views.generic import CreateView, ListView, UpdateView
 
+from apps.core.mixins import TenantAccessMixin, TenantCreateMixin
 from apps.requirements_app.models import Requirement
 from apps.wizard.models import AssessmentSession
 from apps.wizard.services import WizardService
@@ -11,14 +12,14 @@ from .models import EvidenceItem, RequirementEvidenceNeed
 from .services import EvidenceNeedService
 
 
-class EvidenceListView(LoginRequiredMixin, ListView):
+class EvidenceListView(TenantAccessMixin, ListView):
     model = EvidenceItem
     template_name = 'evidence/evidence_list.html'
     context_object_name = 'items'
 
     def get_queryset(self):
         tenant = WizardService.get_default_tenant(self.request.user)
-        qs = EvidenceItem.objects.select_related('session', 'domain', 'measure', 'requirement').filter(tenant=tenant)
+        qs = super().get_queryset().select_related('session', 'domain', 'measure', 'requirement')
         session_id = self.request.GET.get('session')
         if session_id:
             qs = qs.filter(session_id=session_id)
@@ -43,17 +44,18 @@ class EvidenceListView(LoginRequiredMixin, ListView):
         return context
 
 
-class EvidenceNeedSyncView(LoginRequiredMixin, UpdateView):
+class EvidenceNeedSyncView(TenantAccessMixin, UpdateView):
     model = AssessmentSession
     fields = []
+    tenant_filter_field = 'tenant'
 
     def post(self, request, *args, **kwargs):
-        session = get_object_or_404(AssessmentSession, pk=kwargs['pk'])
+        session = get_object_or_404(self.get_queryset(), pk=kwargs['pk'])
         EvidenceNeedService.sync_for_session(session)
         return redirect(f"{reverse('evidence:list')}?session={session.id}")
 
 
-class EvidenceCreateView(LoginRequiredMixin, CreateView):
+class EvidenceCreateView(TenantCreateMixin, CreateView):
     model = EvidenceItem
     form_class = EvidenceItemForm
     template_name = 'evidence/evidence_form.html'
@@ -73,7 +75,6 @@ class EvidenceCreateView(LoginRequiredMixin, CreateView):
         tenant = WizardService.get_default_tenant(self.request.user)
         session_id = self.request.GET.get('session')
         if tenant:
-            form.fields['measure'].queryset = form.fields['measure'].queryset.filter(session__tenant=tenant)
             form.fields['requirement'].queryset = Requirement.objects.filter(is_active=True).order_by('framework', 'code')
         if session_id:
             form.fields['measure'].queryset = form.fields['measure'].queryset.filter(session_id=session_id)
@@ -81,10 +82,9 @@ class EvidenceCreateView(LoginRequiredMixin, CreateView):
 
     def form_valid(self, form):
         tenant = WizardService.get_default_tenant(self.request.user)
-        form.instance.tenant = tenant
         session_id = self.request.GET.get('session')
         if session_id and not form.instance.session_id:
-            form.instance.session = get_object_or_404(AssessmentSession, pk=session_id)
+            form.instance.session = get_object_or_404(AssessmentSession.objects.filter(tenant=tenant), pk=session_id)
         form.instance.owner = self.request.user
         if form.instance.requirement:
             form.instance.linked_requirement = f'{form.instance.requirement.framework} {form.instance.requirement.code}'
@@ -97,7 +97,7 @@ class EvidenceCreateView(LoginRequiredMixin, CreateView):
         return reverse('evidence:list')
 
 
-class EvidenceUpdateView(LoginRequiredMixin, UpdateView):
+class EvidenceUpdateView(TenantAccessMixin, UpdateView):
     model = EvidenceItem
     form_class = EvidenceItemForm
     template_name = 'evidence/evidence_form.html'
@@ -106,7 +106,6 @@ class EvidenceUpdateView(LoginRequiredMixin, UpdateView):
         form = super().get_form(form_class)
         tenant = WizardService.get_default_tenant(self.request.user)
         if tenant:
-            form.fields['measure'].queryset = form.fields['measure'].queryset.filter(session__tenant=tenant)
             form.fields['requirement'].queryset = Requirement.objects.filter(is_active=True).order_by('framework', 'code')
         return form
 

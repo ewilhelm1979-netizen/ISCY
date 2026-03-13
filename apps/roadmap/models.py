@@ -1,8 +1,12 @@
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 
 
-class RoadmapPlan(TimeStampedModel):
+class RoadmapPlan(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'session': 'tenant_id',
+    }
+
     tenant = models.ForeignKey('organizations.Tenant', on_delete=models.CASCADE, related_name='roadmap_plans')
     session = models.ForeignKey('wizard.AssessmentSession', on_delete=models.CASCADE, related_name='roadmap_plans')
     title = models.CharField(max_length=255)
@@ -17,7 +21,9 @@ class RoadmapPlan(TimeStampedModel):
         return self.title
 
 
-class RoadmapPhase(TimeStampedModel):
+class RoadmapPhase(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_source = 'plan__tenant_id'
+
     plan = models.ForeignKey(RoadmapPlan, on_delete=models.CASCADE, related_name='phases')
     name = models.CharField(max_length=255)
     sort_order = models.PositiveIntegerField(default=0)
@@ -33,7 +39,12 @@ class RoadmapPhase(TimeStampedModel):
         return self.name
 
 
-class RoadmapTask(TimeStampedModel):
+class RoadmapTask(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_source = 'phase__plan__tenant_id'
+    tenant_relation_fields = {
+        'measure': 'session__tenant_id',
+    }
+
     class Status(models.TextChoices):
         OPEN = 'OPEN', 'Offen'
         PLANNED = 'PLANNED', 'Geplant'
@@ -65,7 +76,13 @@ class RoadmapTask(TimeStampedModel):
         return self.incoming_dependencies.select_related('predecessor').all()
 
 
-class RoadmapTaskDependency(TimeStampedModel):
+class RoadmapTaskDependency(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_source = 'predecessor__phase__plan__tenant_id'
+    tenant_relation_fields = {
+        'predecessor': 'phase__plan__tenant_id',
+        'successor': 'phase__plan__tenant_id',
+    }
+
     class DependencyType(models.TextChoices):
         FINISH_TO_START = 'FS', 'Finish-to-Start'
         START_TO_START = 'SS', 'Start-to-Start'

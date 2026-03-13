@@ -8,6 +8,7 @@ from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.views.generic import DetailView, ListView, TemplateView, UpdateView, View
+from apps.core.mixins import TenantAccessMixin
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.pdfgen import canvas
@@ -79,7 +80,7 @@ def _build_segments(min_start, max_end, total_days, zoom='month'):
     return segments
 
 
-class RoadmapPlanListView(LoginRequiredMixin, ListView):
+class RoadmapPlanListView(TenantAccessMixin, ListView):
     model = RoadmapPlan
     template_name = 'roadmap/plan_list.html'
     context_object_name = 'plans'
@@ -89,7 +90,7 @@ class RoadmapPlanListView(LoginRequiredMixin, ListView):
         return RoadmapPlan.objects.filter(tenant=tenant).prefetch_related('phases__tasks')
 
 
-class RoadmapPlanDetailView(LoginRequiredMixin, DetailView):
+class RoadmapPlanDetailView(TenantAccessMixin, DetailView):
     model = RoadmapPlan
     template_name = 'roadmap/plan_detail.html'
     context_object_name = 'plan'
@@ -203,21 +204,23 @@ class RoadmapPlanDetailView(LoginRequiredMixin, DetailView):
         return context
 
 
-class RoadmapTaskUpdateView(LoginRequiredMixin, UpdateView):
+class RoadmapTaskUpdateView(TenantAccessMixin, UpdateView):
     model = RoadmapTask
     form_class = RoadmapTaskUpdateForm
     template_name = 'roadmap/task_form.html'
+    tenant_filter_field = 'phase__plan__tenant'
 
     def get_success_url(self):
         return reverse('roadmap:detail', kwargs={'pk': self.object.phase.plan_id})
 
 
-class RoadmapKanbanView(LoginRequiredMixin, TemplateView):
+class RoadmapKanbanView(TenantAccessMixin, TemplateView):
     template_name = 'roadmap/kanban.html'
+    tenant_filter_field = 'tenant'
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        plan = get_object_or_404(RoadmapPlan, pk=self.kwargs['pk'])
+        plan = get_object_or_404(self.filter_queryset_for_tenant(RoadmapPlan.objects.all()), pk=self.kwargs['pk'])
         tasks = RoadmapTask.objects.filter(phase__plan=plan).select_related('phase').prefetch_related('incoming_dependencies__predecessor').order_by('due_date', 'priority')
         grouped = OrderedDict((choice, []) for choice in RoadmapTask.Status.choices)
         for task in tasks:
@@ -227,9 +230,11 @@ class RoadmapKanbanView(LoginRequiredMixin, TemplateView):
         return context
 
 
-class RoadmapPdfView(LoginRequiredMixin, View):
+class RoadmapPdfView(TenantAccessMixin, View):
+    tenant_filter_field = 'tenant'
+
     def get(self, request, pk):
-        plan = get_object_or_404(RoadmapPlan.objects.prefetch_related('phases__tasks'), pk=pk)
+        plan = get_object_or_404(self.filter_queryset_for_tenant(RoadmapPlan.objects.prefetch_related('phases__tasks')), pk=pk)
         buffer = io.BytesIO()
         pdf = canvas.Canvas(buffer, pagesize=landscape(A4))
         width, height = landscape(A4)
@@ -311,9 +316,11 @@ class RoadmapPdfView(LoginRequiredMixin, View):
         return response
 
 
-class RoadmapPngView(LoginRequiredMixin, View):
+class RoadmapPngView(TenantAccessMixin, View):
+    tenant_filter_field = 'tenant'
+
     def get(self, request, pk):
-        plan = get_object_or_404(RoadmapPlan.objects.prefetch_related('phases__tasks'), pk=pk)
+        plan = get_object_or_404(self.filter_queryset_for_tenant(RoadmapPlan.objects.prefetch_related('phases__tasks')), pk=pk)
         phases = list(plan.phases.all())
         min_start, max_end, total_days = _timeline_bounds(plan, phases)
         width, height = 2000, 1080

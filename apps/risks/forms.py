@@ -1,8 +1,16 @@
 from django import forms
+from apps.core.forms import TenantScopedModelForm
 from .models import Risk
 
 
-class RiskForm(forms.ModelForm):
+class RiskForm(TenantScopedModelForm):
+    tenant_scoped_fields = {
+        'category': 'tenant',
+        'process': 'tenant',
+        'asset': 'tenant',
+        'owner': 'tenant',
+    }
+
     class Meta:
         model = Risk
         fields = [

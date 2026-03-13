@@ -1,11 +1,16 @@
 """V20: Forms fuer SoA, Audit, Management Review."""
 from django import forms
+from apps.core.forms import TenantScopedModelForm
 from .soa_models import SoAEntry
 from .audit_models import Audit, AuditFinding
 from .review_models import ManagementReview, ReviewAction
 
 
-class SoAEntryForm(forms.ModelForm):
+class SoAEntryForm(TenantScopedModelForm):
+    tenant_scoped_fields = {
+        'control_owner': 'tenant',
+    }
+
     class Meta:
         model = SoAEntry
         fields = ['is_applicable', 'justification', 'implementation_status', 'control_owner', 'evidence_reference', 'notes']
@@ -16,7 +21,7 @@ class SoAEntryForm(forms.ModelForm):
         }
 
 
-class AuditForm(forms.ModelForm):
+class AuditForm(TenantScopedModelForm):
     class Meta:
         model = Audit
         fields = ['title', 'audit_type', 'status', 'lead_auditor', 'audit_team', 'scope', 'objectives',
@@ -33,7 +38,11 @@ class AuditForm(forms.ModelForm):
         }
 
 
-class AuditFindingForm(forms.ModelForm):
+class AuditFindingForm(TenantScopedModelForm):
+    tenant_scoped_fields = {
+        'responsible': 'tenant',
+    }
+
     class Meta:
         model = AuditFinding
         fields = ['finding_number', 'title', 'description', 'severity', 'status',
@@ -49,7 +58,12 @@ class AuditFindingForm(forms.ModelForm):
         }
 
 
-class ManagementReviewForm(forms.ModelForm):
+class ManagementReviewForm(TenantScopedModelForm):
+    tenant_scoped_fields = {
+        'chairperson': 'tenant',
+        'session': 'tenant',
+    }
+
     class Meta:
         model = ManagementReview
         fields = [
@@ -69,7 +83,11 @@ class ManagementReviewForm(forms.ModelForm):
         widgets['next_review_date'] = forms.DateInput(attrs={'type': 'date'})
 
 
-class ReviewActionForm(forms.ModelForm):
+class ReviewActionForm(TenantScopedModelForm):
+    tenant_scoped_fields = {
+        'responsible': 'tenant',
+    }
+
     class Meta:
         model = ReviewAction
         fields = ['title', 'description', 'responsible', 'due_date', 'status', 'completion_notes']

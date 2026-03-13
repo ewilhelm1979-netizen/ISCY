@@ -1,8 +1,13 @@
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 
 
-class Process(TimeStampedModel):
+class Process(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'business_unit': 'tenant_id',
+        'owner': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         SUFFICIENT = 'SUFFICIENT', 'Vorhanden und ausreichend'
         PARTIAL = 'PARTIAL', 'Vorhanden, aber unvollständig'

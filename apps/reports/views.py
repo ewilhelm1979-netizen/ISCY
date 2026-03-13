@@ -2,6 +2,7 @@ import io
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponse
 from django.views.generic import DetailView, ListView, View
+from apps.core.mixins import TenantAccessMixin
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
@@ -12,17 +13,12 @@ from apps.evidence.services import EvidenceNeedService
 from apps.wizard.services import WizardService
 
 
-class ReportListView(LoginRequiredMixin, ListView):
+class ReportListView(TenantAccessMixin, ListView):
     model = ReportSnapshot
     template_name = 'reports/report_list.html'
     context_object_name = 'reports'
 
-    def get_queryset(self):
-        tenant = WizardService.get_default_tenant(self.request.user)
-        return ReportSnapshot.objects.filter(tenant=tenant) if tenant else ReportSnapshot.objects.none()
-
-
-class ReportDetailView(LoginRequiredMixin, DetailView):
+class ReportDetailView(TenantAccessMixin, DetailView):
     model = ReportSnapshot
     template_name = 'reports/report_detail.html'
     context_object_name = 'report'
@@ -39,9 +35,11 @@ class ReportDetailView(LoginRequiredMixin, DetailView):
         return context
 
 
-class ReportPdfView(LoginRequiredMixin, View):
+class ReportPdfView(TenantAccessMixin, View):
+    tenant_filter_field = 'tenant'
+
     def get(self, request, pk):
-        report = ReportSnapshot.objects.select_related('tenant', 'session').get(pk=pk)
+        report = self.filter_queryset_for_tenant(ReportSnapshot.objects.select_related('tenant', 'session')).get(pk=pk)
         evidence_needs = RequirementEvidenceNeed.objects.filter(tenant=report.tenant, session=report.session).select_related('requirement')[:12]
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), title=report.title)
@@ -116,10 +114,12 @@ class ReportPdfView(LoginRequiredMixin, View):
         return response
 
 
-class ReportProPdfView(LoginRequiredMixin, View):
+class ReportProPdfView(TenantAccessMixin, View):
     """V20: Professioneller audit-ready PDF-Report."""
+    tenant_filter_field = 'tenant'
+
     def get(self, request, pk):
-        report = ReportSnapshot.objects.select_related('tenant', 'session').get(pk=pk)
+        report = self.filter_queryset_for_tenant(ReportSnapshot.objects.select_related('tenant', 'session')).get(pk=pk)
         from .pdf_export import generate_audit_report_pdf
         pdf_bytes = generate_audit_report_pdf(report, report.session, report.tenant)
         response = HttpResponse(content_type='application/pdf')

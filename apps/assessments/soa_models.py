@@ -1,9 +1,14 @@
 """V20: Statement of Applicability (SoA) – ISO 27001 Pflichtdokument."""
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 
 
-class SoADocument(TimeStampedModel):
+class SoADocument(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'session': 'tenant_id',
+        'approved_by': 'tenant_id',
+    }
+
     """Ein SoA-Dokument pro Tenant/Session."""
     class Status(models.TextChoices):
         DRAFT = 'DRAFT', 'Entwurf'
@@ -38,7 +43,13 @@ class SoADocument(TimeStampedModel):
         return self.entries.filter(is_applicable=True, implementation_status='IMPLEMENTED').count()
 
 
-class SoAEntry(TimeStampedModel):
+class SoAEntry(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_source = 'soa__tenant_id'
+    tenant_relation_fields = {
+        'soa': 'tenant_id',
+        'control_owner': 'tenant_id',
+    }
+
     """Eine Zeile im SoA – entspricht einem Annex-A Control."""
     class ImplementationStatus(models.TextChoices):
         NOT_STARTED = 'NOT_STARTED', 'Nicht begonnen'

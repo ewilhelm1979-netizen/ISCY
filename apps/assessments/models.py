@@ -1,8 +1,8 @@
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 
 
-class ApplicabilityAssessment(TimeStampedModel):
+class ApplicabilityAssessment(TenantRelationValidationMixin, TimeStampedModel):
     class Status(models.TextChoices):
         RELEVANT = 'RELEVANT', 'Voraussichtlich relevant'
         POSSIBLY_RELEVANT = 'POSSIBLY_RELEVANT', 'Möglicherweise relevant'
@@ -23,7 +23,12 @@ class ApplicabilityAssessment(TimeStampedModel):
         return f'{self.tenant} - {self.status}'
 
 
-class Assessment(TimeStampedModel):
+class Assessment(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'process': 'tenant_id',
+        'owner': 'tenant_id',
+    }
+
     class Status(models.TextChoices):
         FULFILLED = 'FULFILLED', 'Ausreichend erfüllt'
         PARTIAL = 'PARTIAL', 'Teilweise erfüllt'
@@ -49,7 +54,12 @@ class Assessment(TimeStampedModel):
         return f'{self.process} -> {self.requirement}'
 
 
-class Measure(TimeStampedModel):
+class Measure(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'assessment': 'tenant_id',
+        'owner': 'tenant_id',
+    }
+
     class Priority(models.TextChoices):
         LOW = 'LOW', 'Low'
         MEDIUM = 'MEDIUM', 'Medium'

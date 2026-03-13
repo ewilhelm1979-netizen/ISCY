@@ -1,22 +1,20 @@
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.urls import reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
+from apps.core.mixins import TenantAccessMixin, TenantCreateMixin
 from apps.wizard.services import WizardService
 from .forms import RiskForm
 from .models import Risk
 from .services import RiskMatrixService
 
 
-class RiskListView(LoginRequiredMixin, ListView):
+class RiskListView(TenantAccessMixin, ListView):
     model = Risk
     template_name = 'risks/risk_list.html'
     context_object_name = 'risks'
 
     def get_queryset(self):
-        tenant = WizardService.get_default_tenant(self.request.user)
-        if tenant:
-            return Risk.objects.filter(tenant=tenant).select_related('owner', 'category', 'process')
-        return Risk.objects.none()
+        return super().get_queryset().select_related('owner', 'category', 'process')
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -28,24 +26,19 @@ class RiskListView(LoginRequiredMixin, ListView):
         return ctx
 
 
-class RiskDetailView(LoginRequiredMixin, DetailView):
+class RiskDetailView(TenantAccessMixin, DetailView):
     model = Risk
     template_name = 'risks/risk_detail.html'
     context_object_name = 'risk'
 
 
-class RiskCreateView(LoginRequiredMixin, CreateView):
+class RiskCreateView(TenantCreateMixin, CreateView):
     model = Risk
     form_class = RiskForm
     template_name = 'risks/risk_form.html'
     success_url = reverse_lazy('risks:list')
 
-    def form_valid(self, form):
-        form.instance.tenant = WizardService.get_default_tenant(self.request.user)
-        return super().form_valid(form)
-
-
-class RiskUpdateView(LoginRequiredMixin, UpdateView):
+class RiskUpdateView(TenantAccessMixin, UpdateView):
     model = Risk
     form_class = RiskForm
     template_name = 'risks/risk_form.html'

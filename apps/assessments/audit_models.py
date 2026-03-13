@@ -1,9 +1,13 @@
 """V20: Audit-Modul – internes/externes Audit, Findings, Corrective Actions."""
 from django.db import models
-from apps.core.models import TimeStampedModel
+from apps.core.models import TenantRelationValidationMixin, TimeStampedModel
 
 
-class Audit(TimeStampedModel):
+class Audit(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_relation_fields = {
+        'created_by': 'tenant_id',
+    }
+
     class AuditType(models.TextChoices):
         INTERNAL = 'INTERNAL', 'Internes Audit'
         EXTERNAL = 'EXTERNAL', 'Externes Audit'
@@ -46,7 +50,14 @@ class Audit(TimeStampedModel):
         return self.findings.exclude(status__in=['CLOSED', 'VERIFIED']).count()
 
 
-class AuditFinding(TimeStampedModel):
+class AuditFinding(TenantRelationValidationMixin, TimeStampedModel):
+    tenant_source = 'audit__tenant_id'
+    tenant_relation_fields = {
+        'audit': 'tenant_id',
+        'responsible': 'tenant_id',
+        'verified_by': 'tenant_id',
+    }
+
     class Severity(models.TextChoices):
         MAJOR_NC = 'MAJOR_NC', 'Hauptabweichung (Major NC)'
         MINOR_NC = 'MINOR_NC', 'Nebenabweichung (Minor NC)'
