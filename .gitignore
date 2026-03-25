@@ -1,2 +1,14 @@
 __pycache__/
 *.py[cod]
+.venv/
+.venv-*/
+.venv-ci/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.env
+db.sqlite3
+media/
+staticfiles/
+models/
+backups/

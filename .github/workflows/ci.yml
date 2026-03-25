@@ -18,8 +18,8 @@ jobs:
           python -m venv .venv
           source .venv/bin/activate
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-prod.txt
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-prod.txt
       - name: Django checks and smoke setup
         env:
           SECRET_KEY: ci-secret-key
@@ -27,7 +27,7 @@ jobs:
           DATABASE_URL: sqlite:///db.sqlite3
         run: |
           source .venv/bin/activate
-          mkdir -p static media
+          mkdir -p static media staticfiles
           python manage.py makemigrations --check --dry-run
           python manage.py migrate --noinput
           python manage.py seed_demo || true
@@ -36,6 +36,28 @@ jobs:
           python manage.py seed_product_security || true
           python manage.py check
           python manage.py test apps.core
+
+  nix-devshell:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Nix dev shell smoke test
+        run: |
+          nix develop --command bash -lc '
+            python -m venv .venv-nix-ci
+            source .venv-nix-ci/bin/activate
+            python -m ensurepip --upgrade
+            python -m pip install --upgrade pip setuptools wheel
+            python -m pip install -r requirements.txt
+            cp .env.example .env
+            mkdir -p static media staticfiles
+            python manage.py check
+            python manage.py test apps.core
+          '
 
   llm-runtime-build:
     runs-on: ubuntu-24.04
@@ -57,7 +79,7 @@ jobs:
           export CXX=/usr/bin/clang++
           export CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF"
           export FORCE_CMAKE=1
-          pip install --no-cache-dir --force-reinstall --no-binary=llama-cpp-python llama-cpp-python
+          python -m pip install --no-cache-dir --force-reinstall --no-binary=llama-cpp-python llama-cpp-python
           python -c "import llama_cpp; print('llama-cpp-python OK')"
 
   docker-config:

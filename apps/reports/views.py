@@ -57,7 +57,11 @@ class ReportPdfView(TenantAccessMixin, View):
         story.append(Paragraph(f'Länder / Präsenz: {report.tenant.countries_display}', styles['Normal']))
         story.append(Paragraph(f'Sektor: {report.tenant.sector_label} ({report.tenant.sector_profile.nis2_group})', styles['Normal']))
         if report.compliance_versions_json:
-            story.append(Paragraph(f'Mapping-Versionen: {", ".join(f"{key} {value.get("version", "")}" for key, value in report.compliance_versions_json.items())}', styles['Normal']))
+            version_labels = ", ".join(
+                f"{key} {value.get('version', '')}"
+                for key, value in report.compliance_versions_json.items()
+            )
+            story.append(Paragraph(f"Mapping-Versionen: {version_labels}", styles['Normal']))
         story.append(Paragraph(report.tenant.sector_profile.downstream_impact, styles['BodyText']))
         story.append(Spacer(1, 12))
         story.append(Paragraph('Executive Summary', styles['Heading2']))

@@ -8,6 +8,10 @@ info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$1"; }
 warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$1"; }
 err()  { printf '\033[1;31m[ERR ]\033[0m %s\n' "$1" >&2; }
 
+in_nix_shell() {
+  [ -n "${IN_NIX_SHELL:-}" ]
+}
+
 if [ ! -d ".venv" ]; then
   info "Erstelle virtuelle Umgebung (.venv) mit --copies ..."
   python3 -m venv --copies .venv
@@ -68,8 +72,12 @@ PY
 }
 
 install_system_packages_for_llm() {
+  if in_nix_shell; then
+    info "Nix-Shell erkannt. Verwende vorhandene Toolchain aus nix develop."
+    return 0
+  fi
   if ! command -v sudo >/dev/null 2>&1; then
-    err "sudo wurde nicht gefunden. Bitte installiere clang, openblas und g++-14 manuell."
+    err "sudo wurde nicht gefunden. Bitte installiere clang, OpenBLAS und Build-Tools manuell oder nutze 'nix develop'."
     exit 1
   fi
   info "Installiere/prüfe Systempakete für lokalen llama-cpp-python-Build ..."
@@ -80,7 +88,7 @@ install_system_packages_for_llm() {
 install_llm_runtime() {
   info "Installiere Python-Abhängigkeiten für lokalen LLM-Betrieb ..."
   python -m pip install --upgrade pip setuptools wheel
-  pip install huggingface_hub>=0.34.0
+  python -m pip install "huggingface_hub>=0.34.0"
 
   if python_has_module llama_cpp; then
     info "llama-cpp-python ist bereits importierbar."
@@ -96,8 +104,8 @@ install_llm_runtime() {
   export FORCE_CMAKE=1
 
   info "Baue llama-cpp-python lokal mit clang + OpenBLAS ..."
-  pip uninstall -y llama-cpp-python >/dev/null 2>&1 || true
-  pip install --no-cache-dir --force-reinstall --no-binary=llama-cpp-python llama-cpp-python
+  python -m pip uninstall -y llama-cpp-python >/dev/null 2>&1 || true
+  python -m pip install --no-cache-dir --force-reinstall --no-binary=llama-cpp-python llama-cpp-python
 
   if ! python_has_module llama_cpp; then
     err "llama-cpp-python konnte nach dem Build nicht importiert werden."
@@ -106,13 +114,17 @@ install_llm_runtime() {
   info "llama-cpp-python Runtime ist bereit."
 }
 
-mkdir -p static media "$LOCAL_LLM_TARGET_DIR"
+mkdir -p static media staticfiles "$LOCAL_LLM_TARGET_DIR"
 
 info "Aktualisiere pip ..."
 python -m pip install --upgrade pip
 
 info "Installiere Basis-Abhängigkeiten ..."
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+
+if in_nix_shell; then
+  info "Lokaler Start im Nix-Dev-Shell-Modus."
+fi
 
 if [ ! -f "$LOCAL_LLM_MODEL_PATH" ] && [ "$AUTO_YES" = "1" ]; then
   DOWNLOAD_LOCAL_LLM=1
@@ -136,7 +148,7 @@ fi
 
 if [ "$DOWNLOAD_LOCAL_LLM" = "1" ]; then
   info "Bereite Modell-Download vor ..."
-  pip install -r requirements-llm.txt
+  python -m pip install -r requirements-llm.txt
   python scripts/download_local_llm.py \
     --repo-id "$LOCAL_LLM_HF_REPO_ID" \
     --filename "$LOCAL_LLM_HF_FILENAME" \

@@ -2,6 +2,34 @@
 
 Django-basierte ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstützung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb über `llama-cpp-python`.
 
+## Lokale Entwicklung auf NixOS
+
+Für NixOS und andere lokale Linux-Setups ist jetzt ein reproduzierbarer Dev-Shell-Pfad vorhanden:
+
+```bash
+nix develop
+python -m venv .venv
+source .venv/bin/activate
+python -m ensurepip --upgrade
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
+mkdir -p static media staticfiles models
+cp .env.example .env
+python manage.py migrate
+python manage.py check
+python manage.py runserver
+```
+
+Falls du den lokalen `llama-cpp-python`-Betrieb aktivieren willst:
+
+```bash
+nix develop
+source .venv/bin/activate
+python -m pip install -r requirements-llm.txt
+```
+
+Der Dev-Shell in `flake.nix` bringt die Build- und Laufzeitbibliotheken für PostgreSQL, SQLite und den lokalen `llama-cpp-python`-Build mit.
+
 ## Neu in V23.4
 
 - produktionsnähere **Docker-/Compose-Profile** für Development, Stage und Production
@@ -93,6 +121,8 @@ Danach kann weiter wie gewohnt gestartet werden:
 AUTO_YES=1 INSTALL_LOCAL_LLM=1 DOWNLOAD_LOCAL_LLM=1 VERIFY_LOCAL_LLM=1 ./start.sh
 ```
 
+Auf NixOS bitte bevorzugt ueber `nix develop` arbeiten. `start.sh` erkennt die Nix-Shell und versucht dort keine `apt`-Paketinstallation.
+
 ## Lokale Vulnerability-Feeds
 
 Für lokale EPSS-/KEV-Anreicherung und Git-/Scanner-Vorbereitung stehen Management-Commands bereit:
@@ -125,6 +155,14 @@ GitHub Actions prüft:
 - Django-Konfiguration, Migrationen, Seeds und Health-Endpoints
 - Build der lokalen `llama-cpp-python` Runtime auf Ubuntu 24.04
 - Validierung aller Compose-Dateien inklusive Stage und Production
+
+## Lokale Kurzbefehle
+
+```bash
+make local-bootstrap
+make local-check
+make local-test
+```
 
 ## Support-Matrix
 

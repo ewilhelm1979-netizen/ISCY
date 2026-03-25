@@ -3,7 +3,18 @@ COMPOSE_STAGE=docker compose -f docker-compose.yml -f docker-compose.stage.yml
 COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
 COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 
-.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health handbook-pdf
+.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health handbook-pdf local-bootstrap local-check local-test
+
+local-bootstrap:
+	python3 -m venv .venv
+	mkdir -p static media staticfiles models
+	. .venv/bin/activate && python -m ensurepip --upgrade && python -m pip install --upgrade pip setuptools wheel && python -m pip install -r requirements.txt
+
+local-check:
+	. .venv/bin/activate && python manage.py check
+
+local-test:
+	. .venv/bin/activate && python manage.py test
 
 dev-up:
 	$(COMPOSE_DEV) up --build
