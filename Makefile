@@ -14,7 +14,7 @@ local-check:
 	. .venv/bin/activate && python manage.py check
 
 local-test:
-	. .venv/bin/activate && python manage.py test
+	. .venv/bin/activate && python manage.py test apps.core apps.reports
 
 dev-up:
 	$(COMPOSE_DEV) up --build

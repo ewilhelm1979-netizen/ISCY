@@ -35,7 +35,7 @@ jobs:
           python manage.py seed_requirements || true
           python manage.py seed_product_security || true
           python manage.py check
-          python manage.py test apps.core
+          python manage.py test apps.core apps.reports
 
   nix-devshell:
     runs-on: ubuntu-24.04
@@ -56,7 +56,7 @@ jobs:
             cp .env.example .env
             mkdir -p static media staticfiles
             python manage.py check
-            python manage.py test apps.core
+            python manage.py test apps.core apps.reports
           '
 
   llm-runtime-build:

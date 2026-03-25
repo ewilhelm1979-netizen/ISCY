@@ -164,6 +164,8 @@ make local-check
 make local-test
 ```
 
+`make local-test` deckt aktuell die Basis-Gesundheitschecks und die mandantenbezogenen Report-Views ab.
+
 ## Support-Matrix
 
 Siehe [`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md).

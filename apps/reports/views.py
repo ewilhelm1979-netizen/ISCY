@@ -1,6 +1,7 @@
 import io
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 from django.views.generic import DetailView, ListView, View
 from apps.core.mixins import TenantAccessMixin
 from reportlab.lib import colors
@@ -42,7 +43,12 @@ class ReportPdfView(TenantAccessMixin, View):
     tenant_filter_field = 'tenant'
 
     def get(self, request, pk):
-        report = self.filter_queryset_for_tenant(ReportSnapshot.objects.select_related('tenant', 'session')).get(pk=pk)
+        report = get_object_or_404(
+            self.filter_queryset_for_tenant(
+                ReportSnapshot.objects.select_related('tenant', 'session')
+            ),
+            pk=pk,
+        )
         evidence_needs = RequirementEvidenceNeed.objects.filter(
             tenant=report.tenant,
             session=report.session,
@@ -135,7 +141,12 @@ class ReportProPdfView(TenantAccessMixin, View):
     tenant_filter_field = 'tenant'
 
     def get(self, request, pk):
-        report = self.filter_queryset_for_tenant(ReportSnapshot.objects.select_related('tenant', 'session')).get(pk=pk)
+        report = get_object_or_404(
+            self.filter_queryset_for_tenant(
+                ReportSnapshot.objects.select_related('tenant', 'session')
+            ),
+            pk=pk,
+        )
         from .pdf_export import generate_audit_report_pdf
         pdf_bytes = generate_audit_report_pdf(report, report.session, report.tenant)
         response = HttpResponse(content_type='application/pdf')
