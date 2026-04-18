@@ -142,6 +142,87 @@ class ReportViewTests(TestCase):
             with self.assertRaises(RuntimeError):
                 self.client.get(reverse("reports:list"))
 
+    @patch("apps.reports.services.urlopen")
+    def test_report_detail_can_use_rust_snapshot_bridge(self, mock_urlopen):
+        response_mock = Mock()
+        response_mock.read.return_value = json.dumps({
+            "api_version": "v1",
+            "report": {
+                "id": self.report_a.id,
+                "tenant_id": self.tenant_a.id,
+                "session_id": self.session_a.id,
+                "title": "Rust Detail Report",
+                "executive_summary": "Rust Executive Summary",
+                "applicability_result": "relevant",
+                "iso_readiness_percent": 88,
+                "nis2_readiness_percent": 79,
+                "kritis_readiness_percent": 33,
+                "cra_readiness_percent": 34,
+                "ai_act_readiness_percent": 35,
+                "iec62443_readiness_percent": 36,
+                "iso_sae_21434_readiness_percent": 37,
+                "regulatory_matrix_json": {
+                    "summary": "Rust matrix",
+                    "nis2": {"label": "NIS2", "applicable": True, "reason": "Tenant relevant"},
+                },
+                "compliance_versions_json": {
+                    "ISO27001": {
+                        "framework": "ISO27001",
+                        "version": "2022",
+                        "title": "ISO 27001",
+                        "requirement_count": 93,
+                        "source_count": 1,
+                    }
+                },
+                "product_security_json": {"sbom_required": True},
+                "top_gaps_json": [{"title": "Rust Gap", "severity": "HIGH"}],
+                "top_measures_json": [{"title": "Rust Measure", "priority": "HIGH"}],
+                "roadmap_summary": [{"name": "Rust Phase", "duration_weeks": 4, "objective": "Bridge"}],
+                "domain_scores_json": [{"domain": "Governance", "score_percent": 88, "maturity_level": "Managed"}],
+                "next_steps_json": {"dependencies": []},
+                "created_at": "2026-04-18T10:00:00Z",
+                "updated_at": "2026-04-18T11:00:00Z",
+            },
+        }).encode("utf-8")
+        response_ctx = Mock()
+        response_ctx.__enter__ = Mock(return_value=response_mock)
+        response_ctx.__exit__ = Mock(return_value=False)
+        mock_urlopen.return_value = response_ctx
+        self.client.force_login(self.user_a)
+
+        with self.settings(REPORT_SNAPSHOT_BACKEND="rust_service", RUST_BACKEND_URL="http://rust-backend:9000"):
+            response = self.client.get(reverse("reports:detail", args=[self.report_a.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        rust_request = mock_urlopen.call_args.args[0]
+        self.assertEqual(
+            rust_request.full_url,
+            f"http://rust-backend:9000/api/v1/reports/snapshots/{self.report_a.pk}",
+        )
+        self.assertEqual(rust_request.get_header("X-iscy-tenant-id"), str(self.tenant_a.id))
+        self.assertEqual(rust_request.get_header("X-iscy-user-id"), str(self.user_a.id))
+        report = response.context["report"]
+        self.assertEqual(response.context["report_snapshot_source"], "rust_service")
+        self.assertEqual(report.title, "Rust Detail Report")
+        self.assertEqual(report.iso_readiness_percent, 88)
+        self.assertEqual(report.tenant.name, "Tenant A")
+        self.assertContains(response, "Rust Executive Summary")
+
+    @patch("apps.reports.services.urlopen", side_effect=OSError("backend down"))
+    def test_report_detail_falls_back_to_django_when_rust_unavailable_in_non_strict_mode(self, _mock_urlopen):
+        self.client.force_login(self.user_a)
+
+        with self.settings(
+            REPORT_SNAPSHOT_BACKEND="rust_service",
+            RUST_BACKEND_URL="http://rust-backend:9000",
+            RUST_STRICT_MODE=False,
+        ):
+            response = self.client.get(reverse("reports:detail", args=[self.report_a.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["report_snapshot_source"], "django")
+        self.assertEqual(response.context["report"], self.report_a)
+
     def test_report_detail_blocks_foreign_tenant_access(self):
         self.client.force_login(self.user_a)
 

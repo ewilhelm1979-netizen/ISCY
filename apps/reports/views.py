@@ -12,7 +12,7 @@ from .models import ReportSnapshot
 from .services import ReportSnapshotBridge
 from apps.evidence.models import RequirementEvidenceNeed
 from apps.evidence.services import EvidenceNeedService
-from apps.wizard.services import WizardService
+from apps.wizard.models import GeneratedMeasure
 
 
 class ReportListView(TenantAccessMixin, ListView):
@@ -39,18 +39,34 @@ class ReportDetailView(TenantAccessMixin, DetailView):
     template_name = 'reports/report_detail.html'
     context_object_name = 'report'
 
+    def get_object(self, queryset=None):
+        report_id = self.kwargs.get(self.pk_url_kwarg)
+        rust_report = ReportSnapshotBridge.fetch_detail(self.request, self.get_tenant(), report_id)
+        if rust_report is not None:
+            self.report_snapshot_source = 'rust_service'
+            self.check_tenant_access(rust_report)
+            return rust_report
+        self.report_snapshot_source = 'django'
+        return super().get_object(queryset)
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         report = self.object
+        session_id = getattr(report, 'session_id', None) or getattr(report.session, 'id', None)
         context['evidence_needs'] = RequirementEvidenceNeed.objects.filter(
             tenant=report.tenant,
-            session=report.session,
+            session_id=session_id,
         ).select_related('requirement__mapping_version', 'requirement__primary_source')[:20]
-        measures = list(report.session.generated_measures.select_related('domain', 'question').all()[:12])
+        measures = list(
+            GeneratedMeasure.objects.filter(session_id=session_id)
+            .select_related('domain', 'question')
+            .all()[:12]
+        )
         context['measure_evidence_rows'] = [
             {'measure': measure, 'summary': EvidenceNeedService.measure_need_summary(measure)}
             for measure in measures
         ]
+        context['report_snapshot_source'] = getattr(self, 'report_snapshot_source', 'django')
         return context
 
 
