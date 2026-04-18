@@ -85,6 +85,40 @@ class Command(BaseCommand):
                 'cta_label': 'Assessment anlegen',
                 'sort_order': 60,
             },
+            {
+                'code': 'soc_phishing_playbook_applied',
+                'phase': 'measures',
+                'title': 'SOC-Playbook für Phishing anwenden',
+                'description': (
+                    'Bearbeiten Sie gemeldete Phishing-Fälle entlang einer klaren Kette: '
+                    'Scope bestimmen, Informationen korrelieren, Gemeinsamkeiten (IOC/TTP) suchen, '
+                    'Vorfallstyp bewerten, Verdacht bestätigen, priorisieren, dokumentieren, '
+                    'Containment einleiten und bei Bedarf eskalieren.'
+                ),
+                'why_it_matters': (
+                    'Einzel-Alerts werden häufig falsch eingeschätzt. Das Playbook reduziert sowohl '
+                    'Unterreaktion (Ausbreitung) als auch Überreaktion (unnötige Eskalation) und schafft '
+                    'ein nachvollziehbares Lagebild für SOC, IT und Management.'
+                ),
+                'required_inputs': (
+                    'Mail- und Zustellstatus, Klick-/Interaktionsdaten, Auth-Logs (z. B. Entra ID/M365), '
+                    'EDR-/SIEM-/Proxy-/DNS-/Firewall-Daten, Sandbox-Ergebnisse, Threat-Intelligence, '
+                    'betroffene User/Hosts/privilegierte Konten, Zeitfenster und mögliche Business-Auswirkung.'
+                ),
+                'expected_outputs': (
+                    'Klassifizierter Incident-Typ (z. B. Spam, Credential Phishing, BEC, Malware Delivery, '
+                    'Account Compromise), priorisierte Dringlichkeit, dokumentierte Evidenzkette, '
+                    'eingeleitete Containment-Maßnahmen und begründete Eskalationsentscheidung.'
+                ),
+                'definition_of_done': (
+                    'Der Fall ist für Dritte rekonstruierbar dokumentiert: Scope, Korrelationsergebnisse, '
+                    'IOC/TTP-Bezüge, Klassifikation, Priorität, Maßnahmen, offene Punkte und klare '
+                    'Eskalationsbegründung bzw. Schließungsbegründung sind vorhanden.'
+                ),
+                'route_name': 'assessments:measure_create',
+                'cta_label': 'Incident-Maßnahme erfassen',
+                'sort_order': 70,
+            },
         ]
 
         for item in steps:

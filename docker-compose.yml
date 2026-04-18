@@ -23,6 +23,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      rust-backend:
+        condition: service_healthy
     env_file:
       - .env
     environment:
@@ -39,6 +41,12 @@ services:
       PORT: "8000"
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
       GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
+      RUST_BACKEND_URL: ${RUST_BACKEND_URL:-http://rust-backend:9000}
+      LOCAL_LLM_RUST_URL: ${LOCAL_LLM_RUST_URL:-http://rust-backend:9000}
+      RISK_SCORING_BACKEND: ${RISK_SCORING_BACKEND:-rust_service}
+      GUIDANCE_SCORING_BACKEND: ${GUIDANCE_SCORING_BACKEND:-rust_service}
+      REPORT_SUMMARY_BACKEND: ${REPORT_SUMMARY_BACKEND:-rust_service}
+      RUST_STRICT_MODE: ${RUST_STRICT_MODE:-false}
     expose:
       - "8000"
     volumes:
@@ -50,6 +58,21 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  rust-backend:
+    build:
+      context: ./rust/iscy-backend
+    restart: unless-stopped
+    environment:
+      RUST_BACKEND_BIND: "0.0.0.0:9000"
+    expose:
+      - "9000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9000/health/live || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   postgres_data:

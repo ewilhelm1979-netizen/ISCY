@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Maerz 2026
+Version: Arbeitsstand April 2026 (ISCY V23.5)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -497,6 +497,111 @@ Hier wird aus einer technischen Schwachstellenmeldung eine geschaeftlich nutzbar
 3. EPSS, KEV und Exponierung bewerten
 4. Risiko und Vulnerability automatisch verknuepfen
 5. Massnahmen ueber Roadmap oder Behandlung steuern
+
+### 6.5 SOC-Playbook fuer Phishing- und aehnliche Incident-Faelle
+
+Empfohlene Kette fuer die operative Bearbeitung:
+
+1. Scope bestimmen  
+   Klaeren, wer und was betroffen ist, seit wann der Vorfall laeuft und welche Systeme, Konten, Daten oder Geschaeftsbereiche im Risiko stehen.
+2. Informationen korrelieren  
+   Mail-Logs, SEG, SIEM, EDR, Auth-, Proxy-, DNS- und Firewall-Daten zusammenfuehren.
+3. Nach Gemeinsamkeiten suchen  
+   IOCs und TTPs vergleichen (Domain, URL, Hash, Prozesse, Zeitfenster, Zielgruppe).
+4. Vorfall bewerten  
+   Einordnen, ob Spam, Phishing, BEC, Malware Delivery oder bereits Account Compromise vorliegt.
+5. Verdacht bestaetigen  
+   Von der Hypothese in die Incident-Response wechseln, sobald belastbare Evidenz vorliegt.
+6. Priorisieren  
+   Kritikalitaet und Dringlichkeit anhand Impact, Privilege-Level, Ausbreitungs- und Datenabflussrisiko einstufen.
+7. Dokumentieren  
+   Nachvollziehbar festhalten, was bekannt ist, was vermutet wird, was getan wurde und warum.
+8. Containment einleiten  
+   Sofortmassnahmen risikobasiert umsetzen (z. B. Mail entfernen, URL blockieren, Session widerrufen, Konto sichern, Host isolieren).
+9. Gegebenenfalls eskalieren  
+   An L2/L3, IR, IAM, Management, Datenschutz oder Legal uebergeben, wenn Risiko, Scope oder Komplexitaet es erfordern.
+
+Merksatz: Erst verstehen, dann bewerten, dann eindaemmen, dann eskalieren - wenn Risiko oder Komplexitaet es verlangen.
+
+### 6.6 Docker-Betrieb in einfacher Sprache
+
+Wenn du ISCY schnell und reproduzierbar starten willst, nutze Docker.
+
+1. `make docker-check`  
+   Prueft zuerst alle Compose-Dateien auf Syntax und Zusammenbau.
+2. `make docker-smoke`  
+   Startet eine kurze Funktionsprobe (DB, Migration, Django-Check) und faehrt danach wieder herunter.
+3. Danach den gewuenschten Modus starten  
+   - lokal: `make dev-up`  
+   - stage: `make stage-up`  
+   - produktiv: `make prod-up` oder `make prod-up-llm`
+
+Merksatz: Erst validieren, dann kurz testen, dann dauerhaft starten.
+
+### 6.7 CRA, IoT/Cloud, Windows, OT und Produktionsarchitektur (einfach erklaert)
+
+Stand dieser Anleitung: 18. April 2026.
+
+#### CRA (Cyber Resilience Act) in kurz
+
+- Der CRA ist seit Dezember 2024 in Kraft.
+- Meldepflichten starten ab 11. September 2026.
+- Die wesentlichen Pflichten gelten ab 11. Dezember 2027.
+
+Fuer ISCY bedeutet das praktisch:
+
+1. Produkt-Scope und Komponenten sauber pflegen.
+2. Schwachstellen- und Patch-Prozess dokumentieren.
+3. Incident- und Meldewege frueh vorbereiten.
+4. Nachweise (Evidenz) revisionsfest ablegen.
+
+#### IoT- und Cloud-Security in kurz
+
+- IoT: Asset-Inventar, sichere Defaults, Updatefaehigkeit, Segmentierung.
+- Cloud: Identitaeten haerten, Logs zentral sammeln, Konfigurationen regelmaessig pruefen.
+- In ISCY: Prozesse, Assets, Risiken und Massnahmen zusammenfuehren.
+
+#### Windows-Hardening in kurz
+
+- Admin-Rechte minimieren.
+- MFA, starke Authentisierung und Session-Kontrollen aktivieren.
+- Security-Baselines und Patch-Stand regelmaessig pruefen.
+- Ueber ISCY als Prozess + Evidenz + Review dokumentieren.
+
+#### OT-Security und Produktionssysteme (OPC UA, MES, SCADA, IdentPro)
+
+- IT und OT klar trennen (Zonen/Segmente).
+- Fernzugriffe streng kontrollieren.
+- Kritische Schnittstellen (z. B. OPC UA, MES, SCADA, Identitaetsprovider) inventarisieren.
+- Notfall- und Wiederanlaufablaeufe fuer Produktion ueben.
+- In ISCY als Risiko, Massnahme, Evidenz und Incident-Playbook abbilden.
+
+Merksatz: Technik, Organisation und Nachweis muessen zusammenpassen.
+
+### 6.8 Einfache Abnahme-Checkliste fuer die neuen Themen
+
+Nutze diese Liste als schnelle Team-Abnahme in ISCY:
+
+1. Docker laeuft stabil  
+   - `make docker-check` ist ohne Fehler durchgelaufen.
+   - `make docker-smoke` ist ohne Fehler durchgelaufen.
+2. CRA-Readiness sichtbar  
+   - Product-Security-Scope ist gepflegt.
+   - Schwachstellen-/Patch-Prozess ist dokumentiert.
+   - Incident-/Meldeweg ist dokumentiert.
+3. Cloud-Security umgesetzt  
+   - Cloud-Services sind inventarisiert.
+   - Cloud-Identitaeten/Schluessel folgen Least-Privilege.
+4. Windows-Hardening umgesetzt  
+   - Baselines sind definiert.
+   - lokale Adminrechte, Makros, SMB und Firewall sind geregelt.
+5. OT-/Produktions-Security umgesetzt  
+   - Zonen/Conduits sind dokumentiert.
+   - OPC UA, MES, SCADA und Produktions-Identitaeten sind abgesichert.
+6. Nachweise vorhanden  
+   - Zu jedem Punkt gibt es in ISCY mindestens Prozess, Risiko oder Massnahme plus Evidenz.
+
+Merksatz: Nicht nur planen - auch nachweisbar umsetzen.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
