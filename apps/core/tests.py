@@ -1,5 +1,6 @@
 from django.test import TestCase
 from django.urls import reverse
+from django.conf import settings
 
 
 class HealthViewTests(TestCase):
@@ -12,6 +13,9 @@ class HealthViewTests(TestCase):
         response = self.client.get(reverse('health_ready'))
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['database'], 'ok')
+
+    def test_rust_strict_mode_default_enabled(self):
+        self.assertTrue(settings.RUST_STRICT_MODE)
 
 
 class WebUiParitySmokeTests(TestCase):

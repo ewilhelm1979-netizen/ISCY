@@ -185,6 +185,7 @@ python3 manage.py import_cve_context_csv <tenant-slug> /pfad/zu/cve_context.csv 
 
 Ab V23.5 ist der Vulnerability-Import standardmäßig auf **Rust-only-Normalisierung** gestellt (`VULN_INTEL_RUST_ONLY=True`).
 Wenn `RUST_BACKEND_URL` fehlt, brechen CVE-Upserts absichtlich mit Fehler ab, um Mischbetrieb zu vermeiden.
+Außerdem ist der Cutover-Default jetzt `RUST_STRICT_MODE=True`, damit Risk-/Guidance-/Report-Pfade ohne Rust-Backend nicht still auf Legacy-Fallbacks zurückfallen.
 
 Direkte NVD-Collection-Imports koennen optional mit `--cve-tag`, `--cpe-name`, `--last-mod-start-date` und `--last-mod-end-date` gefiltert werden.
 `sync_nvd_recent` ist fuer regelmaessige Jobs gedacht (z. B. stündlich/taeglich) und nutzt automatisch `lastModStartDate/lastModEndDate`.

@@ -168,4 +168,4 @@ VULN_INTEL_RUST_ONLY = os.getenv('VULN_INTEL_RUST_ONLY', 'True').lower() == 'tru
 RISK_SCORING_BACKEND = os.getenv('RISK_SCORING_BACKEND', 'rust_service')
 GUIDANCE_SCORING_BACKEND = os.getenv('GUIDANCE_SCORING_BACKEND', 'rust_service')
 REPORT_SUMMARY_BACKEND = os.getenv('REPORT_SUMMARY_BACKEND', 'rust_service')
-RUST_STRICT_MODE = os.getenv('RUST_STRICT_MODE', 'False').lower() == 'true'
+RUST_STRICT_MODE = os.getenv('RUST_STRICT_MODE', 'True').lower() == 'true'
