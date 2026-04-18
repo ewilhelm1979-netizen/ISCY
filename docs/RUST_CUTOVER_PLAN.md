@@ -24,7 +24,7 @@ Kontrollierter Wechsel von Python-Pfaden auf Rust-Pfade ohne Big-Bang-Risiko.
 
 ## Stufe 3 – Teil-Cutover
 
-- `import_nvd_cves_canary --apply-source=rust --strict` fuer Stage erzwingen
+- Rust-CLI/Wrapper (`import_nvd_cves`, `sync_nvd_recent`, `import_nvd_cves_canary`) fuer Stage mit verpflichtendem Rust-Healthcheck erzwingen
 - In Production schrittweise per Job-Kohorten aktivieren
 - Mismatch-Grenzwerte definieren (z. B. <0.5%)
 
