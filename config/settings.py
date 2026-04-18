@@ -153,12 +153,19 @@ if not DEBUG:
 
 # Lokales LLM / CVE-Intelligence
 LOCAL_LLM_ENABLED = os.getenv('LOCAL_LLM_ENABLED', 'False').lower() == 'true'
-LOCAL_LLM_BACKEND = os.getenv('LOCAL_LLM_BACKEND', 'llama_cpp')
+LOCAL_LLM_BACKEND = os.getenv('LOCAL_LLM_BACKEND', 'rust_service')
 LOCAL_LLM_MODEL_NAME = os.getenv('LOCAL_LLM_MODEL_NAME', 'Qwen3-8B-GGUF')
 LOCAL_LLM_MODEL_PATH = os.getenv('LOCAL_LLM_MODEL_PATH', '')
+LOCAL_LLM_RUST_URL = os.getenv('LOCAL_LLM_RUST_URL', '').strip()
 LOCAL_LLM_N_CTX = int(os.getenv('LOCAL_LLM_N_CTX', '8192'))
 LOCAL_LLM_N_THREADS = int(os.getenv('LOCAL_LLM_N_THREADS', str(max(2, os.cpu_count() or 4))))
 LOCAL_LLM_GPU_LAYERS = int(os.getenv('LOCAL_LLM_GPU_LAYERS', '0'))
 LOCAL_LLM_VERBOSE_NATIVE = os.getenv('LOCAL_LLM_VERBOSE_NATIVE', 'False').lower() == 'true'
 LOCAL_LLM_TEST_MAX_TOKENS = int(os.getenv('LOCAL_LLM_TEST_MAX_TOKENS', '96'))
 NVD_API_KEY = os.getenv('NVD_API_KEY', '')
+RUST_BACKEND_URL = os.getenv('RUST_BACKEND_URL', '').strip()
+VULN_INTEL_RUST_ONLY = os.getenv('VULN_INTEL_RUST_ONLY', 'True').lower() == 'true'
+RISK_SCORING_BACKEND = os.getenv('RISK_SCORING_BACKEND', 'rust_service')
+GUIDANCE_SCORING_BACKEND = os.getenv('GUIDANCE_SCORING_BACKEND', 'rust_service')
+REPORT_SUMMARY_BACKEND = os.getenv('REPORT_SUMMARY_BACKEND', 'rust_service')
+RUST_STRICT_MODE = os.getenv('RUST_STRICT_MODE', 'True').lower() == 'true'

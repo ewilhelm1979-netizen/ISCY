@@ -9,8 +9,8 @@ jobs:
   django-core:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install app dependencies
@@ -25,6 +25,10 @@ jobs:
           SECRET_KEY: ci-secret-key
           DEBUG: 'True'
           DATABASE_URL: sqlite:///db.sqlite3
+          RUST_BACKEND_URL: http://127.0.0.1:9000
+          GUIDANCE_SCORING_BACKEND: local
+          RISK_SCORING_BACKEND: local
+          REPORT_SUMMARY_BACKEND: local
         run: |
           source .venv/bin/activate
           mkdir -p static media staticfiles
@@ -34,13 +38,26 @@ jobs:
           python manage.py seed_catalog || true
           python manage.py seed_requirements || true
           python manage.py seed_product_security || true
-          python manage.py check
-          python manage.py test apps.core apps.reports apps.product_security
+          make team-test
+      - name: Django Rust-adapter seam checks
+        env:
+          SECRET_KEY: ci-secret-key
+          DEBUG: 'True'
+          DATABASE_URL: sqlite:///db.sqlite3
+          RUST_BACKEND_URL: http://127.0.0.1:9000
+          GUIDANCE_SCORING_BACKEND: rust_service
+          RISK_SCORING_BACKEND: rust_service
+          REPORT_SUMMARY_BACKEND: rust_service
+        run: |
+          source .venv/bin/activate
+          python manage.py test \
+            apps.guidance.tests.JourneyServiceTests \
+            apps.vulnerability_intelligence.tests.RiskScoringBridgeTests
 
   nix-devshell:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v30
         with:
           extra_nix_config: |
@@ -48,6 +65,10 @@ jobs:
       - name: Nix dev shell smoke test
         run: |
           nix develop --command bash -lc '
+            export RUST_BACKEND_URL=http://127.0.0.1:9000
+            export GUIDANCE_SCORING_BACKEND=local
+            export RISK_SCORING_BACKEND=local
+            export REPORT_SUMMARY_BACKEND=local
             python -m venv .venv-nix-ci
             source .venv-nix-ci/bin/activate
             python -m ensurepip --upgrade
@@ -55,39 +76,27 @@ jobs:
             python -m pip install -r requirements.txt
             cp .env.example .env
             mkdir -p static media staticfiles
-            python manage.py check
-            python manage.py test apps.core apps.reports apps.product_security
+            make team-test
           '
 
-  llm-runtime-build:
+  rust-backend-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          python-version: '3.12'
-      - name: Install system packages for llama-cpp-python
+          toolchain: stable
+      - name: Run Rust backend tests
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config python3-dev clang libopenblas-dev g++-14 libstdc++-14-dev
-      - name: Build llama-cpp-python runtime
-        run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          python -m pip install --upgrade pip setuptools wheel
-          export CC=/usr/bin/clang
-          export CXX=/usr/bin/clang++
-          export CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF"
-          export FORCE_CMAKE=1
-          python -m pip install --no-cache-dir --force-reinstall --no-binary=llama-cpp-python llama-cpp-python
-          python -c "import llama_cpp; print('llama-cpp-python OK')"
+          cargo test --manifest-path rust/iscy-backend/Cargo.toml
 
   docker-config:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Validate docker compose files
         run: |
+          cp .env.example .env
           docker compose -f docker-compose.yml config
           docker compose -f docker-compose.yml -f docker-compose.llm.yml config
           docker compose -f docker-compose.yml -f docker-compose.stage.yml config

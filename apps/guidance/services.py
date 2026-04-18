@@ -1,3 +1,8 @@
+import json
+from dataclasses import dataclass
+from urllib.request import Request, urlopen
+
+from django.conf import settings
 from django.urls import NoReverseMatch, reverse
 from apps.assessments.models import ApplicabilityAssessment, Assessment, Measure
 from apps.guidance.models import GuidanceStep, TenantJourneyState
@@ -7,7 +12,22 @@ from apps.requirements_app.models import Requirement
 from apps.risks.models import Risk
 
 
+@dataclass(frozen=True)
+class GuidanceTenantSnapshot:
+    process_count: int
+    risk_count: int
+    assessment_count: int
+    measure_count: int
+    measure_open_count: int
+    applicability_count: int
+    requirement_count: int
+
+
 class JourneyService:
+    @staticmethod
+    def _strict_rust_mode() -> bool:
+        return bool(getattr(settings, 'RUST_STRICT_MODE', False))
+
     @staticmethod
     def get_default_tenant(user=None):
         if user and getattr(user, 'tenant_id', None):
@@ -26,17 +46,21 @@ class JourneyService:
         state = JourneyService.get_or_create_state(tenant)
         steps = list(GuidanceStep.objects.filter(is_active=True).order_by('sort_order'))
 
-        process_count = Process.objects.filter(tenant=tenant).count()
-        risk_count = Risk.objects.filter(tenant=tenant).count()
-        assessment_count = Assessment.objects.filter(tenant=tenant).count()
-        measure_open_count = Measure.objects.filter(tenant=tenant).exclude(status=Measure.Status.DONE).count()
-        applicability_count = ApplicabilityAssessment.objects.filter(tenant=tenant).count()
-        requirement_count = Requirement.objects.filter(is_active=True).count()
+        snapshot = JourneyService._collect_tenant_snapshot(tenant)
 
         completed = 0
         current_step = None
         for step in steps:
-            if JourneyService._is_step_done(step.code, tenant, process_count, risk_count, assessment_count, applicability_count, requirement_count):
+            if JourneyService._is_step_done(
+                step.code,
+                tenant,
+                snapshot.process_count,
+                snapshot.risk_count,
+                snapshot.assessment_count,
+                snapshot.measure_count,
+                snapshot.applicability_count,
+                snapshot.requirement_count,
+            ):
                 completed += 1
             elif current_step is None:
                 current_step = step
@@ -59,16 +83,46 @@ class JourneyService:
         state.progress_percent = int((completed / len(steps)) * 100)
         state.current_step = current_step
         state.last_completed_step = steps[completed - 1] if completed > 0 else None
-        state.summary, state.next_action_text = JourneyService._build_step_message(
-            current_step.code if current_step else '', tenant, process_count, risk_count, assessment_count, measure_open_count, applicability_count
-        ) if current_step else (
-            'Alle aktuell definierten Guided Steps sind abgeschlossen.',
-            'Nächster sinnvoller Schritt: Evidenzen, Reviews und Audit-Vorbereitung vertiefen.',
+
+        rust_eval = JourneyService._evaluate_via_rust(
+            tenant=tenant,
+            process_count=snapshot.process_count,
+            risk_count=snapshot.risk_count,
+            assessment_count=snapshot.assessment_count,
+            measure_count=snapshot.measure_count,
+            measure_open_count=snapshot.measure_open_count,
+            applicability_count=snapshot.applicability_count,
+            requirement_count=snapshot.requirement_count,
         )
+        if rust_eval:
+            state.summary = rust_eval['summary']
+            state.next_action_text = rust_eval['next_action_text']
+        else:
+            state.summary, state.next_action_text = JourneyService._build_step_message(
+                current_step.code if current_step else '',
+                tenant,
+                snapshot.process_count,
+                snapshot.risk_count,
+                snapshot.assessment_count,
+                snapshot.measure_count,
+                snapshot.measure_open_count,
+                snapshot.applicability_count,
+            ) if current_step else (
+                'Alle aktuell definierten Guided Steps sind abgeschlossen.',
+                'Nächster sinnvoller Schritt: Evidenzen, Reviews und Audit-Vorbereitung vertiefen.',
+            )
         state.updated_by = user
         state.save()
 
-        todo_items = JourneyService._todo_items(tenant, process_count, risk_count, assessment_count, measure_open_count, applicability_count)
+        todo_items = rust_eval['todo_items'] if rust_eval else JourneyService._todo_items(
+            tenant,
+            snapshot.process_count,
+            snapshot.risk_count,
+            snapshot.assessment_count,
+            snapshot.measure_count,
+            snapshot.measure_open_count,
+            snapshot.applicability_count,
+        )
         next_step_url = JourneyService._resolve_route(current_step.route_name) if current_step and current_step.route_name else ''
         next_step_label = current_step.cta_label if current_step and current_step.cta_label else 'Zum Schritt'
         return {
@@ -79,6 +133,19 @@ class JourneyService:
         }
 
     @staticmethod
+    def _collect_tenant_snapshot(tenant: Tenant) -> GuidanceTenantSnapshot:
+        """Single ORM boundary for guidance-evaluation counters (migration seam for Rust rewrite)."""
+        return GuidanceTenantSnapshot(
+            process_count=Process.objects.filter(tenant=tenant).count(),
+            risk_count=Risk.objects.filter(tenant=tenant).count(),
+            assessment_count=Assessment.objects.filter(tenant=tenant).count(),
+            measure_count=Measure.objects.filter(tenant=tenant).count(),
+            measure_open_count=Measure.objects.filter(tenant=tenant).exclude(status=Measure.Status.DONE).count(),
+            applicability_count=ApplicabilityAssessment.objects.filter(tenant=tenant).count(),
+            requirement_count=Requirement.objects.filter(is_active=True).count(),
+        )
+
+    @staticmethod
     def _resolve_route(route_name: str) -> str:
         try:
             return reverse(route_name)
@@ -86,7 +153,47 @@ class JourneyService:
             return ''
 
     @staticmethod
-    def _is_step_done(code: str, tenant: Tenant, process_count: int, risk_count: int, assessment_count: int, applicability_count: int, requirement_count: int) -> bool:
+    def _evaluate_via_rust(*, tenant: Tenant, process_count: int, risk_count: int, assessment_count: int,
+                           measure_count: int, measure_open_count: int, applicability_count: int, requirement_count: int):
+        backend = str(getattr(settings, 'GUIDANCE_SCORING_BACKEND', 'rust_service') or '').strip().lower()
+        rust_url = (getattr(settings, 'RUST_BACKEND_URL', '') or '').strip().rstrip('/')
+        if backend != 'rust_service' or not rust_url:
+            if backend == 'rust_service':
+                raise RuntimeError('Rust guidance scoring backend ist aktiv, aber RUST_BACKEND_URL ist nicht gesetzt.')
+            return None
+        payload = {
+            'description_present': bool(tenant.description),
+            'sector_present': bool(tenant.sector),
+            'applicability_count': int(applicability_count),
+            'process_count': int(process_count),
+            'risk_count': int(risk_count),
+            'assessment_count': int(assessment_count),
+            'measure_count': int(measure_count),
+            'measure_open_count': int(measure_open_count),
+            'requirement_count': int(requirement_count),
+        }
+        request = Request(
+            f'{rust_url}/api/v1/guidance/evaluate',
+            data=json.dumps(payload).encode('utf-8'),
+            method='POST',
+        )
+        request.add_header('Content-Type', 'application/json')
+        request.add_header('Accept', 'application/json')
+        try:
+            with urlopen(request, timeout=8) as response:
+                data = json.loads(response.read().decode('utf-8'))
+            return {
+                'summary': str(data.get('summary') or ''),
+                'next_action_text': str(data.get('next_action_text') or ''),
+                'todo_items': [str(x) for x in data.get('todo_items', []) if str(x).strip()],
+            }
+        except Exception as exc:
+            if backend == 'rust_service':
+                raise RuntimeError('Rust guidance scoring backend ist aktiv, aber nicht erreichbar.') from exc
+            return None
+
+    @staticmethod
+    def _is_step_done(code: str, tenant: Tenant, process_count: int, risk_count: int, assessment_count: int, measure_count: int, applicability_count: int, requirement_count: int) -> bool:
         if code == 'applicability_checked':
             return applicability_count >= 1
         if code == 'company_scope_defined':
@@ -99,10 +206,12 @@ class JourneyService:
             return risk_count >= 1
         if code == 'initial_assessment_done':
             return assessment_count >= 1
+        if code == 'soc_phishing_playbook_applied':
+            return measure_count >= 1
         return False
 
     @staticmethod
-    def _build_step_message(code: str, tenant: Tenant, process_count: int, risk_count: int, assessment_count: int, measure_open_count: int, applicability_count: int):
+    def _build_step_message(code: str, tenant: Tenant, process_count: int, risk_count: int, assessment_count: int, measure_count: int, measure_open_count: int, applicability_count: int):
         if code == 'applicability_checked':
             return (
                 'Starten Sie mit der Betroffenheitsanalyse. Erst damit wird klar, ob ISO-27001-Readiness ausreicht oder NIS2-/KRITIS-Nähe vertieft werden sollte.',
@@ -133,13 +242,18 @@ class JourneyService:
                 f'Es gibt aktuell {assessment_count} Assessments und {measure_open_count} offene Maßnahmen. Erst Assessments zeigen, was ausreichend ist und wo echte Gaps bestehen.',
                 'Starten Sie die erste Prozess- oder Requirement-Bewertung.',
             )
+        if code == 'soc_phishing_playbook_applied':
+            return (
+                f'Für den Tenant sind bisher {measure_count} Maßnahmen dokumentiert. Das SOC-Playbook gilt als praktisch verankert, wenn mindestens eine Maßnahme als Incident-Reaktion nachvollziehbar erfasst ist.',
+                'Erfassen Sie eine konkrete Incident-Maßnahme (z. B. Mail-Containment, Session-Entzug oder Konto-Absicherung) inklusive Priorität und Status.',
+            )
         return (
             'Es gibt einen offenen Guided Step.',
             'Prüfen Sie die geführte Umsetzungslogik.',
         )
 
     @staticmethod
-    def _todo_items(tenant: Tenant, process_count: int, risk_count: int, assessment_count: int, measure_open_count: int, applicability_count: int):
+    def _todo_items(tenant: Tenant, process_count: int, risk_count: int, assessment_count: int, measure_count: int, measure_open_count: int, applicability_count: int):
         items = []
         if applicability_count == 0:
             items.append('Betroffenheitsanalyse anlegen')
@@ -151,6 +265,8 @@ class JourneyService:
             items.append('Mindestens ein Risiko dokumentieren')
         if assessment_count < 1:
             items.append('Erstes Assessment durchführen')
+        if measure_count < 1:
+            items.append('Mindestens eine Incident-nahe Maßnahme dokumentieren (SOC-Playbook)')
         if measure_open_count > 0:
             items.append(f'{measure_open_count} offene Maßnahmen nachverfolgen')
         return items

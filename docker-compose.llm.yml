@@ -1,14 +1,10 @@
 services:
   app:
-    build:
-      context: .
-      args:
-        INSTALL_LOCAL_LLM: "true"
     environment:
       LOCAL_LLM_ENABLED: "True"
-      LOCAL_LLM_BACKEND: llama_cpp
-      LOCAL_LLM_MODEL_NAME: ${LOCAL_LLM_MODEL_NAME:-Qwen3-8B-GGUF}
-      LOCAL_LLM_MODEL_PATH: /app/models/${LOCAL_LLM_HF_FILENAME:-Qwen3-8B.Q4_K_M.gguf}
+      LOCAL_LLM_BACKEND: rust_service
+      LOCAL_LLM_MODEL_NAME: ${LOCAL_LLM_MODEL_NAME:-iscy-rust-llm}
+      LOCAL_LLM_RUST_URL: ${LOCAL_LLM_RUST_URL:-http://rust-backend:9000}
       LOCAL_LLM_N_CTX: ${LOCAL_LLM_N_CTX:-8192}
       LOCAL_LLM_N_THREADS: ${LOCAL_LLM_N_THREADS:-8}
       LOCAL_LLM_GPU_LAYERS: ${LOCAL_LLM_GPU_LAYERS:-0}
@@ -16,23 +12,3 @@ services:
     volumes:
       - media_data:/app/media
       - static_data:/app/staticfiles
-      - model_data:/app/models
-
-  model-downloader:
-    profiles: ["llm-setup"]
-    build:
-      context: .
-      args:
-        INSTALL_LOCAL_LLM: "true"
-    entrypoint: ["python", "scripts/download_local_llm.py"]
-    command:
-      [
-        "--repo-id", "${LOCAL_LLM_HF_REPO_ID:-MaziyarPanahi/Qwen3-8B-GGUF}",
-        "--filename", "${LOCAL_LLM_HF_FILENAME:-Qwen3-8B.Q4_K_M.gguf}",
-        "--target-dir", "/app/models"
-      ]
-    volumes:
-      - model_data:/app/models
-
-volumes:
-  model_data:

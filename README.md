@@ -1,6 +1,6 @@
-# ISCY V23.4
+# ISCY V23.5
 
-Django-basierte ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstützung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb über `llama-cpp-python`.
+Django-basierte ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstützung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb über einen Rust-Service.
 
 ## Lokale Entwicklung auf NixOS
 
@@ -20,17 +20,18 @@ python manage.py check
 python manage.py runserver
 ```
 
-Falls du den lokalen `llama-cpp-python`-Betrieb aktivieren willst:
+Falls du den lokalen Rust-LLM-Service aktivieren willst:
 
 ```bash
 nix develop
 source .venv/bin/activate
-python -m pip install -r requirements-llm.txt
+make rust-build
+make rust-run
 ```
 
-Der Dev-Shell in `flake.nix` bringt die Build- und Laufzeitbibliotheken für PostgreSQL, SQLite und den lokalen `llama-cpp-python`-Build mit.
+Der Dev-Shell in `flake.nix` bringt die Build- und Laufzeitbibliotheken für PostgreSQL, SQLite und den lokalen Rust-Service mit.
 
-## Neu in V23.4
+## Neu in V23.5
 
 - produktionsnähere **Docker-/Compose-Profile** für Development, Stage und Production
 - **Nginx Reverse Proxy** für Stage/Production
@@ -53,7 +54,40 @@ Der Dev-Shell in `flake.nix` bringt die Build- und Laufzeitbibliotheken für Pos
 - EPSS-/KEV-/NIS2-kontextualisierte CVE-Bewertung mit Git-/Repository-Vorbereitung
 - Reporting, Dashboard, Roadmap, Evidence, Risks, Requirements
 
+## Rust-Backend-Pfad (Rewrite-Vorbereitung)
+
+Der Rust-Service unter `rust/iscy-backend` ist im Compose-Stack als `rust-backend` integrierbar (Health + NVD + LLM-Endpoint als Startpunkt für eine schrittweise Migration).
+
+```bash
+make rust-build
+make rust-test
+make rust-run
+```
+
+Zusätzlich stellt `rust-backend` eine erste Rust-Weboberflächen-Route-Map für die bisherigen Django-Mountpoints bereit (z. B. `/dashboard/`, `/reports/`, `/cves/`) als Migrationsgrundlage.
+
+## Vordefinierte Security-Template-Pakete (im Fragenkatalog)
+
+Im Seed-Katalog sind zusaetzliche, sofort nutzbare Pakete fuer folgende Schwerpunkte enthalten:
+
+- Cloud-Security (inkl. Cloud-IAM/Schluessel-Absicherung)
+- Windows-Hardening (Baseline-orientiert)
+- OT-/Produktions-Security (inkl. OPC UA, MES, SCADA, Produktions-Identitaeten)
+
 ## Betriebsmodi
+
+### Einfachster Start (empfohlen)
+
+Wenn es "einfach nur laufen" soll:
+
+```bash
+make easy-start
+```
+
+Der Wrapper `scripts/easy_start.sh` nimmt automatisch den einfacheren Weg:
+
+- mit Docker vorhanden -> `make dev-up`
+- ohne Docker -> lokaler Fallback via `./start.sh`
 
 ### 1. Lokale Entwicklung
 
@@ -63,6 +97,11 @@ make dev-up
 ```
 
 App: `http://127.0.0.1:8000`
+
+**Docker-Funktion (einfach):**
+
+- `make docker-check` prueft, ob alle Compose-Dateien gueltig sind.
+- `make docker-smoke` startet eine kleine Funktionsprobe (DB + Migration + Django-Check) und beendet sie wieder.
 
 ### 2. Stage
 
@@ -77,6 +116,7 @@ App: `http://127.0.0.1:8080`
 
 ```bash
 cp .env.production.example .env
+make prod-readiness
 make prod-up
 ```
 
@@ -86,9 +126,10 @@ App: `http://127.0.0.1`
 
 ```bash
 cp .env.production.example .env
-make llm-download
 make prod-up-llm
 ```
+
+Hinweis: Der Rust-LLM-Pfad nutzt den Service `rust-backend` im Compose-Stack; `make llm-download` ist nur noch ein kompatibler No-Op.
 
 ## Backup / Restore
 
@@ -104,24 +145,27 @@ Restore ausführen:
 ENV_FILE=.env.production ./scripts/restore_compose.sh backups/<timestamp>
 ```
 
-## Lokales LLM ohne Docker
+## Lokales LLM ohne Docker (Rust-Service)
 
 Der funktionierende Referenzpfad auf Ubuntu 24.04 ist:
 
-- `clang`
-- `libopenblas-dev`
-- `g++-14`
-- `libstdc++-14-dev`
-- `llama-cpp-python` per Source-Build
-- `Qwen3-8B.Q4_K_M.gguf`
+- Rust Toolchain (`rustup`, `cargo`)
+- laufender `rust/iscy-backend` Service
+- `LOCAL_LLM_BACKEND=rust_service`
+- `LOCAL_LLM_RUST_URL=http://127.0.0.1:9000`
+- `RISK_SCORING_BACKEND=rust_service`
+- `GUIDANCE_SCORING_BACKEND=rust_service`
+- `REPORT_SUMMARY_BACKEND=rust_service`
+- `RUST_STRICT_MODE=True` (erzwingt Rust-Backends ohne Fallback)
 
 Danach kann weiter wie gewohnt gestartet werden:
 
 ```bash
-AUTO_YES=1 INSTALL_LOCAL_LLM=1 DOWNLOAD_LOCAL_LLM=1 VERIFY_LOCAL_LLM=1 ./start.sh
+RUST_BACKEND_URL=http://127.0.0.1:9000 VERIFY_LOCAL_LLM=1 ./start.sh
 ```
 
-Auf NixOS bitte bevorzugt ueber `nix develop` arbeiten. `start.sh` erkennt die Nix-Shell und versucht dort keine `apt`-Paketinstallation.
+Auf NixOS bitte bevorzugt ueber `nix develop` arbeiten.
+Auf Debian/Ubuntu und aktuellen apt-basierten Derivaten kann der Rust-Service direkt per `cargo run` gestartet werden.
 
 ## Lokale Vulnerability-Feeds
 
@@ -130,8 +174,25 @@ Für lokale EPSS-/KEV-Anreicherung und Git-/Scanner-Vorbereitung stehen Manageme
 ```bash
 python3 manage.py import_epss_feed /pfad/zu/epss_scores.csv
 python3 manage.py import_kev_catalog /pfad/zu/known_exploited_vulnerabilities.json --reset-missing
+RUST_BACKEND_URL=http://127.0.0.1:9000 iscy-canary import-collection --has-kev --max-pages 2
+RUST_BACKEND_URL=http://127.0.0.1:9000 iscy-canary sync-recent --hours 24 --max-pages 2
+RUST_BACKEND_URL=http://127.0.0.1:9000 iscy-canary import CVE-2026-1234 CVE-2026-5678
+RUST_BACKEND_URL=http://127.0.0.1:9000 iscy-canary import CVE-2026-1234 --skip-healthcheck
+iscy-canary parity --out-dir reports/canary CVE-2026-1234 CVE-2026-5678
+iscy-canary trend --reports-dir reports/canary --window 30 --max-mismatch-rate 0.5 --enforce-gate
 python3 manage.py import_cve_context_csv <tenant-slug> /pfad/zu/cve_context.csv --user-id <id>
 ```
+
+Ab V23.5 ist der Vulnerability-Import standardmäßig auf **Rust-only-Normalisierung** gestellt (`VULN_INTEL_RUST_ONLY=True`).
+Wenn `RUST_BACKEND_URL` fehlt, brechen CVE-Upserts absichtlich mit Fehler ab, um Mischbetrieb zu vermeiden.
+Außerdem ist der Cutover-Default jetzt `RUST_STRICT_MODE=True`, damit Risk-/Guidance-/Report-Pfade ohne Rust-Backend nicht still auf Legacy-Fallbacks zurückfallen.
+Optional kann der Rust-Import zusätzlich live gegen NVD verifizieren (`RUST_NVD_VERIFY=true`), wodurch im Import-Response die Felder
+`nvd_lookup_attempted`, `nvd_match_found` und `nvd_total_results` gesetzt werden.
+
+Direkte NVD-Collection-Imports koennen optional mit `--cve-tag`, `--cpe-name`, `--last-mod-start-date` und `--last-mod-end-date` gefiltert werden.
+`sync_nvd_recent` ist fuer regelmaessige Jobs gedacht (z. B. stündlich/taeglich) und nutzt automatisch `lastModStartDate/lastModEndDate`.
+Die Django-Wrapper-Kommandos `import_nvd_cves` und `sync_nvd_recent` geben zusätzlich strukturierte Metriken wie
+`seen_records`, `imported_records`, `max_pages` und `results_per_page` aus, damit die Cutover-Qualität im Betrieb sofort sichtbar ist.
 
 `import_cve_context_csv` ist für externe Git-/SBOM-/Scanner-Pipelines gedacht. Wichtige CSV-Spalten sind z. B.:
 `cve_id`, `product`, `release`, `component`, `repository_name`, `repository_url`, `git_ref`, `source_package`, `source_package_version`, `exposure`, `asset_criticality`, `nis2_relevant`.
@@ -139,6 +200,12 @@ python3 manage.py import_cve_context_csv <tenant-slug> /pfad/zu/cve_context.csv 
 ## Handbuch
 
 Ein fachliches Handbuch fuer ISCY liegt in `docs/ISCY_Handbuch.md`.
+Proxmox-Produktiv-Runbook: `docs/PROXMOX_PRODUCTION_RUNBOOK.md`.
+Completion-Backlog: `docs/PROJECT_COMPLETION_BACKLOG.md`.
+Rust-Rewrite-Roadmap: `docs/RUST_REWRITE_ROADMAP.md`.
+Rust-Cutover-Plan: `docs/RUST_CUTOVER_PLAN.md`.
+Rust-Ablöse-Checkliste: `docs/RUST_ABLOESE_CHECKLISTE.md`.
+Rust-Webstack-Umbauplan: `docs/RUST_WEBSTACK_REWRITE_PLAN.md`.
 
 PDF-Export:
 
@@ -153,7 +220,7 @@ Das Skript erzeugt `docs/ISCY_Handbuch.pdf`.
 GitHub Actions prüft:
 
 - Django-Konfiguration, Migrationen, Seeds und Health-Endpoints
-- Build der lokalen `llama-cpp-python` Runtime auf Ubuntu 24.04
+- Rust-Backend-Tests (inkl. LLM-/NVD-API-Endpunkte)
 - Validierung aller Compose-Dateien inklusive Stage und Production
 
 ## Lokale Kurzbefehle
@@ -162,9 +229,11 @@ GitHub Actions prüft:
 make local-bootstrap
 make local-check
 make local-test
+make team-test
 ```
 
 `make local-test` deckt aktuell die Basis-Gesundheitschecks, mandantenbezogene Report-Views und die Product-Security-Routen ab.
+`make team-test` entspricht einem breiteren Team-Check (Django-Check + zentrale Testpakete inkl. Guidance und Vulnerability-Intelligence).
 
 ## Support-Matrix
 
