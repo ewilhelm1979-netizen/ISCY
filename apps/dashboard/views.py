@@ -10,6 +10,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from apps.assets_app.models import InformationAsset
+from apps.dashboard.services import DashboardSummaryBridge
 from apps.evidence.models import EvidenceItem, RequirementEvidenceNeed
 from apps.organizations.models import Tenant
 from apps.processes.models import Process
@@ -22,6 +23,7 @@ from apps.wizard.services import WizardService
 class DashboardDataMixin:
     def build_dashboard_context(self, request):
         tenant = WizardService.get_default_tenant(request.user)
+        rust_summary = DashboardSummaryBridge.fetch(request, tenant)
         latest_report = ReportSnapshot.objects.filter(tenant=tenant).order_by('-created_at').first() if tenant else None
         roadmap_tasks = RoadmapTask.objects.filter(phase__plan__tenant=tenant) if tenant else RoadmapTask.objects.none()
 
@@ -110,11 +112,12 @@ class DashboardDataMixin:
 
         return {
             'tenant': tenant,
-            'process_count': Process.objects.filter(tenant=tenant).count() if tenant else 0,
-            'asset_count': InformationAsset.objects.filter(tenant=tenant).count() if tenant else 0,
-            'open_risk_count': Risk.objects.filter(tenant=tenant).exclude(status=Risk.Status.CLOSED).count() if tenant else 0,
-            'evidence_count': EvidenceItem.objects.filter(tenant=tenant).count() if tenant else 0,
-            'open_task_count': roadmap_tasks.exclude(status=RoadmapTask.Status.DONE).count(),
+            'process_count': _rust_or_local_count(rust_summary, 'process_count', lambda: Process.objects.filter(tenant=tenant).count() if tenant else 0),
+            'asset_count': _rust_or_local_count(rust_summary, 'asset_count', lambda: InformationAsset.objects.filter(tenant=tenant).count() if tenant else 0),
+            'open_risk_count': _rust_or_local_count(rust_summary, 'open_risk_count', lambda: Risk.objects.filter(tenant=tenant).exclude(status=Risk.Status.CLOSED).count() if tenant else 0),
+            'evidence_count': _rust_or_local_count(rust_summary, 'evidence_count', lambda: EvidenceItem.objects.filter(tenant=tenant).count() if tenant else 0),
+            'open_task_count': _rust_or_local_count(rust_summary, 'open_task_count', lambda: roadmap_tasks.exclude(status=RoadmapTask.Status.DONE).count()),
+            'dashboard_summary_source': 'rust_service' if rust_summary else 'django',
             'status_distribution': roadmap_tasks.values('status').annotate(total=Count('id')).order_by('status'),
             'latest_report': latest_report,
             'recent_risks': Risk.objects.filter(tenant=tenant).select_related('process')[:10] if tenant else [],
@@ -148,6 +151,12 @@ class DashboardDataMixin:
                 'covered': drilldown_evidence_needs.filter(status=RequirementEvidenceNeed.Status.COVERED).count() if drilldown_tenant else 0,
             },
         }
+
+
+def _rust_or_local_count(rust_summary, key, fallback):
+    if rust_summary and key in rust_summary:
+        return int(rust_summary.get(key) or 0)
+    return fallback()
 
 
 class DashboardView(LoginRequiredMixin, DashboardDataMixin, TemplateView):
