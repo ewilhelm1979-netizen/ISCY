@@ -2,6 +2,7 @@ COMPOSE_DEV=docker compose
 COMPOSE_STAGE=docker compose -f docker-compose.yml -f docker-compose.stage.yml
 COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
 COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
+PYTHON_BIN=$(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python; fi)
 
 .PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health handbook-pdf local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
 
@@ -17,8 +18,8 @@ local-test:
 	. .venv/bin/activate && python manage.py test apps.core apps.reports apps.product_security
 
 team-test:
-	python manage.py check
-	python manage.py test apps.core apps.reports apps.product_security apps.guidance apps.vulnerability_intelligence
+	$(PYTHON_BIN) manage.py check
+	$(PYTHON_BIN) manage.py test apps.core apps.reports apps.product_security apps.guidance apps.vulnerability_intelligence
 
 docker-check:
 	$(COMPOSE_DEV) config >/dev/null
