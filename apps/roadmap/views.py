@@ -1,14 +1,14 @@
 from collections import OrderedDict
+from collections import Counter
 from datetime import date
 import io
 
-from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import Count
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.views.generic import DetailView, ListView, TemplateView, UpdateView, View
 from apps.core.mixins import TenantAccessMixin
+from apps.reports.models import ReportSnapshot
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.pdfgen import canvas
@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw
 from apps.wizard.services import WizardService
 from .forms import RoadmapTaskUpdateForm
 from .models import RoadmapPlan, RoadmapTask, RoadmapTaskDependency
+from .services import RoadmapRegisterBridge
 
 
 PHASE_COLORS = [
@@ -80,6 +81,23 @@ def _build_segments(min_start, max_end, total_days, zoom='month'):
     return segments
 
 
+def _status_counts(tasks):
+    counts = Counter(task.status for task in tasks)
+    return [
+        {'status': status, 'total': counts[status]}
+        for status, _label in RoadmapTask.Status.choices
+        if counts[status]
+    ]
+
+
+def _latest_report_for_plan(plan):
+    tenant = getattr(plan, 'tenant', None)
+    session_id = getattr(plan, 'session_id', None)
+    if tenant is None or not session_id:
+        return None
+    return ReportSnapshot.objects.filter(tenant=tenant, session_id=session_id).first()
+
+
 class RoadmapPlanListView(TenantAccessMixin, ListView):
     model = RoadmapPlan
     template_name = 'roadmap/plan_list.html'
@@ -87,13 +105,39 @@ class RoadmapPlanListView(TenantAccessMixin, ListView):
 
     def get_queryset(self):
         tenant = WizardService.get_default_tenant(self.request.user)
+        rust_plans = RoadmapRegisterBridge.fetch_list(self.request, tenant)
+        if rust_plans is not None:
+            self.roadmap_register_source = 'rust_service'
+            return rust_plans
+
+        self.roadmap_register_source = 'django'
         return RoadmapPlan.objects.filter(tenant=tenant).prefetch_related('phases__tasks')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['roadmap_register_source'] = getattr(self, 'roadmap_register_source', 'django')
+        return context
 
 
 class RoadmapPlanDetailView(TenantAccessMixin, DetailView):
     model = RoadmapPlan
     template_name = 'roadmap/plan_detail.html'
     context_object_name = 'plan'
+
+    def get_object(self, queryset=None):
+        rust_detail = RoadmapRegisterBridge.fetch_detail(
+            self.request,
+            self.get_tenant(),
+            self.kwargs.get(self.pk_url_kwarg),
+        )
+        if rust_detail is not None:
+            self.roadmap_register_source = 'rust_service'
+            self.roadmap_detail = rust_detail
+            self.check_tenant_access(rust_detail.plan)
+            return rust_detail.plan
+
+        self.roadmap_register_source = 'django'
+        return super().get_object(queryset)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -151,14 +195,25 @@ class RoadmapPlanDetailView(TenantAccessMixin, DetailView):
                 'tasks': tasks,
             })
 
-        tasks = RoadmapTask.objects.filter(phase__plan=plan).select_related('phase').prefetch_related('incoming_dependencies__predecessor').order_by('due_date', 'priority')
+        rust_detail = getattr(self, 'roadmap_detail', None)
+        if rust_detail is not None:
+            tasks = sorted(rust_detail.tasks, key=lambda task: (task.due_date or date.max, task.priority or '', task.id))
+            dependency_rows = rust_detail.dependencies[:40]
+            report = _latest_report_for_plan(plan)
+        else:
+            tasks = list(
+                RoadmapTask.objects.filter(phase__plan=plan)
+                .select_related('phase')
+                .prefetch_related('incoming_dependencies__predecessor')
+                .order_by('due_date', 'priority')
+            )
+            dependency_rows = list(RoadmapTaskDependency.objects.filter(successor__phase__plan=plan).select_related('predecessor', 'successor')[:40])
+            report = plan.session.report_snapshots.first()
+
         grouped = OrderedDict((choice, []) for choice in RoadmapTask.Status.choices)
         for task in tasks:
             grouped[(task.status, task.get_status_display())].append(task)
 
-        dependency_rows = list(RoadmapTaskDependency.objects.filter(successor__phase__plan=plan).select_related('predecessor', 'successor')[:40])
-
-        report = plan.session.report_snapshots.first()
         heatmap_rows = report.domain_scores_json if report else []
 
 
@@ -187,11 +242,11 @@ class RoadmapPlanDetailView(TenantAccessMixin, DetailView):
             'timeline_end': max_end,
             'timeline_total_weeks': max(1, round(total_days / 7)),
             'kanban_columns': grouped,
-            'status_counts': tasks.values('status').annotate(total=Count('id')).order_by('status'),
+            'status_counts': _status_counts(tasks),
             'dependency_rows': dependency_rows,
             'heatmap_rows': heatmap_rows,
             'report': report,
-            'total_tasks': tasks.count(),
+            'total_tasks': len(tasks),
             'total_dependencies': len(dependency_rows),
             'current_view': current_view,
             'current_zoom': current_zoom,
@@ -200,6 +255,7 @@ class RoadmapPlanDetailView(TenantAccessMixin, DetailView):
             'boardroom_top_phases': boardroom_top_phases,
             'critical_tasks': critical_tasks,
             'milestone_feed': milestone_feed,
+            'roadmap_register_source': getattr(self, 'roadmap_register_source', 'django'),
         })
         return context
 
@@ -220,13 +276,27 @@ class RoadmapKanbanView(TenantAccessMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        plan = get_object_or_404(self.filter_queryset_for_tenant(RoadmapPlan.objects.all()), pk=self.kwargs['pk'])
-        tasks = RoadmapTask.objects.filter(phase__plan=plan).select_related('phase').prefetch_related('incoming_dependencies__predecessor').order_by('due_date', 'priority')
+        rust_detail = RoadmapRegisterBridge.fetch_detail(self.request, self.get_tenant(), self.kwargs['pk'])
+        if rust_detail is not None:
+            self.roadmap_register_source = 'rust_service'
+            plan = rust_detail.plan
+            self.check_tenant_access(plan)
+            tasks = sorted(rust_detail.tasks, key=lambda task: (task.due_date or date.max, task.priority or '', task.id))
+        else:
+            self.roadmap_register_source = 'django'
+            plan = get_object_or_404(self.filter_queryset_for_tenant(RoadmapPlan.objects.all()), pk=self.kwargs['pk'])
+            tasks = list(
+                RoadmapTask.objects.filter(phase__plan=plan)
+                .select_related('phase')
+                .prefetch_related('incoming_dependencies__predecessor')
+                .order_by('due_date', 'priority')
+            )
         grouped = OrderedDict((choice, []) for choice in RoadmapTask.Status.choices)
         for task in tasks:
             grouped[(task.status, task.get_status_display())].append(task)
         context['plan'] = plan
         context['kanban_columns'] = grouped
+        context['roadmap_register_source'] = getattr(self, 'roadmap_register_source', 'django')
         return context
 
 

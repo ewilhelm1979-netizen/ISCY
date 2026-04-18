@@ -18,6 +18,7 @@ pub mod process_store;
 pub mod report_store;
 pub mod request_context;
 pub mod risk_store;
+pub mod roadmap_store;
 pub mod tenant_store;
 
 use assessment_store::AssessmentStore;
@@ -29,6 +30,7 @@ use process_store::ProcessStore;
 use report_store::ReportStore;
 use request_context::RequestContext;
 use risk_store::RiskStore;
+use roadmap_store::RoadmapStore;
 use tenant_store::TenantStore;
 
 #[derive(Clone, Default)]
@@ -41,6 +43,7 @@ pub struct AppState {
     pub process_store: Option<ProcessStore>,
     pub report_store: Option<ReportStore>,
     pub risk_store: Option<RiskStore>,
+    pub roadmap_store: Option<RoadmapStore>,
     pub tenant_store: Option<TenantStore>,
 }
 
@@ -55,6 +58,7 @@ impl AppState {
             process_store: None,
             report_store: None,
             risk_store: None,
+            roadmap_store: None,
             tenant_store: None,
         }
     }
@@ -69,6 +73,7 @@ impl AppState {
             process_store: None,
             report_store: None,
             risk_store: None,
+            roadmap_store: None,
             tenant_store,
         }
     }
@@ -105,6 +110,11 @@ impl AppState {
 
     pub fn with_risk_store(mut self, risk_store: Option<RiskStore>) -> Self {
         self.risk_store = risk_store;
+        self
+    }
+
+    pub fn with_roadmap_store(mut self, roadmap_store: Option<RoadmapStore>) -> Self {
+        self.roadmap_store = roadmap_store;
         self
     }
 }
@@ -245,6 +255,20 @@ pub struct MeasuresResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
     pub items: Vec<assessment_store::MeasureSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoadmapPlansResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub plans: Vec<roadmap_store::RoadmapPlanSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoadmapPlanDetailResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub detail: roadmap_store::RoadmapPlanDetail,
 }
 
 #[derive(Debug, Serialize)]
@@ -1074,6 +1098,125 @@ async fn assessment_measures(State(state): State<AppState>, headers: HeaderMap) 
     }
 }
 
+async fn roadmap_plans(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.roadmap_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Roadmap-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_plans(context.tenant_id, 100).await {
+        Ok(plans) => (
+            StatusCode::OK,
+            Json(RoadmapPlansResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                plans,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Roadmaps konnten nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn roadmap_plan_detail(
+    State(state): State<AppState>,
+    Path(plan_id): Path<i64>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.roadmap_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Roadmap-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.plan_detail(context.tenant_id, plan_id).await {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(RoadmapPlanDetailResponse {
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "roadmap_not_found",
+                message: "Roadmap wurde fuer diesen Tenant nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Roadmap konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn report_snapshots(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
         Ok(context) => context,
@@ -1573,6 +1716,8 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/assessments", get(assessment_register))
         .route("/api/v1/assessments/measures", get(assessment_measures))
+        .route("/api/v1/roadmap/plans", get(roadmap_plans))
+        .route("/api/v1/roadmap/plans/{plan_id}", get(roadmap_plan_detail))
         .route("/api/v1/reports/snapshots", get(report_snapshots))
         .route(
             "/api/v1/reports/snapshots/{report_id}",

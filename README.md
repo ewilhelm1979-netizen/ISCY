@@ -163,6 +163,7 @@ Der funktionierende Referenzpfad auf Ubuntu 24.04 ist:
 - `RISK_REGISTER_BACKEND=rust_service`
 - `EVIDENCE_REGISTER_BACKEND=rust_service`
 - `ASSESSMENT_REGISTER_BACKEND=rust_service`
+- `ROADMAP_REGISTER_BACKEND=rust_service`
 - `RUST_STRICT_MODE=True` (erzwingt Rust-Backends ohne Fallback)
 
 Danach kann weiter wie gewohnt gestartet werden:

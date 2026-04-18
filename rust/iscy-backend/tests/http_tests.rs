@@ -4,7 +4,7 @@ use iscy_backend::{
     app_router, app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
     cve_store::CveStore, dashboard_store::DashboardStore, evidence_store::EvidenceStore,
     process_store::ProcessStore, report_store::ReportStore, risk_store::RiskStore,
-    tenant_store::TenantStore, AppState,
+    roadmap_store::RoadmapStore, tenant_store::TenantStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
@@ -1121,6 +1121,165 @@ async fn assessment_measures_return_tenant_measures_from_database() {
     assert_eq!(payload["items"][1]["priority_label"], "High");
     assert_eq!(payload["items"][1]["status_label"], "Open");
     assert_eq!(payload["items"][1]["due_date"], "2026-05-01");
+}
+
+#[tokio::test]
+async fn roadmap_plans_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/roadmap/plans")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn roadmap_plans_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/roadmap/plans")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn roadmap_plans_return_tenant_roadmaps_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/roadmap/plans")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["plans"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["plans"][0]["title"], "Security Roadmap");
+    assert_eq!(payload["plans"][0]["tenant_name"], "Tenant SOC");
+    assert_eq!(payload["plans"][0]["phase_count"], 2);
+    assert_eq!(payload["plans"][0]["task_count"], 3);
+    assert_eq!(payload["plans"][0]["open_task_count"], 2);
+    assert_eq!(payload["plans"][1]["title"], "Earlier Roadmap");
+}
+
+#[tokio::test]
+async fn roadmap_plan_detail_returns_tenant_roadmap_tree_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/roadmap/plans/10")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["plan"]["id"], 10);
+    assert_eq!(payload["plan"]["tenant_id"], 42);
+    assert_eq!(payload["plan"]["title"], "Security Roadmap");
+    assert_eq!(payload["phases"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["phases"][0]["name"], "Governance");
+    assert_eq!(payload["phases"][0]["task_count"], 2);
+    assert_eq!(payload["tasks"].as_array().unwrap().len(), 3);
+    assert_eq!(payload["tasks"][0]["title"], "Policy aktualisieren");
+    assert_eq!(payload["tasks"][0]["status_label"], "Offen");
+    assert_eq!(payload["tasks"][1]["incoming_dependency_count"], 1);
+    assert_eq!(payload["dependencies"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        payload["dependencies"][0]["predecessor_title"],
+        "Policy aktualisieren"
+    );
+    assert_eq!(
+        payload["dependencies"][0]["dependency_type_label"],
+        "Finish-to-Start"
+    );
+}
+
+#[tokio::test]
+async fn roadmap_plan_detail_blocks_foreign_tenant_roadmap() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/roadmap/plans/12")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "roadmap_not_found");
 }
 
 #[tokio::test]
@@ -2744,6 +2903,365 @@ async fn insert_assessment_fixture(pool: &SqlitePool) {
                 '2026-05-02',
                 '2026-04-20T10:00:00Z',
                 '2026-04-20T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_roadmap_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_tenant (
+            id INTEGER PRIMARY KEY,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmapplan (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            tenant_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            summary TEXT NOT NULL,
+            overall_priority varchar(32) NOT NULL,
+            planned_start date NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmapphase (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            plan_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL,
+            sort_order INTEGER NOT NULL,
+            objective TEXT NOT NULL,
+            duration_weeks INTEGER NOT NULL,
+            planned_start date NULL,
+            planned_end date NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmaptask (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            phase_id INTEGER NOT NULL,
+            measure_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            priority varchar(32) NOT NULL,
+            owner_role varchar(64) NOT NULL,
+            due_in_days INTEGER NOT NULL,
+            dependency_text TEXT NOT NULL,
+            status varchar(16) NOT NULL,
+            planned_start date NULL,
+            due_date date NULL,
+            notes TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmaptaskdependency (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            predecessor_id INTEGER NOT NULL,
+            successor_id INTEGER NOT NULL,
+            dependency_type varchar(2) NOT NULL,
+            rationale varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_roadmap_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_tenant (id, name)
+        VALUES (42, 'Tenant SOC'), (99, 'Foreign Tenant')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmapplan (
+            id,
+            created_at,
+            updated_at,
+            tenant_id,
+            session_id,
+            title,
+            summary,
+            overall_priority,
+            planned_start
+        )
+        VALUES
+            (
+                10,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z',
+                42,
+                100,
+                'Security Roadmap',
+                'Bring SOC controls to audit readiness',
+                'HIGH',
+                '2026-05-01'
+            ),
+            (
+                11,
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z',
+                42,
+                101,
+                'Earlier Roadmap',
+                'Earlier planning wave',
+                'MEDIUM',
+                '2026-04-10'
+            ),
+            (
+                12,
+                '2026-04-19T10:00:00Z',
+                '2026-04-19T11:00:00Z',
+                99,
+                102,
+                'Foreign Roadmap',
+                'Foreign tenant planning',
+                'LOW',
+                '2026-05-02'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmapphase (
+            id,
+            created_at,
+            updated_at,
+            plan_id,
+            name,
+            sort_order,
+            objective,
+            duration_weeks,
+            planned_start,
+            planned_end
+        )
+        VALUES
+            (
+                101,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z',
+                10,
+                'Governance',
+                1,
+                'Create ownership and policies',
+                2,
+                '2026-05-01',
+                '2026-05-14'
+            ),
+            (
+                102,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z',
+                10,
+                'Audit Readiness',
+                2,
+                'Collect evidence and review controls',
+                3,
+                '2026-05-15',
+                '2026-06-05'
+            ),
+            (
+                111,
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z',
+                11,
+                'Discovery',
+                1,
+                'Initial discovery',
+                1,
+                '2026-04-10',
+                '2026-04-17'
+            ),
+            (
+                121,
+                '2026-04-19T10:00:00Z',
+                '2026-04-19T11:00:00Z',
+                12,
+                'Foreign Phase',
+                1,
+                'Foreign work',
+                1,
+                '2026-05-02',
+                '2026-05-09'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmaptask (
+            id,
+            created_at,
+            updated_at,
+            phase_id,
+            measure_id,
+            title,
+            description,
+            priority,
+            owner_role,
+            due_in_days,
+            dependency_text,
+            status,
+            planned_start,
+            due_date,
+            notes
+        )
+        VALUES
+            (
+                1001,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z',
+                101,
+                NULL,
+                'Policy aktualisieren',
+                'Update security policy',
+                'HIGH',
+                'CISO',
+                14,
+                '',
+                'OPEN',
+                '2026-05-01',
+                '2026-05-01',
+                ''
+            ),
+            (
+                1002,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z',
+                101,
+                NULL,
+                'MFA ausrollen',
+                'Roll out MFA',
+                'CRITICAL',
+                'IAM Lead',
+                21,
+                'Policy first',
+                'IN_PROGRESS',
+                '2026-05-02',
+                '2026-05-10',
+                'Pilot started'
+            ),
+            (
+                1003,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z',
+                102,
+                NULL,
+                'Auditpaket vorbereiten',
+                'Prepare audit package',
+                'MEDIUM',
+                'Compliance',
+                30,
+                '',
+                'DONE',
+                '2026-05-20',
+                '2026-06-01',
+                'Done'
+            ),
+            (
+                1101,
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z',
+                111,
+                NULL,
+                'Earlier Task',
+                'Earlier work',
+                'LOW',
+                'Analyst',
+                7,
+                '',
+                'OPEN',
+                '2026-04-10',
+                '2026-04-17',
+                ''
+            ),
+            (
+                1201,
+                '2026-04-19T10:00:00Z',
+                '2026-04-19T11:00:00Z',
+                121,
+                NULL,
+                'Foreign Task',
+                'Foreign tenant task',
+                'LOW',
+                'Owner',
+                7,
+                '',
+                'OPEN',
+                '2026-05-02',
+                '2026-05-09',
+                ''
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmaptaskdependency (
+            id,
+            created_at,
+            updated_at,
+            predecessor_id,
+            successor_id,
+            dependency_type,
+            rationale
+        )
+        VALUES
+            (
+                5001,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z',
+                1001,
+                1002,
+                'FS',
+                'Policy gates MFA rollout'
             )
         "#,
     )
