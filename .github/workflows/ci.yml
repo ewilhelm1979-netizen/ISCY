@@ -64,6 +64,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          components: rustfmt, clippy
+      - name: Check Rust formatting
+        run: |
+          cargo fmt --manifest-path rust/iscy-backend/Cargo.toml -- --check
+      - name: Run Rust clippy
+        run: |
+          cargo clippy --manifest-path rust/iscy-backend/Cargo.toml --all-targets -- -D warnings
       - name: Run Rust backend tests
         run: |
           cargo test --manifest-path rust/iscy-backend/Cargo.toml
