@@ -34,8 +34,7 @@ jobs:
           python manage.py seed_catalog || true
           python manage.py seed_requirements || true
           python manage.py seed_product_security || true
-          python manage.py check
-          python manage.py test apps.core apps.reports apps.product_security
+          make team-test
 
   nix-devshell:
     runs-on: ubuntu-24.04
@@ -55,32 +54,19 @@ jobs:
             python -m pip install -r requirements.txt
             cp .env.example .env
             mkdir -p static media staticfiles
-            python manage.py check
-            python manage.py test apps.core apps.reports apps.product_security
+            make team-test
           '
 
-  llm-runtime-build:
+  rust-backend-tests:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          python-version: '3.12'
-      - name: Install system packages for llama-cpp-python
+          toolchain: stable
+      - name: Run Rust backend tests
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config python3-dev clang libopenblas-dev g++-14 libstdc++-14-dev
-      - name: Build llama-cpp-python runtime
-        run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          python -m pip install --upgrade pip setuptools wheel
-          export CC=/usr/bin/clang
-          export CXX=/usr/bin/clang++
-          export CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF"
-          export FORCE_CMAKE=1
-          python -m pip install --no-cache-dir --force-reinstall --no-binary=llama-cpp-python llama-cpp-python
-          python -c "import llama_cpp; print('llama-cpp-python OK')"
+          cargo test --manifest-path rust/iscy-backend/Cargo.toml
 
   docker-config:
     runs-on: ubuntu-24.04

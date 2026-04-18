@@ -1,2 +1,2 @@
-llama-cpp-python>=0.3.7
-huggingface_hub>=0.34.0
+# LLM runtime moved to Rust service (`LOCAL_LLM_BACKEND=rust_service`).
+# Keep this file for compatibility with existing bootstrap scripts.

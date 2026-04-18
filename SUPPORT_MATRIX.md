@@ -5,7 +5,10 @@
 | Mode | Host OS | Python | Database | Local LLM | Status |
 |---|---|---:|---|---|---|
 | Bare metal / venv | Ubuntu 24.04 LTS | 3.12 | PostgreSQL 15/16 or SQLite (dev) | Optional | Supported |
+| Bare metal / venv | Ubuntu derivatives (24.04 base, apt-basiert) | 3.11/3.12 | PostgreSQL 15/16 or SQLite (dev) | Supported (best-effort) | Supported |
 | Bare metal / venv | Debian 12 | 3.11/3.12 | PostgreSQL 15/16 or SQLite (dev) | Core app only officially; local LLM best-effort | Supported (core) |
+| Bare metal / venv | Debian derivatives (aktuell, apt-basiert) | 3.11/3.12 | PostgreSQL 15/16 or SQLite (dev) | Supported (best-effort) | Supported |
+| Bare metal / nix develop | NixOS (flake.nix) | 3.11 | PostgreSQL 15/16 or SQLite (dev) | Optional inkl. lokaler Build-Toolchain | Supported |
 | Docker / Compose | Any Linux host with Docker Engine + Compose | bundled | PostgreSQL 16 container | Optional via `docker-compose.llm.yml` | Preferred |
 
 ## Deployment profiles
@@ -32,7 +35,7 @@
 | Backend | `llama-cpp-python` |
 | Model family | Qwen3 GGUF |
 | Recommended model | `Qwen3-8B.Q4_K_M.gguf` |
-| Build path | `clang` + OpenBLAS + `g++-14` / `libstdc++-14-dev` |
+| Build path | `clang` + OpenBLAS + apt-Fallback (`g++-14`/`g++`, passende `libstdc++-dev`) |
 | Model download | `scripts/download_local_llm.py` or `make llm-download` |
 
 ## Backup / restore baseline
@@ -45,7 +48,6 @@
 
 ## Not officially supported
 
-- Random Debian derivatives without testing
 - Python minor versions outside the documented range
 - musl-based Linux runtimes for the current `llama-cpp-python` wheel path
 - unmanaged host installs without `.venv`
