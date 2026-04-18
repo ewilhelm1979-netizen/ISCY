@@ -11,6 +11,7 @@ use serde_json::Value;
 pub mod asset_store;
 pub mod cve_store;
 pub mod dashboard_store;
+pub mod process_store;
 pub mod report_store;
 pub mod request_context;
 pub mod tenant_store;
@@ -18,6 +19,7 @@ pub mod tenant_store;
 use asset_store::AssetStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
+use process_store::ProcessStore;
 use report_store::ReportStore;
 use request_context::RequestContext;
 use tenant_store::TenantStore;
@@ -27,6 +29,7 @@ pub struct AppState {
     pub asset_store: Option<AssetStore>,
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
+    pub process_store: Option<ProcessStore>,
     pub report_store: Option<ReportStore>,
     pub tenant_store: Option<TenantStore>,
 }
@@ -37,6 +40,7 @@ impl AppState {
             asset_store: None,
             cve_store,
             dashboard_store: None,
+            process_store: None,
             report_store: None,
             tenant_store: None,
         }
@@ -47,6 +51,7 @@ impl AppState {
             asset_store: None,
             cve_store,
             dashboard_store: None,
+            process_store: None,
             report_store: None,
             tenant_store,
         }
@@ -64,6 +69,11 @@ impl AppState {
 
     pub fn with_report_store(mut self, report_store: Option<ReportStore>) -> Self {
         self.report_store = report_store;
+        self
+    }
+
+    pub fn with_process_store(mut self, process_store: Option<ProcessStore>) -> Self {
+        self.process_store = process_store;
         self
     }
 }
@@ -142,6 +152,19 @@ pub struct AssetInventoryResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
     pub assets: Vec<asset_store::InformationAssetSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProcessRegisterResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub processes: Vec<process_store::ProcessSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProcessDetailResponse {
+    pub api_version: &'static str,
+    pub process: process_store::ProcessSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -505,6 +528,125 @@ async fn asset_inventory(State(state): State<AppState>, headers: HeaderMap) -> R
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Assetliste konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn process_register(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.process_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Process-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_processes(context.tenant_id, 200).await {
+        Ok(processes) => (
+            StatusCode::OK,
+            Json(ProcessRegisterResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                processes,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Prozessliste konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn process_detail(
+    Path(process_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.process_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Process-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.process_detail(context.tenant_id, process_id).await {
+        Ok(Some(process)) => (
+            StatusCode::OK,
+            Json(ProcessDetailResponse {
+                api_version: "v1",
+                process,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "process_not_found",
+                message: format!("Prozess {} wurde nicht gefunden.", process_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Prozessdetail konnte nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -999,6 +1141,8 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
         .route("/api/v1/assets/information-assets", get(asset_inventory))
+        .route("/api/v1/processes", get(process_register))
+        .route("/api/v1/processes/{process_id}", get(process_detail))
         .route("/api/v1/reports/snapshots", get(report_snapshots))
         .route(
             "/api/v1/reports/snapshots/{report_id}",

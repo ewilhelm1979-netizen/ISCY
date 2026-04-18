@@ -63,6 +63,10 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
 - `assets_app` hat den naechsten tenantgeschuetzten Read-Slice in Rust:
   - `GET /api/v1/assets/information-assets` liefert das Asset-Register inklusive Business-Unit- und Owner-Anzeige fuer den aktuellen Tenant
   - Django kann die Asset-Liste ueber `ASSET_INVENTORY_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Assets zurueckfallen
+- `processes` hat tenantgeschuetzte Read-APIs in Rust:
+  - `GET /api/v1/processes` liefert das Prozessregister inklusive Business-Unit-, Owner- und Status-Anzeige fuer den aktuellen Tenant
+  - `GET /api/v1/processes/{process_id}` liefert die Prozessdetaildaten fuer die 10-Dimensionen-Ansicht
+  - Django kann Prozessliste und Prozessdetail ueber `PROCESS_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Prozesse zurueckfallen
 
 ## App-Migrationsreihenfolge
 

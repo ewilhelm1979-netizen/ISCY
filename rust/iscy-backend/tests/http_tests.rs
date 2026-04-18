@@ -2,8 +2,8 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use iscy_backend::{
     app_router, app_router_with_state, asset_store::AssetStore, cve_store::CveStore,
-    dashboard_store::DashboardStore, report_store::ReportStore, tenant_store::TenantStore,
-    AppState,
+    dashboard_store::DashboardStore, process_store::ProcessStore, report_store::ReportStore,
+    tenant_store::TenantStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
@@ -449,6 +449,158 @@ async fn asset_inventory_returns_tenant_assets_from_database() {
         payload["assets"][1]["business_unit_name"],
         serde_json::Value::Null
     );
+}
+
+#[tokio::test]
+async fn process_register_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/processes")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn process_register_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/processes")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn process_register_returns_tenant_processes_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_process_tables(&pool).await;
+    insert_process_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_process_store(Some(ProcessStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/processes")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["processes"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["processes"][0]["name"], "Incident Intake");
+    assert_eq!(
+        payload["processes"][0]["status_label"],
+        "Vorhanden, aber unvollständig"
+    );
+    assert_eq!(
+        payload["processes"][0]["business_unit_name"],
+        "Security Operations"
+    );
+    assert_eq!(payload["processes"][0]["owner_display"], "Ada Lovelace");
+    assert_eq!(payload["processes"][0]["documented"], true);
+    assert_eq!(payload["processes"][1]["name"], "Triage");
+}
+
+#[tokio::test]
+async fn process_detail_returns_process_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_process_tables(&pool).await;
+    insert_process_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_process_store(Some(ProcessStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/processes/10")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["process"]["id"], 10);
+    assert_eq!(payload["process"]["tenant_id"], 42);
+    assert_eq!(payload["process"]["name"], "Incident Intake");
+    assert_eq!(payload["process"]["description"], "SOC intake process");
+    assert_eq!(payload["process"]["reviewed_at"], "2026-04-18");
+    assert_eq!(payload["process"]["evidenced"], false);
+}
+
+#[tokio::test]
+async fn process_detail_blocks_foreign_tenant_process() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_process_tables(&pool).await;
+    insert_process_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_process_store(Some(ProcessStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/processes/12")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "process_not_found");
 }
 
 #[tokio::test]
@@ -1015,6 +1167,168 @@ async fn insert_asset_fixture(pool: &SqlitePool) {
                 0,
                 '2026-04-03T10:00:00Z',
                 '2026-04-03T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_process_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_businessunit (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE accounts_user (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            username varchar(150) NOT NULL,
+            first_name varchar(150) NOT NULL,
+            last_name varchar(150) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE processes_process (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            business_unit_id INTEGER NULL,
+            owner_id INTEGER NULL,
+            name varchar(255) NOT NULL,
+            scope varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            status varchar(32) NOT NULL,
+            documented bool NOT NULL,
+            approved bool NOT NULL,
+            communicated bool NOT NULL,
+            implemented bool NOT NULL,
+            effective bool NOT NULL,
+            evidenced bool NOT NULL,
+            reviewed_at date NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_process_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_businessunit (id, tenant_id, name)
+        VALUES (1, 42, 'Security Operations'), (2, 99, 'Foreign BU')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO accounts_user (id, tenant_id, username, first_name, last_name)
+        VALUES
+            (7, 42, 'ada', 'Ada', 'Lovelace'),
+            (8, 42, 'grace', '', '')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO processes_process (
+            id,
+            tenant_id,
+            business_unit_id,
+            owner_id,
+            name,
+            scope,
+            description,
+            status,
+            documented,
+            approved,
+            communicated,
+            implemented,
+            effective,
+            evidenced,
+            reviewed_at,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                10,
+                42,
+                1,
+                7,
+                'Incident Intake',
+                'SOC',
+                'SOC intake process',
+                'PARTIAL',
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                '2026-04-18',
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                11,
+                42,
+                NULL,
+                8,
+                'Triage',
+                'Security Operations',
+                'Alert triage process',
+                'INFORMAL',
+                1,
+                0,
+                1,
+                0,
+                0,
+                0,
+                NULL,
+                '2026-04-19T10:00:00Z',
+                '2026-04-19T11:00:00Z'
+            ),
+            (
+                12,
+                99,
+                2,
+                7,
+                'Foreign Process',
+                'Other',
+                'Foreign tenant process',
+                'SUFFICIENT',
+                1,
+                1,
+                1,
+                1,
+                1,
+                1,
+                '2026-04-20',
+                '2026-04-20T10:00:00Z',
+                '2026-04-20T11:00:00Z'
             )
         "#,
     )
