@@ -1,9 +1,10 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use iscy_backend::{
-    app_router, app_router_with_state, asset_store::AssetStore, cve_store::CveStore,
-    dashboard_store::DashboardStore, evidence_store::EvidenceStore, process_store::ProcessStore,
-    report_store::ReportStore, risk_store::RiskStore, tenant_store::TenantStore, AppState,
+    app_router, app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
+    cve_store::CveStore, dashboard_store::DashboardStore, evidence_store::EvidenceStore,
+    process_store::ProcessStore, report_store::ReportStore, risk_store::RiskStore,
+    tenant_store::TenantStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
@@ -886,6 +887,240 @@ async fn evidence_overview_filters_by_session() {
     assert_eq!(payload["need_summary"]["open"], 1);
     assert_eq!(payload["need_summary"]["partial"], 0);
     assert_eq!(payload["need_summary"]["covered"], 1);
+}
+
+#[tokio::test]
+async fn assessment_applicability_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/applicability")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn assessment_applicability_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/applicability")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn assessment_applicability_returns_tenant_rows_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_assessment_tables(&pool).await;
+    insert_assessment_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_assessment_store(Some(AssessmentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/applicability")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["items"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["items"][0]["tenant_name"], "Tenant SOC");
+    assert_eq!(payload["items"][0]["sector"], "MSSP");
+    assert_eq!(
+        payload["items"][0]["status_label"],
+        "Voraussichtlich relevant"
+    );
+}
+
+#[tokio::test]
+async fn assessment_register_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn assessment_register_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn assessment_register_returns_tenant_assessments_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_assessment_tables(&pool).await;
+    insert_assessment_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_assessment_store(Some(AssessmentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["items"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["items"][0]["process_name"], "Incident Intake");
+    assert_eq!(payload["items"][0]["requirement_framework"], "ISO27001");
+    assert_eq!(payload["items"][0]["status_label"], "Teilweise erfüllt");
+    assert_eq!(payload["items"][0]["owner_display"], "Ada Lovelace");
+    assert_eq!(payload["items"][1]["requirement_code"], "21.2");
+}
+
+#[tokio::test]
+async fn assessment_measures_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/measures")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn assessment_measures_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/measures")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn assessment_measures_return_tenant_measures_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_assessment_tables(&pool).await;
+    insert_assessment_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_assessment_store(Some(AssessmentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/measures")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["items"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["items"][0]["title"], "Policy aktualisieren");
+    assert_eq!(payload["items"][0]["status_label"], "Done");
+    assert_eq!(payload["items"][1]["title"], "MFA ausrollen");
+    assert_eq!(payload["items"][1]["priority_label"], "High");
+    assert_eq!(payload["items"][1]["status_label"], "Open");
+    assert_eq!(payload["items"][1]["due_date"], "2026-05-01");
 }
 
 #[tokio::test]
@@ -2187,6 +2422,328 @@ async fn insert_evidence_fixture(pool: &SqlitePool) {
                 0,
                 '2026-04-18T10:00:00Z',
                 '2026-04-18T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_assessment_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_tenant (
+            id INTEGER PRIMARY KEY,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE accounts_user (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            username varchar(150) NOT NULL,
+            first_name varchar(150) NOT NULL,
+            last_name varchar(150) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE processes_process (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_requirement (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            code varchar(64) NOT NULL,
+            title varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assessments_applicabilityassessment (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            sector varchar(255) NOT NULL,
+            company_size varchar(255) NOT NULL,
+            critical_services TEXT NOT NULL,
+            supply_chain_role varchar(255) NOT NULL,
+            status varchar(32) NOT NULL,
+            reasoning TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assessments_assessment (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            process_id INTEGER NOT NULL,
+            requirement_id INTEGER NOT NULL,
+            owner_id INTEGER NULL,
+            status varchar(32) NOT NULL,
+            score INTEGER NOT NULL,
+            notes TEXT NOT NULL,
+            evidence_summary TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assessments_measure (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            assessment_id INTEGER NULL,
+            owner_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            priority varchar(16) NOT NULL,
+            status varchar(16) NOT NULL,
+            due_date date NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_assessment_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_tenant (id, name)
+        VALUES (42, 'Tenant SOC'), (99, 'Foreign Tenant')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO accounts_user (id, tenant_id, username, first_name, last_name)
+        VALUES
+            (7, 42, 'ada', 'Ada', 'Lovelace'),
+            (8, 42, 'grace', '', ''),
+            (9, 99, 'foreign', 'Foreign', 'User')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO processes_process (id, tenant_id, name)
+        VALUES
+            (1, 42, 'Incident Intake'),
+            (2, 99, 'Foreign Process')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_requirement (id, framework, code, title)
+        VALUES
+            (1, 'ISO27001', 'A.5.17', 'Authentication Information'),
+            (2, 'NIS2', '21.2', 'Incident Handling')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assessments_applicabilityassessment (
+            id,
+            tenant_id,
+            sector,
+            company_size,
+            critical_services,
+            supply_chain_role,
+            status,
+            reasoning,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                10,
+                42,
+                'MSSP',
+                'medium',
+                'Managed detection and response',
+                'critical supplier',
+                'RELEVANT',
+                'Digital provider with critical customer services',
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                11,
+                99,
+                'Retail',
+                'small',
+                '',
+                '',
+                'NOT_DIRECTLY_RELEVANT',
+                'Foreign tenant',
+                '2026-04-19T10:00:00Z',
+                '2026-04-19T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assessments_assessment (
+            id,
+            tenant_id,
+            process_id,
+            requirement_id,
+            owner_id,
+            status,
+            score,
+            notes,
+            evidence_summary,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                20,
+                42,
+                1,
+                1,
+                7,
+                'PARTIAL',
+                3,
+                'MFA rollout started',
+                'Screenshots available',
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                21,
+                42,
+                1,
+                2,
+                NULL,
+                'MISSING',
+                0,
+                '',
+                '',
+                '2026-04-19T10:00:00Z',
+                '2026-04-19T11:00:00Z'
+            ),
+            (
+                22,
+                99,
+                2,
+                1,
+                9,
+                'FULFILLED',
+                5,
+                'Foreign',
+                '',
+                '2026-04-20T10:00:00Z',
+                '2026-04-20T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assessments_measure (
+            id,
+            tenant_id,
+            assessment_id,
+            owner_id,
+            title,
+            description,
+            priority,
+            status,
+            due_date,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                30,
+                42,
+                20,
+                7,
+                'MFA ausrollen',
+                'Roll out phishing-resistant MFA',
+                'HIGH',
+                'OPEN',
+                '2026-05-01',
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                31,
+                42,
+                NULL,
+                8,
+                'Policy aktualisieren',
+                'Update access policy',
+                'MEDIUM',
+                'DONE',
+                NULL,
+                '2026-04-19T10:00:00Z',
+                '2026-04-19T11:00:00Z'
+            ),
+            (
+                32,
+                99,
+                22,
+                9,
+                'Foreign Measure',
+                'Foreign tenant measure',
+                'LOW',
+                'OPEN',
+                '2026-05-02',
+                '2026-04-20T10:00:00Z',
+                '2026-04-20T11:00:00Z'
             )
         "#,
     )

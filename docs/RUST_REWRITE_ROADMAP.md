@@ -75,6 +75,11 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/evidence` liefert Evidenzliste, Nachweispflichten und Coverage-Summary fuer den aktuellen Tenant
   - optional filtert `session_id` die Evidenzen und Nachweispflichten auf eine Assessment-Session
   - Django kann die Evidence-Liste ueber `EVIDENCE_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Evidenzen zurueckfallen
+- `assessments` hat erste tenantgeschuetzte Listen-APIs in Rust:
+  - `GET /api/v1/assessments/applicability` liefert Betroffenheitsanalysen fuer den aktuellen Tenant
+  - `GET /api/v1/assessments` liefert Prozess-/Requirement-Assessments inklusive Prozess-, Requirement- und Owner-Anzeige
+  - `GET /api/v1/assessments/measures` liefert Massnahmen inklusive Assessment- und Owner-Anzeige
+  - Django kann die drei Listen ueber `ASSESSMENT_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
 
 ## App-Migrationsreihenfolge
 

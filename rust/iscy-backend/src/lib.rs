@@ -9,6 +9,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod assessment_store;
 pub mod asset_store;
 pub mod cve_store;
 pub mod dashboard_store;
@@ -19,6 +20,7 @@ pub mod request_context;
 pub mod risk_store;
 pub mod tenant_store;
 
+use assessment_store::AssessmentStore;
 use asset_store::AssetStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
@@ -32,6 +34,7 @@ use tenant_store::TenantStore;
 #[derive(Clone, Default)]
 pub struct AppState {
     pub asset_store: Option<AssetStore>,
+    pub assessment_store: Option<AssessmentStore>,
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
     pub evidence_store: Option<EvidenceStore>,
@@ -45,6 +48,7 @@ impl AppState {
     pub fn new(cve_store: Option<CveStore>) -> Self {
         Self {
             asset_store: None,
+            assessment_store: None,
             cve_store,
             dashboard_store: None,
             evidence_store: None,
@@ -58,6 +62,7 @@ impl AppState {
     pub fn with_stores(cve_store: Option<CveStore>, tenant_store: Option<TenantStore>) -> Self {
         Self {
             asset_store: None,
+            assessment_store: None,
             cve_store,
             dashboard_store: None,
             evidence_store: None,
@@ -80,6 +85,11 @@ impl AppState {
 
     pub fn with_asset_store(mut self, asset_store: Option<AssetStore>) -> Self {
         self.asset_store = asset_store;
+        self
+    }
+
+    pub fn with_assessment_store(mut self, assessment_store: Option<AssessmentStore>) -> Self {
+        self.assessment_store = assessment_store;
         self
     }
 
@@ -214,6 +224,27 @@ pub struct EvidenceOverviewResponse {
     pub evidence_items: Vec<evidence_store::EvidenceItemSummary>,
     pub evidence_needs: Vec<evidence_store::RequirementEvidenceNeedSummary>,
     pub need_summary: evidence_store::EvidenceNeedSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApplicabilityAssessmentsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub items: Vec<assessment_store::ApplicabilityAssessmentSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AssessmentsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub items: Vec<assessment_store::AssessmentSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MeasuresResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub items: Vec<assessment_store::MeasureSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -884,6 +915,165 @@ async fn evidence_overview(
     }
 }
 
+async fn applicability_assessments(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.assessment_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Assessment-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_applicability(context.tenant_id, 200).await {
+        Ok(items) => (
+            StatusCode::OK,
+            Json(ApplicabilityAssessmentsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                items,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Betroffenheitsanalysen konnten nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn assessment_register(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.assessment_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Assessment-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_assessments(context.tenant_id, 200).await {
+        Ok(items) => (
+            StatusCode::OK,
+            Json(AssessmentsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                items,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Assessments konnten nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn assessment_measures(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.assessment_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Assessment-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_measures(context.tenant_id, 200).await {
+        Ok(items) => (
+            StatusCode::OK,
+            Json(MeasuresResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                items,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Massnahmen konnten nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn report_snapshots(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
         Ok(context) => context,
@@ -1377,6 +1567,12 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/risks", get(risk_register))
         .route("/api/v1/risks/{risk_id}", get(risk_detail))
         .route("/api/v1/evidence", get(evidence_overview))
+        .route(
+            "/api/v1/assessments/applicability",
+            get(applicability_assessments),
+        )
+        .route("/api/v1/assessments", get(assessment_register))
+        .route("/api/v1/assessments/measures", get(assessment_measures))
         .route("/api/v1/reports/snapshots", get(report_snapshots))
         .route(
             "/api/v1/reports/snapshots/{report_id}",

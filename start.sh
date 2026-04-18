@@ -74,6 +74,7 @@ set_env_var "ASSET_INVENTORY_BACKEND" "rust_service"
 set_env_var "PROCESS_REGISTER_BACKEND" "rust_service"
 set_env_var "RISK_REGISTER_BACKEND" "rust_service"
 set_env_var "EVIDENCE_REGISTER_BACKEND" "rust_service"
+set_env_var "ASSESSMENT_REGISTER_BACKEND" "rust_service"
 set_env_var "RUST_STRICT_MODE" "True"
 
 if rust_backend_reachable; then
