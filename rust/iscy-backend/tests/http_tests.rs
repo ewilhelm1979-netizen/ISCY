@@ -1,4 +1,4 @@
-use axum::body::Body;
+use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use iscy_backend::app_router;
 use tower::util::ServiceExt;
@@ -6,7 +6,12 @@ use tower::util::ServiceExt;
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
     let response = app_router()
-        .oneshot(Request::builder().uri("/health/live").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health/live")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -16,7 +21,12 @@ async fn health_endpoint_returns_ok() {
 #[tokio::test]
 async fn health_alias_endpoint_returns_ok() {
     let response = app_router()
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -68,6 +78,50 @@ async fn nvd_import_endpoint_normalizes_cve_id() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn nvd_normalize_endpoint_returns_versioned_payload() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/nvd/normalize")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"cve_id":" cve-2026-4242 "}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["cve_id"], "CVE-2026-4242");
+}
+
+#[tokio::test]
+async fn nvd_normalize_endpoint_rejects_invalid_cve_id_with_error_code() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/nvd/normalize")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"cve_id":"not-a-cve"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], false);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["error_code"], "invalid_cve_id");
 }
 
 #[tokio::test]

@@ -33,6 +33,10 @@
             pkgs.clang
             pkgs.gcc14
             pkgs.gnumake
+            pkgs.rustc
+            pkgs.cargo
+            pkgs.rustfmt
+            pkgs.clippy
             pkgs.openblas
             pkgs.libpq
             pkgs.sqlite

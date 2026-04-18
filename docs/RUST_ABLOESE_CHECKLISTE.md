@@ -12,9 +12,10 @@ Komplette Ablösung der CVE-Normalisierungspfade in der Vulnerability-Intelligen
 - [x] **Legacy-Canary-Import auf Rust-only vereinfacht** (kein `--apply-source` Mischmodus mehr).
 - [x] **README auf Rust-only Betrieb aktualisiert**.
 - [x] **Regression-Tests ergänzt/angepasst** (Rust-only Verhalten und Legacy-Command).
+- [x] **Versionierter Rust-Normalisierungsvertrag eingeführt** (`/api/v1/nvd/normalize` mit `api_version` und stabilen Fehlercodes wie `invalid_cve_id`).
 
 ## Verbleibende Ablösearbeiten
-- [ ] CVE-Normalisierung vollständig in Rust-Service konsolidieren (inkl. klarer API-Versionierung und Fehlercodes).
+- [ ] CVE-Normalisierung vollständig als produktiven Rust-Primärpfad konsolidieren (inkl. Monitoring, Betriebsdoku und finaler Entfernung des Python-Kompatibilitätsendpunkts).
 - [ ] NVD-Collection-Import logikseitig als Rust-Primärpfad bereitstellen und Django auf orchestrierende Rolle begrenzen.
 - [ ] Parity-Reports als optionales Audit-Feature markieren (nicht als Betriebsnotwendigkeit).
 - [ ] Betriebsdoku für Stage/Prod um verpflichtende Rust-Health-SLOs und Alerting ergänzen.
@@ -25,4 +26,3 @@ Komplette Ablösung der CVE-Normalisierungspfade in der Vulnerability-Intelligen
 2. **Alle produktiven Upserts verwenden Rust-normalisierte CVE-IDs**.
 3. **Rust-Healthchecks und Integrationstests sind verbindlich in CI/CD**.
 4. **Runbook und Betriebshandbuch enthalten Rust-only Incident- und Rollback-Pfade**.
-

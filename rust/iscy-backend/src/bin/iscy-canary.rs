@@ -114,7 +114,10 @@ fn cmd_trend(args: &[String]) -> anyhow::Result<()> {
     }
 
     if !reports_dir.exists() {
-        anyhow::bail!("Reports-Verzeichnis nicht gefunden: {}", reports_dir.display());
+        anyhow::bail!(
+            "Reports-Verzeichnis nicht gefunden: {}",
+            reports_dir.display()
+        );
     }
 
     let mut files: Vec<PathBuf> = fs::read_dir(&reports_dir)?
@@ -128,7 +131,10 @@ fn cmd_trend(args: &[String]) -> anyhow::Result<()> {
         .collect();
     files.sort();
     if files.is_empty() {
-        anyhow::bail!("Keine Parity-Reports gefunden in: {}", reports_dir.display());
+        anyhow::bail!(
+            "Keine Parity-Reports gefunden in: {}",
+            reports_dir.display()
+        );
     }
 
     let start = files.len().saturating_sub(window);
@@ -143,7 +149,11 @@ fn cmd_trend(args: &[String]) -> anyhow::Result<()> {
         let payload: serde_json::Value = serde_json::from_str(&raw)?;
         let total = payload["total"].as_u64().unwrap_or(0);
         let mismatch = payload["mismatches"].as_u64().unwrap_or(0);
-        let rate = if total > 0 { (mismatch as f64 / total as f64) * 100.0 } else { 0.0 };
+        let rate = if total > 0 {
+            (mismatch as f64 / total as f64) * 100.0
+        } else {
+            0.0
+        };
         rates.push(rate);
         totals += total;
         mismatches += mismatch;
@@ -196,7 +206,8 @@ fn cmd_trend(args: &[String]) -> anyhow::Result<()> {
 }
 
 fn cmd_import(args: &[String]) -> anyhow::Result<()> {
-    let mut backend_url = env::var("RUST_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
+    let mut backend_url =
+        env::var("RUST_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
     let mut cves: Vec<String> = Vec::new();
     let mut skip_healthcheck = false;
     let mut i = 0;
@@ -224,7 +235,10 @@ fn cmd_import(args: &[String]) -> anyhow::Result<()> {
         let health_url = format!("{}/health", backend_url.trim_end_matches('/'));
         let health_resp = client.get(&health_url).send()?;
         if !health_resp.status().is_success() {
-            anyhow::bail!("Rust-Backend Healthcheck fehlgeschlagen mit HTTP {}", health_resp.status());
+            anyhow::bail!(
+                "Rust-Backend Healthcheck fehlgeschlagen mit HTTP {}",
+                health_resp.status()
+            );
         }
     }
     let mut imported = 0_u64;
@@ -233,7 +247,11 @@ fn cmd_import(args: &[String]) -> anyhow::Result<()> {
         let payload = json!({ "cve_id": cve });
         let response = client.post(&endpoint).json(&payload).send()?;
         if !response.status().is_success() {
-            anyhow::bail!("Import fehlgeschlagen für {} mit HTTP {}", payload["cve_id"], response.status());
+            anyhow::bail!(
+                "Import fehlgeschlagen für {} mit HTTP {}",
+                payload["cve_id"],
+                response.status()
+            );
         }
         let body: serde_json::Value = response.json()?;
         println!("{}", serde_json::to_string(&body)?);
@@ -244,6 +262,7 @@ fn cmd_import(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn import_collection(
     nvd_url: &str,
     rust_url: &str,
@@ -266,7 +285,10 @@ fn import_collection(
             .get(format!("{}/health", rust_url.trim_end_matches('/')))
             .send()?;
         if !health_resp.status().is_success() {
-            anyhow::bail!("Rust-Backend Healthcheck fehlgeschlagen mit HTTP {}", health_resp.status());
+            anyhow::bail!(
+                "Rust-Backend Healthcheck fehlgeschlagen mit HTTP {}",
+                health_resp.status()
+            );
         }
     }
 
@@ -276,12 +298,10 @@ fn import_collection(
     let mut page: usize = 0;
 
     while page < max_pages {
-        let mut req = client
-            .get(&nvd_endpoint)
-            .query(&[
-                ("resultsPerPage", results_per_page.to_string()),
-                ("startIndex", start_index.to_string()),
-            ]);
+        let mut req = client.get(&nvd_endpoint).query(&[
+            ("resultsPerPage", results_per_page.to_string()),
+            ("startIndex", start_index.to_string()),
+        ]);
         if has_kev {
             req = req.query(&[("hasKev", String::from("true"))]);
         }
@@ -346,8 +366,10 @@ fn import_collection(
 }
 
 fn cmd_import_collection(args: &[String]) -> anyhow::Result<()> {
-    let rust_url = env::var("RUST_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
-    let nvd_url = env::var("NVD_BASE_URL").unwrap_or_else(|_| "https://services.nvd.nist.gov".to_string());
+    let rust_url =
+        env::var("RUST_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
+    let nvd_url =
+        env::var("NVD_BASE_URL").unwrap_or_else(|_| "https://services.nvd.nist.gov".to_string());
     let mut cve_tag = String::new();
     let mut cpe_name = String::new();
     let mut has_kev = false;
@@ -463,8 +485,10 @@ fn cmd_sync_recent(args: &[String]) -> anyhow::Result<()> {
     let start_iso = start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let end_iso = end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-    let rust_url = env::var("RUST_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
-    let nvd_url = env::var("NVD_BASE_URL").unwrap_or_else(|_| "https://services.nvd.nist.gov".to_string());
+    let rust_url =
+        env::var("RUST_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
+    let nvd_url =
+        env::var("NVD_BASE_URL").unwrap_or_else(|_| "https://services.nvd.nist.gov".to_string());
     import_collection(
         &nvd_url,
         &rust_url,
@@ -482,7 +506,9 @@ fn cmd_sync_recent(args: &[String]) -> anyhow::Result<()> {
 fn main() -> anyhow::Result<()> {
     let mut args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
-        anyhow::bail!("Usage: iscy-canary <parity|trend|import|import-collection|sync-recent> [args]");
+        anyhow::bail!(
+            "Usage: iscy-canary <parity|trend|import|import-collection|sync-recent> [args]"
+        );
     }
     let cmd = args.remove(0);
     match cmd.as_str() {

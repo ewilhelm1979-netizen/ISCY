@@ -1,4 +1,10 @@
-use axum::{extract::Json, response::Html, routing::{get, post}, Router};
+use axum::{
+    extract::Json,
+    http::StatusCode,
+    response::{Html, IntoResponse, Response},
+    routing::{get, post},
+    Router,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -9,8 +15,17 @@ pub struct NvdImportRequest {
 #[derive(Debug, Serialize)]
 pub struct NvdImportResponse {
     pub accepted: bool,
+    pub api_version: &'static str,
     pub cve_id: String,
     pub source: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApiErrorResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub error_code: &'static str,
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +104,55 @@ pub struct CveSummaryResponse {
 
 pub fn normalize_cve_id(input: &str) -> String {
     input.trim().to_uppercase()
+}
+
+pub fn is_valid_cve_id(input: &str) -> bool {
+    let parts: Vec<&str> = input.split('-').collect();
+    if parts.len() != 3 || parts[0] != "CVE" || parts[1].len() != 4 || parts[2].len() < 4 {
+        return false;
+    }
+    parts[1].chars().all(|c| c.is_ascii_digit()) && parts[2].chars().all(|c| c.is_ascii_digit())
+}
+
+fn nvd_normalize_response(payload: NvdImportRequest) -> Response {
+    let normalized = normalize_cve_id(&payload.cve_id);
+    if normalized.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "empty_cve_id",
+                message: "CVE-ID darf nicht leer sein.".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if !is_valid_cve_id(&normalized) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_cve_id",
+                message: format!(
+                    "CVE-ID '{}' entspricht nicht dem erwarteten Format CVE-YYYY-NNNN.",
+                    normalized
+                ),
+            }),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(NvdImportResponse {
+            accepted: true,
+            api_version: "v1",
+            cve_id: normalized,
+            source: "NVD",
+        }),
+    )
+        .into_response()
 }
 
 async fn health_live() -> Json<serde_json::Value> {
@@ -170,12 +234,12 @@ async fn web_navigator() -> Html<String> {
     web_placeholder("/navigator/", "Guidance Navigator").await
 }
 
-async fn nvd_import(Json(payload): Json<NvdImportRequest>) -> Json<NvdImportResponse> {
-    Json(NvdImportResponse {
-        accepted: true,
-        cve_id: normalize_cve_id(&payload.cve_id),
-        source: "NVD",
-    })
+async fn nvd_normalize(Json(payload): Json<NvdImportRequest>) -> Response {
+    nvd_normalize_response(payload)
+}
+
+async fn nvd_import(Json(payload): Json<NvdImportRequest>) -> Response {
+    nvd_normalize_response(payload)
 }
 
 async fn llm_generate(Json(payload): Json<LlmGenerateRequest>) -> Json<LlmGenerateResponse> {
@@ -259,7 +323,9 @@ async fn risk_priority(Json(payload): Json<RiskPriorityRequest>) -> Json<RiskPri
     })
 }
 
-async fn guidance_evaluate(Json(payload): Json<GuidanceEvaluateRequest>) -> Json<GuidanceEvaluateResponse> {
+async fn guidance_evaluate(
+    Json(payload): Json<GuidanceEvaluateRequest>,
+) -> Json<GuidanceEvaluateResponse> {
     let mut todo_items: Vec<String> = Vec::new();
     if payload.applicability_count == 0 {
         todo_items.push("Betroffenheitsanalyse anlegen".to_string());
@@ -268,7 +334,10 @@ async fn guidance_evaluate(Json(payload): Json<GuidanceEvaluateRequest>) -> Json
         todo_items.push("ISMS-Scope und Unternehmensbeschreibung pflegen".to_string());
     }
     if payload.process_count < 3 {
-        todo_items.push(format!("Noch {} kritische Prozesse erfassen", 3 - payload.process_count));
+        todo_items.push(format!(
+            "Noch {} kritische Prozesse erfassen",
+            3 - payload.process_count
+        ));
     }
     if payload.risk_count < 1 {
         todo_items.push("Mindestens ein Risiko dokumentieren".to_string());
@@ -277,15 +346,23 @@ async fn guidance_evaluate(Json(payload): Json<GuidanceEvaluateRequest>) -> Json
         todo_items.push("Erstes Assessment durchführen".to_string());
     }
     if payload.measure_count < 1 {
-        todo_items.push("Mindestens eine Incident-nahe Maßnahme dokumentieren (SOC-Playbook)".to_string());
+        todo_items.push(
+            "Mindestens eine Incident-nahe Maßnahme dokumentieren (SOC-Playbook)".to_string(),
+        );
     }
     if payload.measure_open_count > 0 {
-        todo_items.push(format!("{} offene Maßnahmen nachverfolgen", payload.measure_open_count));
+        todo_items.push(format!(
+            "{} offene Maßnahmen nachverfolgen",
+            payload.measure_open_count
+        ));
     }
 
-    let steps = vec![
+    let steps = [
         ("applicability_checked", payload.applicability_count >= 1),
-        ("company_scope_defined", payload.description_present && payload.sector_present),
+        (
+            "company_scope_defined",
+            payload.description_present && payload.sector_present,
+        ),
         ("requirements_available", payload.requirement_count >= 4),
         ("initial_processes_captured", payload.process_count >= 3),
         ("initial_risks_captured", payload.risk_count >= 1),
@@ -293,7 +370,10 @@ async fn guidance_evaluate(Json(payload): Json<GuidanceEvaluateRequest>) -> Json
         ("soc_phishing_playbook_applied", payload.measure_count >= 1),
     ];
 
-    let current_step_code = steps.iter().find(|(_, done)| !*done).map(|(code, _)| code.to_string());
+    let current_step_code = steps
+        .iter()
+        .find(|(_, done)| !*done)
+        .map(|(code, _)| code.to_string());
     let (summary, next_action_text) = match current_step_code.as_deref() {
         Some("applicability_checked") => (
             "Starten Sie mit der Betroffenheitsanalyse. Erst damit wird klar, ob ISO-27001-Readiness ausreicht oder NIS2-/KRITIS-Nähe vertieft werden sollte.".to_string(),
@@ -376,6 +456,7 @@ pub fn app_router() -> Router {
         .route("/organizations/", get(web_organizations))
         .route("/product-security/", get(web_product_security))
         .route("/cves/", get(web_cves))
+        .route("/api/v1/nvd/normalize", post(nvd_normalize))
         .route("/api/v1/nvd/import", post(nvd_import))
         .route("/api/v1/llm/generate", post(llm_generate))
         .route("/api/v1/risk/priority", post(risk_priority))

@@ -12,3 +12,4 @@ media/
 staticfiles/
 models/
 backups/
+rust/iscy-backend/target/
