@@ -1,8 +1,11 @@
 """Wizard-Service V19 – Findings F01, F02, F03, F05, F08, F16, F17 umgesetzt."""
 
+import json
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Dict, List, Optional
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from django.conf import settings
 from django.db import transaction
@@ -17,8 +20,10 @@ from apps.requirements_app.models import Requirement
 from apps.requirements_app.services import RegulatoryMappingService
 from apps.processes.models import Process
 from apps.reports.models import ReportSnapshot
+from apps.reports.services import ReportSessionRef, ReportSnapshotDetailItem
 from apps.evidence.services import EvidenceNeedService
 from apps.roadmap.models import RoadmapPlan, RoadmapPhase, RoadmapTask, RoadmapTaskDependency
+from apps.roadmap.services import RoadmapPlanBridgeDetail, RoadmapRustClient
 from apps.product_security.services import ProductSecurityService
 from .models import AssessmentSession, DomainScore, GeneratedGap, GeneratedMeasure, SessionAnswer
 
@@ -30,6 +35,497 @@ class ApplicabilityResult:
     reasoning: str
     score: int
     kritis_indication: str      # F03: Klartext-Indikation
+
+
+@dataclass(frozen=True)
+class WizardDomainRef:
+    id: int
+    code: str
+    name: str
+    sort_order: int = 0
+
+    def __str__(self) -> str:
+        return self.name
+
+
+@dataclass(frozen=True)
+class WizardSessionBridgeItem:
+    id: int
+    tenant: object
+    tenant_id: int
+    tenant_name: str
+    assessment_type: str
+    assessment_type_label: str
+    status: str
+    status_label: str
+    current_step: str
+    current_step_label: str
+    started_by_id: int | None
+    started_by_display: str | None
+    applicability_result: str
+    applicability_reasoning: str
+    executive_summary: str
+    progress_percent: int
+    completed_at: str | None
+    created_at: str
+    updated_at: str
+
+    @property
+    def pk(self) -> int:
+        return self.id
+
+    def get_assessment_type_display(self) -> str:
+        return self.assessment_type_label
+
+    def get_status_display(self) -> str:
+        return self.status_label
+
+    def get_current_step_display(self) -> str:
+        return self.current_step_label
+
+
+@dataclass(frozen=True)
+class WizardDomainScoreBridgeItem:
+    id: int
+    session_id: int
+    domain: WizardDomainRef
+    domain_id: int
+    score_raw: int
+    score_percent: int
+    maturity_level: str
+    gap_level: str
+    created_at: str
+    updated_at: str
+
+    @property
+    def pk(self) -> int:
+        return self.id
+
+
+@dataclass(frozen=True)
+class WizardGapBridgeItem:
+    id: int
+    session_id: int
+    domain: WizardDomainRef
+    domain_id: int
+    question_id: int | None
+    severity: str
+    severity_label: str
+    title: str
+    description: str
+    created_at: str
+    updated_at: str
+
+    @property
+    def pk(self) -> int:
+        return self.id
+
+    def get_severity_display(self) -> str:
+        return self.severity_label
+
+
+@dataclass(frozen=True)
+class WizardMeasureBridgeItem:
+    id: int
+    session_id: int
+    domain: WizardDomainRef | None
+    domain_id: int | None
+    question_id: int | None
+    title: str
+    description: str
+    priority: str
+    priority_label: str
+    effort: str
+    effort_label: str
+    measure_type: str
+    measure_type_label: str
+    target_phase: str
+    owner_role: str
+    reason: str
+    status: str
+    status_label: str
+    created_at: str
+    updated_at: str
+
+    @property
+    def pk(self) -> int:
+        return self.id
+
+    def get_priority_display(self) -> str:
+        return self.priority_label
+
+    def get_effort_display(self) -> str:
+        return self.effort_label
+
+    def get_measure_type_display(self) -> str:
+        return self.measure_type_label
+
+    def get_status_display(self) -> str:
+        return self.status_label
+
+
+@dataclass(frozen=True)
+class WizardResultsBridgeResult:
+    session: WizardSessionBridgeItem
+    report: ReportSnapshotDetailItem | None
+    plan_detail: RoadmapPlanBridgeDetail | None
+    domain_scores: list[WizardDomainScoreBridgeItem]
+    gaps: list[WizardGapBridgeItem]
+    measures: list[WizardMeasureBridgeItem]
+    evidence_count: int
+
+    @property
+    def plan(self):
+        return self.plan_detail.plan if self.plan_detail else None
+
+
+class WizardRustClient:
+    @staticmethod
+    def _base_url() -> str:
+        base = (getattr(settings, 'RUST_BACKEND_URL', '') or '').strip()
+        return base.rstrip('/')
+
+    @staticmethod
+    def fetch_sessions(request, tenant, timeout: int = 8) -> list[WizardSessionBridgeItem]:
+        base = WizardRustClient._base_url()
+        if not base:
+            raise RuntimeError('RUST_BACKEND_URL ist nicht gesetzt.')
+
+        rust_request = WizardRustClient._authenticated_request(
+            request,
+            tenant,
+            f'{base}/api/v1/wizard/sessions',
+        )
+        with urlopen(rust_request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+
+        tenant_id = WizardRustClient._int_field(payload, 'tenant_id')
+        if tenant_id != int(tenant.id):
+            raise RuntimeError('Rust-Wizard-Sessions gehoeren nicht zum angefragten Tenant.')
+
+        return [
+            WizardRustClient._session_from_payload(item, tenant)
+            for item in payload.get('sessions', [])
+            if isinstance(item, dict)
+        ]
+
+    @staticmethod
+    def fetch_results(request, tenant, session_id: int, timeout: int = 8) -> WizardResultsBridgeResult | None:
+        base = WizardRustClient._base_url()
+        if not base:
+            raise RuntimeError('RUST_BACKEND_URL ist nicht gesetzt.')
+
+        rust_request = WizardRustClient._authenticated_request(
+            request,
+            tenant,
+            f'{base}/api/v1/wizard/sessions/{int(session_id)}/results',
+        )
+        try:
+            with urlopen(rust_request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode('utf-8'))
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+
+        session_payload = payload.get('session') or {}
+        if not isinstance(session_payload, dict):
+            raise RuntimeError('Rust-Wizard-Ergebnis hat kein session-Objekt geliefert.')
+        session = WizardRustClient._session_from_payload(session_payload, tenant)
+        if session.tenant_id != int(tenant.id):
+            raise RuntimeError('Rust-Wizard-Ergebnis gehoert nicht zum angefragten Tenant.')
+
+        report_payload = payload.get('report')
+        report = WizardRustClient._report_from_payload(report_payload, tenant) if isinstance(report_payload, dict) else None
+
+        roadmap_payload = payload.get('roadmap')
+        plan_detail = WizardRustClient._roadmap_from_payload(roadmap_payload, tenant) if isinstance(roadmap_payload, dict) else None
+
+        return WizardResultsBridgeResult(
+            session=session,
+            report=report,
+            plan_detail=plan_detail,
+            domain_scores=[
+                WizardRustClient._domain_score_from_payload(item)
+                for item in payload.get('domain_scores', [])
+                if isinstance(item, dict)
+            ],
+            gaps=[
+                WizardRustClient._gap_from_payload(item)
+                for item in payload.get('gaps', [])
+                if isinstance(item, dict)
+            ],
+            measures=[
+                WizardRustClient._measure_from_payload(item)
+                for item in payload.get('measures', [])
+                if isinstance(item, dict)
+            ],
+            evidence_count=WizardRustClient._int_field(payload, 'evidence_count'),
+        )
+
+    @staticmethod
+    def _session_from_payload(item: dict, tenant) -> WizardSessionBridgeItem:
+        return WizardSessionBridgeItem(
+            id=WizardRustClient._int_field(item, 'id'),
+            tenant=tenant,
+            tenant_id=WizardRustClient._int_field(item, 'tenant_id'),
+            tenant_name=str(item.get('tenant_name') or getattr(tenant, 'name', '')),
+            assessment_type=str(item.get('assessment_type') or AssessmentSession.Type.FULL),
+            assessment_type_label=str(item.get('assessment_type_label') or ''),
+            status=str(item.get('status') or AssessmentSession.Status.DRAFT),
+            status_label=str(item.get('status_label') or ''),
+            current_step=str(item.get('current_step') or AssessmentSession.Step.PROFILE),
+            current_step_label=str(item.get('current_step_label') or ''),
+            started_by_id=WizardRustClient._optional_int_field(item, 'started_by_id'),
+            started_by_display=WizardRustClient._optional_str_field(item, 'started_by_display'),
+            applicability_result=str(item.get('applicability_result') or ''),
+            applicability_reasoning=str(item.get('applicability_reasoning') or ''),
+            executive_summary=str(item.get('executive_summary') or ''),
+            progress_percent=WizardRustClient._int_field(item, 'progress_percent'),
+            completed_at=WizardRustClient._optional_str_field(item, 'completed_at'),
+            created_at=str(item.get('created_at') or ''),
+            updated_at=str(item.get('updated_at') or ''),
+        )
+
+    @staticmethod
+    def _domain_ref_from_payload(item: dict) -> WizardDomainRef:
+        return WizardDomainRef(
+            id=WizardRustClient._int_field(item, 'domain_id'),
+            code=str(item.get('domain_code') or ''),
+            name=str(item.get('domain_name') or ''),
+            sort_order=WizardRustClient._int_field(item, 'domain_sort_order'),
+        )
+
+    @staticmethod
+    def _domain_score_from_payload(item: dict) -> WizardDomainScoreBridgeItem:
+        domain = WizardRustClient._domain_ref_from_payload(item)
+        return WizardDomainScoreBridgeItem(
+            id=WizardRustClient._int_field(item, 'id'),
+            session_id=WizardRustClient._int_field(item, 'session_id'),
+            domain=domain,
+            domain_id=domain.id,
+            score_raw=WizardRustClient._int_field(item, 'score_raw'),
+            score_percent=WizardRustClient._int_field(item, 'score_percent'),
+            maturity_level=str(item.get('maturity_level') or ''),
+            gap_level=str(item.get('gap_level') or ''),
+            created_at=str(item.get('created_at') or ''),
+            updated_at=str(item.get('updated_at') or ''),
+        )
+
+    @staticmethod
+    def _gap_from_payload(item: dict) -> WizardGapBridgeItem:
+        domain = WizardRustClient._domain_ref_from_payload(item)
+        severity = str(item.get('severity') or GeneratedGap.Severity.MEDIUM)
+        return WizardGapBridgeItem(
+            id=WizardRustClient._int_field(item, 'id'),
+            session_id=WizardRustClient._int_field(item, 'session_id'),
+            domain=domain,
+            domain_id=domain.id,
+            question_id=WizardRustClient._optional_int_field(item, 'question_id'),
+            severity=severity,
+            severity_label=str(item.get('severity_label') or dict(GeneratedGap.Severity.choices).get(severity, severity)),
+            title=str(item.get('title') or ''),
+            description=str(item.get('description') or ''),
+            created_at=str(item.get('created_at') or ''),
+            updated_at=str(item.get('updated_at') or ''),
+        )
+
+    @staticmethod
+    def _measure_from_payload(item: dict) -> WizardMeasureBridgeItem:
+        domain_id = WizardRustClient._optional_int_field(item, 'domain_id')
+        domain = None
+        if domain_id is not None:
+            domain = WizardDomainRef(
+                id=domain_id,
+                code=str(item.get('domain_code') or ''),
+                name=str(item.get('domain_name') or ''),
+            )
+        priority = str(item.get('priority') or GeneratedMeasure.Priority.MEDIUM)
+        effort = str(item.get('effort') or GeneratedMeasure.Effort.MEDIUM)
+        measure_type = str(item.get('measure_type') or GeneratedMeasure.Type.ORGANIZATIONAL)
+        status = str(item.get('status') or GeneratedMeasure.Status.OPEN)
+        return WizardMeasureBridgeItem(
+            id=WizardRustClient._int_field(item, 'id'),
+            session_id=WizardRustClient._int_field(item, 'session_id'),
+            domain=domain,
+            domain_id=domain_id,
+            question_id=WizardRustClient._optional_int_field(item, 'question_id'),
+            title=str(item.get('title') or ''),
+            description=str(item.get('description') or ''),
+            priority=priority,
+            priority_label=str(item.get('priority_label') or dict(GeneratedMeasure.Priority.choices).get(priority, priority)),
+            effort=effort,
+            effort_label=str(item.get('effort_label') or dict(GeneratedMeasure.Effort.choices).get(effort, effort)),
+            measure_type=measure_type,
+            measure_type_label=str(item.get('measure_type_label') or dict(GeneratedMeasure.Type.choices).get(measure_type, measure_type)),
+            target_phase=str(item.get('target_phase') or ''),
+            owner_role=str(item.get('owner_role') or ''),
+            reason=str(item.get('reason') or ''),
+            status=status,
+            status_label=str(item.get('status_label') or dict(GeneratedMeasure.Status.choices).get(status, status)),
+            created_at=str(item.get('created_at') or ''),
+            updated_at=str(item.get('updated_at') or ''),
+        )
+
+    @staticmethod
+    def _report_from_payload(report: dict, tenant) -> ReportSnapshotDetailItem:
+        session_id = WizardRustClient._int_field(report, 'session_id')
+        return ReportSnapshotDetailItem(
+            id=WizardRustClient._int_field(report, 'id'),
+            tenant=tenant,
+            tenant_id=WizardRustClient._int_field(report, 'tenant_id'),
+            session=ReportSessionRef(id=session_id),
+            session_id=session_id,
+            title=str(report.get('title') or ''),
+            executive_summary=str(report.get('executive_summary') or ''),
+            applicability_result=str(report.get('applicability_result') or ''),
+            iso_readiness_percent=WizardRustClient._int_field(report, 'iso_readiness_percent'),
+            nis2_readiness_percent=WizardRustClient._int_field(report, 'nis2_readiness_percent'),
+            kritis_readiness_percent=WizardRustClient._int_field(report, 'kritis_readiness_percent'),
+            cra_readiness_percent=WizardRustClient._int_field(report, 'cra_readiness_percent'),
+            ai_act_readiness_percent=WizardRustClient._int_field(report, 'ai_act_readiness_percent'),
+            iec62443_readiness_percent=WizardRustClient._int_field(report, 'iec62443_readiness_percent'),
+            iso_sae_21434_readiness_percent=WizardRustClient._int_field(report, 'iso_sae_21434_readiness_percent'),
+            regulatory_matrix_json=WizardRustClient._dict_field(report, 'regulatory_matrix_json'),
+            compliance_versions_json=WizardRustClient._dict_field(report, 'compliance_versions_json'),
+            product_security_json=WizardRustClient._dict_field(report, 'product_security_json'),
+            top_gaps_json=WizardRustClient._list_field(report, 'top_gaps_json'),
+            top_measures_json=WizardRustClient._list_field(report, 'top_measures_json'),
+            roadmap_summary=WizardRustClient._list_field(report, 'roadmap_summary'),
+            domain_scores_json=WizardRustClient._list_field(report, 'domain_scores_json'),
+            next_steps_json=WizardRustClient._dict_field(report, 'next_steps_json'),
+            created_at=str(report.get('created_at') or ''),
+            updated_at=str(report.get('updated_at') or ''),
+        )
+
+    @staticmethod
+    def _roadmap_from_payload(payload: dict, tenant) -> RoadmapPlanBridgeDetail | None:
+        plan_payload = payload.get('plan') or {}
+        if not isinstance(plan_payload, dict):
+            return None
+        plan = RoadmapRustClient._plan_from_payload(plan_payload, tenant)
+
+        phase_by_id = {}
+        for item in payload.get('phases', []):
+            if not isinstance(item, dict):
+                continue
+            phase = RoadmapRustClient._phase_from_payload(item, plan)
+            phase_by_id[phase.id] = phase
+            plan.phases.add(phase)
+
+        tasks = []
+        task_by_id = {}
+        for item in payload.get('tasks', []):
+            if not isinstance(item, dict):
+                continue
+            phase = phase_by_id.get(WizardRustClient._int_field(item, 'phase_id'))
+            if phase is None:
+                continue
+            task = RoadmapRustClient._task_from_payload(item, phase)
+            tasks.append(task)
+            task_by_id[task.id] = task
+            phase.tasks.add(task)
+
+        dependencies = []
+        for item in payload.get('dependencies', []):
+            if not isinstance(item, dict):
+                continue
+            dependency = RoadmapRustClient._dependency_from_payload(item, task_by_id)
+            dependencies.append(dependency)
+            if dependency.successor is not None:
+                dependency.successor.incoming_dependencies.add(dependency)
+
+        return RoadmapPlanBridgeDetail(plan=plan, tasks=tasks, dependencies=dependencies)
+
+    @staticmethod
+    def _authenticated_request(request, tenant, url: str) -> Request:
+        user = getattr(request, 'user', None)
+        user_id = getattr(user, 'id', None)
+        if not user_id:
+            raise RuntimeError('Wizard-Rust-Bridge braucht einen authentifizierten User.')
+
+        rust_request = Request(url)
+        rust_request.add_header('Accept', 'application/json')
+        rust_request.add_header('X-ISCY-Tenant-ID', str(tenant.id))
+        rust_request.add_header('X-ISCY-User-ID', str(user_id))
+        user_email = (getattr(user, 'email', '') or '').strip()
+        if user_email:
+            rust_request.add_header('X-ISCY-User-Email', user_email)
+        return rust_request
+
+    @staticmethod
+    def _int_field(payload: dict, key: str) -> int:
+        return int(payload.get(key) or 0)
+
+    @staticmethod
+    def _optional_int_field(payload: dict, key: str) -> int | None:
+        value = payload.get(key)
+        if value in (None, ''):
+            return None
+        return int(value)
+
+    @staticmethod
+    def _optional_str_field(payload: dict, key: str) -> str | None:
+        value = str(payload.get(key) or '').strip()
+        return value or None
+
+    @staticmethod
+    def _dict_field(payload: dict, key: str) -> dict:
+        value = payload.get(key)
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _list_field(payload: dict, key: str) -> list:
+        value = payload.get(key)
+        return value if isinstance(value, list) else []
+
+
+class WizardResultsBridge:
+    @staticmethod
+    def fetch_sessions(request, tenant):
+        if tenant is None:
+            return None
+
+        backend = str(getattr(settings, 'WIZARD_RESULTS_BACKEND', 'rust_service') or '').strip().lower()
+        if backend != 'rust_service':
+            return None
+
+        if not WizardRustClient._base_url():
+            if WizardResultsBridge._strict_rust_mode():
+                raise RuntimeError('Rust wizard backend ist aktiv, aber RUST_BACKEND_URL ist nicht gesetzt.')
+            return None
+
+        try:
+            return WizardRustClient.fetch_sessions(request, tenant)
+        except Exception as exc:
+            if WizardResultsBridge._strict_rust_mode():
+                raise RuntimeError('Rust wizard backend ist aktiv, aber nicht erreichbar.') from exc
+            return None
+
+    @staticmethod
+    def fetch_results(request, tenant, session_id):
+        if tenant is None or not session_id:
+            return None
+
+        backend = str(getattr(settings, 'WIZARD_RESULTS_BACKEND', 'rust_service') or '').strip().lower()
+        if backend != 'rust_service':
+            return None
+
+        if not WizardRustClient._base_url():
+            if WizardResultsBridge._strict_rust_mode():
+                raise RuntimeError('Rust wizard backend ist aktiv, aber RUST_BACKEND_URL ist nicht gesetzt.')
+            return None
+
+        try:
+            return WizardRustClient.fetch_results(request, tenant, int(session_id))
+        except Exception as exc:
+            if WizardResultsBridge._strict_rust_mode():
+                raise RuntimeError('Rust wizard backend ist aktiv, aber nicht erreichbar.') from exc
+            return None
+
+    @staticmethod
+    def _strict_rust_mode() -> bool:
+        return bool(getattr(settings, 'RUST_STRICT_MODE', False))
 
 
 # ──────────────────────────────────────────────────────────────────────

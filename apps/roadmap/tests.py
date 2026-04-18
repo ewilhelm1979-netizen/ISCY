@@ -155,6 +155,61 @@ class RoadmapViewTests(TestCase):
         self.assertContains(response, 'Policy aktualisieren')
         self.assertContains(response, '1 Abhängigkeit')
 
+    @patch('apps.roadmap.services.urlopen')
+    def test_roadmap_task_update_can_use_rust_register_bridge(self, mock_urlopen):
+        payload = self._rust_detail_payload()['tasks'][0]
+        payload.update({
+            'status': 'DONE',
+            'status_label': 'Erledigt',
+            'planned_start': '2026-05-02',
+            'due_date': '2026-05-08',
+            'owner_role': 'CISO Office',
+            'notes': 'Closed in Rust',
+        })
+        self._mock_rust_response(mock_urlopen, {
+            'api_version': 'v1',
+            'plan_id': self.plan_a.id,
+            'task': payload,
+        })
+        self.client.force_login(self.user_a)
+
+        with self.settings(ROADMAP_REGISTER_BACKEND='rust_service', RUST_BACKEND_URL='http://rust-backend:9000'):
+            response = self.client.post(
+                reverse('roadmap:task-edit', kwargs={'pk': self.task_a.id}),
+                {
+                    'status': 'DONE',
+                    'planned_start': '2026-05-02',
+                    'due_date': '2026-05-08',
+                    'owner_role': 'CISO Office',
+                    'notes': 'Closed in Rust',
+                },
+            )
+
+        self.assertRedirects(
+            response,
+            reverse('roadmap:detail', kwargs={'pk': self.plan_a.id}),
+            fetch_redirect_response=False,
+        )
+        rust_request = mock_urlopen.call_args.args[0]
+        body = json.loads(rust_request.data.decode('utf-8'))
+        self.assertEqual(rust_request.full_url, f'http://rust-backend:9000/api/v1/roadmap/tasks/{self.task_a.id}')
+        self.assertEqual(rust_request.get_method(), 'PATCH')
+        self.assertEqual(body['status'], 'DONE')
+        self.assertEqual(body['owner_role'], 'CISO Office')
+
+    @patch('apps.roadmap.services.urlopen')
+    def test_roadmap_pdf_can_use_rust_export_data(self, mock_urlopen):
+        self._mock_rust_response(mock_urlopen, self._rust_detail_payload())
+        self.client.force_login(self.user_a)
+
+        with self.settings(ROADMAP_REGISTER_BACKEND='rust_service', RUST_BACKEND_URL='http://rust-backend:9000'):
+            response = self.client.get(reverse('roadmap:pdf', kwargs={'pk': self.plan_a.id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        rust_request = mock_urlopen.call_args.args[0]
+        self.assertEqual(rust_request.full_url, f'http://rust-backend:9000/api/v1/roadmap/plans/{self.plan_a.id}')
+
     @patch('apps.roadmap.services.urlopen', side_effect=OSError('backend down'))
     def test_roadmap_list_falls_back_to_django_when_rust_unavailable_in_non_strict_mode(self, _mock_urlopen):
         self.client.force_login(self.user_a)

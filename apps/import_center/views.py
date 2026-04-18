@@ -10,7 +10,7 @@ from openpyxl import Workbook
 
 from apps.wizard.services import WizardService
 from .forms import DataImportForm
-from .services import ImportService, TEMPLATE_COLUMNS, COLUMN_SYNONYMS
+from .services import ImportCenterBridge, ImportService, TEMPLATE_COLUMNS, COLUMN_SYNONYMS
 
 
 class ImportCenterView(LoginRequiredMixin, FormView):
@@ -94,15 +94,27 @@ class ImportPreviewView(LoginRequiredMixin, TemplateView):
         raw_rows = preview.get('rows', [])
         rows = ImportService.apply_mapping(raw_rows, selected_mapping)
         replace_existing = preview.get('replace_existing', False)
-        if import_type == DataImportForm.ImportType.BUSINESS_UNITS:
-            created, updated = ImportService.import_business_units(tenant, rows, replace_existing=replace_existing)
-        elif import_type == DataImportForm.ImportType.PROCESSES:
-            created, updated = ImportService.import_processes(tenant, rows, replace_existing=replace_existing)
-        elif import_type == DataImportForm.ImportType.SUPPLIERS:
-            created, updated = ImportService.import_suppliers(tenant, rows, replace_existing=replace_existing)
+        rust_result = ImportCenterBridge.apply_import(
+            request,
+            tenant,
+            import_type,
+            rows,
+            replace_existing=replace_existing,
+        )
+        if rust_result is not None:
+            created, updated = rust_result.created, rust_result.updated
+            skipped_note = f' {rust_result.skipped} Zeile(n) ohne Name uebersprungen.' if rust_result.skipped else ''
+            messages.success(request, f'Import übernommen: {created} neu, {updated} aktualisiert.{skipped_note}')
         else:
-            created, updated = ImportService.import_assets(tenant, rows, replace_existing=replace_existing)
-        messages.success(request, f'Import übernommen: {created} neu, {updated} aktualisiert.')
+            if import_type == DataImportForm.ImportType.BUSINESS_UNITS:
+                created, updated = ImportService.import_business_units(tenant, rows, replace_existing=replace_existing)
+            elif import_type == DataImportForm.ImportType.PROCESSES:
+                created, updated = ImportService.import_processes(tenant, rows, replace_existing=replace_existing)
+            elif import_type == DataImportForm.ImportType.SUPPLIERS:
+                created, updated = ImportService.import_suppliers(tenant, rows, replace_existing=replace_existing)
+            else:
+                created, updated = ImportService.import_assets(tenant, rows, replace_existing=replace_existing)
+            messages.success(request, f'Import übernommen: {created} neu, {updated} aktualisiert.')
         request.session.pop('import_preview', None)
         return redirect('imports:center')
 

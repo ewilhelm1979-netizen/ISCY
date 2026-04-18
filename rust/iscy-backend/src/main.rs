@@ -3,8 +3,9 @@ use std::net::SocketAddr;
 use iscy_backend::{
     app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
     cve_store::CveStore, dashboard_store::DashboardStore, evidence_store::EvidenceStore,
-    process_store::ProcessStore, report_store::ReportStore, risk_store::RiskStore,
-    roadmap_store::RoadmapStore, tenant_store::TenantStore, AppState,
+    import_store::ImportStore, process_store::ProcessStore, report_store::ReportStore,
+    risk_store::RiskStore, roadmap_store::RoadmapStore, tenant_store::TenantStore,
+    wizard_store::WizardStore, AppState,
 };
 use tokio::net::TcpListener;
 
@@ -22,8 +23,10 @@ async fn main() -> anyhow::Result<()> {
         process_store,
         risk_store,
         evidence_store,
+        import_store,
         assessment_store,
         roadmap_store,
+        wizard_store,
     ) = match std::env::var("DATABASE_URL") {
         Ok(database_url) if !database_url.trim().is_empty() => {
             let cve_store = CveStore::connect(&database_url).await?;
@@ -34,8 +37,10 @@ async fn main() -> anyhow::Result<()> {
             let process_store = ProcessStore::connect(&database_url).await?;
             let risk_store = RiskStore::connect(&database_url).await?;
             let evidence_store = EvidenceStore::connect(&database_url).await?;
+            let import_store = ImportStore::connect(&database_url).await?;
             let assessment_store = AssessmentStore::connect(&database_url).await?;
             let roadmap_store = RoadmapStore::connect(&database_url).await?;
+            let wizard_store = WizardStore::connect(&database_url).await?;
             (
                 Some(cve_store),
                 Some(tenant_store),
@@ -45,11 +50,15 @@ async fn main() -> anyhow::Result<()> {
                 Some(process_store),
                 Some(risk_store),
                 Some(evidence_store),
+                Some(import_store),
                 Some(assessment_store),
                 Some(roadmap_store),
+                Some(wizard_store),
             )
         }
-        _ => (None, None, None, None, None, None, None, None, None, None),
+        _ => (
+            None, None, None, None, None, None, None, None, None, None, None, None,
+        ),
     };
     let state = AppState::with_stores(cve_store, tenant_store)
         .with_dashboard_store(dashboard_store)
@@ -58,8 +67,10 @@ async fn main() -> anyhow::Result<()> {
         .with_process_store(process_store)
         .with_risk_store(risk_store)
         .with_evidence_store(evidence_store)
+        .with_import_store(import_store)
         .with_assessment_store(assessment_store)
-        .with_roadmap_store(roadmap_store);
+        .with_roadmap_store(roadmap_store)
+        .with_wizard_store(wizard_store);
 
     let listener = TcpListener::bind(addr).await?;
     println!("ISCY Rust backend listening on http://{}", addr);

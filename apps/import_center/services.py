@@ -1,8 +1,12 @@
 import csv
 import io
+import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Tuple
+from urllib.request import Request, urlopen
 
+from django.conf import settings
 from openpyxl import load_workbook
 
 from apps.assets_app.models import InformationAsset
@@ -41,6 +45,115 @@ TEMPLATE_COLUMNS = {
     'suppliers': ['name', 'service_description', 'criticality'],
     'assets': ['name', 'asset_type', 'criticality', 'description', 'business_unit', 'confidentiality', 'integrity', 'availability', 'lifecycle_status', 'in_scope'],
 }
+
+
+@dataclass(frozen=True)
+class ImportJobBridgeResult:
+    tenant_id: int
+    import_type: str
+    row_count: int
+    created: int
+    updated: int
+    skipped: int
+
+
+class ImportRustClient:
+    @staticmethod
+    def _base_url() -> str:
+        base = (getattr(settings, 'RUST_BACKEND_URL', '') or '').strip()
+        return base.rstrip('/')
+
+    @staticmethod
+    def apply_import(
+        request,
+        tenant,
+        import_type: str,
+        rows: list[dict],
+        replace_existing: bool = False,
+        timeout: int = 30,
+    ) -> ImportJobBridgeResult:
+        base = ImportRustClient._base_url()
+        if not base:
+            raise RuntimeError('RUST_BACKEND_URL ist nicht gesetzt.')
+
+        payload = {
+            'import_type': import_type,
+            'replace_existing': bool(replace_existing),
+            'rows': rows,
+        }
+        rust_request = ImportRustClient._authenticated_request(
+            request,
+            tenant,
+            f'{base}/api/v1/import-center/jobs',
+            payload,
+        )
+        with urlopen(rust_request, timeout=timeout) as response:
+            response_payload = json.loads(response.read().decode('utf-8'))
+
+        result = response_payload.get('result') or {}
+        tenant_id = int(result.get('tenant_id') or 0)
+        if tenant_id != int(tenant.id):
+            raise RuntimeError('Rust-Importjob gehoert nicht zum angefragten Tenant.')
+
+        return ImportJobBridgeResult(
+            tenant_id=tenant_id,
+            import_type=str(result.get('import_type') or import_type),
+            row_count=int(result.get('row_count') or 0),
+            created=int(result.get('created') or 0),
+            updated=int(result.get('updated') or 0),
+            skipped=int(result.get('skipped') or 0),
+        )
+
+    @staticmethod
+    def _authenticated_request(request, tenant, url: str, payload: dict) -> Request:
+        user = getattr(request, 'user', None)
+        user_id = getattr(user, 'id', None)
+        if not user_id:
+            raise RuntimeError('Import-Rust-Bridge braucht einen authentifizierten User.')
+
+        body = json.dumps(payload).encode('utf-8')
+        rust_request = Request(url, data=body, method='POST')
+        rust_request.add_header('Accept', 'application/json')
+        rust_request.add_header('Content-Type', 'application/json')
+        rust_request.add_header('X-ISCY-Tenant-ID', str(tenant.id))
+        rust_request.add_header('X-ISCY-User-ID', str(user_id))
+        user_email = (getattr(user, 'email', '') or '').strip()
+        if user_email:
+            rust_request.add_header('X-ISCY-User-Email', user_email)
+        return rust_request
+
+
+class ImportCenterBridge:
+    @staticmethod
+    def apply_import(request, tenant, import_type: str, rows: list[dict], replace_existing: bool = False):
+        if tenant is None:
+            return None
+
+        backend = str(getattr(settings, 'IMPORT_CENTER_BACKEND', 'rust_service') or '').strip().lower()
+        if backend != 'rust_service':
+            return None
+
+        if not ImportRustClient._base_url():
+            if ImportCenterBridge._strict_rust_mode():
+                raise RuntimeError('Rust import backend ist aktiv, aber RUST_BACKEND_URL ist nicht gesetzt.')
+            return None
+
+        try:
+            return ImportRustClient.apply_import(
+                request,
+                tenant,
+                import_type,
+                rows,
+                replace_existing=replace_existing,
+            )
+        except Exception as exc:
+            if ImportCenterBridge._strict_rust_mode():
+                raise RuntimeError('Rust import backend ist aktiv, aber nicht erreichbar.') from exc
+            return None
+
+    @staticmethod
+    def _strict_rust_mode() -> bool:
+        return bool(getattr(settings, 'RUST_STRICT_MODE', False))
 
 
 class ImportService:

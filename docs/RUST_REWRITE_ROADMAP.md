@@ -80,10 +80,18 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/assessments` liefert Prozess-/Requirement-Assessments inklusive Prozess-, Requirement- und Owner-Anzeige
   - `GET /api/v1/assessments/measures` liefert Massnahmen inklusive Assessment- und Owner-Anzeige
   - Django kann die drei Listen ueber `ASSESSMENT_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
-- `roadmap` hat tenantgeschuetzte Read-APIs in Rust:
+- `roadmap` hat tenantgeschuetzte Read-/Update-APIs in Rust:
   - `GET /api/v1/roadmap/plans` liefert Roadmap-Planlisten inklusive Phasen-/Task-Zaehlern fuer den aktuellen Tenant
   - `GET /api/v1/roadmap/plans/{plan_id}` liefert den Plan-Detailbaum mit Phasen, Tasks und Abhaengigkeiten
-  - Django kann Liste, Detail und Kanban ueber `ROADMAP_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
+  - `PATCH /api/v1/roadmap/tasks/{task_id}` aktualisiert Status, Termine, Owner-Rolle und Notizen tenantgeschuetzt
+  - Django kann Liste, Detail, Kanban, Task-Updates sowie PDF/PNG-Exportdaten ueber `ROADMAP_REGISTER_BACKEND=rust_service` aus Rust bedienen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
+- `wizard` hat tenantgeschuetzte Read-/Result-APIs in Rust:
+  - `GET /api/v1/wizard/sessions` liefert die Assessment-Session-Historie fuer den aktuellen Tenant
+  - `GET /api/v1/wizard/sessions/{session_id}/results` liefert Ergebnisdaten inklusive Domain-Scores, Gaps, Massnahmen, Evidenzzaehler, Report und Roadmap-Detailbaum
+  - Django kann Wizard-Start und Ergebnisansicht ueber `WIZARD_RESULTS_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
+- `import_center` hat tenantgeschuetzte Importjob-Writes in Rust:
+  - `POST /api/v1/import-center/jobs` legt gemappte Business-Units, Prozesse, Lieferanten und Assets an oder aktualisiert sie; optional ersetzt es vorhandene Eintraege dieses Typs
+  - Django behaelt Datei-Upload, CSV/XLSX-Parsing und Mapping-Vorschau, uebergibt den bestaetigten Import aber ueber `IMPORT_CENTER_BACKEND=rust_service` an Rust
 
 ## App-Migrationsreihenfolge
 

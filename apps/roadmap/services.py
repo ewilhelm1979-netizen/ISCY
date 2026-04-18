@@ -147,6 +147,12 @@ class RoadmapPlanBridgeDetail:
     dependencies: list[RoadmapTaskDependencyBridgeItem]
 
 
+@dataclass
+class RoadmapTaskUpdateBridgeResult:
+    plan_id: int
+    task: RoadmapTaskBridgeItem
+
+
 class RoadmapRustClient:
     @staticmethod
     def _base_url() -> str:
@@ -235,6 +241,71 @@ class RoadmapRustClient:
                 dependency.successor.incoming_dependencies.add(dependency)
 
         return RoadmapPlanBridgeDetail(plan=plan, tasks=tasks, dependencies=dependencies)
+
+    @staticmethod
+    def update_task(request, tenant, task_id: int, data: dict, timeout: int = 8) -> RoadmapTaskUpdateBridgeResult | None:
+        base = RoadmapRustClient._base_url()
+        if not base:
+            raise RuntimeError('RUST_BACKEND_URL ist nicht gesetzt.')
+
+        rust_request = RoadmapRustClient._authenticated_json_request(
+            request,
+            tenant,
+            f'{base}/api/v1/roadmap/tasks/{int(task_id)}',
+            {
+                'status': data.get('status'),
+                'planned_start': RoadmapRustClient._date_to_payload(data.get('planned_start')),
+                'due_date': RoadmapRustClient._date_to_payload(data.get('due_date')),
+                'owner_role': data.get('owner_role') or '',
+                'notes': data.get('notes') or '',
+            },
+            method='PATCH',
+        )
+        try:
+            with urlopen(rust_request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode('utf-8'))
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+
+        plan_id = RoadmapRustClient._int_field(payload, 'plan_id')
+        task_payload = payload.get('task') or {}
+        if not isinstance(task_payload, dict):
+            raise RuntimeError('Rust-Roadmaptask-Update hat kein task-Objekt geliefert.')
+
+        plan = RoadmapPlanBridgeItem(
+            id=plan_id,
+            tenant=tenant,
+            tenant_id=int(tenant.id),
+            tenant_name=getattr(tenant, 'name', ''),
+            session_id=0,
+            title='',
+            summary='',
+            overall_priority='',
+            planned_start=None,
+            phase_count=0,
+            task_count=0,
+            open_task_count=0,
+            created_at=None,
+            updated_at=None,
+        )
+        phase = RoadmapPhaseBridgeItem(
+            id=RoadmapRustClient._int_field(task_payload, 'phase_id'),
+            plan=plan,
+            plan_id=plan_id,
+            name=str(task_payload.get('phase_name') or ''),
+            sort_order=0,
+            objective='',
+            duration_weeks=0,
+            planned_start=None,
+            planned_end=None,
+            task_count=0,
+            created_at=None,
+            updated_at=None,
+        )
+        task = RoadmapRustClient._task_from_payload(task_payload, phase)
+        return RoadmapTaskUpdateBridgeResult(plan_id=plan_id, task=task)
 
     @staticmethod
     def _plan_from_payload(item: dict, tenant) -> RoadmapPlanBridgeItem:
@@ -344,6 +415,22 @@ class RoadmapRustClient:
         return rust_request
 
     @staticmethod
+    def _authenticated_json_request(request, tenant, url: str, payload: dict, method: str) -> Request:
+        rust_request = RoadmapRustClient._authenticated_request(request, tenant, url)
+        rust_request.data = json.dumps(payload).encode('utf-8')
+        rust_request.method = method
+        rust_request.add_header('Content-Type', 'application/json')
+        return rust_request
+
+    @staticmethod
+    def _date_to_payload(value) -> str:
+        if not value:
+            return ''
+        if hasattr(value, 'isoformat'):
+            return value.isoformat()
+        return str(value)
+
+    @staticmethod
     def _int_field(payload: dict, key: str) -> int:
         return int(payload.get(key) or 0)
 
@@ -408,6 +495,27 @@ class RoadmapRegisterBridge:
 
         try:
             return RoadmapRustClient.fetch_plan_detail(request, tenant, int(plan_id))
+        except Exception as exc:
+            if RoadmapRegisterBridge._strict_rust_mode():
+                raise RuntimeError('Rust roadmap register backend ist aktiv, aber nicht erreichbar.') from exc
+            return None
+
+    @staticmethod
+    def update_task(request, tenant, task_id, data):
+        if tenant is None or not task_id:
+            return None
+
+        backend = str(getattr(settings, 'ROADMAP_REGISTER_BACKEND', 'rust_service') or '').strip().lower()
+        if backend != 'rust_service':
+            return None
+
+        if not RoadmapRustClient._base_url():
+            if RoadmapRegisterBridge._strict_rust_mode():
+                raise RuntimeError('Rust roadmap register backend ist aktiv, aber RUST_BACKEND_URL ist nicht gesetzt.')
+            return None
+
+        try:
+            return RoadmapRustClient.update_task(request, tenant, int(task_id), data)
         except Exception as exc:
             if RoadmapRegisterBridge._strict_rust_mode():
                 raise RuntimeError('Rust roadmap register backend ist aktiv, aber nicht erreichbar.') from exc

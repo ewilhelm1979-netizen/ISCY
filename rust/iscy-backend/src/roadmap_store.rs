@@ -1,5 +1,5 @@
 use anyhow::{bail, Context};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -90,6 +90,30 @@ pub struct RoadmapPlanDetail {
     pub dependencies: Vec<RoadmapTaskDependencySummary>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RoadmapTaskUpdateRequest {
+    pub status: Option<String>,
+    pub planned_start: Option<String>,
+    pub due_date: Option<String>,
+    pub owner_role: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RoadmapTaskUpdateResult {
+    pub plan_id: i64,
+    pub task: RoadmapTaskSummary,
+}
+
+struct RoadmapTaskCurrent {
+    plan_id: i64,
+    status: String,
+    planned_start: Option<String>,
+    due_date: Option<String>,
+    owner_role: String,
+    notes: String,
+}
+
 impl RoadmapStore {
     pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
         let normalized_url = normalize_database_url(database_url);
@@ -136,6 +160,18 @@ impl RoadmapStore {
         match self {
             Self::Postgres(pool) => plan_detail_postgres(pool, tenant_id, plan_id).await,
             Self::Sqlite(pool) => plan_detail_sqlite(pool, tenant_id, plan_id).await,
+        }
+    }
+
+    pub async fn update_task(
+        &self,
+        tenant_id: i64,
+        task_id: i64,
+        payload: RoadmapTaskUpdateRequest,
+    ) -> anyhow::Result<Option<RoadmapTaskUpdateResult>> {
+        match self {
+            Self::Postgres(pool) => update_task_postgres(pool, tenant_id, task_id, payload).await,
+            Self::Sqlite(pool) => update_task_sqlite(pool, tenant_id, task_id, payload).await,
         }
     }
 }
@@ -282,6 +318,208 @@ async fn plan_detail_sqlite(
         tasks,
         dependencies,
     }))
+}
+
+async fn update_task_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    task_id: i64,
+    payload: RoadmapTaskUpdateRequest,
+) -> anyhow::Result<Option<RoadmapTaskUpdateResult>> {
+    let Some(current) = task_current_postgres(pool, tenant_id, task_id).await? else {
+        return Ok(None);
+    };
+    let status = payload
+        .status
+        .as_deref()
+        .map(normalize_task_status)
+        .unwrap_or(current.status.as_str());
+    let planned_start = payload
+        .planned_start
+        .as_deref()
+        .map(normalize_optional_date)
+        .unwrap_or(current.planned_start);
+    let due_date = payload
+        .due_date
+        .as_deref()
+        .map(normalize_optional_date)
+        .unwrap_or(current.due_date);
+    let owner_role = payload
+        .owner_role
+        .unwrap_or(current.owner_role)
+        .trim()
+        .to_string();
+    let notes = payload.notes.unwrap_or(current.notes);
+
+    sqlx::query(
+        r#"
+        UPDATE roadmap_roadmaptask
+        SET status = $2,
+            planned_start = $3,
+            due_date = $4,
+            owner_role = $5,
+            notes = $6,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(task_id)
+    .bind(status)
+    .bind(planned_start)
+    .bind(due_date)
+    .bind(owner_role)
+    .bind(notes)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Roadmaptask konnte nicht aktualisiert werden")?;
+
+    let task = task_by_id_postgres(pool, tenant_id, task_id)
+        .await?
+        .context("Aktualisierter Roadmaptask wurde nicht gefunden")?;
+    Ok(Some(RoadmapTaskUpdateResult {
+        plan_id: current.plan_id,
+        task,
+    }))
+}
+
+async fn update_task_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    task_id: i64,
+    payload: RoadmapTaskUpdateRequest,
+) -> anyhow::Result<Option<RoadmapTaskUpdateResult>> {
+    let Some(current) = task_current_sqlite(pool, tenant_id, task_id).await? else {
+        return Ok(None);
+    };
+    let status = payload
+        .status
+        .as_deref()
+        .map(normalize_task_status)
+        .unwrap_or(current.status.as_str());
+    let planned_start = payload
+        .planned_start
+        .as_deref()
+        .map(normalize_optional_date)
+        .unwrap_or(current.planned_start);
+    let due_date = payload
+        .due_date
+        .as_deref()
+        .map(normalize_optional_date)
+        .unwrap_or(current.due_date);
+    let owner_role = payload
+        .owner_role
+        .unwrap_or(current.owner_role)
+        .trim()
+        .to_string();
+    let notes = payload.notes.unwrap_or(current.notes);
+
+    sqlx::query(
+        r#"
+        UPDATE roadmap_roadmaptask
+        SET status = ?2,
+            planned_start = ?3,
+            due_date = ?4,
+            owner_role = ?5,
+            notes = ?6,
+            updated_at = datetime('now')
+        WHERE id = ?1
+        "#,
+    )
+    .bind(task_id)
+    .bind(status)
+    .bind(planned_start)
+    .bind(due_date)
+    .bind(owner_role)
+    .bind(notes)
+    .execute(pool)
+    .await
+    .context("SQLite-Roadmaptask konnte nicht aktualisiert werden")?;
+
+    let task = task_by_id_sqlite(pool, tenant_id, task_id)
+        .await?
+        .context("Aktualisierter Roadmaptask wurde nicht gefunden")?;
+    Ok(Some(RoadmapTaskUpdateResult {
+        plan_id: current.plan_id,
+        task,
+    }))
+}
+
+async fn task_current_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    task_id: i64,
+) -> anyhow::Result<Option<RoadmapTaskCurrent>> {
+    let row = sqlx::query(task_current_postgres_sql())
+        .bind(tenant_id)
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Roadmaptask konnte nicht fuer Update gelesen werden")?;
+    row.map(|row| {
+        Ok(RoadmapTaskCurrent {
+            plan_id: row.try_get("plan_id")?,
+            status: row.try_get("status")?,
+            planned_start: row.try_get("planned_start")?,
+            due_date: row.try_get("due_date")?,
+            owner_role: row.try_get("owner_role")?,
+            notes: row.try_get("notes")?,
+        })
+    })
+    .transpose()
+}
+
+async fn task_current_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    task_id: i64,
+) -> anyhow::Result<Option<RoadmapTaskCurrent>> {
+    let row = sqlx::query(task_current_sqlite_sql())
+        .bind(tenant_id)
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Roadmaptask konnte nicht fuer Update gelesen werden")?;
+    row.map(|row| {
+        Ok(RoadmapTaskCurrent {
+            plan_id: row.try_get("plan_id")?,
+            status: row.try_get("status")?,
+            planned_start: row.try_get("planned_start")?,
+            due_date: row.try_get("due_date")?,
+            owner_role: row.try_get("owner_role")?,
+            notes: row.try_get("notes")?,
+        })
+    })
+    .transpose()
+}
+
+async fn task_by_id_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    task_id: i64,
+) -> anyhow::Result<Option<RoadmapTaskSummary>> {
+    let row = sqlx::query(task_by_id_postgres_sql())
+        .bind(tenant_id)
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Roadmaptask konnte nicht gelesen werden")?;
+    row.map(task_from_pg_row).transpose().map_err(Into::into)
+}
+
+async fn task_by_id_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    task_id: i64,
+) -> anyhow::Result<Option<RoadmapTaskSummary>> {
+    let row = sqlx::query(task_by_id_sqlite_sql())
+        .bind(tenant_id)
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Roadmaptask konnte nicht gelesen werden")?;
+    row.map(task_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
 }
 
 fn plan_from_pg_row(row: PgRow) -> Result<RoadmapPlanSummary, sqlx::Error> {
@@ -702,6 +940,100 @@ fn tasks_sqlite_sql() -> &'static str {
     "#
 }
 
+fn task_current_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        phase.plan_id,
+        task.status,
+        task.planned_start::text AS planned_start,
+        task.due_date::text AS due_date,
+        task.owner_role,
+        task.notes
+    FROM roadmap_roadmaptask task
+    JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id
+    JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id
+    WHERE plan.tenant_id = $1 AND task.id = $2
+    "#
+}
+
+fn task_current_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        phase.plan_id,
+        task.status,
+        CAST(task.planned_start AS TEXT) AS planned_start,
+        CAST(task.due_date AS TEXT) AS due_date,
+        task.owner_role,
+        task.notes
+    FROM roadmap_roadmaptask task
+    JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id
+    JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id
+    WHERE plan.tenant_id = ? AND task.id = ?
+    "#
+}
+
+fn task_by_id_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        task.id,
+        task.phase_id,
+        phase.name AS phase_name,
+        task.measure_id,
+        task.title,
+        task.description,
+        task.priority,
+        task.owner_role,
+        task.due_in_days::bigint AS due_in_days,
+        task.dependency_text,
+        task.status,
+        task.planned_start::text AS planned_start,
+        task.due_date::text AS due_date,
+        task.notes,
+        (
+            SELECT COUNT(*)::bigint
+            FROM roadmap_roadmaptaskdependency dep
+            WHERE dep.successor_id = task.id
+        ) AS incoming_dependency_count,
+        task.created_at::text AS created_at,
+        task.updated_at::text AS updated_at
+    FROM roadmap_roadmaptask task
+    JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id
+    JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id
+    WHERE plan.tenant_id = $1 AND task.id = $2
+    "#
+}
+
+fn task_by_id_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        task.id,
+        task.phase_id,
+        phase.name AS phase_name,
+        task.measure_id,
+        task.title,
+        task.description,
+        task.priority,
+        task.owner_role,
+        task.due_in_days,
+        task.dependency_text,
+        task.status,
+        CAST(task.planned_start AS TEXT) AS planned_start,
+        CAST(task.due_date AS TEXT) AS due_date,
+        task.notes,
+        (
+            SELECT COUNT(*)
+            FROM roadmap_roadmaptaskdependency dep
+            WHERE dep.successor_id = task.id
+        ) AS incoming_dependency_count,
+        CAST(task.created_at AS TEXT) AS created_at,
+        CAST(task.updated_at AS TEXT) AS updated_at
+    FROM roadmap_roadmaptask task
+    JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id
+    JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id
+    WHERE plan.tenant_id = ? AND task.id = ?
+    "#
+}
+
 fn dependencies_postgres_sql() -> &'static str {
     r#"
     SELECT
@@ -762,5 +1094,25 @@ fn dependency_type_label(dependency_type: &str) -> &'static str {
         "FS" => "Finish-to-Start",
         "SS" => "Start-to-Start",
         _ => "Unbekannt",
+    }
+}
+
+fn normalize_task_status(status: &str) -> &'static str {
+    match status.trim().to_ascii_uppercase().as_str() {
+        "OPEN" => "OPEN",
+        "PLANNED" => "PLANNED",
+        "IN_PROGRESS" => "IN_PROGRESS",
+        "BLOCKED" => "BLOCKED",
+        "DONE" => "DONE",
+        _ => "OPEN",
+    }
+}
+
+fn normalize_optional_date(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(10).collect())
     }
 }

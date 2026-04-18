@@ -18,7 +18,7 @@ from apps.product_security.services import ProductSecurityService
 
 from .forms import AssessmentLaunchForm, CompanyProfileForm, ScopeCaptureForm
 from .models import AssessmentSession
-from .services import WizardService
+from .services import WizardResultsBridge, WizardService
 
 
 def _require_tenant(request):
@@ -44,8 +44,14 @@ class WizardStartView(LoginRequiredMixin, FormView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         tenant = WizardService.get_default_tenant(self.request.user)
+        rust_sessions = WizardResultsBridge.fetch_sessions(self.request, tenant)
         context['tenant'] = tenant
-        context['sessions'] = AssessmentSession.objects.filter(tenant=tenant) if tenant else []
+        if rust_sessions is not None:
+            context['sessions'] = rust_sessions
+            context['wizard_results_source'] = 'rust_service'
+        else:
+            context['sessions'] = AssessmentSession.objects.filter(tenant=tenant) if tenant else []
+            context['wizard_results_source'] = 'django'
         context['latest_report'] = ReportSnapshot.objects.filter(tenant=tenant).first() if tenant else None
         context['sector_context'] = WizardService.get_sector_context(tenant) if tenant else None
         context['country_context'] = WizardService.get_country_context(tenant) if tenant else None
@@ -310,6 +316,28 @@ class WizardResultsView(LoginRequiredMixin, TemplateView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        tenant = _require_tenant(self.request)
+        rust_results = WizardResultsBridge.fetch_results(self.request, tenant, self.kwargs['pk'])
+        if rust_results is not None:
+            session = rust_results.session
+            context.update(
+                {
+                    'session': session,
+                    'report': rust_results.report,
+                    'plan': rust_results.plan,
+                    'domain_scores': rust_results.domain_scores,
+                    'gaps': rust_results.gaps,
+                    'measures': rust_results.measures,
+                    'evidence_count': rust_results.evidence_count,
+                    'sector_context': WizardService.get_sector_context(session.tenant),
+                    'country_context': WizardService.get_country_context(session.tenant),
+                    'mode_context': WizardService.get_mode_context(session),
+                    'product_matrix': ProductSecurityService.get_regime_matrix(session.tenant),
+                    'wizard_results_source': 'rust_service',
+                }
+            )
+            return context
+
         session = _require_session_access(self.request, self.kwargs['pk'])
         report = ReportSnapshot.objects.filter(session=session).first()
         plan = RoadmapPlan.objects.filter(session=session).first()
@@ -326,6 +354,7 @@ class WizardResultsView(LoginRequiredMixin, TemplateView):
                 'country_context': WizardService.get_country_context(session.tenant),
                 'mode_context': WizardService.get_mode_context(session),
                 'product_matrix': ProductSecurityService.get_regime_matrix(session.tenant),
+                'wizard_results_source': 'django',
             }
         )
         return context

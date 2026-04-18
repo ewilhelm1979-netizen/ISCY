@@ -3,7 +3,7 @@ from collections import Counter
 from datetime import date
 import io
 
-from django.http import HttpResponse
+from django.http import HttpResponse, HttpResponseRedirect
 from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.views.generic import DetailView, ListView, TemplateView, UpdateView, View
@@ -269,6 +269,22 @@ class RoadmapTaskUpdateView(TenantAccessMixin, UpdateView):
     def get_success_url(self):
         return reverse('roadmap:detail', kwargs={'pk': self.object.phase.plan_id})
 
+    def form_valid(self, form):
+        rust_result = RoadmapRegisterBridge.update_task(
+            self.request,
+            self.get_tenant(),
+            self.object.pk,
+            form.cleaned_data,
+        )
+        if rust_result is not None:
+            self.object.status = rust_result.task.status
+            self.object.planned_start = rust_result.task.planned_start
+            self.object.due_date = rust_result.task.due_date
+            self.object.owner_role = rust_result.task.owner_role
+            self.object.notes = rust_result.task.notes
+            return HttpResponseRedirect(reverse('roadmap:detail', kwargs={'pk': rust_result.plan_id}))
+        return super().form_valid(form)
+
 
 class RoadmapKanbanView(TenantAccessMixin, TemplateView):
     template_name = 'roadmap/kanban.html'
@@ -304,7 +320,20 @@ class RoadmapPdfView(TenantAccessMixin, View):
     tenant_filter_field = 'tenant'
 
     def get(self, request, pk):
-        plan = get_object_or_404(self.filter_queryset_for_tenant(RoadmapPlan.objects.prefetch_related('phases__tasks')), pk=pk)
+        rust_detail = RoadmapRegisterBridge.fetch_detail(request, self.get_tenant(), pk)
+        if rust_detail is not None:
+            plan = rust_detail.plan
+            self.check_tenant_access(plan)
+            phases = list(plan.phases.all())
+            export_tasks = sorted(rust_detail.tasks, key=lambda task: (task.priority or '', task.due_date or date.max, task.id))
+        else:
+            plan = get_object_or_404(self.filter_queryset_for_tenant(RoadmapPlan.objects.prefetch_related('phases__tasks')), pk=pk)
+            phases = list(plan.phases.all())
+            export_tasks = list(
+                RoadmapTask.objects.filter(phase__plan=plan)
+                .prefetch_related('incoming_dependencies__predecessor')
+                .order_by('priority', 'due_date')[:14]
+            )
         buffer = io.BytesIO()
         pdf = canvas.Canvas(buffer, pagesize=landscape(A4))
         width, height = landscape(A4)
@@ -315,7 +344,6 @@ class RoadmapPdfView(TenantAccessMixin, View):
         pdf.setFont('Helvetica', 9)
         pdf.drawString(margin, height - 45, plan.summary[:140])
 
-        phases = list(plan.phases.all())
         min_start, max_end, total_days = _timeline_bounds(plan, phases)
 
         top = height - 95
@@ -369,7 +397,7 @@ class RoadmapPdfView(TenantAccessMixin, View):
         pdf.drawString(margin, text_y, 'Priorisierte Aufgaben und Abhängigkeiten')
         pdf.setFont('Helvetica', 8)
         text_y -= 14
-        for task in RoadmapTask.objects.filter(phase__plan=plan).prefetch_related('incoming_dependencies__predecessor').order_by('priority', 'due_date')[:14]:
+        for task in export_tasks[:14]:
             deps = ', '.join(dep.predecessor.title[:18] for dep in task.incoming_dependencies.all()[:2]) or '-'
             line = f'• {task.title[:45]} | {task.priority or "-"} | fällig: {task.due_date.strftime("%d.%m.%Y") if task.due_date else "-"} | abhängig von: {deps}'
             pdf.drawString(margin, text_y, line[:150])
@@ -390,8 +418,14 @@ class RoadmapPngView(TenantAccessMixin, View):
     tenant_filter_field = 'tenant'
 
     def get(self, request, pk):
-        plan = get_object_or_404(self.filter_queryset_for_tenant(RoadmapPlan.objects.prefetch_related('phases__tasks')), pk=pk)
-        phases = list(plan.phases.all())
+        rust_detail = RoadmapRegisterBridge.fetch_detail(request, self.get_tenant(), pk)
+        if rust_detail is not None:
+            plan = rust_detail.plan
+            self.check_tenant_access(plan)
+            phases = list(plan.phases.all())
+        else:
+            plan = get_object_or_404(self.filter_queryset_for_tenant(RoadmapPlan.objects.prefetch_related('phases__tasks')), pk=pk)
+            phases = list(plan.phases.all())
         min_start, max_end, total_days = _timeline_bounds(plan, phases)
         width, height = 2000, 1080
         image = Image.new('RGB', (width, height), '#f0f4fa')

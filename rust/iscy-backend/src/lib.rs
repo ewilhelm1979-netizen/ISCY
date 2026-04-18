@@ -3,7 +3,7 @@ use axum::{
     extract::{Json, Path, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, patch, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
@@ -14,24 +14,28 @@ pub mod asset_store;
 pub mod cve_store;
 pub mod dashboard_store;
 pub mod evidence_store;
+pub mod import_store;
 pub mod process_store;
 pub mod report_store;
 pub mod request_context;
 pub mod risk_store;
 pub mod roadmap_store;
 pub mod tenant_store;
+pub mod wizard_store;
 
 use assessment_store::AssessmentStore;
 use asset_store::AssetStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
 use evidence_store::EvidenceStore;
+use import_store::ImportStore;
 use process_store::ProcessStore;
 use report_store::ReportStore;
 use request_context::RequestContext;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
 use tenant_store::TenantStore;
+use wizard_store::WizardStore;
 
 #[derive(Clone, Default)]
 pub struct AppState {
@@ -40,11 +44,13 @@ pub struct AppState {
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
     pub evidence_store: Option<EvidenceStore>,
+    pub import_store: Option<ImportStore>,
     pub process_store: Option<ProcessStore>,
     pub report_store: Option<ReportStore>,
     pub risk_store: Option<RiskStore>,
     pub roadmap_store: Option<RoadmapStore>,
     pub tenant_store: Option<TenantStore>,
+    pub wizard_store: Option<WizardStore>,
 }
 
 impl AppState {
@@ -55,11 +61,13 @@ impl AppState {
             cve_store,
             dashboard_store: None,
             evidence_store: None,
+            import_store: None,
             process_store: None,
             report_store: None,
             risk_store: None,
             roadmap_store: None,
             tenant_store: None,
+            wizard_store: None,
         }
     }
 
@@ -70,11 +78,13 @@ impl AppState {
             cve_store,
             dashboard_store: None,
             evidence_store: None,
+            import_store: None,
             process_store: None,
             report_store: None,
             risk_store: None,
             roadmap_store: None,
             tenant_store,
+            wizard_store: None,
         }
     }
 
@@ -85,6 +95,11 @@ impl AppState {
 
     pub fn with_evidence_store(mut self, evidence_store: Option<EvidenceStore>) -> Self {
         self.evidence_store = evidence_store;
+        self
+    }
+
+    pub fn with_import_store(mut self, import_store: Option<ImportStore>) -> Self {
+        self.import_store = import_store;
         self
     }
 
@@ -115,6 +130,11 @@ impl AppState {
 
     pub fn with_roadmap_store(mut self, roadmap_store: Option<RoadmapStore>) -> Self {
         self.roadmap_store = roadmap_store;
+        self
+    }
+
+    pub fn with_wizard_store(mut self, wizard_store: Option<WizardStore>) -> Self {
+        self.wizard_store = wizard_store;
         self
     }
 }
@@ -237,6 +257,13 @@ pub struct EvidenceOverviewResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ImportJobResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub result: import_store::ImportJobResult,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ApplicabilityAssessmentsResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
@@ -269,6 +296,27 @@ pub struct RoadmapPlanDetailResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub detail: roadmap_store::RoadmapPlanDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoadmapTaskUpdateResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: roadmap_store::RoadmapTaskUpdateResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WizardSessionsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub sessions: Vec<wizard_store::WizardSessionSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WizardResultsResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub results: wizard_store::WizardResultsSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -939,6 +987,73 @@ async fn evidence_overview(
     }
 }
 
+async fn import_center_job(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<import_store::ImportJobRequest>,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.import_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Import-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.apply_job(context.tenant_id, payload).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(ImportJobResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) if err.to_string().contains("Importtyp") => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_import_type",
+                message: err.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Importjob konnte nicht angewendet werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn applicability_assessments(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
         Ok(context) => context,
@@ -1211,6 +1326,192 @@ async fn roadmap_plan_detail(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Roadmap konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn roadmap_task_update(
+    State(state): State<AppState>,
+    Path(task_id): Path<i64>,
+    headers: HeaderMap,
+    Json(payload): Json<roadmap_store::RoadmapTaskUpdateRequest>,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.roadmap_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Roadmap-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.update_task(context.tenant_id, task_id, payload).await {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(RoadmapTaskUpdateResponse {
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "roadmap_task_not_found",
+                message: "Roadmaptask wurde fuer diesen Tenant nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Roadmaptask konnte nicht aktualisiert werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn wizard_sessions(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.wizard_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Wizard-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_sessions(context.tenant_id, 50).await {
+        Ok(sessions) => (
+            StatusCode::OK,
+            Json(WizardSessionsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                sessions,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Wizard-Sessions konnten nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn wizard_results(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.wizard_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Wizard-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.results(context.tenant_id, session_id).await {
+        Ok(Some(results)) => (
+            StatusCode::OK,
+            Json(WizardResultsResponse {
+                api_version: "v1",
+                results,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "wizard_session_not_found",
+                message: "Wizard-Session wurde fuer diesen Tenant nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Wizard-Ergebnisse konnten nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -1710,6 +2011,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/risks", get(risk_register))
         .route("/api/v1/risks/{risk_id}", get(risk_detail))
         .route("/api/v1/evidence", get(evidence_overview))
+        .route("/api/v1/import-center/jobs", post(import_center_job))
         .route(
             "/api/v1/assessments/applicability",
             get(applicability_assessments),
@@ -1718,6 +2020,15 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/assessments/measures", get(assessment_measures))
         .route("/api/v1/roadmap/plans", get(roadmap_plans))
         .route("/api/v1/roadmap/plans/{plan_id}", get(roadmap_plan_detail))
+        .route(
+            "/api/v1/roadmap/tasks/{task_id}",
+            patch(roadmap_task_update),
+        )
+        .route("/api/v1/wizard/sessions", get(wizard_sessions))
+        .route(
+            "/api/v1/wizard/sessions/{session_id}/results",
+            get(wizard_results),
+        )
         .route("/api/v1/reports/snapshots", get(report_snapshots))
         .route(
             "/api/v1/reports/snapshots/{report_id}",

@@ -3,8 +3,9 @@ use axum::http::{Request, StatusCode};
 use iscy_backend::{
     app_router, app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
     cve_store::CveStore, dashboard_store::DashboardStore, evidence_store::EvidenceStore,
-    process_store::ProcessStore, report_store::ReportStore, risk_store::RiskStore,
-    roadmap_store::RoadmapStore, tenant_store::TenantStore, AppState,
+    import_store::ImportStore, process_store::ProcessStore, report_store::ReportStore,
+    risk_store::RiskStore, roadmap_store::RoadmapStore, tenant_store::TenantStore,
+    wizard_store::WizardStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
@@ -890,6 +891,235 @@ async fn evidence_overview_filters_by_session() {
 }
 
 #[tokio::test]
+async fn import_center_jobs_require_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/jobs")
+                .header("x-iscy-tenant-id", "42")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"import_type":"processes","replace_existing":false,"rows":[]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn import_center_jobs_require_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/jobs")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"import_type":"processes","replace_existing":false,"rows":[]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn import_center_job_applies_process_rows_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/jobs")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"
+                    {
+                        "import_type": "processes",
+                        "replace_existing": false,
+                        "rows": [
+                            {
+                                "name": "Incident Intake",
+                                "business_unit": "Security Operations",
+                                "scope": "SOC",
+                                "description": "Updated intake",
+                                "status": "SUFFICIENT",
+                                "documented": "yes",
+                                "approved": "yes",
+                                "communicated": "yes",
+                                "implemented": "yes",
+                                "effective": "yes",
+                                "evidenced": "yes"
+                            },
+                            {
+                                "name": "Vendor Review",
+                                "business_unit": "Governance",
+                                "scope": "Suppliers",
+                                "description": "Review supplier risk",
+                                "status": "PARTIAL",
+                                "documented": true
+                            },
+                            {"name": ""}
+                        ]
+                    }
+                    "#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["result"]["tenant_id"], 42);
+    assert_eq!(payload["result"]["created"], 1);
+    assert_eq!(payload["result"]["updated"], 1);
+    assert_eq!(payload["result"]["skipped"], 1);
+
+    let process_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM processes_process WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(process_count, 2);
+    let updated = sqlx::query(
+        "SELECT status, evidenced FROM processes_process WHERE tenant_id = 42 AND name = 'Incident Intake'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let status: String = updated.try_get("status").unwrap();
+    let evidenced: bool = updated.try_get("evidenced").unwrap();
+    assert_eq!(status, "SUFFICIENT");
+    assert!(evidenced);
+    let governance_bu_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 42 AND name = 'Governance'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(governance_bu_count, 1);
+}
+
+#[tokio::test]
+async fn import_center_job_replaces_tenant_assets() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/jobs")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"
+                    {
+                        "import_type": "assets",
+                        "replace_existing": true,
+                        "rows": [
+                            {
+                                "name": "Customer Portal",
+                                "business_unit": "Digital Services",
+                                "asset_type": "APPLICATION",
+                                "criticality": "HIGH",
+                                "description": "External portal",
+                                "confidentiality": "HIGH",
+                                "integrity": "HIGH",
+                                "availability": "MEDIUM",
+                                "lifecycle_status": "active",
+                                "in_scope": "yes"
+                            },
+                            {
+                                "name": "Data Lake",
+                                "asset_type": "DATA",
+                                "criticality": "VERY_HIGH",
+                                "description": "Analytics platform",
+                                "in_scope": "no"
+                            },
+                            {"name": ""}
+                        ]
+                    }
+                    "#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["result"]["created"], 2);
+    assert_eq!(payload["result"]["updated"], 0);
+    assert_eq!(payload["result"]["skipped"], 1);
+
+    let asset_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM assets_app_informationasset WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(asset_count, 2);
+    let old_asset_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM assets_app_informationasset WHERE tenant_id = 42 AND name = 'Legacy CRM'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(old_asset_count, 0);
+    let data_lake = sqlx::query(
+        "SELECT asset_type, criticality, is_in_scope FROM assets_app_informationasset WHERE tenant_id = 42 AND name = 'Data Lake'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let asset_type: String = data_lake.try_get("asset_type").unwrap();
+    let criticality: String = data_lake.try_get("criticality").unwrap();
+    let is_in_scope: bool = data_lake.try_get("is_in_scope").unwrap();
+    assert_eq!(asset_type, "DATA");
+    assert_eq!(criticality, "VERY_HIGH");
+    assert!(!is_in_scope);
+}
+
+#[tokio::test]
 async fn assessment_applicability_requires_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(
@@ -1280,6 +1510,253 @@ async fn roadmap_plan_detail_blocks_foreign_tenant_roadmap() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "roadmap_not_found");
+}
+
+#[tokio::test]
+async fn roadmap_task_update_updates_tenant_task_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/roadmap/tasks/1001")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"status":"DONE","planned_start":"2026-05-02","due_date":"2026-05-08","owner_role":"CISO Office","notes":"Closed in Rust"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["plan_id"], 10);
+    assert_eq!(payload["task"]["id"], 1001);
+    assert_eq!(payload["task"]["status"], "DONE");
+    assert_eq!(payload["task"]["status_label"], "Erledigt");
+    assert_eq!(payload["task"]["owner_role"], "CISO Office");
+    assert_eq!(payload["task"]["notes"], "Closed in Rust");
+
+    let row =
+        sqlx::query("SELECT status, owner_role, notes FROM roadmap_roadmaptask WHERE id = 1001")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let status: String = row.try_get("status").unwrap();
+    let owner_role: String = row.try_get("owner_role").unwrap();
+    let notes: String = row.try_get("notes").unwrap();
+    assert_eq!(status, "DONE");
+    assert_eq!(owner_role, "CISO Office");
+    assert_eq!(notes, "Closed in Rust");
+}
+
+#[tokio::test]
+async fn roadmap_task_update_blocks_foreign_tenant_task() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/roadmap/tasks/1201")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"status":"DONE"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "roadmap_task_not_found");
+}
+
+#[tokio::test]
+async fn wizard_sessions_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/wizard/sessions")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn wizard_sessions_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/wizard/sessions")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn wizard_sessions_return_tenant_sessions_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_wizard_tables(&pool).await;
+    insert_wizard_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_wizard_store(Some(WizardStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/wizard/sessions")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["sessions"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["sessions"][0]["id"], 101);
+    assert_eq!(
+        payload["sessions"][0]["assessment_type_label"],
+        "ISO-27001-Readiness bewerten"
+    );
+    assert_eq!(payload["sessions"][0]["started_by_display"], "Ada Lovelace");
+    assert_eq!(payload["sessions"][1]["id"], 100);
+}
+
+#[tokio::test]
+async fn wizard_results_return_full_result_tree_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_wizard_tables(&pool).await;
+    insert_wizard_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_wizard_store(Some(WizardStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/wizard/sessions/100/results")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["session"]["id"], 100);
+    assert_eq!(payload["session"]["tenant_id"], 42);
+    assert_eq!(payload["domain_scores"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["domain_scores"][0]["domain_name"], "Governance");
+    assert_eq!(payload["gaps"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["gaps"][0]["severity_label"], "Hoch");
+    assert_eq!(payload["measures"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["measures"][0]["priority_label"], "Kritisch");
+    assert_eq!(payload["evidence_count"], 2);
+    assert_eq!(payload["report"]["title"], "April Readiness");
+    assert_eq!(
+        payload["report"]["domain_scores_json"][0]["domain"],
+        "Governance"
+    );
+    assert_eq!(payload["roadmap"]["plan"]["title"], "Security Roadmap");
+    assert_eq!(payload["roadmap"]["phases"][0]["name"], "Governance Phase");
+    assert_eq!(
+        payload["roadmap"]["tasks"][0]["title"],
+        "Policy aktualisieren"
+    );
+}
+
+#[tokio::test]
+async fn wizard_results_blocks_foreign_tenant_session() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_wizard_tables(&pool).await;
+    insert_wizard_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_wizard_store(Some(WizardStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/wizard/sessions/200/results")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "wizard_session_not_found");
 }
 
 #[tokio::test]
@@ -1700,6 +2177,201 @@ async fn report_cve_summary_endpoint_returns_ok() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+async fn create_import_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_businessunit (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            owner_id INTEGER NULL,
+            name varchar(255) NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_supplier (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            owner_id INTEGER NULL,
+            name varchar(255) NOT NULL,
+            service_description TEXT NOT NULL,
+            criticality varchar(32) NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE processes_process (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            business_unit_id INTEGER NULL,
+            owner_id INTEGER NULL,
+            name varchar(255) NOT NULL,
+            scope varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            status varchar(32) NOT NULL,
+            documented bool NOT NULL,
+            approved bool NOT NULL,
+            communicated bool NOT NULL,
+            implemented bool NOT NULL,
+            effective bool NOT NULL,
+            evidenced bool NOT NULL,
+            reviewed_at date NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assets_app_informationasset (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            business_unit_id INTEGER NULL,
+            owner_id INTEGER NULL,
+            name varchar(255) NOT NULL,
+            asset_type varchar(24) NOT NULL,
+            criticality varchar(16) NOT NULL,
+            description TEXT NOT NULL,
+            confidentiality varchar(32) NOT NULL,
+            integrity varchar(32) NOT NULL,
+            availability varchar(32) NOT NULL,
+            lifecycle_status varchar(64) NOT NULL,
+            is_in_scope bool NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_import_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_businessunit (
+            id,
+            tenant_id,
+            owner_id,
+            name,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (1, 42, NULL, 'Security Operations', '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z'),
+            (2, 42, NULL, 'Digital Services', '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z'),
+            (3, 99, NULL, 'Foreign BU', '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO processes_process (
+            id,
+            tenant_id,
+            business_unit_id,
+            owner_id,
+            name,
+            scope,
+            description,
+            status,
+            documented,
+            approved,
+            communicated,
+            implemented,
+            effective,
+            evidenced,
+            reviewed_at,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                10,
+                42,
+                1,
+                NULL,
+                'Incident Intake',
+                'SOC',
+                'SOC intake process',
+                'PARTIAL',
+                1,
+                0,
+                0,
+                1,
+                0,
+                0,
+                NULL,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assets_app_informationasset (
+            id,
+            tenant_id,
+            business_unit_id,
+            owner_id,
+            name,
+            asset_type,
+            criticality,
+            description,
+            confidentiality,
+            integrity,
+            availability,
+            lifecycle_status,
+            is_in_scope,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                20,
+                42,
+                2,
+                NULL,
+                'Legacy CRM',
+                'APPLICATION',
+                'LOW',
+                'Legacy application',
+                'LOW',
+                'LOW',
+                'LOW',
+                'retired',
+                0,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn create_asset_tables(pool: &SqlitePool) {
@@ -3262,6 +3934,646 @@ async fn insert_roadmap_fixture(pool: &SqlitePool) {
                 1002,
                 'FS',
                 'Policy gates MFA rollout'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_wizard_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_tenant (
+            id INTEGER PRIMARY KEY,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE accounts_user (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            username varchar(150) NOT NULL,
+            first_name varchar(150) NOT NULL,
+            last_name varchar(150) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE wizard_assessmentsession (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            tenant_id INTEGER NOT NULL,
+            assessment_type varchar(24) NOT NULL,
+            status varchar(20) NOT NULL,
+            current_step varchar(24) NOT NULL,
+            started_by_id INTEGER NULL,
+            applicability_result varchar(64) NOT NULL,
+            applicability_reasoning TEXT NOT NULL,
+            executive_summary TEXT NOT NULL,
+            progress_percent INTEGER NOT NULL,
+            completed_at TEXT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE catalog_assessmentdomain (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            code varchar(64) NOT NULL,
+            name varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            weight INTEGER NOT NULL,
+            sort_order INTEGER NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE wizard_domainscore (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            session_id INTEGER NOT NULL,
+            domain_id INTEGER NOT NULL,
+            score_raw INTEGER NOT NULL,
+            score_percent INTEGER NOT NULL,
+            maturity_level varchar(64) NOT NULL,
+            gap_level varchar(32) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE wizard_generatedgap (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            session_id INTEGER NOT NULL,
+            domain_id INTEGER NOT NULL,
+            question_id INTEGER NULL,
+            severity varchar(16) NOT NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE wizard_generatedmeasure (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            session_id INTEGER NOT NULL,
+            domain_id INTEGER NULL,
+            question_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            priority varchar(16) NOT NULL,
+            effort varchar(16) NOT NULL,
+            measure_type varchar(20) NOT NULL,
+            target_phase varchar(64) NOT NULL,
+            owner_role varchar(64) NOT NULL,
+            reason TEXT NOT NULL,
+            status varchar(16) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE evidence_evidenceitem (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            session_id INTEGER NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE reports_reportsnapshot (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            executive_summary TEXT NOT NULL,
+            applicability_result varchar(255) NOT NULL,
+            iso_readiness_percent INTEGER NOT NULL,
+            nis2_readiness_percent INTEGER NOT NULL,
+            kritis_readiness_percent INTEGER NOT NULL,
+            cra_readiness_percent INTEGER NOT NULL,
+            ai_act_readiness_percent INTEGER NOT NULL,
+            iec62443_readiness_percent INTEGER NOT NULL,
+            iso_sae_21434_readiness_percent INTEGER NOT NULL,
+            regulatory_matrix_json TEXT NOT NULL,
+            compliance_versions_json TEXT NOT NULL,
+            product_security_json TEXT NOT NULL,
+            top_gaps_json TEXT NOT NULL,
+            top_measures_json TEXT NOT NULL,
+            roadmap_summary TEXT NOT NULL,
+            domain_scores_json TEXT NOT NULL,
+            next_steps_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmapplan (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            tenant_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            summary TEXT NOT NULL,
+            overall_priority varchar(32) NOT NULL,
+            planned_start date NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmapphase (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            plan_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL,
+            sort_order INTEGER NOT NULL,
+            objective TEXT NOT NULL,
+            duration_weeks INTEGER NOT NULL,
+            planned_start date NULL,
+            planned_end date NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmaptask (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            phase_id INTEGER NOT NULL,
+            measure_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            priority varchar(32) NOT NULL,
+            owner_role varchar(64) NOT NULL,
+            due_in_days INTEGER NOT NULL,
+            dependency_text TEXT NOT NULL,
+            status varchar(16) NOT NULL,
+            planned_start date NULL,
+            due_date date NULL,
+            notes TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmaptaskdependency (
+            id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            predecessor_id INTEGER NOT NULL,
+            successor_id INTEGER NOT NULL,
+            dependency_type varchar(2) NOT NULL,
+            rationale varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_wizard_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_tenant (id, name)
+        VALUES (42, 'Tenant SOC'), (99, 'Foreign Tenant')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO accounts_user (id, tenant_id, username, first_name, last_name)
+        VALUES
+            (7, 42, 'ada', 'Ada', 'Lovelace'),
+            (9, 99, 'foreign', 'Foreign', 'User')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO wizard_assessmentsession (
+            id,
+            created_at,
+            updated_at,
+            tenant_id,
+            assessment_type,
+            status,
+            current_step,
+            started_by_id,
+            applicability_result,
+            applicability_reasoning,
+            executive_summary,
+            progress_percent,
+            completed_at
+        )
+        VALUES
+            (
+                100,
+                '2026-04-17T10:00:00Z',
+                '2026-04-17T11:00:00Z',
+                42,
+                'FULL',
+                'COMPLETED',
+                'results',
+                7,
+                'NIS2 relevant',
+                'Critical managed service provider',
+                'Executive summary from wizard',
+                100,
+                '2026-04-17T12:00:00Z'
+            ),
+            (
+                101,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z',
+                42,
+                'ISO_READINESS',
+                'IN_PROGRESS',
+                'maturity',
+                7,
+                '',
+                '',
+                '',
+                75,
+                NULL
+            ),
+            (
+                200,
+                '2026-04-19T10:00:00Z',
+                '2026-04-19T11:00:00Z',
+                99,
+                'FULL',
+                'COMPLETED',
+                'results',
+                9,
+                'Foreign result',
+                '',
+                '',
+                100,
+                '2026-04-19T12:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO catalog_assessmentdomain (
+            id,
+            created_at,
+            updated_at,
+            code,
+            name,
+            description,
+            weight,
+            sort_order
+        )
+        VALUES
+            (1, '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z', 'GOV', 'Governance', '', 10, 1),
+            (2, '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z', 'IAM', 'Identity Access', '', 10, 2)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO wizard_domainscore (
+            id,
+            created_at,
+            updated_at,
+            session_id,
+            domain_id,
+            score_raw,
+            score_percent,
+            maturity_level,
+            gap_level
+        )
+        VALUES
+            (10, '2026-04-17T10:00:00Z', '2026-04-17T11:00:00Z', 100, 1, 8, 80, 'Managed', 'LOW'),
+            (11, '2026-04-17T10:00:00Z', '2026-04-17T11:00:00Z', 100, 2, 4, 40, 'Basic', 'HIGH')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO wizard_generatedgap (
+            id,
+            created_at,
+            updated_at,
+            session_id,
+            domain_id,
+            question_id,
+            severity,
+            title,
+            description
+        )
+        VALUES
+            (
+                20,
+                '2026-04-17T10:00:00Z',
+                '2026-04-17T11:00:00Z',
+                100,
+                2,
+                NULL,
+                'HIGH',
+                'MFA-Abdeckung fehlt',
+                'MFA is not consistently enforced'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO wizard_generatedmeasure (
+            id,
+            created_at,
+            updated_at,
+            session_id,
+            domain_id,
+            question_id,
+            title,
+            description,
+            priority,
+            effort,
+            measure_type,
+            target_phase,
+            owner_role,
+            reason,
+            status
+        )
+        VALUES
+            (
+                30,
+                '2026-04-17T10:00:00Z',
+                '2026-04-17T11:00:00Z',
+                100,
+                2,
+                NULL,
+                'MFA ausrollen',
+                'Roll out phishing-resistant MFA',
+                'CRITICAL',
+                'MEDIUM',
+                'TECHNICAL',
+                '30 Tage',
+                'IAM Lead',
+                'Identity gap',
+                'OPEN'
+            ),
+            (
+                31,
+                '2026-04-17T10:00:00Z',
+                '2026-04-17T11:00:00Z',
+                100,
+                1,
+                NULL,
+                'Policy aktualisieren',
+                'Update security policy',
+                'HIGH',
+                'SMALL',
+                'DOCUMENTARY',
+                '30 Tage',
+                'CISO',
+                'Governance gap',
+                'PLANNED'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (id, tenant_id, session_id)
+        VALUES (1, 42, 100), (2, 42, 100), (3, 42, 101), (4, 99, 200)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO reports_reportsnapshot (
+            id,
+            tenant_id,
+            session_id,
+            title,
+            executive_summary,
+            applicability_result,
+            iso_readiness_percent,
+            nis2_readiness_percent,
+            kritis_readiness_percent,
+            cra_readiness_percent,
+            ai_act_readiness_percent,
+            iec62443_readiness_percent,
+            iso_sae_21434_readiness_percent,
+            regulatory_matrix_json,
+            compliance_versions_json,
+            product_security_json,
+            top_gaps_json,
+            top_measures_json,
+            roadmap_summary,
+            domain_scores_json,
+            next_steps_json,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                40,
+                42,
+                100,
+                'April Readiness',
+                'Report summary',
+                'NIS2 relevant',
+                80,
+                75,
+                30,
+                20,
+                10,
+                15,
+                25,
+                '{"summary":"applicable"}',
+                '{"ISO27001":{"framework":"ISO27001","version":"2022","title":"ISO","requirement_count":10,"source_count":1}}',
+                '{"product_security_scope":"SOC platform"}',
+                '[{"title":"MFA-Abdeckung fehlt"}]',
+                '[{"title":"MFA ausrollen","priority":"CRITICAL"}]',
+                '[{"name":"Governance"}]',
+                '[{"domain":"Governance","score_percent":80,"maturity_level":"Managed"}]',
+                '{"dependencies":[{"predecessor":"Policy","successor":"MFA","type":"FS","rationale":"Policy first"}],"next_30_days":[{"title":"MFA"}]}',
+                '2026-04-17T10:00:00Z',
+                '2026-04-17T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmapplan (
+            id,
+            created_at,
+            updated_at,
+            tenant_id,
+            session_id,
+            title,
+            summary,
+            overall_priority,
+            planned_start
+        )
+        VALUES
+            (
+                50,
+                '2026-04-17T10:00:00Z',
+                '2026-04-17T11:00:00Z',
+                42,
+                100,
+                'Security Roadmap',
+                'Roadmap summary',
+                'HIGH',
+                '2026-05-01'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmapphase (
+            id,
+            created_at,
+            updated_at,
+            plan_id,
+            name,
+            sort_order,
+            objective,
+            duration_weeks,
+            planned_start,
+            planned_end
+        )
+        VALUES
+            (
+                51,
+                '2026-04-17T10:00:00Z',
+                '2026-04-17T11:00:00Z',
+                50,
+                'Governance Phase',
+                1,
+                'Create governance',
+                2,
+                '2026-05-01',
+                '2026-05-14'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmaptask (
+            id,
+            created_at,
+            updated_at,
+            phase_id,
+            measure_id,
+            title,
+            description,
+            priority,
+            owner_role,
+            due_in_days,
+            dependency_text,
+            status,
+            planned_start,
+            due_date,
+            notes
+        )
+        VALUES
+            (
+                52,
+                '2026-04-17T10:00:00Z',
+                '2026-04-17T11:00:00Z',
+                51,
+                NULL,
+                'Policy aktualisieren',
+                'Update security policy',
+                'HIGH',
+                'CISO',
+                14,
+                '',
+                'OPEN',
+                '2026-05-01',
+                '2026-05-07',
+                ''
             )
         "#,
     )
