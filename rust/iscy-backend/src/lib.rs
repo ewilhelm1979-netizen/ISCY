@@ -1,4 +1,5 @@
 use axum::{
+    extract::Query,
     extract::{Json, Path, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
@@ -11,6 +12,7 @@ use serde_json::Value;
 pub mod asset_store;
 pub mod cve_store;
 pub mod dashboard_store;
+pub mod evidence_store;
 pub mod process_store;
 pub mod report_store;
 pub mod request_context;
@@ -20,6 +22,7 @@ pub mod tenant_store;
 use asset_store::AssetStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
+use evidence_store::EvidenceStore;
 use process_store::ProcessStore;
 use report_store::ReportStore;
 use request_context::RequestContext;
@@ -31,6 +34,7 @@ pub struct AppState {
     pub asset_store: Option<AssetStore>,
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
+    pub evidence_store: Option<EvidenceStore>,
     pub process_store: Option<ProcessStore>,
     pub report_store: Option<ReportStore>,
     pub risk_store: Option<RiskStore>,
@@ -43,6 +47,7 @@ impl AppState {
             asset_store: None,
             cve_store,
             dashboard_store: None,
+            evidence_store: None,
             process_store: None,
             report_store: None,
             risk_store: None,
@@ -55,6 +60,7 @@ impl AppState {
             asset_store: None,
             cve_store,
             dashboard_store: None,
+            evidence_store: None,
             process_store: None,
             report_store: None,
             risk_store: None,
@@ -64,6 +70,11 @@ impl AppState {
 
     pub fn with_dashboard_store(mut self, dashboard_store: Option<DashboardStore>) -> Self {
         self.dashboard_store = dashboard_store;
+        self
+    }
+
+    pub fn with_evidence_store(mut self, evidence_store: Option<EvidenceStore>) -> Self {
+        self.evidence_store = evidence_store;
         self
     }
 
@@ -188,6 +199,21 @@ pub struct RiskRegisterResponse {
 pub struct RiskDetailResponse {
     pub api_version: &'static str,
     pub risk: risk_store::RiskSummary,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EvidenceOverviewQuery {
+    pub session_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceOverviewResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub session_id: Option<i64>,
+    pub evidence_items: Vec<evidence_store::EvidenceItemSummary>,
+    pub evidence_needs: Vec<evidence_store::RequirementEvidenceNeedSummary>,
+    pub need_summary: evidence_store::EvidenceNeedSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -795,6 +821,69 @@ async fn risk_detail(
     }
 }
 
+async fn evidence_overview(
+    Query(query): Query<EvidenceOverviewQuery>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.evidence_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Evidence-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .evidence_overview(context.tenant_id, query.session_id, 200, 30)
+        .await
+    {
+        Ok(overview) => (
+            StatusCode::OK,
+            Json(EvidenceOverviewResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                session_id: query.session_id,
+                evidence_items: overview.evidence_items,
+                evidence_needs: overview.evidence_needs,
+                need_summary: overview.need_summary,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Evidenzuebersicht konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn report_snapshots(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
         Ok(context) => context,
@@ -1287,6 +1376,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/processes/{process_id}", get(process_detail))
         .route("/api/v1/risks", get(risk_register))
         .route("/api/v1/risks/{risk_id}", get(risk_detail))
+        .route("/api/v1/evidence", get(evidence_overview))
         .route("/api/v1/reports/snapshots", get(report_snapshots))
         .route(
             "/api/v1/reports/snapshots/{report_id}",

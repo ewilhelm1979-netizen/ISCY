@@ -2,8 +2,8 @@ use std::net::SocketAddr;
 
 use iscy_backend::{
     app_router_with_state, asset_store::AssetStore, cve_store::CveStore,
-    dashboard_store::DashboardStore, process_store::ProcessStore, report_store::ReportStore,
-    risk_store::RiskStore, tenant_store::TenantStore, AppState,
+    dashboard_store::DashboardStore, evidence_store::EvidenceStore, process_store::ProcessStore,
+    report_store::ReportStore, risk_store::RiskStore, tenant_store::TenantStore, AppState,
 };
 use tokio::net::TcpListener;
 
@@ -20,6 +20,7 @@ async fn main() -> anyhow::Result<()> {
         asset_store,
         process_store,
         risk_store,
+        evidence_store,
     ) = match std::env::var("DATABASE_URL") {
         Ok(database_url) if !database_url.trim().is_empty() => {
             let cve_store = CveStore::connect(&database_url).await?;
@@ -29,6 +30,7 @@ async fn main() -> anyhow::Result<()> {
             let asset_store = AssetStore::connect(&database_url).await?;
             let process_store = ProcessStore::connect(&database_url).await?;
             let risk_store = RiskStore::connect(&database_url).await?;
+            let evidence_store = EvidenceStore::connect(&database_url).await?;
             (
                 Some(cve_store),
                 Some(tenant_store),
@@ -37,16 +39,18 @@ async fn main() -> anyhow::Result<()> {
                 Some(asset_store),
                 Some(process_store),
                 Some(risk_store),
+                Some(evidence_store),
             )
         }
-        _ => (None, None, None, None, None, None, None),
+        _ => (None, None, None, None, None, None, None, None),
     };
     let state = AppState::with_stores(cve_store, tenant_store)
         .with_dashboard_store(dashboard_store)
         .with_report_store(report_store)
         .with_asset_store(asset_store)
         .with_process_store(process_store)
-        .with_risk_store(risk_store);
+        .with_risk_store(risk_store)
+        .with_evidence_store(evidence_store);
 
     let listener = TcpListener::bind(addr).await?;
     println!("ISCY Rust backend listening on http://{}", addr);

@@ -71,6 +71,10 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/risks` liefert das Risikoregister inklusive Kategorie, Prozess, Asset, Owner, Score und Risikolevel fuer den aktuellen Tenant
   - `GET /api/v1/risks/{risk_id}` liefert die Risikodetaildaten fuer Bewertung und Behandlung
   - Django kann Risikoliste und Risikodetail ueber `RISK_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Risiken zurueckfallen
+- `evidence` hat die erste tenantgeschuetzte Read-API in Rust:
+  - `GET /api/v1/evidence` liefert Evidenzliste, Nachweispflichten und Coverage-Summary fuer den aktuellen Tenant
+  - optional filtert `session_id` die Evidenzen und Nachweispflichten auf eine Assessment-Session
+  - Django kann die Evidence-Liste ueber `EVIDENCE_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Evidenzen zurueckfallen
 
 ## App-Migrationsreihenfolge
 

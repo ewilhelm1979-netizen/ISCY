@@ -2,8 +2,8 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use iscy_backend::{
     app_router, app_router_with_state, asset_store::AssetStore, cve_store::CveStore,
-    dashboard_store::DashboardStore, process_store::ProcessStore, report_store::ReportStore,
-    risk_store::RiskStore, tenant_store::TenantStore, AppState,
+    dashboard_store::DashboardStore, evidence_store::EvidenceStore, process_store::ProcessStore,
+    report_store::ReportStore, risk_store::RiskStore, tenant_store::TenantStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
@@ -756,6 +756,136 @@ async fn risk_detail_blocks_foreign_tenant_risk() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "risk_not_found");
+}
+
+#[tokio::test]
+async fn evidence_overview_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn evidence_overview_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn evidence_overview_returns_tenant_evidence_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["session_id"], serde_json::Value::Null);
+    assert_eq!(payload["evidence_items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        payload["evidence_items"][0]["title"],
+        "MFA Rollout Screenshot"
+    );
+    assert_eq!(payload["evidence_items"][0]["status_label"], "Freigegeben");
+    assert_eq!(
+        payload["evidence_items"][0]["owner_display"],
+        "Ada Lovelace"
+    );
+    assert_eq!(
+        payload["evidence_items"][0]["requirement_framework"],
+        "ISO27001"
+    );
+    assert_eq!(payload["evidence_items"][0]["mapping_program_name"], "ISCY");
+    assert_eq!(payload["evidence_needs"].as_array().unwrap().len(), 3);
+    assert_eq!(payload["need_summary"]["open"], 1);
+    assert_eq!(payload["need_summary"]["partial"], 1);
+    assert_eq!(payload["need_summary"]["covered"], 1);
+}
+
+#[tokio::test]
+async fn evidence_overview_filters_by_session() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence?session_id=100")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["session_id"], 100);
+    assert_eq!(payload["evidence_items"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["evidence_items"][0]["session_id"], 100);
+    assert_eq!(payload["evidence_needs"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["need_summary"]["open"], 1);
+    assert_eq!(payload["need_summary"]["partial"], 0);
+    assert_eq!(payload["need_summary"]["covered"], 1);
 }
 
 #[tokio::test]
@@ -1719,6 +1849,344 @@ async fn insert_risk_fixture(pool: &SqlitePool) {
                 NULL,
                 '2026-04-03T10:00:00Z',
                 '2026-04-03T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_evidence_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE accounts_user (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            username varchar(150) NOT NULL,
+            first_name varchar(150) NOT NULL,
+            last_name varchar(150) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE wizard_generatedmeasure (
+            id INTEGER PRIMARY KEY,
+            title varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_mappingversion (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            program_name varchar(64) NOT NULL,
+            version varchar(32) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_regulatorysource (
+            id INTEGER PRIMARY KEY,
+            authority varchar(128) NOT NULL,
+            citation varchar(255) NOT NULL,
+            title varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_requirement (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            code varchar(64) NOT NULL,
+            title varchar(255) NOT NULL,
+            mapping_version_id INTEGER NULL,
+            primary_source_id INTEGER NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE evidence_evidenceitem (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            session_id INTEGER NULL,
+            domain_id INTEGER NULL,
+            measure_id INTEGER NULL,
+            requirement_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            linked_requirement varchar(128) NOT NULL,
+            file varchar(100) NULL,
+            status varchar(16) NOT NULL,
+            owner_id INTEGER NULL,
+            review_notes TEXT NOT NULL,
+            reviewed_by_id INTEGER NULL,
+            reviewed_at TEXT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE evidence_requirementevidenceneed (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            session_id INTEGER NULL,
+            requirement_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            is_mandatory bool NOT NULL,
+            status varchar(16) NOT NULL,
+            rationale TEXT NOT NULL,
+            covered_count INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_evidence_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO accounts_user (id, tenant_id, username, first_name, last_name)
+        VALUES
+            (7, 42, 'ada', 'Ada', 'Lovelace'),
+            (8, 42, 'grace', '', ''),
+            (9, 99, 'foreign', 'Foreign', 'User')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO wizard_generatedmeasure (id, title)
+        VALUES (1, 'MFA einführen')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_mappingversion (id, framework, program_name, version)
+        VALUES (1, 'ISO27001', 'ISCY', '2022')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_regulatorysource (id, authority, citation, title)
+        VALUES (1, 'ISO', 'A.5.17', 'Authentication information')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_requirement (
+            id,
+            framework,
+            code,
+            title,
+            mapping_version_id,
+            primary_source_id
+        )
+        VALUES
+            (1, 'ISO27001', 'A.5.17', 'Authentication Information', 1, 1),
+            (2, 'NIS2', '21.2', 'Incident Handling', 1, NULL)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (
+            id,
+            tenant_id,
+            session_id,
+            domain_id,
+            measure_id,
+            requirement_id,
+            title,
+            description,
+            linked_requirement,
+            file,
+            status,
+            owner_id,
+            review_notes,
+            reviewed_by_id,
+            reviewed_at,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                10,
+                42,
+                100,
+                NULL,
+                1,
+                1,
+                'MFA Rollout Screenshot',
+                'Screenshot of enforced MFA policy',
+                'ISO27001 A.5.17',
+                'evidence/mfa.png',
+                'APPROVED',
+                7,
+                'Looks good',
+                8,
+                '2026-04-18T12:00:00Z',
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T12:00:00Z'
+            ),
+            (
+                11,
+                42,
+                101,
+                NULL,
+                NULL,
+                2,
+                'Incident Playbook',
+                'SOC incident handling playbook',
+                'NIS2 21.2',
+                NULL,
+                'SUBMITTED',
+                8,
+                '',
+                NULL,
+                NULL,
+                '2026-04-17T10:00:00Z',
+                '2026-04-17T11:00:00Z'
+            ),
+            (
+                12,
+                99,
+                102,
+                NULL,
+                NULL,
+                1,
+                'Foreign Evidence',
+                'Foreign tenant evidence',
+                'ISO27001 A.5.17',
+                NULL,
+                'DRAFT',
+                9,
+                '',
+                NULL,
+                NULL,
+                '2026-04-16T10:00:00Z',
+                '2026-04-16T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_requirementevidenceneed (
+            id,
+            tenant_id,
+            session_id,
+            requirement_id,
+            title,
+            description,
+            is_mandatory,
+            status,
+            rationale,
+            covered_count,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                20,
+                42,
+                100,
+                1,
+                'Nachweis für ISO27001 A.5.17',
+                'MFA policy evidence',
+                1,
+                'COVERED',
+                'Evidence is approved',
+                2,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                21,
+                42,
+                100,
+                2,
+                'Nachweis für NIS2 21.2',
+                'Incident process evidence',
+                1,
+                'OPEN',
+                'Incident evidence missing',
+                0,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                22,
+                42,
+                101,
+                2,
+                'Nachweis für NIS2 21.2 Review',
+                'Incident process evidence',
+                1,
+                'PARTIAL',
+                'Incident evidence partly available',
+                1,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                23,
+                99,
+                102,
+                1,
+                'Foreign Need',
+                'Foreign tenant evidence need',
+                1,
+                'OPEN',
+                '',
+                0,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
             )
         "#,
     )

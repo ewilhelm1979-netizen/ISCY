@@ -1,4 +1,3 @@
-from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.views.generic import CreateView, ListView, UpdateView
@@ -9,7 +8,7 @@ from apps.wizard.models import AssessmentSession
 from apps.wizard.services import WizardService
 from .forms import EvidenceItemForm
 from .models import EvidenceItem, RequirementEvidenceNeed
-from .services import EvidenceNeedService
+from .services import EvidenceNeedService, EvidenceRegisterBridge
 
 
 class EvidenceListView(TenantAccessMixin, ListView):
@@ -18,30 +17,62 @@ class EvidenceListView(TenantAccessMixin, ListView):
     context_object_name = 'items'
 
     def get_queryset(self):
-        tenant = WizardService.get_default_tenant(self.request.user)
-        qs = super().get_queryset().select_related('session', 'domain', 'measure', 'requirement__mapping_version', 'requirement__primary_source')
-        session_id = self.request.GET.get('session')
+        session_id = self._selected_session()
+        rust_overview = EvidenceRegisterBridge.fetch_overview(self.request, self.get_tenant(), session_id=session_id)
+        if rust_overview is not None:
+            self.evidence_register_source = 'rust_service'
+            self.evidence_overview = rust_overview
+            return rust_overview.evidence_items
+
+        self.evidence_register_source = 'django'
+        qs = super().get_queryset().select_related(
+            'session',
+            'domain',
+            'measure',
+            'requirement__mapping_version',
+            'requirement__primary_source',
+            'owner',
+        )
         if session_id:
             qs = qs.filter(session_id=session_id)
         return qs
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        tenant = WizardService.get_default_tenant(self.request.user)
-        selected_session = self.request.GET.get('session', '')
+        tenant = self.get_tenant()
+        selected_session = self._selected_session()
         sessions = AssessmentSession.objects.filter(tenant=tenant) if tenant else []
-        needs = RequirementEvidenceNeed.objects.filter(tenant=tenant).select_related('requirement__mapping_version', 'requirement__primary_source')
-        if selected_session:
-            needs = needs.filter(session_id=selected_session)
+        overview = getattr(self, 'evidence_overview', None)
+        if overview is not None:
+            evidence_needs = overview.evidence_needs
+            need_summary = overview.need_summary
+        else:
+            needs = RequirementEvidenceNeed.objects.filter(tenant=tenant).select_related(
+                'requirement__mapping_version',
+                'requirement__primary_source',
+            )
+            if selected_session:
+                needs = needs.filter(session_id=selected_session)
+            need_summary = {
+                'open': needs.filter(status=RequirementEvidenceNeed.Status.OPEN).count(),
+                'partial': needs.filter(status=RequirementEvidenceNeed.Status.PARTIAL).count(),
+                'covered': needs.filter(status=RequirementEvidenceNeed.Status.COVERED).count(),
+            }
+            evidence_needs = needs[:30]
+
+        evidence_items = context.get('object_list', [])
         context['sessions'] = sessions
         context['selected_session'] = selected_session
-        context['needs'] = needs[:30]
-        context['need_summary'] = {
-            'open': needs.filter(status=RequirementEvidenceNeed.Status.OPEN).count(),
-            'partial': needs.filter(status=RequirementEvidenceNeed.Status.PARTIAL).count(),
-            'covered': needs.filter(status=RequirementEvidenceNeed.Status.COVERED).count(),
-        }
+        context['items'] = evidence_items
+        context['evidence_items'] = evidence_items
+        context['needs'] = evidence_needs
+        context['evidence_needs'] = evidence_needs
+        context['need_summary'] = need_summary
+        context['evidence_register_source'] = getattr(self, 'evidence_register_source', 'django')
         return context
+
+    def _selected_session(self):
+        return self.request.GET.get('session', '').strip()
 
 
 class EvidenceNeedSyncView(TenantAccessMixin, UpdateView):
