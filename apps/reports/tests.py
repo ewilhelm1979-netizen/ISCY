@@ -1,5 +1,8 @@
+import json
+from unittest.mock import Mock, patch
+
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.organizations.models import Tenant
@@ -10,6 +13,7 @@ from apps.wizard.models import AssessmentSession
 User = get_user_model()
 
 
+@override_settings(REPORT_SNAPSHOT_BACKEND="local", RUST_BACKEND_URL="")
 class ReportViewTests(TestCase):
     def setUp(self):
         self.tenant_a = Tenant.objects.create(name="Tenant A", slug="tenant-a", country="DE")
@@ -72,6 +76,71 @@ class ReportViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         reports = list(response.context["reports"])
         self.assertEqual(reports, [self.report_a])
+        self.assertEqual(response.context["report_snapshot_source"], "django")
+
+    @patch("apps.reports.services.urlopen")
+    def test_report_list_can_use_rust_snapshot_bridge(self, mock_urlopen):
+        response_mock = Mock()
+        response_mock.read.return_value = json.dumps({
+            "api_version": "v1",
+            "tenant_id": self.tenant_a.id,
+            "reports": [
+                {
+                    "id": self.report_a.id,
+                    "tenant_id": self.tenant_a.id,
+                    "session_id": self.session_a.id,
+                    "title": "Rust Report A",
+                    "applicability_result": "relevant",
+                    "iso_readiness_percent": 81,
+                    "nis2_readiness_percent": 76,
+                    "created_at": "2026-04-18T10:00:00Z",
+                    "updated_at": "2026-04-18T11:00:00Z",
+                }
+            ],
+        }).encode("utf-8")
+        response_ctx = Mock()
+        response_ctx.__enter__ = Mock(return_value=response_mock)
+        response_ctx.__exit__ = Mock(return_value=False)
+        mock_urlopen.return_value = response_ctx
+        self.client.force_login(self.user_a)
+
+        with self.settings(REPORT_SNAPSHOT_BACKEND="rust_service", RUST_BACKEND_URL="http://rust-backend:9000"):
+            response = self.client.get(reverse("reports:list"))
+
+        self.assertEqual(response.status_code, 200)
+        rust_request = mock_urlopen.call_args.args[0]
+        self.assertEqual(rust_request.full_url, "http://rust-backend:9000/api/v1/reports/snapshots")
+        self.assertEqual(rust_request.get_header("X-iscy-tenant-id"), str(self.tenant_a.id))
+        self.assertEqual(rust_request.get_header("X-iscy-user-id"), str(self.user_a.id))
+        reports = list(response.context["reports"])
+        self.assertEqual(response.context["report_snapshot_source"], "rust_service")
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0].title, "Rust Report A")
+        self.assertEqual(reports[0].tenant.name, "Tenant A")
+        self.assertEqual(reports[0].iso_readiness_percent, 81)
+
+    @patch("apps.reports.services.urlopen", side_effect=OSError("backend down"))
+    def test_report_list_falls_back_to_django_when_rust_unavailable_in_non_strict_mode(self, _mock_urlopen):
+        self.client.force_login(self.user_a)
+
+        with self.settings(
+            REPORT_SNAPSHOT_BACKEND="rust_service",
+            RUST_BACKEND_URL="http://rust-backend:9000",
+            RUST_STRICT_MODE=False,
+        ):
+            response = self.client.get(reverse("reports:list"))
+
+        self.assertEqual(response.status_code, 200)
+        reports = list(response.context["reports"])
+        self.assertEqual(response.context["report_snapshot_source"], "django")
+        self.assertEqual(reports, [self.report_a])
+
+    def test_report_list_raises_in_strict_mode_without_rust_backend_url(self):
+        self.client.force_login(self.user_a)
+
+        with self.settings(REPORT_SNAPSHOT_BACKEND="rust_service", RUST_BACKEND_URL="", RUST_STRICT_MODE=True):
+            with self.assertRaises(RuntimeError):
+                self.client.get(reverse("reports:list"))
 
     def test_report_detail_blocks_foreign_tenant_access(self):
         self.client.force_login(self.user_a)

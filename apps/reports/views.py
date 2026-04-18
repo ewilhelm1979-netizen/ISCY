@@ -9,6 +9,7 @@ from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from .models import ReportSnapshot
+from .services import ReportSnapshotBridge
 from apps.evidence.models import RequirementEvidenceNeed
 from apps.evidence.services import EvidenceNeedService
 from apps.wizard.services import WizardService
@@ -18,6 +19,20 @@ class ReportListView(TenantAccessMixin, ListView):
     model = ReportSnapshot
     template_name = 'reports/report_list.html'
     context_object_name = 'reports'
+
+    def get_queryset(self):
+        rust_reports = ReportSnapshotBridge.fetch_list(self.request, self.get_tenant())
+        if rust_reports is not None:
+            self.report_snapshot_source = 'rust_service'
+            return rust_reports
+        self.report_snapshot_source = 'django'
+        return super().get_queryset().select_related('tenant')
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context['report_snapshot_source'] = getattr(self, 'report_snapshot_source', 'django')
+        return context
+
 
 class ReportDetailView(TenantAccessMixin, DetailView):
     model = ReportSnapshot

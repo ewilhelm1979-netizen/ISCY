@@ -156,6 +156,7 @@ Der funktionierende Referenzpfad auf Ubuntu 24.04 ist:
 - `RISK_SCORING_BACKEND=rust_service`
 - `GUIDANCE_SCORING_BACKEND=rust_service`
 - `REPORT_SUMMARY_BACKEND=rust_service`
+- `REPORT_SNAPSHOT_BACKEND=rust_service`
 - `DASHBOARD_SUMMARY_BACKEND=rust_service`
 - `RUST_STRICT_MODE=True` (erzwingt Rust-Backends ohne Fallback)
 

@@ -59,6 +59,7 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
 - `reports` hat erste tenantgeschuetzte Read-APIs in Rust:
   - `GET /api/v1/reports/snapshots` liefert die ReportSnapshot-Liste fuer den aktuellen Tenant
   - `GET /api/v1/reports/snapshots/{report_id}` liefert ReportSnapshot-Details inklusive Readiness-Prozenten und JSON-Auswertungen
+  - Django kann die Report-Liste ueber `REPORT_SNAPSHOT_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Reports zurueckfallen
 
 ## App-Migrationsreihenfolge
 
