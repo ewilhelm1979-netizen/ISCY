@@ -1,11 +1,9 @@
-from django.contrib.auth.mixins import LoginRequiredMixin
 from django.urls import reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 from apps.core.mixins import TenantAccessMixin, TenantCreateMixin
-from apps.wizard.services import WizardService
 from .forms import RiskForm
 from .models import Risk
-from .services import RiskMatrixService
+from .services import RiskMatrixService, RiskRegisterBridge
 
 
 class RiskListView(TenantAccessMixin, ListView):
@@ -14,11 +12,18 @@ class RiskListView(TenantAccessMixin, ListView):
     context_object_name = 'risks'
 
     def get_queryset(self):
-        return super().get_queryset().select_related('owner', 'category', 'process')
+        rust_risks = RiskRegisterBridge.fetch_list(self.request, self.get_tenant())
+        if rust_risks is not None:
+            self.risk_register_source = 'rust_service'
+            return rust_risks
+
+        self.risk_register_source = 'django'
+        return super().get_queryset().select_related('owner', 'category', 'process', 'asset')
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        risks = list(self.get_queryset())
+        risks = list(ctx.get('risks', []))
+        ctx['risk_register_source'] = getattr(self, 'risk_register_source', 'django')
         ctx['matrix'] = RiskMatrixService.build_matrix(risks)
         ctx['summary'] = RiskMatrixService.summary(risks)
         ctx['impact_labels'] = ['Unerheblich', 'Gering', 'Mittel', 'Hoch', 'Kritisch']
@@ -30,6 +35,25 @@ class RiskDetailView(TenantAccessMixin, DetailView):
     model = Risk
     template_name = 'risks/risk_detail.html'
     context_object_name = 'risk'
+
+    def get_object(self, queryset=None):
+        rust_risk = RiskRegisterBridge.fetch_detail(
+            self.request,
+            self.get_tenant(),
+            self.kwargs.get(self.pk_url_kwarg),
+        )
+        if rust_risk is not None:
+            self.risk_register_source = 'rust_service'
+            self.check_tenant_access(rust_risk)
+            return rust_risk
+
+        self.risk_register_source = 'django'
+        return super().get_object(queryset)
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx['risk_register_source'] = getattr(self, 'risk_register_source', 'django')
+        return ctx
 
 
 class RiskCreateView(TenantCreateMixin, CreateView):

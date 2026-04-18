@@ -67,6 +67,10 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/processes` liefert das Prozessregister inklusive Business-Unit-, Owner- und Status-Anzeige fuer den aktuellen Tenant
   - `GET /api/v1/processes/{process_id}` liefert die Prozessdetaildaten fuer die 10-Dimensionen-Ansicht
   - Django kann Prozessliste und Prozessdetail ueber `PROCESS_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Prozesse zurueckfallen
+- `risks` hat tenantgeschuetzte Read-APIs in Rust:
+  - `GET /api/v1/risks` liefert das Risikoregister inklusive Kategorie, Prozess, Asset, Owner, Score und Risikolevel fuer den aktuellen Tenant
+  - `GET /api/v1/risks/{risk_id}` liefert die Risikodetaildaten fuer Bewertung und Behandlung
+  - Django kann Risikoliste und Risikodetail ueber `RISK_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Risiken zurueckfallen
 
 ## App-Migrationsreihenfolge
 

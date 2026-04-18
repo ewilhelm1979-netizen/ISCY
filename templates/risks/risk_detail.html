@@ -30,6 +30,7 @@
       <div class="d-flex gap-3 flex-wrap mt-3">
         {% if risk.owner %}<span class="v19-meta-pill">Owner: {{ risk.owner }}</span>{% endif %}
         {% if risk.process %}<span class="v19-meta-pill">Prozess: {{ risk.process }}</span>{% endif %}
+        {% if risk.asset %}<span class="v19-meta-pill">Asset: {{ risk.asset }}</span>{% endif %}
         {% if risk.review_date %}<span class="v19-meta-pill">Review: {{ risk.review_date|date:"d.m.Y" }}</span>{% endif %}
         {% if risk.treatment_due_date %}<span class="v19-meta-pill">Fällig: {{ risk.treatment_due_date|date:"d.m.Y" }}</span>{% endif %}
       </div>

@@ -14,6 +14,7 @@ pub mod dashboard_store;
 pub mod process_store;
 pub mod report_store;
 pub mod request_context;
+pub mod risk_store;
 pub mod tenant_store;
 
 use asset_store::AssetStore;
@@ -22,6 +23,7 @@ use dashboard_store::DashboardStore;
 use process_store::ProcessStore;
 use report_store::ReportStore;
 use request_context::RequestContext;
+use risk_store::RiskStore;
 use tenant_store::TenantStore;
 
 #[derive(Clone, Default)]
@@ -31,6 +33,7 @@ pub struct AppState {
     pub dashboard_store: Option<DashboardStore>,
     pub process_store: Option<ProcessStore>,
     pub report_store: Option<ReportStore>,
+    pub risk_store: Option<RiskStore>,
     pub tenant_store: Option<TenantStore>,
 }
 
@@ -42,6 +45,7 @@ impl AppState {
             dashboard_store: None,
             process_store: None,
             report_store: None,
+            risk_store: None,
             tenant_store: None,
         }
     }
@@ -53,6 +57,7 @@ impl AppState {
             dashboard_store: None,
             process_store: None,
             report_store: None,
+            risk_store: None,
             tenant_store,
         }
     }
@@ -74,6 +79,11 @@ impl AppState {
 
     pub fn with_process_store(mut self, process_store: Option<ProcessStore>) -> Self {
         self.process_store = process_store;
+        self
+    }
+
+    pub fn with_risk_store(mut self, risk_store: Option<RiskStore>) -> Self {
+        self.risk_store = risk_store;
         self
     }
 }
@@ -165,6 +175,19 @@ pub struct ProcessRegisterResponse {
 pub struct ProcessDetailResponse {
     pub api_version: &'static str,
     pub process: process_store::ProcessSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RiskRegisterResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub risks: Vec<risk_store::RiskSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RiskDetailResponse {
+    pub api_version: &'static str,
+    pub risk: risk_store::RiskSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -647,6 +670,125 @@ async fn process_detail(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Prozessdetail konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn risk_register(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.risk_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Risk-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_risks(context.tenant_id, 200).await {
+        Ok(risks) => (
+            StatusCode::OK,
+            Json(RiskRegisterResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                risks,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Risikoliste konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn risk_detail(
+    Path(risk_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.risk_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Risk-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.risk_detail(context.tenant_id, risk_id).await {
+        Ok(Some(risk)) => (
+            StatusCode::OK,
+            Json(RiskDetailResponse {
+                api_version: "v1",
+                risk,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "risk_not_found",
+                message: format!("Risiko {} wurde nicht gefunden.", risk_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Risikodetail konnte nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -1143,6 +1285,8 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/assets/information-assets", get(asset_inventory))
         .route("/api/v1/processes", get(process_register))
         .route("/api/v1/processes/{process_id}", get(process_detail))
+        .route("/api/v1/risks", get(risk_register))
+        .route("/api/v1/risks/{risk_id}", get(risk_detail))
         .route("/api/v1/reports/snapshots", get(report_snapshots))
         .route(
             "/api/v1/reports/snapshots/{report_id}",

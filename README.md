@@ -160,6 +160,7 @@ Der funktionierende Referenzpfad auf Ubuntu 24.04 ist:
 - `DASHBOARD_SUMMARY_BACKEND=rust_service`
 - `ASSET_INVENTORY_BACKEND=rust_service`
 - `PROCESS_REGISTER_BACKEND=rust_service`
+- `RISK_REGISTER_BACKEND=rust_service`
 - `RUST_STRICT_MODE=True` (erzwingt Rust-Backends ohne Fallback)
 
 Danach kann weiter wie gewohnt gestartet werden:
