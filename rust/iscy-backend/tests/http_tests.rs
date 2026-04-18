@@ -1,6 +1,8 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
-use iscy_backend::{app_router, app_router_with_state, cve_store::CveStore, AppState};
+use iscy_backend::{
+    app_router, app_router_with_state, cve_store::CveStore, tenant_store::TenantStore, AppState,
+};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
 
@@ -169,6 +171,115 @@ async fn context_tenant_returns_authenticated_tenant_context() {
         payload["authorization_model"],
         "header-bridged-django-context-v1"
     );
+}
+
+#[tokio::test]
+async fn organization_tenant_profile_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/organizations/tenant-profile")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn organization_tenant_profile_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/organizations/tenant-profile")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn organization_tenant_profile_returns_tenant_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_tenant_table(&pool).await;
+    insert_tenant(&pool).await;
+    let app = app_router_with_state(AppState::with_stores(
+        None,
+        Some(TenantStore::from_sqlite_pool(pool.clone())),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/organizations/tenant-profile")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant"]["id"], 42);
+    assert_eq!(payload["tenant"]["name"], "Tenant SOC");
+    assert_eq!(payload["tenant"]["slug"], "tenant-soc");
+    assert_eq!(payload["tenant"]["operation_countries"][0], "DE");
+    assert_eq!(payload["tenant"]["sector"], "MSSP");
+    assert_eq!(payload["tenant"]["nis2_relevant"], true);
+    assert_eq!(payload["tenant"]["uses_ai_systems"], true);
+}
+
+#[tokio::test]
+async fn organization_tenant_profile_returns_not_found_for_unknown_tenant() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_tenant_table(&pool).await;
+    let app = app_router_with_state(AppState::with_stores(
+        None,
+        Some(TenantStore::from_sqlite_pool(pool.clone())),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/organizations/tenant-profile")
+                .header("x-iscy-tenant-id", "99")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "tenant_not_found");
 }
 
 #[tokio::test]
@@ -460,6 +571,101 @@ async fn create_cverecord_table(pool: &SqlitePool) {
             raw_json TEXT NOT NULL,
             published_at TEXT NULL,
             modified_at TEXT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_tenant_table(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_tenant (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            name varchar(255) NOT NULL,
+            slug varchar(50) NOT NULL UNIQUE,
+            country varchar(100) NOT NULL,
+            operation_countries TEXT NOT NULL,
+            description TEXT NOT NULL,
+            sector varchar(64) NOT NULL,
+            employee_count integer NOT NULL,
+            annual_revenue_million decimal NOT NULL,
+            balance_sheet_million decimal NOT NULL,
+            critical_services TEXT NOT NULL,
+            supply_chain_role varchar(255) NOT NULL,
+            nis2_relevant bool NOT NULL,
+            kritis_relevant bool NOT NULL,
+            develops_digital_products bool NOT NULL,
+            uses_ai_systems bool NOT NULL,
+            ot_iacs_scope bool NOT NULL,
+            automotive_scope bool NOT NULL,
+            psirt_defined bool NOT NULL,
+            sbom_required bool NOT NULL,
+            product_security_scope TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_tenant(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_tenant (
+            id,
+            created_at,
+            updated_at,
+            name,
+            slug,
+            country,
+            operation_countries,
+            description,
+            sector,
+            employee_count,
+            annual_revenue_million,
+            balance_sheet_million,
+            critical_services,
+            supply_chain_role,
+            nis2_relevant,
+            kritis_relevant,
+            develops_digital_products,
+            uses_ai_systems,
+            ot_iacs_scope,
+            automotive_scope,
+            psirt_defined,
+            sbom_required,
+            product_security_scope
+        )
+        VALUES (
+            42,
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP,
+            'Tenant SOC',
+            'tenant-soc',
+            'DE',
+            '["DE","FR"]',
+            'Tenant fuer SOC-Playbook-Test',
+            'MSSP',
+            250,
+            '12.50',
+            '9.25',
+            'SOC und Incident Response',
+            'Managed Security Provider',
+            1,
+            0,
+            1,
+            1,
+            0,
+            0,
+            1,
+            1,
+            'Sichere Entwicklung und PSIRT'
         )
         "#,
     )

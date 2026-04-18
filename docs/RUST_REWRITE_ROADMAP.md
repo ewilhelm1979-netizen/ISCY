@@ -49,6 +49,9 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
 - Rust hat einen ersten Request-Kontext-Vertrag fuer Tenant/User-Header:
   - `GET /api/v1/context/whoami` fuer Diagnose/Bridge-Kontext
   - `GET /api/v1/context/tenant` als Muster fuer geschuetzte tenantgebundene Rust-Routen
+- `organizations` hat den ersten echten App-Read-Slice in Rust:
+  - `GET /api/v1/organizations/tenant-profile` liest das Tenant-Profil ueber den Rust-Tenant-Store
+  - die Route ist durch `X-ISCY-User-ID` und `X-ISCY-Tenant-ID` geschuetzt
 
 ## App-Migrationsreihenfolge
 

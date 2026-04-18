@@ -10,18 +10,31 @@ use serde_json::Value;
 
 pub mod cve_store;
 pub mod request_context;
+pub mod tenant_store;
 
 use cve_store::{CveStore, NvdCveRecord};
 use request_context::RequestContext;
+use tenant_store::TenantStore;
 
 #[derive(Clone, Default)]
 pub struct AppState {
     pub cve_store: Option<CveStore>,
+    pub tenant_store: Option<TenantStore>,
 }
 
 impl AppState {
     pub fn new(cve_store: Option<CveStore>) -> Self {
-        Self { cve_store }
+        Self {
+            cve_store,
+            tenant_store: None,
+        }
+    }
+
+    pub fn with_stores(cve_store: Option<CveStore>, tenant_store: Option<TenantStore>) -> Self {
+        Self {
+            cve_store,
+            tenant_store,
+        }
     }
 }
 
@@ -79,6 +92,12 @@ pub struct TenantContextResponse {
     pub user_id: i64,
     pub user_email: Option<String>,
     pub authorization_model: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TenantProfileResponse {
+    pub api_version: &'static str,
+    pub tenant: tenant_store::TenantProfile,
 }
 
 #[derive(Debug, Deserialize)]
@@ -259,6 +278,71 @@ async fn context_tenant(headers: HeaderMap) -> Response {
                 api_version: "v1",
                 error_code: err.error_code(),
                 message: err.message().to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn organization_tenant_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.tenant_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Tenant-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.tenant_profile(context.tenant_id).await {
+        Ok(Some(tenant)) => (
+            StatusCode::OK,
+            Json(TenantProfileResponse {
+                api_version: "v1",
+                tenant,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "tenant_not_found",
+                message: format!("Tenant {} wurde nicht gefunden.", context.tenant_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Tenant-Profil konnte nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -628,6 +712,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/health/live", get(health_live))
         .route("/api/v1/context/whoami", get(context_whoami))
         .route("/api/v1/context/tenant", get(context_tenant))
+        .route(
+            "/api/v1/organizations/tenant-profile",
+            get(organization_tenant_profile),
+        )
         .route("/", get(web_index))
         .route("/login/", get(web_login))
         .route("/navigator/", get(web_navigator))
