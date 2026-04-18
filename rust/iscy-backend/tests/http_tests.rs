@@ -2,7 +2,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use iscy_backend::{
     app_router, app_router_with_state, cve_store::CveStore, dashboard_store::DashboardStore,
-    tenant_store::TenantStore, AppState,
+    report_store::ReportStore, tenant_store::TenantStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
@@ -365,6 +365,163 @@ async fn dashboard_summary_returns_counts_from_database() {
 }
 
 #[tokio::test]
+async fn report_snapshots_require_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/snapshots")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn report_snapshots_require_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/snapshots")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn report_snapshots_return_tenant_reports_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_report_table(&pool).await;
+    insert_report_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/snapshots")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["reports"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["reports"][0]["id"], 11);
+    assert_eq!(payload["reports"][0]["title"], "April Readiness");
+    assert_eq!(payload["reports"][0]["iso_readiness_percent"], 78);
+    assert_eq!(payload["reports"][1]["id"], 10);
+}
+
+#[tokio::test]
+async fn report_snapshot_detail_returns_report_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_report_table(&pool).await;
+    insert_report_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/snapshots/11")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["report"]["id"], 11);
+    assert_eq!(payload["report"]["tenant_id"], 42);
+    assert_eq!(
+        payload["report"]["executive_summary"],
+        "April Executive Summary"
+    );
+    assert_eq!(payload["report"]["kritis_readiness_percent"], 33);
+    assert_eq!(
+        payload["report"]["compliance_versions_json"]["ISO27001"]["version"],
+        "2022"
+    );
+    assert_eq!(
+        payload["report"]["top_measures_json"][0]["title"],
+        "MFA einfuehren"
+    );
+    assert_eq!(
+        payload["report"]["domain_scores_json"][0]["domain"],
+        "Governance"
+    );
+}
+
+#[tokio::test]
+async fn report_snapshot_detail_blocks_foreign_tenant_report() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_report_table(&pool).await;
+    insert_report_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/snapshots/12")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "report_not_found");
+}
+
+#[tokio::test]
 async fn rust_web_surface_routes_return_ok() {
     let paths = vec![
         "/",
@@ -625,6 +782,152 @@ async fn report_cve_summary_endpoint_returns_ok() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+async fn create_report_table(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE reports_reportsnapshot (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            executive_summary TEXT NOT NULL,
+            applicability_result varchar(255) NOT NULL,
+            iso_readiness_percent INTEGER NOT NULL,
+            nis2_readiness_percent INTEGER NOT NULL,
+            kritis_readiness_percent INTEGER NOT NULL,
+            cra_readiness_percent INTEGER NOT NULL,
+            ai_act_readiness_percent INTEGER NOT NULL,
+            iec62443_readiness_percent INTEGER NOT NULL,
+            iso_sae_21434_readiness_percent INTEGER NOT NULL,
+            regulatory_matrix_json TEXT NOT NULL,
+            compliance_versions_json TEXT NOT NULL,
+            product_security_json TEXT NOT NULL,
+            top_gaps_json TEXT NOT NULL,
+            top_measures_json TEXT NOT NULL,
+            roadmap_summary TEXT NOT NULL,
+            domain_scores_json TEXT NOT NULL,
+            next_steps_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_report_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO reports_reportsnapshot (
+            id,
+            tenant_id,
+            session_id,
+            title,
+            executive_summary,
+            applicability_result,
+            iso_readiness_percent,
+            nis2_readiness_percent,
+            kritis_readiness_percent,
+            cra_readiness_percent,
+            ai_act_readiness_percent,
+            iec62443_readiness_percent,
+            iso_sae_21434_readiness_percent,
+            regulatory_matrix_json,
+            compliance_versions_json,
+            product_security_json,
+            top_gaps_json,
+            top_measures_json,
+            roadmap_summary,
+            domain_scores_json,
+            next_steps_json,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                10,
+                42,
+                100,
+                'March Readiness',
+                'March Executive Summary',
+                'relevant',
+                65,
+                70,
+                20,
+                21,
+                22,
+                23,
+                24,
+                '{"overall":"medium"}',
+                '{"ISO27001":{"version":"2022"}}',
+                '{"sbom_required":true}',
+                '[{"title":"Gap A"}]',
+                '[{"title":"Patch Prozess"}]',
+                '[{"name":"Phase 1"}]',
+                '[{"domain":"Risk","score_percent":62}]',
+                '{"dependencies":[]}',
+                '2026-03-01T10:00:00Z',
+                '2026-03-01T11:00:00Z'
+            ),
+            (
+                11,
+                42,
+                101,
+                'April Readiness',
+                'April Executive Summary',
+                'relevant',
+                78,
+                82,
+                33,
+                34,
+                35,
+                36,
+                37,
+                '{"overall":"high"}',
+                '{"ISO27001":{"version":"2022"},"NIS2":{"version":"2024"}}',
+                '{"sbom_required":true,"psirt":true}',
+                '[{"title":"Gap B"}]',
+                '[{"title":"MFA einfuehren","priority":"HIGH"}]',
+                '[{"name":"Phase 2","duration_weeks":6}]',
+                '[{"domain":"Governance","score_percent":82}]',
+                '{"dependencies":[{"predecessor":"A","successor":"B"}]}',
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z'
+            ),
+            (
+                12,
+                99,
+                102,
+                'Other Tenant Readiness',
+                'Other Executive Summary',
+                'not_relevant',
+                90,
+                91,
+                40,
+                41,
+                42,
+                43,
+                44,
+                '{}',
+                '{}',
+                '{}',
+                '[]',
+                '[]',
+                '[]',
+                '[]',
+                '{}',
+                '2026-04-02T10:00:00Z',
+                '2026-04-02T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn create_dashboard_tables(pool: &SqlitePool) {

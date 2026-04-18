@@ -56,6 +56,9 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/dashboard/summary` liefert tenantgebundene Zaehler fuer Prozesse, Assets, offene Risiken, Evidenzen, offene Roadmap-Tasks und den neuesten Report
   - die Route nutzt denselben geschuetzten Tenant-Kontext wie die Organizations-API
   - Django kann die Dashboard-KPI-Zeile ueber `DASHBOARD_SUMMARY_BACKEND=rust_service` aus Rust lesen und faellt im Nicht-Strict-Modus auf lokale ORM-Zaehler zurueck
+- `reports` hat erste tenantgeschuetzte Read-APIs in Rust:
+  - `GET /api/v1/reports/snapshots` liefert die ReportSnapshot-Liste fuer den aktuellen Tenant
+  - `GET /api/v1/reports/snapshots/{report_id}` liefert ReportSnapshot-Details inklusive Readiness-Prozenten und JSON-Auswertungen
 
 ## App-Migrationsreihenfolge
 

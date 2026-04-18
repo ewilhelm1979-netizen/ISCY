@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, State},
+    extract::{Json, Path, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -10,11 +10,13 @@ use serde_json::Value;
 
 pub mod cve_store;
 pub mod dashboard_store;
+pub mod report_store;
 pub mod request_context;
 pub mod tenant_store;
 
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
+use report_store::ReportStore;
 use request_context::RequestContext;
 use tenant_store::TenantStore;
 
@@ -22,6 +24,7 @@ use tenant_store::TenantStore;
 pub struct AppState {
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
+    pub report_store: Option<ReportStore>,
     pub tenant_store: Option<TenantStore>,
 }
 
@@ -30,6 +33,7 @@ impl AppState {
         Self {
             cve_store,
             dashboard_store: None,
+            report_store: None,
             tenant_store: None,
         }
     }
@@ -38,12 +42,18 @@ impl AppState {
         Self {
             cve_store,
             dashboard_store: None,
+            report_store: None,
             tenant_store,
         }
     }
 
     pub fn with_dashboard_store(mut self, dashboard_store: Option<DashboardStore>) -> Self {
         self.dashboard_store = dashboard_store;
+        self
+    }
+
+    pub fn with_report_store(mut self, report_store: Option<ReportStore>) -> Self {
+        self.report_store = report_store;
         self
     }
 }
@@ -115,6 +125,19 @@ pub struct DashboardSummaryResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub summary: dashboard_store::DashboardSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReportSnapshotsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub reports: Vec<report_store::ReportSnapshotSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReportSnapshotDetailResponse {
+    pub api_version: &'static str,
+    pub report: report_store::ReportSnapshotDetail,
 }
 
 #[derive(Debug, Deserialize)]
@@ -412,6 +435,125 @@ async fn dashboard_summary(State(state): State<AppState>, headers: HeaderMap) ->
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Dashboard-Summary konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn report_snapshots(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_snapshots(context.tenant_id, 50).await {
+        Ok(reports) => (
+            StatusCode::OK,
+            Json(ReportSnapshotsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                reports,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Reportliste konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn report_snapshot_detail(
+    Path(report_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.snapshot_detail(context.tenant_id, report_id).await {
+        Ok(Some(report)) => (
+            StatusCode::OK,
+            Json(ReportSnapshotDetailResponse {
+                api_version: "v1",
+                report,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "report_not_found",
+                message: format!("Report {} wurde nicht gefunden.", report_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Reportdetail konnte nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -786,6 +928,11 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(organization_tenant_profile),
         )
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
+        .route("/api/v1/reports/snapshots", get(report_snapshots))
+        .route(
+            "/api/v1/reports/snapshots/{report_id}",
+            get(report_snapshot_detail),
+        )
         .route("/", get(web_index))
         .route("/login/", get(web_login))
         .route("/navigator/", get(web_navigator))
