@@ -1,11 +1,27 @@
 use axum::{
-    extract::Json,
+    extract::{Json, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+pub mod cve_store;
+
+use cve_store::{CveStore, NvdCveRecord};
+
+#[derive(Clone, Default)]
+pub struct AppState {
+    pub cve_store: Option<CveStore>,
+}
+
+impl AppState {
+    pub fn new(cve_store: Option<CveStore>) -> Self {
+        Self { cve_store }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct NvdImportRequest {
@@ -18,6 +34,22 @@ pub struct NvdImportResponse {
     pub api_version: &'static str,
     pub cve_id: String,
     pub source: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NvdPersistRequest {
+    pub cve: Value,
+    pub cve_id: Option<String>,
+    pub raw_payload: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NvdPersistResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub cve_id: String,
+    pub source: &'static str,
+    pub persisted: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -242,6 +274,83 @@ async fn nvd_import(Json(payload): Json<NvdImportRequest>) -> Response {
     nvd_normalize_response(payload)
 }
 
+async fn nvd_upsert(
+    State(state): State<AppState>,
+    Json(payload): Json<NvdPersistRequest>,
+) -> Response {
+    let raw_payload = payload.raw_payload.unwrap_or_else(|| payload.cve.clone());
+    let fallback_cve_id = payload.cve_id.as_deref().unwrap_or("");
+    let record = NvdCveRecord::from_nvd_value(&payload.cve, &raw_payload, fallback_cve_id);
+    let normalized = normalize_cve_id(&record.cve_id);
+
+    if normalized.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "empty_cve_id",
+                message: "CVE-ID darf nicht leer sein.".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    if !is_valid_cve_id(&normalized) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_cve_id",
+                message: format!(
+                    "CVE-ID '{}' entspricht nicht dem erwarteten Format CVE-YYYY-NNNN.",
+                    normalized
+                ),
+            }),
+        )
+            .into_response();
+    }
+
+    let Some(store) = state.cve_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-CVE-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    let record = record.with_cve_id(normalized.clone());
+    if let Err(err) = store.upsert_nvd_cve(&record).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("CVE konnte nicht persistiert werden: {err}"),
+            }),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(NvdPersistResponse {
+            accepted: true,
+            api_version: "v1",
+            cve_id: normalized,
+            source: "NVD",
+            persisted: true,
+        }),
+    )
+        .into_response()
+}
+
 async fn llm_generate(Json(payload): Json<LlmGenerateRequest>) -> Json<LlmGenerateResponse> {
     let excerpt: String = payload.prompt.chars().take(240).collect();
     let max_tokens = payload.max_tokens.unwrap_or(900);
@@ -435,6 +544,10 @@ async fn report_cve_summary(Json(payload): Json<CveSummaryRequest>) -> Json<CveS
 }
 
 pub fn app_router() -> Router {
+    app_router_with_state(AppState::default())
+}
+
+pub fn app_router_with_state(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_live))
         .route("/health/ready", get(health_live))
@@ -458,10 +571,12 @@ pub fn app_router() -> Router {
         .route("/cves/", get(web_cves))
         .route("/api/v1/nvd/normalize", post(nvd_normalize))
         .route("/api/v1/nvd/import", post(nvd_import))
+        .route("/api/v1/nvd/upsert", post(nvd_upsert))
         .route("/api/v1/llm/generate", post(llm_generate))
         .route("/api/v1/risk/priority", post(risk_priority))
         .route("/api/v1/guidance/evaluate", post(guidance_evaluate))
         .route("/api/v1/reports/cve-summary", post(report_cve_summary))
+        .with_state(state)
 }
 
 #[cfg(test)]

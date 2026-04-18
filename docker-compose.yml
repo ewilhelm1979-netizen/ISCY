@@ -65,6 +65,7 @@ services:
     restart: unless-stopped
     environment:
       RUST_BACKEND_BIND: "0.0.0.0:9000"
+      DATABASE_URL: ${DATABASE_URL:-postgresql://isms:isms@db:5432/isms}
     expose:
       - "9000"
     healthcheck:

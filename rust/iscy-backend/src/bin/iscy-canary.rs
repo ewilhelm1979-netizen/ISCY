@@ -4,10 +4,70 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use chrono::Utc;
-use serde_json::json;
+use serde_json::{json, Value};
 
 fn normalize_legacy(input: &str) -> String {
     input.trim().to_uppercase()
+}
+
+fn nvd_api_key() -> String {
+    env::var("NVD_API_KEY").unwrap_or_default()
+}
+
+fn nvd_endpoint(nvd_url: &str) -> String {
+    format!("{}/rest/json/cves/2.0", nvd_url.trim_end_matches('/'))
+}
+
+fn fetch_nvd_cve(
+    client: &reqwest::blocking::Client,
+    nvd_url: &str,
+    cve_id: &str,
+) -> anyhow::Result<(Value, Value)> {
+    let mut req = client
+        .get(nvd_endpoint(nvd_url))
+        .query(&[("cveId", cve_id.to_string())]);
+    let api_key = nvd_api_key();
+    if !api_key.is_empty() {
+        req = req.header("apiKey", api_key);
+    }
+
+    let response = req.send()?;
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "NVD request fuer {} fehlgeschlagen mit HTTP {}",
+            cve_id,
+            response.status()
+        );
+    }
+    let payload: Value = response.json()?;
+    let cve = payload["vulnerabilities"]
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|entry| entry.get("cve"))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Keine CVE-Daten fuer {} gefunden", cve_id))?;
+    Ok((cve, payload))
+}
+
+fn post_nvd_upsert(
+    client: &reqwest::blocking::Client,
+    rust_endpoint: &str,
+    cve: &Value,
+    raw_payload: &Value,
+) -> anyhow::Result<Value> {
+    let cve_id = cve.get("id").and_then(Value::as_str).unwrap_or("");
+    let response = client
+        .post(rust_endpoint)
+        .json(&json!({ "cve": cve, "raw_payload": raw_payload }))
+        .send()?;
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "Rust-Upsert fehlgeschlagen fuer {} mit HTTP {}",
+            cve_id,
+            response.status()
+        );
+    }
+    Ok(response.json()?)
 }
 
 fn cmd_parity(args: &[String]) -> anyhow::Result<()> {
@@ -208,12 +268,19 @@ fn cmd_trend(args: &[String]) -> anyhow::Result<()> {
 fn cmd_import(args: &[String]) -> anyhow::Result<()> {
     let mut backend_url =
         env::var("RUST_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
+    let mut nvd_url =
+        env::var("NVD_BASE_URL").unwrap_or_else(|_| "https://services.nvd.nist.gov".to_string());
     let mut cves: Vec<String> = Vec::new();
     let mut skip_healthcheck = false;
     let mut i = 0;
     while i < args.len() {
         if args[i] == "--backend-url" && i + 1 < args.len() {
             backend_url = args[i + 1].trim_end_matches('/').to_string();
+            i += 2;
+            continue;
+        }
+        if args[i] == "--nvd-url" && i + 1 < args.len() {
+            nvd_url = args[i + 1].trim_end_matches('/').to_string();
             i += 2;
             continue;
         }
@@ -229,7 +296,7 @@ fn cmd_import(args: &[String]) -> anyhow::Result<()> {
         anyhow::bail!("Keine CVE-IDs übergeben.");
     }
 
-    let endpoint = format!("{}/api/v1/nvd/import", backend_url.trim_end_matches('/'));
+    let endpoint = format!("{}/api/v1/nvd/upsert", backend_url.trim_end_matches('/'));
     let client = reqwest::blocking::Client::new();
     if !skip_healthcheck {
         let health_url = format!("{}/health", backend_url.trim_end_matches('/'));
@@ -244,16 +311,9 @@ fn cmd_import(args: &[String]) -> anyhow::Result<()> {
     let mut imported = 0_u64;
 
     for cve in cves {
-        let payload = json!({ "cve_id": cve });
-        let response = client.post(&endpoint).json(&payload).send()?;
-        if !response.status().is_success() {
-            anyhow::bail!(
-                "Import fehlgeschlagen für {} mit HTTP {}",
-                payload["cve_id"],
-                response.status()
-            );
-        }
-        let body: serde_json::Value = response.json()?;
+        let normalized = normalize_legacy(&cve);
+        let (cve_payload, raw_payload) = fetch_nvd_cve(&client, &nvd_url, &normalized)?;
+        let body = post_nvd_upsert(&client, &endpoint, &cve_payload, &raw_payload)?;
         println!("{}", serde_json::to_string(&body)?);
         imported += 1;
     }
@@ -275,10 +335,10 @@ fn import_collection(
     max_pages: usize,
     skip_healthcheck: bool,
 ) -> anyhow::Result<()> {
-    let nvd_api_key = env::var("NVD_API_KEY").unwrap_or_default();
+    let nvd_api_key = nvd_api_key();
     let client = reqwest::blocking::Client::new();
-    let nvd_endpoint = format!("{}/rest/json/cves/2.0", nvd_url.trim_end_matches('/'));
-    let rust_endpoint = format!("{}/api/v1/nvd/import", rust_url.trim_end_matches('/'));
+    let nvd_endpoint = nvd_endpoint(nvd_url);
+    let rust_endpoint = format!("{}/api/v1/nvd/upsert", rust_url.trim_end_matches('/'));
 
     if !skip_healthcheck {
         let health_resp = client
@@ -335,22 +395,13 @@ fn import_collection(
         }
 
         for v in vulnerabilities {
-            let cve_id = v["cve"]["id"].as_str().unwrap_or("").trim().to_string();
+            let cve = &v["cve"];
+            let cve_id = cve["id"].as_str().unwrap_or("").trim().to_string();
             if cve_id.is_empty() {
                 continue;
             }
-            let import_response = client
-                .post(&rust_endpoint)
-                .json(&json!({ "cve_id": cve_id }))
-                .send()?;
-            if import_response.status().is_success() {
-                imported_records += 1;
-            } else {
-                anyhow::bail!(
-                    "Rust-Import fehlgeschlagen mit HTTP {}",
-                    import_response.status()
-                );
-            }
+            post_nvd_upsert(&client, &rust_endpoint, cve, &payload)?;
+            imported_records += 1;
             seen_records += 1;
         }
 

@@ -1,6 +1,7 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
-use iscy_backend::app_router;
+use iscy_backend::{app_router, app_router_with_state, cve_store::CveStore, AppState};
+use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
 
 #[tokio::test]
@@ -125,6 +126,104 @@ async fn nvd_normalize_endpoint_rejects_invalid_cve_id_with_error_code() {
 }
 
 #[tokio::test]
+async fn nvd_upsert_endpoint_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/nvd/upsert")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"cve":{"id":"CVE-2026-4242"}}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], false);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn nvd_upsert_endpoint_persists_cve_record() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/nvd/upsert")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{
+                        "cve": {
+                            "id": " cve-2026-4242 ",
+                            "descriptions": [{"lang": "en", "value": "Rust persisted CVE"}],
+                            "metrics": {
+                                "cvssMetricV31": [{
+                                    "baseSeverity": "HIGH",
+                                    "cvssData": {
+                                        "baseScore": 8.1,
+                                        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+                                    }
+                                }]
+                            },
+                            "weaknesses": [{"description": [{"value": "CWE-79"}]}],
+                            "references": [{"url": "https://example.test/cve"}],
+                            "configurations": [],
+                            "published": "2026-01-01T00:00:00.000Z",
+                            "lastModified": "2026-01-02T00:00:00.000Z"
+                        },
+                        "raw_payload": {"source": "test"}
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["cve_id"], "CVE-2026-4242");
+    assert_eq!(payload["persisted"], true);
+
+    let row = sqlx::query(
+        r#"
+        SELECT cve_id, description, severity, weakness_ids_json, references_json, raw_json
+        FROM vulnerability_intelligence_cverecord
+        WHERE cve_id = ?
+        "#,
+    )
+    .bind("CVE-2026-4242")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("cve_id"), "CVE-2026-4242");
+    assert_eq!(row.get::<String, _>("description"), "Rust persisted CVE");
+    assert_eq!(row.get::<String, _>("severity"), "HIGH");
+    assert_eq!(row.get::<String, _>("weakness_ids_json"), r#"["CWE-79"]"#);
+    assert_eq!(
+        row.get::<String, _>("references_json"),
+        r#"["https://example.test/cve"]"#
+    );
+    assert_eq!(row.get::<String, _>("raw_json"), r#"{"source":"test"}"#);
+}
+
+#[tokio::test]
 async fn llm_generate_endpoint_returns_ok() {
     let response = app_router()
         .oneshot(
@@ -196,4 +295,38 @@ async fn report_cve_summary_endpoint_returns_ok() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+async fn create_cverecord_table(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE vulnerability_intelligence_cverecord (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            cve_id varchar(32) NOT NULL UNIQUE,
+            source varchar(32) NOT NULL,
+            description TEXT NOT NULL,
+            cvss_score decimal NULL,
+            cvss_vector varchar(255) NOT NULL,
+            severity varchar(16) NOT NULL,
+            weakness_ids_json TEXT NOT NULL,
+            references_json TEXT NOT NULL,
+            configurations_json TEXT NOT NULL,
+            epss_score decimal NULL,
+            in_kev_catalog bool NOT NULL,
+            kev_date_added date NULL,
+            kev_vendor_project varchar(255) NOT NULL,
+            kev_product varchar(255) NOT NULL,
+            kev_required_action TEXT NOT NULL,
+            kev_known_ransomware bool NOT NULL,
+            raw_json TEXT NOT NULL,
+            published_at TEXT NULL,
+            modified_at TEXT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
