@@ -52,6 +52,9 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
 - `organizations` hat den ersten echten App-Read-Slice in Rust:
   - `GET /api/v1/organizations/tenant-profile` liest das Tenant-Profil ueber den Rust-Tenant-Store
   - die Route ist durch `X-ISCY-User-ID` und `X-ISCY-Tenant-ID` geschuetzt
+- `dashboard` bekommt den naechsten Read-Slice in Rust:
+  - `GET /api/v1/dashboard/summary` liefert tenantgebundene Zaehler fuer Prozesse, Assets, offene Risiken, Evidenzen, offene Roadmap-Tasks und den neuesten Report
+  - die Route nutzt denselben geschuetzten Tenant-Kontext wie die Organizations-API
 
 ## App-Migrationsreihenfolge
 

@@ -1,7 +1,8 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use iscy_backend::{
-    app_router, app_router_with_state, cve_store::CveStore, tenant_store::TenantStore, AppState,
+    app_router, app_router_with_state, cve_store::CveStore, dashboard_store::DashboardStore,
+    tenant_store::TenantStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
@@ -283,6 +284,87 @@ async fn organization_tenant_profile_returns_not_found_for_unknown_tenant() {
 }
 
 #[tokio::test]
+async fn dashboard_summary_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/dashboard/summary")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn dashboard_summary_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/dashboard/summary")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn dashboard_summary_returns_counts_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_dashboard_tables(&pool).await;
+    insert_dashboard_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_dashboard_store(Some(DashboardStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/dashboard/summary")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["process_count"], 2);
+    assert_eq!(payload["asset_count"], 3);
+    assert_eq!(payload["open_risk_count"], 2);
+    assert_eq!(payload["evidence_count"], 4);
+    assert_eq!(payload["open_task_count"], 2);
+    assert_eq!(payload["latest_report"]["id"], 11);
+    assert_eq!(payload["latest_report"]["title"], "April Readiness");
+    assert_eq!(payload["latest_report"]["iso_readiness_percent"], 78);
+    assert_eq!(payload["latest_report"]["nis2_readiness_percent"], 82);
+}
+
+#[tokio::test]
 async fn rust_web_surface_routes_return_ok() {
     let paths = vec![
         "/",
@@ -543,6 +625,188 @@ async fn report_cve_summary_endpoint_returns_ok() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+async fn create_dashboard_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE processes_process (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assets_app_informationasset (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE risks_risk (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            status varchar(16) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE evidence_evidenceitem (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmapplan (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmapphase (
+            id INTEGER PRIMARY KEY,
+            plan_id INTEGER NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE roadmap_roadmaptask (
+            id INTEGER PRIMARY KEY,
+            phase_id INTEGER NOT NULL,
+            status varchar(16) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE reports_reportsnapshot (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            created_at TEXT NOT NULL,
+            iso_readiness_percent INTEGER NOT NULL,
+            nis2_readiness_percent INTEGER NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_dashboard_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO processes_process (id, tenant_id)
+        VALUES (1, 42), (2, 42), (3, 99)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assets_app_informationasset (id, tenant_id)
+        VALUES (1, 42), (2, 42), (3, 42), (4, 99)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO risks_risk (id, tenant_id, status)
+        VALUES (1, 42, 'IDENTIFIED'), (2, 42, 'TREATING'), (3, 42, 'CLOSED'), (4, 99, 'IDENTIFIED')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (id, tenant_id)
+        VALUES (1, 42), (2, 42), (3, 42), (4, 42), (5, 99)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmapplan (id, tenant_id)
+        VALUES (1, 42), (2, 99)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmapphase (id, plan_id)
+        VALUES (1, 1), (2, 2)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmaptask (id, phase_id, status)
+        VALUES (1, 1, 'OPEN'), (2, 1, 'DONE'), (3, 1, 'IN_PROGRESS'), (4, 2, 'OPEN')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO reports_reportsnapshot (
+            id,
+            tenant_id,
+            title,
+            created_at,
+            iso_readiness_percent,
+            nis2_readiness_percent
+        )
+        VALUES
+            (10, 42, 'March Readiness', '2026-03-01T10:00:00Z', 65, 70),
+            (11, 42, 'April Readiness', '2026-04-01T10:00:00Z', 78, 82),
+            (12, 99, 'Other Tenant Readiness', '2026-04-02T10:00:00Z', 90, 91)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn create_cverecord_table(pool: &SqlitePool) {

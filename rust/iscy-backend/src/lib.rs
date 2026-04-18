@@ -9,16 +9,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod cve_store;
+pub mod dashboard_store;
 pub mod request_context;
 pub mod tenant_store;
 
 use cve_store::{CveStore, NvdCveRecord};
+use dashboard_store::DashboardStore;
 use request_context::RequestContext;
 use tenant_store::TenantStore;
 
 #[derive(Clone, Default)]
 pub struct AppState {
     pub cve_store: Option<CveStore>,
+    pub dashboard_store: Option<DashboardStore>,
     pub tenant_store: Option<TenantStore>,
 }
 
@@ -26,6 +29,7 @@ impl AppState {
     pub fn new(cve_store: Option<CveStore>) -> Self {
         Self {
             cve_store,
+            dashboard_store: None,
             tenant_store: None,
         }
     }
@@ -33,8 +37,14 @@ impl AppState {
     pub fn with_stores(cve_store: Option<CveStore>, tenant_store: Option<TenantStore>) -> Self {
         Self {
             cve_store,
+            dashboard_store: None,
             tenant_store,
         }
+    }
+
+    pub fn with_dashboard_store(mut self, dashboard_store: Option<DashboardStore>) -> Self {
+        self.dashboard_store = dashboard_store;
+        self
     }
 }
 
@@ -98,6 +108,13 @@ pub struct TenantContextResponse {
 pub struct TenantProfileResponse {
     pub api_version: &'static str,
     pub tenant: tenant_store::TenantProfile,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DashboardSummaryResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub summary: dashboard_store::DashboardSummary,
 }
 
 #[derive(Debug, Deserialize)]
@@ -343,6 +360,58 @@ async fn organization_tenant_profile(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Tenant-Profil konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn dashboard_summary(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.dashboard_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Dashboard-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.dashboard_summary(context.tenant_id).await {
+        Ok(summary) => (
+            StatusCode::OK,
+            Json(DashboardSummaryResponse {
+                api_version: "v1",
+                summary,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Dashboard-Summary konnte nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -716,6 +785,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/organizations/tenant-profile",
             get(organization_tenant_profile),
         )
+        .route("/api/v1/dashboard/summary", get(dashboard_summary))
         .route("/", get(web_index))
         .route("/login/", get(web_login))
         .route("/navigator/", get(web_navigator))
