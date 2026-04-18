@@ -35,6 +35,72 @@ async fn health_alias_endpoint_returns_ok() {
 }
 
 #[tokio::test]
+async fn context_whoami_returns_anonymous_context_without_headers() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/context/whoami")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["authenticated"], false);
+    assert_eq!(payload["tenant_id"], serde_json::Value::Null);
+    assert_eq!(payload["user_id"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn context_whoami_reads_tenant_and_user_headers() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/context/whoami")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["authenticated"], true);
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["user_id"], 7);
+    assert_eq!(payload["user_email"], "security@example.test");
+}
+
+#[tokio::test]
+async fn context_whoami_rejects_invalid_tenant_header() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/context/whoami")
+                .header("x-iscy-tenant-id", "tenant-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], false);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["error_code"], "invalid_tenant_id");
+}
+
+#[tokio::test]
 async fn rust_web_surface_routes_return_ok() {
     let paths = vec![
         "/",

@@ -1,6 +1,6 @@
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Router,
@@ -9,8 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod cve_store;
+pub mod request_context;
 
 use cve_store::{CveStore, NvdCveRecord};
+use request_context::RequestContext;
 
 #[derive(Clone, Default)]
 pub struct AppState {
@@ -58,6 +60,15 @@ pub struct ApiErrorResponse {
     pub api_version: &'static str,
     pub error_code: &'static str,
     pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContextWhoamiResponse {
+    pub api_version: &'static str,
+    pub authenticated: bool,
+    pub tenant_id: Option<i64>,
+    pub user_id: Option<i64>,
+    pub user_email: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -189,6 +200,32 @@ fn nvd_normalize_response(payload: NvdImportRequest) -> Response {
 
 async fn health_live() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "service": "iscy-rust-backend" }))
+}
+
+async fn context_whoami(headers: HeaderMap) -> Response {
+    match RequestContext::from_headers(&headers) {
+        Ok(context) => (
+            StatusCode::OK,
+            Json(ContextWhoamiResponse {
+                api_version: "v1",
+                authenticated: context.authenticated,
+                tenant_id: context.tenant_id,
+                user_id: context.user_id,
+                user_email: context.user_email,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: err.error_code(),
+                message: err.message().to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 async fn web_index() -> Html<String> {
@@ -552,6 +589,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/health", get(health_live))
         .route("/health/ready", get(health_live))
         .route("/health/live", get(health_live))
+        .route("/api/v1/context/whoami", get(context_whoami))
         .route("/", get(web_index))
         .route("/login/", get(web_login))
         .route("/navigator/", get(web_navigator))
