@@ -71,6 +71,16 @@ pub struct ContextWhoamiResponse {
     pub user_email: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct TenantContextResponse {
+    pub api_version: &'static str,
+    pub authenticated: bool,
+    pub tenant_id: i64,
+    pub user_id: i64,
+    pub user_email: Option<String>,
+    pub authorization_model: &'static str,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct LlmGenerateRequest {
     pub prompt: String,
@@ -217,6 +227,33 @@ async fn context_whoami(headers: HeaderMap) -> Response {
             .into_response(),
         Err(err) => (
             StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: err.error_code(),
+                message: err.message().to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn context_tenant(headers: HeaderMap) -> Response {
+    match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => (
+            StatusCode::OK,
+            Json(TenantContextResponse {
+                api_version: "v1",
+                authenticated: true,
+                tenant_id: context.tenant_id,
+                user_id: context.user_id,
+                user_email: context.user_email,
+                authorization_model: "header-bridged-django-context-v1",
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            err.status_code(),
             Json(ApiErrorResponse {
                 accepted: false,
                 api_version: "v1",
@@ -590,6 +627,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/health/ready", get(health_live))
         .route("/health/live", get(health_live))
         .route("/api/v1/context/whoami", get(context_whoami))
+        .route("/api/v1/context/tenant", get(context_tenant))
         .route("/", get(web_index))
         .route("/login/", get(web_login))
         .route("/navigator/", get(web_navigator))

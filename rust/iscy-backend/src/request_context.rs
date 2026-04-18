@@ -1,4 +1,4 @@
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, StatusCode};
 use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -9,10 +9,24 @@ pub struct RequestContext {
     pub user_email: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuthenticatedTenantContext {
+    pub tenant_id: i64,
+    pub user_id: i64,
+    pub user_email: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestContextError {
     InvalidTenantId,
     InvalidUserId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequiredTenantContextError {
+    InvalidHeaders(RequestContextError),
+    MissingUser,
+    MissingTenant,
 }
 
 impl RequestContext {
@@ -30,6 +44,30 @@ impl RequestContext {
             user_email,
         })
     }
+
+    pub fn authenticated_tenant_from_headers(
+        headers: &HeaderMap,
+    ) -> Result<AuthenticatedTenantContext, RequiredTenantContextError> {
+        Self::from_headers(headers)
+            .map_err(RequiredTenantContextError::InvalidHeaders)?
+            .require_authenticated_tenant()
+    }
+
+    pub fn require_authenticated_tenant(
+        self,
+    ) -> Result<AuthenticatedTenantContext, RequiredTenantContextError> {
+        let user_id = self
+            .user_id
+            .ok_or(RequiredTenantContextError::MissingUser)?;
+        let tenant_id = self
+            .tenant_id
+            .ok_or(RequiredTenantContextError::MissingTenant)?;
+        Ok(AuthenticatedTenantContext {
+            tenant_id,
+            user_id,
+            user_email: self.user_email,
+        })
+    }
 }
 
 impl RequestContextError {
@@ -44,6 +82,32 @@ impl RequestContextError {
         match self {
             Self::InvalidTenantId => "X-ISCY-Tenant-ID muss eine positive Ganzzahl sein.",
             Self::InvalidUserId => "X-ISCY-User-ID muss eine positive Ganzzahl sein.",
+        }
+    }
+}
+
+impl RequiredTenantContextError {
+    pub fn status_code(&self) -> StatusCode {
+        match self {
+            Self::InvalidHeaders(_) => StatusCode::BAD_REQUEST,
+            Self::MissingUser => StatusCode::UNAUTHORIZED,
+            Self::MissingTenant => StatusCode::FORBIDDEN,
+        }
+    }
+
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            Self::InvalidHeaders(err) => err.error_code(),
+            Self::MissingUser => "missing_user_context",
+            Self::MissingTenant => "missing_tenant_context",
+        }
+    }
+
+    pub fn message(&self) -> &'static str {
+        match self {
+            Self::InvalidHeaders(err) => err.message(),
+            Self::MissingUser => "Authentifizierte Rust-App-Routen benoetigen X-ISCY-User-ID.",
+            Self::MissingTenant => "Tenant-gebundene Rust-App-Routen benoetigen X-ISCY-Tenant-ID.",
         }
     }
 }
@@ -76,7 +140,7 @@ fn optional_string_header(headers: &HeaderMap, name: &'static str) -> Option<Str
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
 
-    use super::{RequestContext, RequestContextError};
+    use super::{RequestContext, RequestContextError, RequiredTenantContextError};
 
     #[test]
     fn parses_empty_context_as_anonymous() {
@@ -114,5 +178,39 @@ mod tests {
             RequestContext::from_headers(&headers).unwrap_err(),
             RequestContextError::InvalidTenantId
         );
+    }
+
+    #[test]
+    fn requires_authenticated_user_for_tenant_context() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iscy-tenant-id", HeaderValue::from_static("42"));
+
+        assert_eq!(
+            RequestContext::authenticated_tenant_from_headers(&headers).unwrap_err(),
+            RequiredTenantContextError::MissingUser
+        );
+    }
+
+    #[test]
+    fn requires_tenant_for_authenticated_tenant_context() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iscy-user-id", HeaderValue::from_static("7"));
+
+        assert_eq!(
+            RequestContext::authenticated_tenant_from_headers(&headers).unwrap_err(),
+            RequiredTenantContextError::MissingTenant
+        );
+    }
+
+    #[test]
+    fn builds_authenticated_tenant_context() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iscy-tenant-id", HeaderValue::from_static("42"));
+        headers.insert("x-iscy-user-id", HeaderValue::from_static("7"));
+
+        let context = RequestContext::authenticated_tenant_from_headers(&headers).unwrap();
+
+        assert_eq!(context.tenant_id, 42);
+        assert_eq!(context.user_id, 7);
     }
 }

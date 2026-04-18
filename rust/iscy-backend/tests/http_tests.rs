@@ -101,6 +101,77 @@ async fn context_whoami_rejects_invalid_tenant_header() {
 }
 
 #[tokio::test]
+async fn context_tenant_requires_user_header() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/context/tenant")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], false);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn context_tenant_requires_tenant_header() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/context/tenant")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], false);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["error_code"], "missing_tenant_context");
+}
+
+#[tokio::test]
+async fn context_tenant_returns_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/context/tenant")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["authenticated"], true);
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["user_id"], 7);
+    assert_eq!(payload["user_email"], "security@example.test");
+    assert_eq!(
+        payload["authorization_model"],
+        "header-bridged-django-context-v1"
+    );
+}
+
+#[tokio::test]
 async fn rust_web_surface_routes_return_ok() {
     let paths = vec![
         "/",
