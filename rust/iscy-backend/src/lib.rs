@@ -8,12 +8,14 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod asset_store;
 pub mod cve_store;
 pub mod dashboard_store;
 pub mod report_store;
 pub mod request_context;
 pub mod tenant_store;
 
+use asset_store::AssetStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
 use report_store::ReportStore;
@@ -22,6 +24,7 @@ use tenant_store::TenantStore;
 
 #[derive(Clone, Default)]
 pub struct AppState {
+    pub asset_store: Option<AssetStore>,
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
     pub report_store: Option<ReportStore>,
@@ -31,6 +34,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(cve_store: Option<CveStore>) -> Self {
         Self {
+            asset_store: None,
             cve_store,
             dashboard_store: None,
             report_store: None,
@@ -40,6 +44,7 @@ impl AppState {
 
     pub fn with_stores(cve_store: Option<CveStore>, tenant_store: Option<TenantStore>) -> Self {
         Self {
+            asset_store: None,
             cve_store,
             dashboard_store: None,
             report_store: None,
@@ -49,6 +54,11 @@ impl AppState {
 
     pub fn with_dashboard_store(mut self, dashboard_store: Option<DashboardStore>) -> Self {
         self.dashboard_store = dashboard_store;
+        self
+    }
+
+    pub fn with_asset_store(mut self, asset_store: Option<AssetStore>) -> Self {
+        self.asset_store = asset_store;
         self
     }
 
@@ -125,6 +135,13 @@ pub struct DashboardSummaryResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub summary: dashboard_store::DashboardSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AssetInventoryResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub assets: Vec<asset_store::InformationAssetSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -435,6 +452,59 @@ async fn dashboard_summary(State(state): State<AppState>, headers: HeaderMap) ->
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Dashboard-Summary konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn asset_inventory(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.asset_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Asset-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_information_assets(context.tenant_id, 200).await {
+        Ok(assets) => (
+            StatusCode::OK,
+            Json(AssetInventoryResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                assets,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Assetliste konnte nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -928,6 +998,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(organization_tenant_profile),
         )
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
+        .route("/api/v1/assets/information-assets", get(asset_inventory))
         .route("/api/v1/reports/snapshots", get(report_snapshots))
         .route(
             "/api/v1/reports/snapshots/{report_id}",

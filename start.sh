@@ -70,6 +70,7 @@ set_env_var "GUIDANCE_SCORING_BACKEND" "rust_service"
 set_env_var "REPORT_SUMMARY_BACKEND" "rust_service"
 set_env_var "REPORT_SNAPSHOT_BACKEND" "rust_service"
 set_env_var "DASHBOARD_SUMMARY_BACKEND" "rust_service"
+set_env_var "ASSET_INVENTORY_BACKEND" "rust_service"
 set_env_var "RUST_STRICT_MODE" "True"
 
 if rust_backend_reachable; then

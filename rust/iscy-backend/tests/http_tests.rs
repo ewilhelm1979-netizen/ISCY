@@ -1,8 +1,9 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use iscy_backend::{
-    app_router, app_router_with_state, cve_store::CveStore, dashboard_store::DashboardStore,
-    report_store::ReportStore, tenant_store::TenantStore, AppState,
+    app_router, app_router_with_state, asset_store::AssetStore, cve_store::CveStore,
+    dashboard_store::DashboardStore, report_store::ReportStore, tenant_store::TenantStore,
+    AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
@@ -362,6 +363,92 @@ async fn dashboard_summary_returns_counts_from_database() {
     assert_eq!(payload["latest_report"]["title"], "April Readiness");
     assert_eq!(payload["latest_report"]["iso_readiness_percent"], 78);
     assert_eq!(payload["latest_report"]["nis2_readiness_percent"], 82);
+}
+
+#[tokio::test]
+async fn asset_inventory_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assets/information-assets")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn asset_inventory_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assets/information-assets")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn asset_inventory_returns_tenant_assets_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_asset_tables(&pool).await;
+    insert_asset_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_asset_store(Some(AssetStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assets/information-assets")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["assets"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["assets"][0]["name"], "Customer Portal");
+    assert_eq!(payload["assets"][0]["asset_type_label"], "Anwendung");
+    assert_eq!(payload["assets"][0]["criticality_label"], "Hoch");
+    assert_eq!(
+        payload["assets"][0]["business_unit_name"],
+        "Digital Services"
+    );
+    assert_eq!(payload["assets"][0]["owner_display"], "Ada Lovelace");
+    assert_eq!(payload["assets"][0]["is_in_scope"], true);
+    assert_eq!(payload["assets"][1]["name"], "Data Lake");
+    assert_eq!(
+        payload["assets"][1]["business_unit_name"],
+        serde_json::Value::Null
+    );
 }
 
 #[tokio::test]
@@ -782,6 +869,158 @@ async fn report_cve_summary_endpoint_returns_ok() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+async fn create_asset_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_businessunit (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE accounts_user (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            username varchar(150) NOT NULL,
+            first_name varchar(150) NOT NULL,
+            last_name varchar(150) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assets_app_informationasset (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            business_unit_id INTEGER NULL,
+            owner_id INTEGER NULL,
+            name varchar(255) NOT NULL,
+            asset_type varchar(24) NOT NULL,
+            criticality varchar(16) NOT NULL,
+            description TEXT NOT NULL,
+            confidentiality varchar(32) NOT NULL,
+            integrity varchar(32) NOT NULL,
+            availability varchar(32) NOT NULL,
+            lifecycle_status varchar(64) NOT NULL,
+            is_in_scope bool NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_asset_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_businessunit (id, tenant_id, name)
+        VALUES (1, 42, 'Digital Services'), (2, 99, 'Foreign BU')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO accounts_user (id, tenant_id, username, first_name, last_name)
+        VALUES
+            (7, 42, 'ada', 'Ada', 'Lovelace'),
+            (8, 42, 'grace', '', '')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assets_app_informationasset (
+            id,
+            tenant_id,
+            business_unit_id,
+            owner_id,
+            name,
+            asset_type,
+            criticality,
+            description,
+            confidentiality,
+            integrity,
+            availability,
+            lifecycle_status,
+            is_in_scope,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                10,
+                42,
+                1,
+                7,
+                'Customer Portal',
+                'APPLICATION',
+                'HIGH',
+                'External customer platform',
+                'HIGH',
+                'HIGH',
+                'MEDIUM',
+                'active',
+                1,
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z'
+            ),
+            (
+                11,
+                42,
+                NULL,
+                8,
+                'Data Lake',
+                'DATA',
+                'VERY_HIGH',
+                'Analytics data store',
+                'VERY_HIGH',
+                'HIGH',
+                'HIGH',
+                'active',
+                1,
+                '2026-04-02T10:00:00Z',
+                '2026-04-02T11:00:00Z'
+            ),
+            (
+                12,
+                99,
+                2,
+                7,
+                'Foreign CRM',
+                'SERVICE',
+                'LOW',
+                'Foreign tenant asset',
+                'LOW',
+                'LOW',
+                'LOW',
+                'retired',
+                0,
+                '2026-04-03T10:00:00Z',
+                '2026-04-03T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn create_report_table(pool: &SqlitePool) {
