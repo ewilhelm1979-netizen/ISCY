@@ -154,6 +154,40 @@ class EvidenceViewTests(TestCase):
         self.assertContains(response, 'ISO27001 A.5.17')
         self.assertContains(response, 'Abgedeckt')
 
+    @patch('apps.evidence.services.urlopen')
+    def test_evidence_need_sync_can_use_rust_register_bridge(self, mock_urlopen):
+        response_mock = Mock()
+        response_mock.read.return_value = json.dumps({
+            'accepted': True,
+            'api_version': 'v1',
+            'session_id': self.session_a.id,
+            'created': 1,
+            'updated': 2,
+            'need_summary': {'open': 1, 'partial': 1, 'covered': 0},
+        }).encode('utf-8')
+        response_ctx = Mock()
+        response_ctx.__enter__ = Mock(return_value=response_mock)
+        response_ctx.__exit__ = Mock(return_value=False)
+        mock_urlopen.return_value = response_ctx
+        self.client.force_login(self.user_a)
+
+        with self.settings(EVIDENCE_REGISTER_BACKEND='rust_service', RUST_BACKEND_URL='http://rust-backend:9000'):
+            response = self.client.post(reverse('evidence:sync-needs', args=[self.session_a.pk]))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], f"{reverse('evidence:list')}?session={self.session_a.id}")
+        rust_request = mock_urlopen.call_args.args[0]
+        self.assertEqual(
+            rust_request.full_url,
+            f'http://rust-backend:9000/api/v1/evidence/sessions/{self.session_a.id}/needs/sync',
+        )
+        self.assertEqual(rust_request.get_method(), 'POST')
+        self.assertEqual(rust_request.get_header('X-iscy-tenant-id'), str(self.tenant_a.id))
+        self.assertEqual(rust_request.get_header('X-iscy-user-id'), str(self.user_a.id))
+        payload = json.loads(rust_request.data.decode('utf-8'))
+        self.assertEqual(payload['covered_threshold'], 2)
+        self.assertEqual(payload['partial_threshold'], 1)
+
     @patch('apps.evidence.services.urlopen', side_effect=OSError('backend down'))
     def test_evidence_list_falls_back_to_django_when_rust_unavailable_in_non_strict_mode(self, _mock_urlopen):
         self.client.force_login(self.user_a)

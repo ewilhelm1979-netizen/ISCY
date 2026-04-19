@@ -339,6 +339,14 @@ pub struct EvidenceOverviewResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct EvidenceNeedSyncResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: evidence_store::EvidenceNeedSyncResult,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ImportJobResponse {
     pub accepted: bool,
     pub api_version: &'static str,
@@ -1586,6 +1594,77 @@ async fn evidence_overview(
     }
 }
 
+async fn evidence_need_sync(
+    Path(session_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<evidence_store::EvidenceNeedSyncRequest>,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.evidence_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Evidence-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .sync_evidence_needs(context.tenant_id, session_id, payload)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(EvidenceNeedSyncResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "evidence_session_not_found",
+                message: format!("Assessment-Session {} wurde nicht gefunden.", session_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Evidenzpflichten konnten nicht synchronisiert werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn import_center_job(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2683,6 +2762,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(risk_detail).patch(risk_update),
         )
         .route("/api/v1/evidence", get(evidence_overview))
+        .route(
+            "/api/v1/evidence/sessions/{session_id}/needs/sync",
+            post(evidence_need_sync),
+        )
         .route("/api/v1/import-center/jobs", post(import_center_job))
         .route(
             "/api/v1/assessments/applicability",

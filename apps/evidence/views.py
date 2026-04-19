@@ -82,7 +82,8 @@ class EvidenceNeedSyncView(TenantAccessMixin, UpdateView):
 
     def post(self, request, *args, **kwargs):
         session = get_object_or_404(self.get_queryset(), pk=kwargs['pk'])
-        EvidenceNeedService.sync_for_session(session)
+        if EvidenceRegisterBridge.sync_needs_for_session(request, session) is None:
+            EvidenceNeedService.sync_for_session(session)
         return redirect(f"{reverse('evidence:list')}?session={session.id}")
 
 
@@ -121,7 +122,8 @@ class EvidenceCreateView(TenantCreateMixin, CreateView):
             form.instance.linked_requirement = f'{form.instance.requirement.framework} {form.instance.requirement.code}'
         response = super().form_valid(form)
         if form.instance.session_id:
-            EvidenceNeedService.sync_for_session(form.instance.session)
+            if EvidenceRegisterBridge.sync_needs_for_session(self.request, form.instance.session) is None:
+                EvidenceNeedService.sync_for_session(form.instance.session)
         return response
 
     def get_success_url(self):
@@ -149,7 +151,8 @@ class EvidenceUpdateView(TenantAccessMixin, UpdateView):
             form.instance.linked_requirement = f'{form.instance.requirement.framework} {form.instance.requirement.code}'
         response = super().form_valid(form)
         if form.instance.session_id:
-            EvidenceNeedService.sync_for_session(form.instance.session)
+            if EvidenceRegisterBridge.sync_needs_for_session(self.request, form.instance.session) is None:
+                EvidenceNeedService.sync_for_session(form.instance.session)
         return response
 
     def get_success_url(self):

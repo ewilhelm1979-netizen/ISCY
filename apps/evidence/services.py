@@ -180,6 +180,41 @@ class EvidenceRustClient:
         )
 
     @staticmethod
+    def sync_needs(request, tenant, session_id: int, timeout: int = 8) -> dict:
+        base = EvidenceRustClient._base_url()
+        if not base:
+            raise RuntimeError('RUST_BACKEND_URL ist nicht gesetzt.')
+
+        payload = EvidenceRustClient._sync_payload()
+        rust_request = EvidenceRustClient._authenticated_json_request(
+            request,
+            tenant,
+            f'{base}/api/v1/evidence/sessions/{int(session_id)}/needs/sync',
+            'POST',
+            payload,
+        )
+        with urlopen(rust_request, timeout=timeout) as response:
+            response_payload = json.loads(response.read().decode('utf-8'))
+
+        result = response_payload.get('result') or response_payload
+        result_session_id = EvidenceRustClient._int_field(result, 'session_id')
+        if result_session_id != int(session_id):
+            raise RuntimeError('Rust-Evidenzpflichten-Sync gehoert nicht zur angefragten Session.')
+        return {
+            'created': EvidenceRustClient._int_field(result, 'created'),
+            'updated': EvidenceRustClient._int_field(result, 'updated'),
+            'need_summary': EvidenceRustClient._need_summary_from_payload(result.get('need_summary') or {}),
+        }
+
+    @staticmethod
+    def _sync_payload() -> dict:
+        thresholds = getattr(settings, 'EVIDENCE_COVERAGE_THRESHOLDS', {'covered': 2, 'partial': 1})
+        return {
+            'covered_threshold': int(thresholds.get('covered', 2) or 2),
+            'partial_threshold': int(thresholds.get('partial', 1) or 1),
+        }
+
+    @staticmethod
     def _evidence_item_from_payload(item: dict, tenant) -> EvidenceItemBridgeItem:
         measure_id = EvidenceRustClient._optional_int_field(item, 'measure_id')
         measure_title = str(item.get('measure_title') or '').strip()
@@ -285,20 +320,27 @@ class EvidenceRustClient:
         }
 
     @staticmethod
-    def _authenticated_request(request, tenant, url: str) -> Request:
+    def _authenticated_request(request, tenant, url: str, *, method: str = 'GET', data: bytes | None = None) -> Request:
         user = getattr(request, 'user', None)
         user_id = getattr(user, 'id', None)
         if not user_id:
             raise RuntimeError('Evidence-Rust-Bridge braucht einen authentifizierten User.')
 
-        rust_request = Request(url)
+        rust_request = Request(url, data=data, method=method)
         rust_request.add_header('Accept', 'application/json')
+        if data is not None:
+            rust_request.add_header('Content-Type', 'application/json')
         rust_request.add_header('X-ISCY-Tenant-ID', str(tenant.id))
         rust_request.add_header('X-ISCY-User-ID', str(user_id))
         user_email = (getattr(user, 'email', '') or '').strip()
         if user_email:
             rust_request.add_header('X-ISCY-User-Email', user_email)
         return rust_request
+
+    @staticmethod
+    def _authenticated_json_request(request, tenant, url: str, method: str, payload: dict) -> Request:
+        data = json.dumps(payload).encode('utf-8')
+        return EvidenceRustClient._authenticated_request(request, tenant, url, method=method, data=data)
 
     @staticmethod
     def _int_field(payload: dict, key: str) -> int:
@@ -345,6 +387,28 @@ class EvidenceRegisterBridge:
         except Exception as exc:
             if EvidenceRegisterBridge._strict_rust_mode():
                 raise RuntimeError('Rust evidence register backend ist aktiv, aber nicht erreichbar.') from exc
+            return None
+
+    @staticmethod
+    def sync_needs_for_session(request, session):
+        tenant = getattr(session, 'tenant', None)
+        if tenant is None:
+            return None
+
+        backend = str(getattr(settings, 'EVIDENCE_REGISTER_BACKEND', 'rust_service') or '').strip().lower()
+        if backend != 'rust_service':
+            return None
+
+        if not EvidenceRustClient._base_url():
+            if EvidenceRegisterBridge._strict_rust_mode():
+                raise RuntimeError('Rust evidence register backend ist aktiv, aber RUST_BACKEND_URL ist nicht gesetzt.')
+            return None
+
+        try:
+            return EvidenceRustClient.sync_needs(request, tenant, session.id)
+        except Exception as exc:
+            if EvidenceRegisterBridge._strict_rust_mode():
+                raise RuntimeError('Rust evidence need sync backend ist aktiv, aber nicht erreichbar.') from exc
             return None
 
     @staticmethod

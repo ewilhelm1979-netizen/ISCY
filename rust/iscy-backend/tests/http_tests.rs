@@ -1655,6 +1655,147 @@ async fn evidence_overview_filters_by_session() {
 }
 
 #[tokio::test]
+async fn evidence_need_sync_creates_and_updates_session_needs() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_requirement (
+            id,
+            framework,
+            code,
+            title,
+            description,
+            is_active,
+            evidence_required,
+            evidence_guidance,
+            evidence_examples,
+            sector_package,
+            legal_reference,
+            mapping_version_id,
+            primary_source_id
+        )
+        VALUES (
+            3,
+            'NIS2',
+            '21.3',
+            'Digital Supplier Controls',
+            'Manage digital supplier controls',
+            1,
+            1,
+            '',
+            'Supplier contracts and review records',
+            'DIGITAL',
+            'NIS2 Art. 21',
+            1,
+            NULL
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/sessions/100/needs/sync")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{"covered_threshold":2,"partial_threshold":1}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["session_id"], 100);
+    assert_eq!(payload["created"], 1);
+    assert_eq!(payload["updated"], 2);
+    assert_eq!(payload["need_summary"]["open"], 1);
+    assert_eq!(payload["need_summary"]["partial"], 2);
+    assert_eq!(payload["need_summary"]["covered"], 0);
+
+    let updated: (String, i64) = sqlx::query_as(
+        r#"
+        SELECT status, covered_count
+        FROM evidence_requirementevidenceneed
+        WHERE tenant_id = 42 AND session_id = 100 AND requirement_id = 1
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(updated.0, "PARTIAL");
+    assert_eq!(updated.1, 1);
+
+    let created_status: String = sqlx::query_scalar(
+        r#"
+        SELECT status
+        FROM evidence_requirementevidenceneed
+        WHERE tenant_id = 42 AND session_id = 100 AND requirement_id = 3
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(created_status, "OPEN");
+}
+
+#[tokio::test]
+async fn evidence_need_sync_blocks_foreign_tenant_session() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/sessions/102/needs/sync")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{"covered_threshold":2,"partial_threshold":1}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "evidence_session_not_found");
+}
+
+#[tokio::test]
 async fn import_center_jobs_require_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(
@@ -4965,6 +5106,30 @@ async fn insert_risk_fixture(pool: &SqlitePool) {
 async fn create_evidence_tables(pool: &SqlitePool) {
     sqlx::query(
         r#"
+        CREATE TABLE organizations_tenant (
+            id INTEGER PRIMARY KEY,
+            name varchar(255) NOT NULL,
+            sector varchar(64) NOT NULL,
+            kritis_relevant bool NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE wizard_assessmentsession (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
         CREATE TABLE accounts_user (
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
@@ -5007,7 +5172,8 @@ async fn create_evidence_tables(pool: &SqlitePool) {
             id INTEGER PRIMARY KEY,
             authority varchar(128) NOT NULL,
             citation varchar(255) NOT NULL,
-            title varchar(255) NOT NULL
+            title varchar(255) NOT NULL,
+            url varchar(200) NOT NULL
         )
         "#,
     )
@@ -5021,6 +5187,13 @@ async fn create_evidence_tables(pool: &SqlitePool) {
             framework varchar(32) NOT NULL,
             code varchar(64) NOT NULL,
             title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            is_active bool NOT NULL,
+            evidence_required bool NOT NULL,
+            evidence_guidance TEXT NOT NULL,
+            evidence_examples TEXT NOT NULL,
+            sector_package varchar(64) NOT NULL,
+            legal_reference varchar(128) NOT NULL,
             mapping_version_id INTEGER NULL,
             primary_source_id INTEGER NULL
         )
@@ -5081,6 +5254,29 @@ async fn create_evidence_tables(pool: &SqlitePool) {
 async fn insert_evidence_fixture(pool: &SqlitePool) {
     sqlx::query(
         r#"
+        INSERT INTO organizations_tenant (id, name, sector, kritis_relevant)
+        VALUES
+            (42, 'Tenant A', 'MSSP', 0),
+            (99, 'Tenant B', 'OTHER', 0)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO wizard_assessmentsession (id, tenant_id)
+        VALUES
+            (100, 42),
+            (101, 42),
+            (102, 99)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
         INSERT INTO accounts_user (id, tenant_id, username, first_name, last_name)
         VALUES
             (7, 42, 'ada', 'Ada', 'Lovelace'),
@@ -5111,8 +5307,8 @@ async fn insert_evidence_fixture(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
-        INSERT INTO requirements_app_regulatorysource (id, authority, citation, title)
-        VALUES (1, 'ISO', 'A.5.17', 'Authentication information')
+        INSERT INTO requirements_app_regulatorysource (id, authority, citation, title, url)
+        VALUES (1, 'ISO', 'A.5.17', 'Authentication information', 'https://example.test/source')
         "#,
     )
     .execute(pool)
@@ -5125,12 +5321,47 @@ async fn insert_evidence_fixture(pool: &SqlitePool) {
             framework,
             code,
             title,
+            description,
+            is_active,
+            evidence_required,
+            evidence_guidance,
+            evidence_examples,
+            sector_package,
+            legal_reference,
             mapping_version_id,
             primary_source_id
         )
         VALUES
-            (1, 'ISO27001', 'A.5.17', 'Authentication Information', 1, 1),
-            (2, 'NIS2', '21.2', 'Incident Handling', 1, NULL)
+            (
+                1,
+                'ISO27001',
+                'A.5.17',
+                'Authentication Information',
+                'Protect authentication information',
+                1,
+                1,
+                'Collect MFA evidence',
+                'MFA screenshots and policy approvals',
+                'ALL',
+                'ISO A.5.17',
+                1,
+                1
+            ),
+            (
+                2,
+                'NIS2',
+                '21.2',
+                'Incident Handling',
+                'Manage security incidents',
+                1,
+                1,
+                '',
+                '',
+                'ALL',
+                '',
+                1,
+                NULL
+            )
         "#,
     )
     .execute(pool)
