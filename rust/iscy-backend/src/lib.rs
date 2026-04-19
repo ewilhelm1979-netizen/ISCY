@@ -290,6 +290,13 @@ pub struct ProductSecurityRoadmapDetailResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProductSecurityRoadmapTaskUpdateResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: product_security_store::ProductSecurityRoadmapTaskUpdateResult,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RiskRegisterResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
@@ -1110,6 +1117,78 @@ async fn product_security_product_roadmap(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Product-Security-Roadmap konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_roadmap_task_update(
+    Path(task_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<product_security_store::ProductSecurityRoadmapTaskUpdateRequest>,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .update_roadmap_task(context.tenant_id, task_id, payload)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(ProductSecurityRoadmapTaskUpdateResponse {
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "product_security_roadmap_task_not_found",
+                message: "Product-Security-Roadmaptask wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!(
+                    "Product-Security-Roadmaptask konnte nicht aktualisiert werden: {err}"
+                ),
             }),
         )
             .into_response(),
@@ -2380,6 +2459,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/product-security/products/{product_id}/roadmap",
             get(product_security_product_roadmap),
+        )
+        .route(
+            "/api/v1/product-security/roadmap-tasks/{task_id}",
+            patch(product_security_roadmap_task_update),
         )
         .route("/api/v1/risks", get(risk_register))
         .route("/api/v1/risks/{risk_id}", get(risk_detail))

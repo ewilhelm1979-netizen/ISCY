@@ -1,8 +1,11 @@
 from django.contrib.auth.mixins import LoginRequiredMixin
+from django.http import HttpResponseRedirect
 from django.shortcuts import get_object_or_404
-from django.views.generic import DetailView, ListView, TemplateView
+from django.urls import reverse
+from django.views.generic import DetailView, ListView, TemplateView, UpdateView
 
-from .models import Product, ProductSecuritySnapshot
+from .forms import ProductSecurityRoadmapTaskUpdateForm
+from .models import Product, ProductSecurityRoadmapTask, ProductSecuritySnapshot
 from .services_rust import ProductSecurityBridge
 from .services import ProductSecurityService
 
@@ -130,3 +133,35 @@ class ProductRoadmapView(LoginRequiredMixin, TemplateView):
             'product_security_source': 'django',
         })
         return context
+
+
+class ProductSecurityRoadmapTaskUpdateView(LoginRequiredMixin, UpdateView):
+    model = ProductSecurityRoadmapTask
+    form_class = ProductSecurityRoadmapTaskUpdateForm
+    template_name = 'product_security/roadmap_task_form.html'
+    context_object_name = 'task'
+
+    def get_queryset(self):
+        tenant = getattr(self.request, 'tenant', None)
+        return ProductSecurityRoadmapTask.objects.for_tenant(tenant).select_related('roadmap__product')
+
+    def get_success_url(self):
+        return reverse('product_security:roadmap', kwargs={'pk': self.object.roadmap.product_id})
+
+    def form_valid(self, form):
+        rust_result = ProductSecurityBridge.update_roadmap_task(
+            self.request,
+            getattr(self.request, 'tenant', None),
+            self.object.pk,
+            form.cleaned_data,
+        )
+        if rust_result is not None:
+            self.object.status = rust_result.task.status
+            self.object.priority = rust_result.task.priority
+            self.object.owner_role = rust_result.task.owner_role
+            self.object.due_in_days = rust_result.task.due_in_days
+            self.object.dependency_text = rust_result.task.dependency_text
+            return HttpResponseRedirect(
+                reverse('product_security:roadmap', kwargs={'pk': rust_result.product_id})
+            )
+        return super().form_valid(form)

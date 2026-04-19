@@ -7,6 +7,7 @@ from django.urls import reverse
 
 from apps.organizations.models import Tenant
 from apps.product_security.models import Product, ProductFamily, ProductSecuritySnapshot
+from apps.product_security.services import ProductSecurityService
 
 
 User = get_user_model()
@@ -196,6 +197,103 @@ class ProductSecurityViewTests(TestCase):
         self.assertEqual(response.context["product_security_source"], "rust_service")
         self.assertContains(response, "Rust Product Roadmap")
         self.assertContains(response, "Rust Roadmap Task")
+
+    def test_product_roadmap_task_update_uses_local_backend(self):
+        roadmap = ProductSecurityService.generate_product_roadmap(self.product_a)
+        task = roadmap.tasks.first()
+        self.client.force_login(self.user_a)
+
+        response = self.client.post(
+            reverse("product_security:roadmap-task-edit", args=[task.pk]),
+            {
+                "status": "DONE",
+                "priority": "MEDIUM",
+                "owner_role": "Product Security Office",
+                "due_in_days": "9",
+                "dependency_text": "Reviewed locally",
+            },
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("product_security:roadmap", args=[self.product_a.pk]),
+            fetch_redirect_response=False,
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.status, "DONE")
+        self.assertEqual(task.priority, "MEDIUM")
+        self.assertEqual(task.owner_role, "Product Security Office")
+        self.assertEqual(task.due_in_days, 9)
+        self.assertEqual(task.dependency_text, "Reviewed locally")
+
+    @patch("apps.product_security.services_rust.urlopen")
+    def test_product_roadmap_task_update_can_use_rust_bridge(self, mock_urlopen):
+        roadmap = ProductSecurityService.generate_product_roadmap(self.product_a)
+        task = roadmap.tasks.first()
+        task_payload = self._rust_roadmap_task_payload()
+        task_payload.update({
+            "id": task.id,
+            "roadmap_id": roadmap.id,
+            "status": "DONE",
+            "status_label": "Erledigt",
+            "priority": "MEDIUM",
+            "owner_role": "Product Security Office",
+            "due_in_days": 9,
+            "dependency_text": "Reviewed in Rust",
+        })
+        self._mock_rust_response(mock_urlopen, {
+            "api_version": "v1",
+            "product_id": self.product_a.id,
+            "roadmap_id": roadmap.id,
+            "task": task_payload,
+        })
+        self.client.force_login(self.user_a)
+
+        with self.settings(PRODUCT_SECURITY_BACKEND="rust_service", RUST_BACKEND_URL="http://rust-backend:9000"):
+            response = self.client.post(
+                reverse("product_security:roadmap-task-edit", args=[task.pk]),
+                {
+                    "status": "DONE",
+                    "priority": "MEDIUM",
+                    "owner_role": "Product Security Office",
+                    "due_in_days": "9",
+                    "dependency_text": "Reviewed in Rust",
+                },
+            )
+
+        self.assertRedirects(
+            response,
+            reverse("product_security:roadmap", args=[self.product_a.pk]),
+            fetch_redirect_response=False,
+        )
+        rust_request = mock_urlopen.call_args.args[0]
+        body = json.loads(rust_request.data.decode("utf-8"))
+        self.assertEqual(
+            rust_request.full_url,
+            f"http://rust-backend:9000/api/v1/product-security/roadmap-tasks/{task.id}",
+        )
+        self.assertEqual(rust_request.get_method(), "PATCH")
+        self.assertEqual(body["status"], "DONE")
+        self.assertEqual(body["owner_role"], "Product Security Office")
+        self.assertEqual(body["due_in_days"], 9)
+
+    def test_product_roadmap_task_update_blocks_foreign_tenant_access(self):
+        roadmap = ProductSecurityService.generate_product_roadmap(self.product_b)
+        task = roadmap.tasks.first()
+        self.client.force_login(self.user_a)
+
+        response = self.client.post(
+            reverse("product_security:roadmap-task-edit", args=[task.pk]),
+            {
+                "status": "DONE",
+                "priority": "MEDIUM",
+                "owner_role": "Product Security Office",
+                "due_in_days": "9",
+                "dependency_text": "Nope",
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
 
     def _rust_payload(self):
         return {

@@ -35,7 +35,10 @@
           <div class="card border-0 shadow-sm"><div class="card-body">
             <div class="d-flex justify-content-between align-items-start gap-2">
               <strong>{{ task.title }}</strong>
-              <span class="badge {% if task.priority == 'CRITICAL' %}text-bg-danger{% elif task.priority == 'HIGH' %}text-bg-warning{% else %}text-bg-light{% endif %}">{{ task.priority|default:'-' }}</span>
+              <div class="d-flex gap-2 align-items-center">
+                <span class="badge {% if task.priority == 'CRITICAL' %}text-bg-danger{% elif task.priority == 'HIGH' %}text-bg-warning{% else %}text-bg-light{% endif %}">{{ task.priority|default:'-' }}</span>
+                <a class="btn btn-sm btn-outline-secondary" href="{% url 'product_security:roadmap-task-edit' task.id %}">Bearbeiten</a>
+              </div>
             </div>
             <p class="small text-muted mt-2 mb-2">{{ task.description }}</p>
             <div class="small text-muted">Owner: {{ task.owner_role|default:'-' }} · Ziel: {{ task.due_in_days }} Tage</div>

@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from django.conf import settings
@@ -386,6 +387,13 @@ class ProductSecurityRoadmapBridgeResult:
     snapshot: ProductSecuritySnapshotListItem | None
 
 
+@dataclass(frozen=True)
+class ProductSecurityRoadmapTaskUpdateBridgeResult:
+    product_id: int
+    roadmap_id: int
+    task: ProductSecurityRoadmapTaskItem
+
+
 class ProductSecurityRustClient:
     @staticmethod
     def _base_url() -> str:
@@ -494,6 +502,49 @@ class ProductSecurityRustClient:
             roadmap=ProductSecurityRustClient._roadmap_from_payload(roadmap_payload, tenant),
             tasks=ProductSecurityRustClient._items(payload, 'tasks', tenant, ProductSecurityRustClient._roadmap_task_from_payload),
             snapshot=ProductSecurityRustClient._snapshot_from_payload(snapshot_payload, tenant) if isinstance(snapshot_payload, dict) else None,
+        )
+
+    @staticmethod
+    def update_roadmap_task(
+        request,
+        tenant,
+        task_id: int,
+        data: dict,
+        timeout: int = 8,
+    ) -> ProductSecurityRoadmapTaskUpdateBridgeResult | None:
+        base = ProductSecurityRustClient._base_url()
+        if not base:
+            raise RuntimeError('RUST_BACKEND_URL ist nicht gesetzt.')
+
+        rust_request = ProductSecurityRustClient._authenticated_json_request(
+            request,
+            tenant,
+            f'{base}/api/v1/product-security/roadmap-tasks/{int(task_id)}',
+            {
+                'status': data.get('status'),
+                'priority': data.get('priority') or '',
+                'owner_role': data.get('owner_role') or '',
+                'due_in_days': data.get('due_in_days'),
+                'dependency_text': data.get('dependency_text') or '',
+            },
+            method='PATCH',
+        )
+        try:
+            with urlopen(rust_request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode('utf-8'))
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+
+        task_payload = payload.get('task') or {}
+        if not isinstance(task_payload, dict):
+            raise RuntimeError('Rust-Product-Security-Roadmaptask-Update hat kein task-Objekt geliefert.')
+
+        return ProductSecurityRoadmapTaskUpdateBridgeResult(
+            product_id=ProductSecurityRustClient._int_field(payload, 'product_id'),
+            roadmap_id=ProductSecurityRustClient._int_field(payload, 'roadmap_id'),
+            task=ProductSecurityRustClient._roadmap_task_from_payload(task_payload, tenant),
         )
 
     @staticmethod
@@ -802,6 +853,14 @@ class ProductSecurityRustClient:
         return rust_request
 
     @staticmethod
+    def _authenticated_json_request(request, tenant, url: str, payload: dict, method: str) -> Request:
+        rust_request = ProductSecurityRustClient._authenticated_request(request, tenant, url)
+        rust_request.data = json.dumps(payload).encode('utf-8')
+        rust_request.method = method
+        rust_request.add_header('Content-Type', 'application/json')
+        return rust_request
+
+    @staticmethod
     def _int_field(payload: dict, key: str) -> int:
         return int(payload.get(key) or 0)
 
@@ -879,6 +938,27 @@ class ProductSecurityBridge:
 
         try:
             return ProductSecurityRustClient.fetch_roadmap(request, tenant, product_id)
+        except Exception as exc:
+            if ProductSecurityBridge._strict_rust_mode():
+                raise RuntimeError('Rust product security backend ist aktiv, aber nicht erreichbar.') from exc
+            return None
+
+    @staticmethod
+    def update_roadmap_task(request, tenant, task_id: int, data: dict):
+        if tenant is None:
+            return None
+
+        backend = str(getattr(settings, 'PRODUCT_SECURITY_BACKEND', 'rust_service') or '').strip().lower()
+        if backend != 'rust_service':
+            return None
+
+        if not ProductSecurityRustClient._base_url():
+            if ProductSecurityBridge._strict_rust_mode():
+                raise RuntimeError('Rust product security backend ist aktiv, aber RUST_BACKEND_URL ist nicht gesetzt.')
+            return None
+
+        try:
+            return ProductSecurityRustClient.update_roadmap_task(request, tenant, task_id, data)
         except Exception as exc:
             if ProductSecurityBridge._strict_rust_mode():
                 raise RuntimeError('Rust product security backend ist aktiv, aber nicht erreichbar.') from exc

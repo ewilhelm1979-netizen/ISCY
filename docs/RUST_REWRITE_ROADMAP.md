@@ -100,7 +100,8 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/product-security/overview` liefert Product-Security-Matrix, Posture-Kennzahlen, Produktliste und letzte Snapshots fuer den aktuellen Tenant
   - `GET /api/v1/product-security/products/{product_id}` liefert den Detailbaum mit Releases, Komponenten, Threat Models, TARAs, Schwachstellen, AI-Systemen, PSIRT, Advisories, Snapshot und Roadmap-Aufgaben
   - `GET /api/v1/product-security/products/{product_id}/roadmap` liefert Roadmap, Snapshot und Aufgaben fuer die Produkt-Roadmap
-  - Django kann Product-Security-Liste, Produktdetail und Roadmap ueber `PRODUCT_SECURITY_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
+  - `PATCH /api/v1/product-security/roadmap-tasks/{task_id}` aktualisiert Status, Prioritaet, Owner-Rolle, Ziel-Tage und Abhaengigkeitstext tenantgeschuetzt
+  - Django kann Product-Security-Liste, Produktdetail, Roadmap und Roadmap-Task-Updates ueber `PRODUCT_SECURITY_BACKEND=rust_service` aus Rust bedienen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
 
 ## App-Migrationsreihenfolge
 

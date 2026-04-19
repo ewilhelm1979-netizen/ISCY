@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Product-Security-Aufgabe pflegen{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="v19-glass-card">
+      <div>
+        <h1>Product-Security-Aufgabe pflegen</h1>
+        <p class="text-muted">{{ object.roadmap.product.name }} · {{ object.get_phase_display }}</p>
+        <div class="alert alert-light">
+          <strong>{{ object.title }}</strong><br>
+          {{ object.description }}
+        </div>
+        <form method="post">
+          {% csrf_token %}
+          {{ form.as_p }}
+          <button class="btn btn-primary">Speichern</button>
+          <a class="btn btn-outline-secondary" href="{% url 'product_security:roadmap' object.roadmap.product_id %}">Zurück</a>
+        </form>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4">
+    <div class="v19-glass-card">
+      <div>
+        <h4>Operative Steuerung</h4>
+        <ul class="mb-0">
+          <li>Status hält PSIRT und Delivery synchron</li>
+          <li>Owner-Rollen machen Verantwortung sichtbar</li>
+          <li>Ziel-Tage und Abhängigkeiten bleiben auditierbar</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

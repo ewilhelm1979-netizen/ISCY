@@ -1,5 +1,5 @@
 use anyhow::{bail, Context};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -305,6 +305,22 @@ pub struct ProductSecurityRoadmapDetail {
     pub snapshot: Option<ProductSecuritySnapshotSummary>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProductSecurityRoadmapTaskUpdateRequest {
+    pub status: Option<String>,
+    pub priority: Option<String>,
+    pub owner_role: Option<String>,
+    pub due_in_days: Option<i64>,
+    pub dependency_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityRoadmapTaskUpdateResult {
+    pub product_id: i64,
+    pub roadmap_id: i64,
+    pub task: ProductSecurityRoadmapTaskSummary,
+}
+
 #[derive(Debug, Clone)]
 struct TenantProductSecurityContext {
     sector: String,
@@ -312,6 +328,16 @@ struct TenantProductSecurityContext {
     uses_ai_systems: bool,
     ot_iacs_scope: bool,
     automotive_scope: bool,
+}
+
+struct ProductSecurityRoadmapTaskCurrent {
+    product_id: i64,
+    roadmap_id: i64,
+    status: String,
+    priority: String,
+    owner_role: String,
+    due_in_days: i64,
+    dependency_text: String,
 }
 
 impl ProductSecurityStore {
@@ -376,6 +402,22 @@ impl ProductSecurityStore {
         match self {
             Self::Postgres(pool) => roadmap_detail_postgres(pool, tenant_id, product_id).await,
             Self::Sqlite(pool) => roadmap_detail_sqlite(pool, tenant_id, product_id).await,
+        }
+    }
+
+    pub async fn update_roadmap_task(
+        &self,
+        tenant_id: i64,
+        task_id: i64,
+        payload: ProductSecurityRoadmapTaskUpdateRequest,
+    ) -> anyhow::Result<Option<ProductSecurityRoadmapTaskUpdateResult>> {
+        match self {
+            Self::Postgres(pool) => {
+                update_roadmap_task_postgres(pool, tenant_id, task_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                update_roadmap_task_sqlite(pool, tenant_id, task_id, payload).await
+            }
         }
     }
 }
@@ -888,6 +930,226 @@ async fn load_roadmap_tasks_sqlite(
         .into_iter()
         .map(roadmap_task_from_sqlite_row)
         .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn update_roadmap_task_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    task_id: i64,
+    payload: ProductSecurityRoadmapTaskUpdateRequest,
+) -> anyhow::Result<Option<ProductSecurityRoadmapTaskUpdateResult>> {
+    let Some(current) = roadmap_task_current_postgres(pool, tenant_id, task_id).await? else {
+        return Ok(None);
+    };
+
+    let status = payload
+        .status
+        .as_deref()
+        .map(normalize_roadmap_task_status)
+        .unwrap_or(current.status);
+    let priority = payload
+        .priority
+        .as_deref()
+        .map(normalize_roadmap_task_priority)
+        .unwrap_or(current.priority);
+    let owner_role = payload
+        .owner_role
+        .unwrap_or(current.owner_role)
+        .trim()
+        .to_string();
+    let due_in_days = payload
+        .due_in_days
+        .map(|value| value.max(0))
+        .unwrap_or(current.due_in_days);
+    let dependency_text = payload.dependency_text.unwrap_or(current.dependency_text);
+
+    sqlx::query(
+        r#"
+        UPDATE product_security_productsecurityroadmaptask
+        SET status = $2,
+            priority = $3,
+            owner_role = $4,
+            due_in_days = $5,
+            dependency_text = $6,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(task_id)
+    .bind(status)
+    .bind(priority)
+    .bind(owner_role)
+    .bind(due_in_days)
+    .bind(dependency_text)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Product-Security-Roadmaptask konnte nicht aktualisiert werden")?;
+
+    let task = roadmap_task_by_id_postgres(pool, tenant_id, task_id)
+        .await?
+        .context("Aktualisierter Product-Security-Roadmaptask wurde nicht gefunden")?;
+    Ok(Some(ProductSecurityRoadmapTaskUpdateResult {
+        product_id: current.product_id,
+        roadmap_id: current.roadmap_id,
+        task,
+    }))
+}
+
+async fn update_roadmap_task_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    task_id: i64,
+    payload: ProductSecurityRoadmapTaskUpdateRequest,
+) -> anyhow::Result<Option<ProductSecurityRoadmapTaskUpdateResult>> {
+    let Some(current) = roadmap_task_current_sqlite(pool, tenant_id, task_id).await? else {
+        return Ok(None);
+    };
+
+    let status = payload
+        .status
+        .as_deref()
+        .map(normalize_roadmap_task_status)
+        .unwrap_or(current.status);
+    let priority = payload
+        .priority
+        .as_deref()
+        .map(normalize_roadmap_task_priority)
+        .unwrap_or(current.priority);
+    let owner_role = payload
+        .owner_role
+        .unwrap_or(current.owner_role)
+        .trim()
+        .to_string();
+    let due_in_days = payload
+        .due_in_days
+        .map(|value| value.max(0))
+        .unwrap_or(current.due_in_days);
+    let dependency_text = payload.dependency_text.unwrap_or(current.dependency_text);
+
+    sqlx::query(
+        r#"
+        UPDATE product_security_productsecurityroadmaptask
+        SET status = ?2,
+            priority = ?3,
+            owner_role = ?4,
+            due_in_days = ?5,
+            dependency_text = ?6,
+            updated_at = datetime('now')
+        WHERE id = ?1
+        "#,
+    )
+    .bind(task_id)
+    .bind(status)
+    .bind(priority)
+    .bind(owner_role)
+    .bind(due_in_days)
+    .bind(dependency_text)
+    .execute(pool)
+    .await
+    .context("SQLite-Product-Security-Roadmaptask konnte nicht aktualisiert werden")?;
+
+    let task = roadmap_task_by_id_sqlite(pool, tenant_id, task_id)
+        .await?
+        .context("Aktualisierter Product-Security-Roadmaptask wurde nicht gefunden")?;
+    Ok(Some(ProductSecurityRoadmapTaskUpdateResult {
+        product_id: current.product_id,
+        roadmap_id: current.roadmap_id,
+        task,
+    }))
+}
+
+async fn roadmap_task_current_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    task_id: i64,
+) -> anyhow::Result<Option<ProductSecurityRoadmapTaskCurrent>> {
+    sqlx::query(
+        r#"
+        SELECT
+            roadmap.product_id,
+            task.roadmap_id,
+            task.status,
+            task.priority,
+            task.owner_role,
+            task.due_in_days,
+            task.dependency_text
+        FROM product_security_productsecurityroadmaptask task
+        INNER JOIN product_security_productsecurityroadmap roadmap
+            ON roadmap.id = task.roadmap_id AND roadmap.tenant_id = task.tenant_id
+        WHERE task.tenant_id = $1 AND task.id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(task_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Product-Security-Roadmaptask konnte nicht gelesen werden")?
+    .map(roadmap_task_current_from_pg_row)
+    .transpose()
+    .map_err(Into::into)
+}
+
+async fn roadmap_task_current_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    task_id: i64,
+) -> anyhow::Result<Option<ProductSecurityRoadmapTaskCurrent>> {
+    sqlx::query(
+        r#"
+        SELECT
+            roadmap.product_id,
+            task.roadmap_id,
+            task.status,
+            task.priority,
+            task.owner_role,
+            task.due_in_days,
+            task.dependency_text
+        FROM product_security_productsecurityroadmaptask task
+        INNER JOIN product_security_productsecurityroadmap roadmap
+            ON roadmap.id = task.roadmap_id AND roadmap.tenant_id = task.tenant_id
+        WHERE task.tenant_id = ? AND task.id = ?
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(task_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Product-Security-Roadmaptask konnte nicht gelesen werden")?
+    .map(roadmap_task_current_from_sqlite_row)
+    .transpose()
+    .map_err(Into::into)
+}
+
+async fn roadmap_task_by_id_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    task_id: i64,
+) -> anyhow::Result<Option<ProductSecurityRoadmapTaskSummary>> {
+    sqlx::query(roadmap_task_by_id_postgres_sql())
+        .bind(tenant_id)
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Product-Security-Roadmaptask konnte nicht gelesen werden")?
+        .map(roadmap_task_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn roadmap_task_by_id_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    task_id: i64,
+) -> anyhow::Result<Option<ProductSecurityRoadmapTaskSummary>> {
+    sqlx::query(roadmap_task_by_id_sqlite_sql())
+        .bind(tenant_id)
+        .bind(task_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Product-Security-Roadmaptask konnte nicht gelesen werden")?
+        .map(roadmap_task_from_sqlite_row)
+        .transpose()
         .map_err(Into::into)
 }
 
@@ -1627,6 +1889,64 @@ fn roadmap_tasks_sqlite_sql() -> &'static str {
     "#
 }
 
+fn roadmap_task_by_id_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        task.id,
+        task.tenant_id,
+        task.roadmap_id,
+        task.related_release_id,
+        release.version AS related_release_version,
+        task.related_vulnerability_id,
+        vuln.title AS related_vulnerability_title,
+        task.phase,
+        task.title,
+        task.description,
+        task.priority,
+        task.owner_role,
+        task.due_in_days,
+        task.dependency_text,
+        task.status,
+        task.created_at::text AS created_at,
+        task.updated_at::text AS updated_at
+    FROM product_security_productsecurityroadmaptask task
+    LEFT JOIN product_security_productrelease release
+        ON release.id = task.related_release_id AND release.tenant_id = task.tenant_id
+    LEFT JOIN product_security_vulnerability vuln
+        ON vuln.id = task.related_vulnerability_id AND vuln.tenant_id = task.tenant_id
+    WHERE task.tenant_id = $1 AND task.id = $2
+    "#
+}
+
+fn roadmap_task_by_id_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        task.id,
+        task.tenant_id,
+        task.roadmap_id,
+        task.related_release_id,
+        release.version AS related_release_version,
+        task.related_vulnerability_id,
+        vuln.title AS related_vulnerability_title,
+        task.phase,
+        task.title,
+        task.description,
+        task.priority,
+        task.owner_role,
+        task.due_in_days,
+        task.dependency_text,
+        task.status,
+        CAST(task.created_at AS TEXT) AS created_at,
+        CAST(task.updated_at AS TEXT) AS updated_at
+    FROM product_security_productsecurityroadmaptask task
+    LEFT JOIN product_security_productrelease release
+        ON release.id = task.related_release_id AND release.tenant_id = task.tenant_id
+    LEFT JOIN product_security_vulnerability vuln
+        ON vuln.id = task.related_vulnerability_id AND vuln.tenant_id = task.tenant_id
+    WHERE task.tenant_id = ? AND task.id = ?
+    "#
+}
+
 fn posture_postgres_sql() -> &'static str {
     r#"
     SELECT
@@ -2185,6 +2505,34 @@ fn roadmap_task_from_sqlite_row(
     })
 }
 
+fn roadmap_task_current_from_pg_row(
+    row: PgRow,
+) -> Result<ProductSecurityRoadmapTaskCurrent, sqlx::Error> {
+    Ok(ProductSecurityRoadmapTaskCurrent {
+        product_id: row.try_get("product_id")?,
+        roadmap_id: row.try_get("roadmap_id")?,
+        status: row.try_get("status")?,
+        priority: row.try_get("priority")?,
+        owner_role: row.try_get("owner_role")?,
+        due_in_days: row.try_get("due_in_days")?,
+        dependency_text: row.try_get("dependency_text")?,
+    })
+}
+
+fn roadmap_task_current_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<ProductSecurityRoadmapTaskCurrent, sqlx::Error> {
+    Ok(ProductSecurityRoadmapTaskCurrent {
+        product_id: row.try_get("product_id")?,
+        roadmap_id: row.try_get("roadmap_id")?,
+        status: row.try_get("status")?,
+        priority: row.try_get("priority")?,
+        owner_role: row.try_get("owner_role")?,
+        due_in_days: row.try_get("due_in_days")?,
+        dependency_text: row.try_get("dependency_text")?,
+    })
+}
+
 fn posture_from_pg_row(row: PgRow) -> anyhow::Result<ProductSecurityPosture> {
     Ok(ProductSecurityPosture {
         products: row.try_get("products")?,
@@ -2412,4 +2760,29 @@ fn roadmap_task_status_label(value: &str) -> String {
         _ => value,
     }
     .to_string()
+}
+
+fn normalize_roadmap_task_status(value: &str) -> String {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "OPEN" => "OPEN",
+        "PLANNED" => "PLANNED",
+        "IN_PROGRESS" => "IN_PROGRESS",
+        "DONE" => "DONE",
+        _ => "OPEN",
+    }
+    .to_string()
+}
+
+fn normalize_roadmap_task_priority(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    match trimmed.to_ascii_uppercase().as_str() {
+        "CRITICAL" => "CRITICAL".to_string(),
+        "HIGH" => "HIGH".to_string(),
+        "MEDIUM" => "MEDIUM".to_string(),
+        "LOW" => "LOW".to_string(),
+        _ => trimmed.to_string(),
+    }
 }

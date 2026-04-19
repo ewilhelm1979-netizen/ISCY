@@ -994,6 +994,116 @@ async fn product_security_roadmap_returns_task_data_from_database() {
 }
 
 #[tokio::test]
+async fn product_security_roadmap_task_update_updates_tenant_task() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/product-security/roadmap-tasks/901")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{
+                        "status": "DONE",
+                        "priority": "MEDIUM",
+                        "owner_role": "Product Security Office",
+                        "due_in_days": 7,
+                        "dependency_text": "Reviewed in planning"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["product_id"], 100);
+    assert_eq!(payload["roadmap_id"], 900);
+    assert_eq!(payload["task"]["id"], 901);
+    assert_eq!(payload["task"]["status"], "DONE");
+    assert_eq!(payload["task"]["status_label"], "Erledigt");
+    assert_eq!(payload["task"]["priority"], "MEDIUM");
+    assert_eq!(payload["task"]["owner_role"], "Product Security Office");
+    assert_eq!(payload["task"]["due_in_days"], 7);
+    assert_eq!(payload["task"]["dependency_text"], "Reviewed in planning");
+
+    let row = sqlx::query(
+        r#"
+        SELECT status, priority, owner_role, due_in_days, dependency_text
+        FROM product_security_productsecurityroadmaptask
+        WHERE id = 901
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("status"), "DONE");
+    assert_eq!(row.get::<String, _>("priority"), "MEDIUM");
+    assert_eq!(
+        row.get::<String, _>("owner_role"),
+        "Product Security Office"
+    );
+    assert_eq!(row.get::<i64, _>("due_in_days"), 7);
+    assert_eq!(
+        row.get::<String, _>("dependency_text"),
+        "Reviewed in planning"
+    );
+}
+
+#[tokio::test]
+async fn product_security_roadmap_task_update_blocks_foreign_tenant_task() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/product-security/roadmap-tasks/901")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "99")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(r#"{"status":"DONE"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["error_code"],
+        "product_security_roadmap_task_not_found"
+    );
+}
+
+#[tokio::test]
 async fn risk_register_requires_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(
