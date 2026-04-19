@@ -11,6 +11,7 @@ use serde_json::Value;
 
 pub mod assessment_store;
 pub mod asset_store;
+pub mod catalog_store;
 pub mod cve_store;
 pub mod dashboard_store;
 pub mod evidence_store;
@@ -18,6 +19,7 @@ pub mod import_store;
 pub mod process_store;
 pub mod report_store;
 pub mod request_context;
+pub mod requirement_store;
 pub mod risk_store;
 pub mod roadmap_store;
 pub mod tenant_store;
@@ -25,6 +27,7 @@ pub mod wizard_store;
 
 use assessment_store::AssessmentStore;
 use asset_store::AssetStore;
+use catalog_store::CatalogStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
 use evidence_store::EvidenceStore;
@@ -32,6 +35,7 @@ use import_store::ImportStore;
 use process_store::ProcessStore;
 use report_store::ReportStore;
 use request_context::RequestContext;
+use requirement_store::RequirementStore;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
 use tenant_store::TenantStore;
@@ -41,12 +45,14 @@ use wizard_store::WizardStore;
 pub struct AppState {
     pub asset_store: Option<AssetStore>,
     pub assessment_store: Option<AssessmentStore>,
+    pub catalog_store: Option<CatalogStore>,
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
     pub evidence_store: Option<EvidenceStore>,
     pub import_store: Option<ImportStore>,
     pub process_store: Option<ProcessStore>,
     pub report_store: Option<ReportStore>,
+    pub requirement_store: Option<RequirementStore>,
     pub risk_store: Option<RiskStore>,
     pub roadmap_store: Option<RoadmapStore>,
     pub tenant_store: Option<TenantStore>,
@@ -58,12 +64,14 @@ impl AppState {
         Self {
             asset_store: None,
             assessment_store: None,
+            catalog_store: None,
             cve_store,
             dashboard_store: None,
             evidence_store: None,
             import_store: None,
             process_store: None,
             report_store: None,
+            requirement_store: None,
             risk_store: None,
             roadmap_store: None,
             tenant_store: None,
@@ -75,12 +83,14 @@ impl AppState {
         Self {
             asset_store: None,
             assessment_store: None,
+            catalog_store: None,
             cve_store,
             dashboard_store: None,
             evidence_store: None,
             import_store: None,
             process_store: None,
             report_store: None,
+            requirement_store: None,
             risk_store: None,
             roadmap_store: None,
             tenant_store,
@@ -108,6 +118,11 @@ impl AppState {
         self
     }
 
+    pub fn with_catalog_store(mut self, catalog_store: Option<CatalogStore>) -> Self {
+        self.catalog_store = catalog_store;
+        self
+    }
+
     pub fn with_assessment_store(mut self, assessment_store: Option<AssessmentStore>) -> Self {
         self.assessment_store = assessment_store;
         self
@@ -115,6 +130,11 @@ impl AppState {
 
     pub fn with_report_store(mut self, report_store: Option<ReportStore>) -> Self {
         self.report_store = report_store;
+        self
+    }
+
+    pub fn with_requirement_store(mut self, requirement_store: Option<RequirementStore>) -> Self {
+        self.requirement_store = requirement_store;
         self
     }
 
@@ -213,6 +233,13 @@ pub struct AssetInventoryResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
     pub assets: Vec<asset_store::InformationAssetSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CatalogDomainsResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub library: catalog_store::CatalogDomainLibrary,
 }
 
 #[derive(Debug, Serialize)]
@@ -330,6 +357,13 @@ pub struct ReportSnapshotsResponse {
 pub struct ReportSnapshotDetailResponse {
     pub api_version: &'static str,
     pub report: report_store::ReportSnapshotDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RequirementLibraryResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub library: requirement_store::RequirementLibrary,
 }
 
 #[derive(Debug, Deserialize)]
@@ -680,6 +714,55 @@ async fn asset_inventory(State(state): State<AppState>, headers: HeaderMap) -> R
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Assetliste konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn catalog_domains(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(err) = RequestContext::authenticated_tenant_from_headers(&headers) {
+        return (
+            err.status_code(),
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: err.error_code(),
+                message: err.message().to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let Some(store) = state.catalog_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Catalog-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.domain_library().await {
+        Ok(library) => (
+            StatusCode::OK,
+            Json(CatalogDomainsResponse {
+                api_version: "v1",
+                library,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Fragenkatalog konnte nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -1637,6 +1720,55 @@ async fn report_snapshot_detail(
     }
 }
 
+async fn requirement_library(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(err) = RequestContext::authenticated_tenant_from_headers(&headers) {
+        return (
+            err.status_code(),
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: err.error_code(),
+                message: err.message().to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let Some(store) = state.requirement_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Requirement-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.library(500).await {
+        Ok(library) => (
+            StatusCode::OK,
+            Json(RequirementLibraryResponse {
+                api_version: "v1",
+                library,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Requirement Library konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn web_index() -> Html<String> {
     Html(
         r#"<!doctype html>
@@ -2004,6 +2136,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/organizations/tenant-profile",
             get(organization_tenant_profile),
         )
+        .route("/api/v1/catalog/domains", get(catalog_domains))
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
         .route("/api/v1/assets/information-assets", get(asset_inventory))
         .route("/api/v1/processes", get(process_register))
@@ -2034,6 +2167,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/reports/snapshots/{report_id}",
             get(report_snapshot_detail),
         )
+        .route("/api/v1/requirements", get(requirement_library))
         .route("/", get(web_index))
         .route("/login/", get(web_login))
         .route("/navigator/", get(web_navigator))

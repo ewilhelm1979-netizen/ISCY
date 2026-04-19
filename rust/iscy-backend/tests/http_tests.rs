@@ -2,10 +2,10 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use iscy_backend::{
     app_router, app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
-    cve_store::CveStore, dashboard_store::DashboardStore, evidence_store::EvidenceStore,
-    import_store::ImportStore, process_store::ProcessStore, report_store::ReportStore,
-    risk_store::RiskStore, roadmap_store::RoadmapStore, tenant_store::TenantStore,
-    wizard_store::WizardStore, AppState,
+    catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore,
+    evidence_store::EvidenceStore, import_store::ImportStore, process_store::ProcessStore,
+    report_store::ReportStore, requirement_store::RequirementStore, risk_store::RiskStore,
+    roadmap_store::RoadmapStore, tenant_store::TenantStore, wizard_store::WizardStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
@@ -284,6 +284,170 @@ async fn organization_tenant_profile_returns_not_found_for_unknown_tenant() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "tenant_not_found");
+}
+
+#[tokio::test]
+async fn catalog_domains_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/catalog/domains")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn catalog_domains_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/catalog/domains")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn catalog_domains_return_domain_question_tree_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_catalog_tables(&pool).await;
+    insert_catalog_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_catalog_store(Some(CatalogStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/catalog/domains")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["question_count"], 3);
+    assert_eq!(payload["domains"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["domains"][0]["code"], "GOV");
+    assert_eq!(payload["domains"][0]["question_count"], 2);
+    assert_eq!(payload["domains"][0]["questions"][0]["code"], "GOV-APP-1");
+    assert_eq!(
+        payload["domains"][0]["questions"][0]["question_kind_label"],
+        "Betroffenheit"
+    );
+}
+
+#[tokio::test]
+async fn requirement_library_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/requirements")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn requirement_library_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/requirements")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn requirement_library_returns_requirements_and_versions_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_requirement_tables(&pool).await;
+    insert_requirement_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_requirement_store(Some(RequirementStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/requirements")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["requirements"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["requirements"][0]["framework"], "ISO27001");
+    assert_eq!(payload["requirements"][0]["framework_label"], "ISO 27001");
+    assert_eq!(
+        payload["requirements"][0]["mapping_version"]["version"],
+        "2022"
+    );
+    assert_eq!(
+        payload["requirements"][0]["primary_source"]["authority"],
+        "ISO"
+    );
+    assert_eq!(payload["mapping_versions"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["mapping_versions"][0]["source_count"], 1);
+    assert_eq!(payload["mapping_versions"][0]["requirement_count"], 1);
 }
 
 #[tokio::test]
@@ -2177,6 +2341,389 @@ async fn report_cve_summary_endpoint_returns_ok() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+async fn create_catalog_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE catalog_assessmentdomain (
+            id INTEGER PRIMARY KEY,
+            code varchar(64) NOT NULL,
+            name varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            weight INTEGER NOT NULL,
+            sort_order INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE catalog_assessmentquestion (
+            id INTEGER PRIMARY KEY,
+            domain_id INTEGER NULL,
+            code varchar(64) NOT NULL,
+            text varchar(500) NOT NULL,
+            help_text TEXT NOT NULL,
+            why_it_matters TEXT NOT NULL,
+            question_kind varchar(20) NOT NULL,
+            wizard_step varchar(20) NOT NULL,
+            weight INTEGER NOT NULL,
+            is_required bool NOT NULL,
+            applies_to_iso27001 bool NOT NULL,
+            applies_to_nis2 bool NOT NULL,
+            applies_to_cra bool NOT NULL,
+            applies_to_ai_act bool NOT NULL,
+            applies_to_iec62443 bool NOT NULL,
+            applies_to_iso_sae_21434 bool NOT NULL,
+            applies_to_product_security bool NOT NULL,
+            sort_order INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_catalog_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO catalog_assessmentdomain (
+            id,
+            code,
+            name,
+            description,
+            weight,
+            sort_order,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (1, 'GOV', 'Governance', 'Governance controls', 10, 1, '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z'),
+            (2, 'IAM', 'Identity Access', 'Identity controls', 10, 2, '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO catalog_assessmentquestion (
+            id,
+            domain_id,
+            code,
+            text,
+            help_text,
+            why_it_matters,
+            question_kind,
+            wizard_step,
+            weight,
+            is_required,
+            applies_to_iso27001,
+            applies_to_nis2,
+            applies_to_cra,
+            applies_to_ai_act,
+            applies_to_iec62443,
+            applies_to_iso_sae_21434,
+            applies_to_product_security,
+            sort_order,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                10,
+                1,
+                'GOV-APP-1',
+                'Ist der NIS2-Scope geklaert?',
+                'Scope help',
+                'Scope matters',
+                'APPLICABILITY',
+                'applicability',
+                10,
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z'
+            ),
+            (
+                11,
+                1,
+                'GOV-MAT-1',
+                'Sind Policies dokumentiert?',
+                'Policy help',
+                'Policy matters',
+                'MATURITY',
+                'maturity',
+                10,
+                1,
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                2,
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z'
+            ),
+            (
+                12,
+                2,
+                'IAM-MAT-1',
+                'Ist MFA umgesetzt?',
+                'MFA help',
+                'MFA matters',
+                'MATURITY',
+                'maturity',
+                10,
+                1,
+                1,
+                1,
+                0,
+                0,
+                0,
+                0,
+                1,
+                1,
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_requirement_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_mappingversion (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            slug varchar(50) NOT NULL,
+            title varchar(255) NOT NULL,
+            version varchar(32) NOT NULL,
+            program_name varchar(64) NOT NULL,
+            status varchar(16) NOT NULL,
+            effective_on date NULL,
+            notes TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_regulatorysource (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            mapping_version_id INTEGER NOT NULL,
+            code varchar(64) NOT NULL,
+            title varchar(255) NOT NULL,
+            authority varchar(128) NOT NULL,
+            citation varchar(255) NOT NULL,
+            url varchar(200) NOT NULL,
+            source_type varchar(32) NOT NULL,
+            published_on date NULL,
+            effective_on date NULL,
+            notes TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_requirement (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            code varchar(64) NOT NULL,
+            title varchar(255) NOT NULL,
+            domain varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            guidance TEXT NOT NULL,
+            is_active bool NOT NULL,
+            evidence_required bool NOT NULL,
+            evidence_guidance TEXT NOT NULL,
+            evidence_examples TEXT NOT NULL,
+            sector_package varchar(64) NOT NULL,
+            legal_reference varchar(128) NOT NULL,
+            mapped_controls TEXT NOT NULL,
+            mapping_rationale TEXT NOT NULL,
+            coverage_level varchar(16) NOT NULL,
+            mapping_version_id INTEGER NULL,
+            primary_source_id INTEGER NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_requirement_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_mappingversion (
+            id,
+            framework,
+            slug,
+            title,
+            version,
+            program_name,
+            status,
+            effective_on,
+            notes,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (1, 'ISO27001', 'iso27001-2022', 'ISO 27001 Mapping', '2022', 'ISCY', 'ACTIVE', '2026-01-01', 'Active mapping', '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z'),
+            (2, 'NIS2', 'nis2-draft', 'NIS2 Draft', 'draft', 'ISCY', 'DRAFT', NULL, 'Draft mapping', '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_regulatorysource (
+            id,
+            framework,
+            mapping_version_id,
+            code,
+            title,
+            authority,
+            citation,
+            url,
+            source_type,
+            published_on,
+            effective_on,
+            notes,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                10,
+                'ISO27001',
+                1,
+                'A.5.17',
+                'Authentication Information',
+                'ISO',
+                'ISO/IEC 27001:2022 A.5.17',
+                'https://example.test/iso',
+                'STANDARD',
+                '2022-10-25',
+                '2022-10-25',
+                '',
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_requirement (
+            id,
+            framework,
+            code,
+            title,
+            domain,
+            description,
+            guidance,
+            is_active,
+            evidence_required,
+            evidence_guidance,
+            evidence_examples,
+            sector_package,
+            legal_reference,
+            mapped_controls,
+            mapping_rationale,
+            coverage_level,
+            mapping_version_id,
+            primary_source_id,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                100,
+                'ISO27001',
+                'A.5.17',
+                'Authentication Information',
+                'Identity',
+                'Protect authentication information',
+                'Use MFA and vaulting',
+                1,
+                1,
+                'MFA policy',
+                'Policy, screenshots',
+                'ALL',
+                'ISO/IEC 27001:2022 A.5.17',
+                '[]',
+                'Primary identity control',
+                'PRIMARY',
+                1,
+                10,
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z'
+            ),
+            (
+                101,
+                'NIS2',
+                '21.2',
+                'Incident Handling',
+                'Incident Response',
+                'Handle incidents',
+                '',
+                1,
+                1,
+                '',
+                '',
+                'ALL',
+                'NIS2 Art. 21',
+                '[]',
+                '',
+                'SUPPORTING',
+                NULL,
+                NULL,
+                '2026-04-01T10:00:00Z',
+                '2026-04-01T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn create_import_tables(pool: &SqlitePool) {

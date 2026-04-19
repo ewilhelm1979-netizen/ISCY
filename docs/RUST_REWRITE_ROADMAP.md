@@ -80,6 +80,10 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/assessments` liefert Prozess-/Requirement-Assessments inklusive Prozess-, Requirement- und Owner-Anzeige
   - `GET /api/v1/assessments/measures` liefert Massnahmen inklusive Assessment- und Owner-Anzeige
   - Django kann die drei Listen ueber `ASSESSMENT_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
+- `catalog` und `requirements_app` haben tenantkontext-geschuetzte Read-APIs in Rust:
+  - `GET /api/v1/catalog/domains` liefert Domaenen inklusive eingebetteter Fragen und Gesamtzaehler
+  - `GET /api/v1/requirements` liefert Requirements inklusive Mapping-Versionen und Primaerquellen
+  - Django kann Fragenkatalog und Requirement Library ueber `CATALOG_BACKEND=rust_service` und `REQUIREMENTS_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
 - `roadmap` hat tenantgeschuetzte Read-/Update-APIs in Rust:
   - `GET /api/v1/roadmap/plans` liefert Roadmap-Planlisten inklusive Phasen-/Task-Zaehlern fuer den aktuellen Tenant
   - `GET /api/v1/roadmap/plans/{plan_id}` liefert den Plan-Detailbaum mit Phasen, Tasks und Abhaengigkeiten

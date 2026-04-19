@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 
 use iscy_backend::{
     app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
-    cve_store::CveStore, dashboard_store::DashboardStore, evidence_store::EvidenceStore,
-    import_store::ImportStore, process_store::ProcessStore, report_store::ReportStore,
-    risk_store::RiskStore, roadmap_store::RoadmapStore, tenant_store::TenantStore,
-    wizard_store::WizardStore, AppState,
+    catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore,
+    evidence_store::EvidenceStore, import_store::ImportStore, process_store::ProcessStore,
+    report_store::ReportStore, requirement_store::RequirementStore, risk_store::RiskStore,
+    roadmap_store::RoadmapStore, tenant_store::TenantStore, wizard_store::WizardStore, AppState,
 };
 use tokio::net::TcpListener;
 
@@ -19,7 +19,9 @@ async fn main() -> anyhow::Result<()> {
         tenant_store,
         dashboard_store,
         report_store,
+        requirement_store,
         asset_store,
+        catalog_store,
         process_store,
         risk_store,
         evidence_store,
@@ -33,7 +35,9 @@ async fn main() -> anyhow::Result<()> {
             let tenant_store = TenantStore::connect(&database_url).await?;
             let dashboard_store = DashboardStore::connect(&database_url).await?;
             let report_store = ReportStore::connect(&database_url).await?;
+            let requirement_store = RequirementStore::connect(&database_url).await?;
             let asset_store = AssetStore::connect(&database_url).await?;
+            let catalog_store = CatalogStore::connect(&database_url).await?;
             let process_store = ProcessStore::connect(&database_url).await?;
             let risk_store = RiskStore::connect(&database_url).await?;
             let evidence_store = EvidenceStore::connect(&database_url).await?;
@@ -46,7 +50,9 @@ async fn main() -> anyhow::Result<()> {
                 Some(tenant_store),
                 Some(dashboard_store),
                 Some(report_store),
+                Some(requirement_store),
                 Some(asset_store),
+                Some(catalog_store),
                 Some(process_store),
                 Some(risk_store),
                 Some(evidence_store),
@@ -57,13 +63,15 @@ async fn main() -> anyhow::Result<()> {
             )
         }
         _ => (
-            None, None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None, None, None,
         ),
     };
     let state = AppState::with_stores(cve_store, tenant_store)
         .with_dashboard_store(dashboard_store)
         .with_report_store(report_store)
+        .with_requirement_store(requirement_store)
         .with_asset_store(asset_store)
+        .with_catalog_store(catalog_store)
         .with_process_store(process_store)
         .with_risk_store(risk_store)
         .with_evidence_store(evidence_store)

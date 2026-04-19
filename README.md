@@ -158,6 +158,8 @@ Der funktionierende Referenzpfad auf Ubuntu 24.04 ist:
 - `REPORT_SUMMARY_BACKEND=rust_service`
 - `REPORT_SNAPSHOT_BACKEND=rust_service`
 - `DASHBOARD_SUMMARY_BACKEND=rust_service`
+- `CATALOG_BACKEND=rust_service`
+- `REQUIREMENTS_BACKEND=rust_service`
 - `ASSET_INVENTORY_BACKEND=rust_service`
 - `PROCESS_REGISTER_BACKEND=rust_service`
 - `RISK_REGISTER_BACKEND=rust_service`
