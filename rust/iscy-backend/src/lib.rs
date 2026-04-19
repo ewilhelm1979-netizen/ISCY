@@ -276,6 +276,20 @@ pub struct ProductSecurityOverviewResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProductSecurityDetailResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub detail: product_security_store::ProductSecurityDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductSecurityRoadmapDetailResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub detail: product_security_store::ProductSecurityRoadmapDetail,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RiskRegisterResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
@@ -964,6 +978,138 @@ async fn product_security_overview(State(state): State<AppState>, headers: Heade
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Product-Security-Uebersicht konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_product_detail(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.detail(context.tenant_id, product_id).await {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(ProductSecurityDetailResponse {
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "product_not_found",
+                message: "Product-Security-Produkt wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Product-Security-Detail konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_product_roadmap(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.roadmap_detail(context.tenant_id, product_id).await {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(ProductSecurityRoadmapDetailResponse {
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "roadmap_not_found",
+                message: "Product-Security-Roadmap wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Product-Security-Roadmap konnte nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -2226,6 +2372,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/product-security/overview",
             get(product_security_overview),
+        )
+        .route(
+            "/api/v1/product-security/products/{product_id}",
+            get(product_security_product_detail),
+        )
+        .route(
+            "/api/v1/product-security/products/{product_id}/roadmap",
+            get(product_security_product_roadmap),
         )
         .route("/api/v1/risks", get(risk_register))
         .route("/api/v1/risks/{risk_id}", get(risk_detail))

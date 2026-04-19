@@ -860,6 +860,140 @@ async fn product_security_overview_returns_tenant_products_from_database() {
 }
 
 #[tokio::test]
+async fn product_security_detail_returns_product_tree_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/products/100")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["product"]["name"], "Sensor Gateway");
+    assert_eq!(payload["releases"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["releases"][0]["status_label"], "Aktiv");
+    assert_eq!(payload["components"][0]["name"], "Gateway Firmware");
+    assert_eq!(payload["components"][0]["supplier_name"], "Secure Supplier");
+    assert_eq!(payload["components"][0]["has_sbom"], true);
+    assert_eq!(payload["threat_models"][0]["name"], "Gateway Threat Model");
+    assert_eq!(payload["threat_models"][0]["scenario_count"], 1);
+    assert_eq!(payload["threat_scenarios"], 1);
+    assert_eq!(
+        payload["taras"][0]["scenario_title"],
+        "Unsigned firmware update"
+    );
+    assert_eq!(payload["vulnerabilities"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        payload["vulnerabilities"][0]["component_name"],
+        "Gateway Firmware"
+    );
+    assert_eq!(payload["ai_systems"][0]["name"], "Gateway Assistant");
+    assert_eq!(payload["psirt_cases"][0]["case_id"], "PSIRT-1");
+    assert_eq!(payload["advisories"][0]["advisory_id"], "ADV-1");
+    assert_eq!(payload["snapshot"]["cra_readiness_percent"], 72);
+    assert_eq!(payload["roadmap"]["title"], "Gateway Roadmap");
+    assert_eq!(payload["roadmap_tasks"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        payload["roadmap_tasks"][1]["related_vulnerability_title"],
+        "Critical firmware exposure"
+    );
+}
+
+#[tokio::test]
+async fn product_security_detail_blocks_foreign_tenant_product() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/products/101")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "product_not_found");
+}
+
+#[tokio::test]
+async fn product_security_roadmap_returns_task_data_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/products/100/roadmap")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["product"]["name"], "Sensor Gateway");
+    assert_eq!(payload["roadmap"]["title"], "Gateway Roadmap");
+    assert_eq!(payload["tasks"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["tasks"][0]["phase"], "GOVERNANCE");
+    assert_eq!(payload["tasks"][0]["phase_label"], "Governance");
+    assert_eq!(
+        payload["tasks"][1]["title"],
+        "Remediate critical firmware exposure"
+    );
+    assert_eq!(payload["snapshot"]["psirt_readiness_percent"], 55);
+}
+
+#[tokio::test]
 async fn risk_register_requires_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(
@@ -3181,6 +3315,18 @@ async fn create_product_security_tables(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
+        CREATE TABLE organizations_supplier (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
         CREATE TABLE product_security_productfamily (
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
@@ -3220,7 +3366,50 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             tenant_id INTEGER NOT NULL,
             product_id INTEGER NOT NULL,
             version varchar(64) NOT NULL,
-            status varchar(16) NOT NULL
+            status varchar(16) NOT NULL,
+            release_date TEXT NULL,
+            support_end_date TEXT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_component (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            supplier_id INTEGER NULL,
+            name varchar(255) NOT NULL,
+            component_type varchar(16) NOT NULL,
+            version varchar(64) NOT NULL,
+            is_open_source bool NOT NULL,
+            has_sbom bool NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_aisystem (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NULL,
+            name varchar(255) NOT NULL,
+            use_case TEXT NOT NULL,
+            provider varchar(255) NOT NULL,
+            risk_classification varchar(16) NOT NULL,
+            in_scope bool NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
         "#,
     )
@@ -3233,8 +3422,32 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
             product_id INTEGER NOT NULL,
+            release_id INTEGER NULL,
             name varchar(255) NOT NULL,
-            status varchar(16) NOT NULL
+            methodology varchar(100) NOT NULL,
+            summary TEXT NOT NULL,
+            status varchar(16) NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_threatscenario (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            threat_model_id INTEGER NOT NULL,
+            component_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            category varchar(32) NOT NULL,
+            attack_path TEXT NOT NULL,
+            impact TEXT NOT NULL,
+            severity varchar(16) NOT NULL,
+            mitigation_status varchar(64) NOT NULL
         )
         "#,
     )
@@ -3247,8 +3460,17 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
             product_id INTEGER NOT NULL,
+            release_id INTEGER NULL,
+            scenario_id INTEGER NULL,
             name varchar(255) NOT NULL,
-            risk_score INTEGER NOT NULL
+            summary TEXT NOT NULL,
+            attack_feasibility INTEGER NOT NULL,
+            impact_score INTEGER NOT NULL,
+            risk_score INTEGER NOT NULL,
+            status varchar(16) NOT NULL,
+            treatment_decision varchar(128) NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
         "#,
     )
@@ -3261,9 +3483,16 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
             product_id INTEGER NOT NULL,
+            release_id INTEGER NULL,
+            component_id INTEGER NULL,
             title varchar(255) NOT NULL,
+            cve varchar(50) NOT NULL,
             severity varchar(16) NOT NULL,
-            status varchar(16) NOT NULL
+            status varchar(16) NOT NULL,
+            remediation_due TEXT NULL,
+            summary TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
         "#,
     )
@@ -3276,8 +3505,16 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
             product_id INTEGER NOT NULL,
+            release_id INTEGER NULL,
+            vulnerability_id INTEGER NULL,
             case_id varchar(64) NOT NULL,
-            status varchar(20) NOT NULL
+            title varchar(255) NOT NULL,
+            severity varchar(16) NOT NULL,
+            status varchar(20) NOT NULL,
+            disclosure_due TEXT NULL,
+            summary TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
         "#,
     )
@@ -3290,8 +3527,15 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
             product_id INTEGER NOT NULL,
+            release_id INTEGER NULL,
+            psirt_case_id INTEGER NULL,
             advisory_id varchar(64) NOT NULL,
-            status varchar(16) NOT NULL
+            title varchar(255) NOT NULL,
+            status varchar(16) NOT NULL,
+            published_on TEXT NULL,
+            summary TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         )
         "#,
     )
@@ -3325,6 +3569,47 @@ async fn create_product_security_tables(pool: &SqlitePool) {
     .execute(pool)
     .await
     .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_productsecurityroadmap (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            summary TEXT NOT NULL,
+            generated_from_snapshot_id INTEGER NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_productsecurityroadmaptask (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            roadmap_id INTEGER NOT NULL,
+            related_release_id INTEGER NULL,
+            related_vulnerability_id INTEGER NULL,
+            phase varchar(16) NOT NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            priority varchar(32) NOT NULL,
+            owner_role varchar(64) NOT NULL,
+            due_in_days INTEGER NOT NULL,
+            dependency_text TEXT NOT NULL,
+            status varchar(16) NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn insert_product_security_fixture(pool: &SqlitePool) {
@@ -3336,6 +3621,15 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
         VALUES
             (42, 'MANUFACTURING', 1, 1, 0, 0),
             (99, 'OTHER', 1, 0, 0, 0)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_supplier (id, tenant_id, name)
+        VALUES (50, 42, 'Secure Supplier')
         "#,
     )
     .execute(pool)
@@ -3405,11 +3699,51 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
-        INSERT INTO product_security_productrelease (id, tenant_id, product_id, version, status)
+        INSERT INTO product_security_productrelease (
+            id,
+            tenant_id,
+            product_id,
+            version,
+            status,
+            release_date,
+            support_end_date,
+            created_at,
+            updated_at
+        )
         VALUES
-            (200, 42, 100, '1.0', 'ACTIVE'),
-            (201, 42, 100, '0.9', 'EOL'),
-            (202, 99, 101, '9.9', 'ACTIVE')
+            (
+                200,
+                42,
+                100,
+                '1.0',
+                'ACTIVE',
+                '2026-04-01',
+                '2028-04-01',
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                201,
+                42,
+                100,
+                '0.9',
+                'EOL',
+                '2025-01-01',
+                '2026-01-01',
+                '2026-04-18T09:00:00Z',
+                '2026-04-18T09:30:00Z'
+            ),
+            (
+                202,
+                99,
+                101,
+                '9.9',
+                'ACTIVE',
+                '2026-01-01',
+                '2027-01-01',
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            )
         "#,
     )
     .execute(pool)
@@ -3417,8 +3751,32 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
-        INSERT INTO product_security_threatmodel (id, tenant_id, product_id, name, status)
-        VALUES (300, 42, 100, 'Gateway Threat Model', 'APPROVED')
+        INSERT INTO product_security_component (
+            id,
+            tenant_id,
+            product_id,
+            supplier_id,
+            name,
+            component_type,
+            version,
+            is_open_source,
+            has_sbom,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            250,
+            42,
+            100,
+            50,
+            'Gateway Firmware',
+            'FIRMWARE',
+            '1.0.3',
+            0,
+            1,
+            '2026-04-18T10:00:00Z',
+            '2026-04-18T11:00:00Z'
+        )
         "#,
     )
     .execute(pool)
@@ -3426,8 +3784,30 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
-        INSERT INTO product_security_tara (id, tenant_id, product_id, name, risk_score)
-        VALUES (400, 42, 100, 'Gateway TARA', 9)
+        INSERT INTO product_security_aisystem (
+            id,
+            tenant_id,
+            product_id,
+            name,
+            use_case,
+            provider,
+            risk_classification,
+            in_scope,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            260,
+            42,
+            100,
+            'Gateway Assistant',
+            'Firmware triage and support guidance',
+            'Internal',
+            'LIMITED',
+            1,
+            '2026-04-18T10:00:00Z',
+            '2026-04-18T11:00:00Z'
+        )
         "#,
     )
     .execute(pool)
@@ -3435,11 +3815,168 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
-        INSERT INTO product_security_vulnerability (id, tenant_id, product_id, title, severity, status)
+        INSERT INTO product_security_threatmodel (
+            id,
+            tenant_id,
+            product_id,
+            release_id,
+            name,
+            methodology,
+            summary,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            300,
+            42,
+            100,
+            200,
+            'Gateway Threat Model',
+            'STRIDE',
+            'Gateway threat model summary',
+            'APPROVED',
+            '2026-04-18T10:00:00Z',
+            '2026-04-18T11:00:00Z'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_threatscenario (
+            id,
+            tenant_id,
+            threat_model_id,
+            component_id,
+            title,
+            category,
+            attack_path,
+            impact,
+            severity,
+            mitigation_status
+        )
+        VALUES (
+            301,
+            42,
+            300,
+            250,
+            'Unsigned firmware update',
+            'TAMPERING',
+            'Attacker replaces firmware package',
+            'Remote code execution',
+            'CRITICAL',
+            'Open'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_tara (
+            id,
+            tenant_id,
+            product_id,
+            release_id,
+            scenario_id,
+            name,
+            summary,
+            attack_feasibility,
+            impact_score,
+            risk_score,
+            status,
+            treatment_decision,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            400,
+            42,
+            100,
+            200,
+            301,
+            'Gateway TARA',
+            'TARA for firmware update abuse',
+            3,
+            4,
+            12,
+            'OPEN',
+            'Mitigate in next firmware release',
+            '2026-04-18T10:00:00Z',
+            '2026-04-18T11:00:00Z'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_vulnerability (
+            id,
+            tenant_id,
+            product_id,
+            release_id,
+            component_id,
+            title,
+            cve,
+            severity,
+            status,
+            remediation_due,
+            summary,
+            created_at,
+            updated_at
+        )
         VALUES
-            (500, 42, 100, 'Critical firmware exposure', 'CRITICAL', 'OPEN'),
-            (501, 42, 100, 'Outdated dependency', 'HIGH', 'TRIAGED'),
-            (502, 42, 100, 'Fixed UI issue', 'LOW', 'FIXED')
+            (
+                500,
+                42,
+                100,
+                200,
+                250,
+                'Critical firmware exposure',
+                'CVE-2026-0001',
+                'CRITICAL',
+                'OPEN',
+                '2026-05-18',
+                'Critical issue in firmware updater',
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                501,
+                42,
+                100,
+                200,
+                250,
+                'Outdated dependency',
+                '',
+                'HIGH',
+                'TRIAGED',
+                '2026-06-01',
+                'Dependency needs update',
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                502,
+                42,
+                100,
+                200,
+                250,
+                'Fixed UI issue',
+                '',
+                'LOW',
+                'FIXED',
+                NULL,
+                'Already fixed',
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            )
         "#,
     )
     .execute(pool)
@@ -3447,8 +3984,36 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
-        INSERT INTO product_security_psirtcase (id, tenant_id, product_id, case_id, status)
-        VALUES (600, 42, 100, 'PSIRT-1', 'TRIAGE')
+        INSERT INTO product_security_psirtcase (
+            id,
+            tenant_id,
+            product_id,
+            release_id,
+            vulnerability_id,
+            case_id,
+            title,
+            severity,
+            status,
+            disclosure_due,
+            summary,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            600,
+            42,
+            100,
+            200,
+            500,
+            'PSIRT-1',
+            'Critical firmware disclosure',
+            'CRITICAL',
+            'TRIAGE',
+            '2026-05-20',
+            'PSIRT case for critical firmware exposure',
+            '2026-04-18T10:00:00Z',
+            '2026-04-18T11:00:00Z'
+        )
         "#,
     )
     .execute(pool)
@@ -3456,8 +4021,34 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
-        INSERT INTO product_security_securityadvisory (id, tenant_id, product_id, advisory_id, status)
-        VALUES (700, 42, 100, 'ADV-1', 'PUBLISHED')
+        INSERT INTO product_security_securityadvisory (
+            id,
+            tenant_id,
+            product_id,
+            release_id,
+            psirt_case_id,
+            advisory_id,
+            title,
+            status,
+            published_on,
+            summary,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            700,
+            42,
+            100,
+            200,
+            600,
+            'ADV-1',
+            'Gateway firmware advisory',
+            'PUBLISHED',
+            '2026-05-21',
+            'Advisory for firmware exposure',
+            '2026-04-18T10:00:00Z',
+            '2026-04-18T11:00:00Z'
+        )
         "#,
     )
     .execute(pool)
@@ -3505,6 +4096,92 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
             '2026-04-18T10:00:00Z',
             '2026-04-18T11:00:00Z'
         )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_productsecurityroadmap (
+            id,
+            tenant_id,
+            product_id,
+            title,
+            summary,
+            generated_from_snapshot_id,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            900,
+            42,
+            100,
+            'Gateway Roadmap',
+            'Roadmap from Rust detail fixture',
+            800,
+            '2026-04-18T12:00:00Z',
+            '2026-04-18T12:30:00Z'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_productsecurityroadmaptask (
+            id,
+            tenant_id,
+            roadmap_id,
+            related_release_id,
+            related_vulnerability_id,
+            phase,
+            title,
+            description,
+            priority,
+            owner_role,
+            due_in_days,
+            dependency_text,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                901,
+                42,
+                900,
+                200,
+                NULL,
+                'GOVERNANCE',
+                'Define product security ownership',
+                'Clarify owner roles and release gates',
+                'HIGH',
+                'Product Security Lead',
+                30,
+                '',
+                'OPEN',
+                '2026-04-18T12:00:00Z',
+                '2026-04-18T12:30:00Z'
+            ),
+            (
+                902,
+                42,
+                900,
+                200,
+                500,
+                'RESPONSE',
+                'Remediate critical firmware exposure',
+                'Ship remediation and prepare disclosure',
+                'CRITICAL',
+                'PSIRT Lead',
+                14,
+                'Firmware patch readiness',
+                'PLANNED',
+                '2026-04-18T12:00:00Z',
+                '2026-04-18T12:30:00Z'
+            )
         "#,
     )
     .execute(pool)

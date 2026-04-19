@@ -2,7 +2,7 @@ from django.contrib.auth.mixins import LoginRequiredMixin
 from django.shortcuts import get_object_or_404
 from django.views.generic import DetailView, ListView, TemplateView
 
-from .models import Product, ProductSecurityRoadmap, ProductSecuritySnapshot
+from .models import Product, ProductSecuritySnapshot
 from .services_rust import ProductSecurityBridge
 from .services import ProductSecurityService
 
@@ -51,6 +51,25 @@ class ProductDetailView(LoginRequiredMixin, DetailView):
         context = super().get_context_data(**kwargs)
         product = self.object
         ProductSecurityService.generate_product_roadmap(product)
+        detail = ProductSecurityBridge.fetch_detail(self.request, product.tenant, product.id)
+        if detail:
+            context['object'] = detail.product
+            context['product'] = detail.product
+            context['components'] = detail.components
+            context['releases'] = detail.releases
+            context['threat_models'] = detail.threat_models
+            context['threat_scenarios'] = detail.threat_scenarios
+            context['taras'] = detail.taras
+            context['vulnerabilities'] = detail.vulnerabilities
+            context['ai_systems'] = detail.ai_systems
+            context['psirt_cases'] = detail.psirt_cases
+            context['advisories'] = detail.advisories
+            context['snapshot'] = detail.snapshot
+            context['roadmap'] = detail.roadmap
+            context['roadmap_tasks'] = detail.roadmap_tasks
+            context['product_security_source'] = 'rust_service'
+            return context
+
         context['components'] = product.components.all().select_related('supplier')
         context['releases'] = product.releases.all()
         context['threat_models'] = product.threat_models.all().prefetch_related('scenarios')
@@ -63,6 +82,7 @@ class ProductDetailView(LoginRequiredMixin, DetailView):
         context['snapshot'] = product.snapshots.first()
         context['roadmap'] = product.roadmaps.first()
         context['roadmap_tasks'] = context['roadmap'].tasks.all() if context['roadmap'] else []
+        context['product_security_source'] = 'django'
         return context
 
 
@@ -74,6 +94,30 @@ class ProductRoadmapView(LoginRequiredMixin, TemplateView):
         tenant = getattr(self.request, 'tenant', None)
         product = get_object_or_404(Product.objects.for_tenant(tenant), pk=self.kwargs['pk'])
         roadmap = ProductSecurityService.generate_product_roadmap(product)
+        detail = ProductSecurityBridge.fetch_roadmap(self.request, product.tenant, product.id)
+        if detail:
+            phase_order = [
+                ('GOVERNANCE', 'Governance'),
+                ('MODELING', 'Threat Modeling / TARA'),
+                ('DELIVERY', 'Secure Delivery'),
+                ('RESPONSE', 'PSIRT / Response'),
+                ('COMPLIANCE', 'Regulatory Readiness'),
+            ]
+            grouped = {
+                (phase_code, phase_label): [
+                    task for task in detail.tasks if task.phase == phase_code
+                ]
+                for phase_code, phase_label in phase_order
+            }
+            context.update({
+                'product': detail.product,
+                'roadmap': detail.roadmap,
+                'grouped_tasks': grouped,
+                'snapshot': detail.snapshot,
+                'product_security_source': 'rust_service',
+            })
+            return context
+
         tasks = roadmap.tasks.all().order_by('phase', 'priority', 'title')
         grouped = {}
         for phase_code, phase_label in roadmap.tasks.model.Phase.choices:
@@ -83,5 +127,6 @@ class ProductRoadmapView(LoginRequiredMixin, TemplateView):
             'roadmap': roadmap,
             'grouped_tasks': grouped,
             'snapshot': product.snapshots.first(),
+            'product_security_source': 'django',
         })
         return context

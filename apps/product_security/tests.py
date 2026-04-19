@@ -144,6 +144,25 @@ class ProductSecurityViewTests(TestCase):
         self.assertGreater(roadmap.tasks.count(), 0)
         self.assertContains(response, "Product-Security-Roadmap")
 
+    @patch("apps.product_security.services_rust.urlopen")
+    def test_product_detail_can_use_rust_bridge(self, mock_urlopen):
+        self._mock_rust_response(mock_urlopen, self._rust_detail_payload())
+        self.client.force_login(self.user_a)
+
+        with self.settings(PRODUCT_SECURITY_BACKEND="rust_service", RUST_BACKEND_URL="http://rust-backend:9000"):
+            response = self.client.get(reverse("product_security:detail", args=[self.product_a.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        rust_request = mock_urlopen.call_args.args[0]
+        self.assertEqual(
+            rust_request.full_url,
+            f"http://rust-backend:9000/api/v1/product-security/products/{self.product_a.id}",
+        )
+        self.assertEqual(response.context["product_security_source"], "rust_service")
+        self.assertContains(response, "Rust Firmware")
+        self.assertContains(response, "Rust Threat Model")
+        self.assertContains(response, "Rust Roadmap Task")
+
     def test_product_roadmap_blocks_foreign_tenant_access(self):
         self.client.force_login(self.user_a)
 
@@ -159,6 +178,24 @@ class ProductSecurityViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Governance")
         self.assertContains(response, "Produkt-Scope, Verantwortlichkeiten und Security Sign-off festigen")
+
+    @patch("apps.product_security.services_rust.urlopen")
+    def test_product_roadmap_can_use_rust_bridge(self, mock_urlopen):
+        self._mock_rust_response(mock_urlopen, self._rust_roadmap_payload())
+        self.client.force_login(self.user_a)
+
+        with self.settings(PRODUCT_SECURITY_BACKEND="rust_service", RUST_BACKEND_URL="http://rust-backend:9000"):
+            response = self.client.get(reverse("product_security:roadmap", args=[self.product_a.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        rust_request = mock_urlopen.call_args.args[0]
+        self.assertEqual(
+            rust_request.full_url,
+            f"http://rust-backend:9000/api/v1/product-security/products/{self.product_a.id}/roadmap",
+        )
+        self.assertEqual(response.context["product_security_source"], "rust_service")
+        self.assertContains(response, "Rust Product Roadmap")
+        self.assertContains(response, "Rust Roadmap Task")
 
     def _rust_payload(self):
         return {
@@ -241,6 +278,191 @@ class ProductSecurityViewTests(TestCase):
                 "created_at": "2026-04-19T10:00:00Z",
                 "updated_at": "2026-04-19T11:00:00Z",
             }],
+        }
+
+    def _rust_detail_payload(self):
+        payload = self._rust_payload()
+        product = payload["products"][0]
+        snapshot = payload["snapshots"][0]
+        return {
+            "api_version": "v1",
+            "product": product,
+            "releases": [{
+                "id": 200,
+                "tenant_id": self.tenant_a.id,
+                "product_id": self.product_a.id,
+                "version": "1.0",
+                "status": "ACTIVE",
+                "status_label": "Aktiv",
+                "release_date": "2026-04-01",
+                "support_end_date": "2028-04-01",
+                "created_at": "2026-04-19T10:00:00Z",
+                "updated_at": "2026-04-19T11:00:00Z",
+            }],
+            "components": [{
+                "id": 250,
+                "tenant_id": self.tenant_a.id,
+                "product_id": self.product_a.id,
+                "supplier_id": None,
+                "supplier_name": None,
+                "name": "Rust Firmware",
+                "component_type": "FIRMWARE",
+                "component_type_label": "Firmware",
+                "version": "1.0.3",
+                "is_open_source": False,
+                "has_sbom": True,
+                "created_at": "2026-04-19T10:00:00Z",
+                "updated_at": "2026-04-19T11:00:00Z",
+            }],
+            "threat_models": [{
+                "id": 300,
+                "tenant_id": self.tenant_a.id,
+                "product_id": self.product_a.id,
+                "release_id": 200,
+                "release_version": "1.0",
+                "name": "Rust Threat Model",
+                "methodology": "STRIDE",
+                "summary": "Rust threat summary",
+                "status": "APPROVED",
+                "status_label": "Freigegeben",
+                "scenario_count": 1,
+                "created_at": "2026-04-19T10:00:00Z",
+                "updated_at": "2026-04-19T11:00:00Z",
+            }],
+            "threat_scenarios": 1,
+            "taras": [{
+                "id": 400,
+                "tenant_id": self.tenant_a.id,
+                "product_id": self.product_a.id,
+                "release_id": 200,
+                "release_version": "1.0",
+                "scenario_id": 301,
+                "scenario_title": "Rust scenario",
+                "name": "Rust TARA",
+                "summary": "Rust TARA summary",
+                "attack_feasibility": 3,
+                "impact_score": 4,
+                "risk_score": 12,
+                "status": "OPEN",
+                "status_label": "Offen",
+                "treatment_decision": "Mitigate",
+                "created_at": "2026-04-19T10:00:00Z",
+                "updated_at": "2026-04-19T11:00:00Z",
+            }],
+            "vulnerabilities": [{
+                "id": 500,
+                "tenant_id": self.tenant_a.id,
+                "product_id": self.product_a.id,
+                "release_id": 200,
+                "release_version": "1.0",
+                "component_id": 250,
+                "component_name": "Rust Firmware",
+                "title": "Rust Critical Finding",
+                "cve": "CVE-2026-0001",
+                "severity": "CRITICAL",
+                "severity_label": "Kritisch",
+                "status": "OPEN",
+                "status_label": "Offen",
+                "remediation_due": "2026-05-18",
+                "summary": "Rust vulnerability summary",
+                "created_at": "2026-04-19T10:00:00Z",
+                "updated_at": "2026-04-19T11:00:00Z",
+            }],
+            "ai_systems": [{
+                "id": 260,
+                "tenant_id": self.tenant_a.id,
+                "product_id": self.product_a.id,
+                "product_name": "Rust Produkt",
+                "name": "Rust AI Assistant",
+                "use_case": "Support triage",
+                "provider": "Internal",
+                "risk_classification": "LIMITED",
+                "risk_classification_label": "Begrenztes Risiko",
+                "in_scope": True,
+                "created_at": "2026-04-19T10:00:00Z",
+                "updated_at": "2026-04-19T11:00:00Z",
+            }],
+            "psirt_cases": [{
+                "id": 600,
+                "tenant_id": self.tenant_a.id,
+                "product_id": self.product_a.id,
+                "release_id": 200,
+                "release_version": "1.0",
+                "vulnerability_id": 500,
+                "vulnerability_title": "Rust Critical Finding",
+                "case_id": "RUST-PSIRT-1",
+                "title": "Rust PSIRT Case",
+                "severity": "CRITICAL",
+                "severity_label": "Kritisch",
+                "status": "TRIAGE",
+                "status_label": "Triage",
+                "disclosure_due": "2026-05-20",
+                "summary": "Rust PSIRT summary",
+                "created_at": "2026-04-19T10:00:00Z",
+                "updated_at": "2026-04-19T11:00:00Z",
+            }],
+            "advisories": [{
+                "id": 700,
+                "tenant_id": self.tenant_a.id,
+                "product_id": self.product_a.id,
+                "release_id": 200,
+                "release_version": "1.0",
+                "psirt_case_id": 600,
+                "psirt_case_identifier": "RUST-PSIRT-1",
+                "advisory_id": "RUST-ADV-1",
+                "title": "Rust Advisory",
+                "status": "PUBLISHED",
+                "status_label": "Veröffentlicht",
+                "published_on": "2026-05-21",
+                "summary": "Rust advisory summary",
+                "created_at": "2026-04-19T10:00:00Z",
+                "updated_at": "2026-04-19T11:00:00Z",
+            }],
+            "snapshot": snapshot,
+            "roadmap": {
+                "id": 900,
+                "tenant_id": self.tenant_a.id,
+                "product_id": self.product_a.id,
+                "title": "Rust Product Roadmap",
+                "summary": "Rust roadmap summary",
+                "generated_from_snapshot_id": self.snapshot_a.id,
+                "created_at": "2026-04-19T10:00:00Z",
+                "updated_at": "2026-04-19T11:00:00Z",
+            },
+            "roadmap_tasks": [self._rust_roadmap_task_payload()],
+        }
+
+    def _rust_roadmap_payload(self):
+        detail = self._rust_detail_payload()
+        return {
+            "api_version": "v1",
+            "product": detail["product"],
+            "roadmap": detail["roadmap"],
+            "tasks": detail["roadmap_tasks"],
+            "snapshot": detail["snapshot"],
+        }
+
+    def _rust_roadmap_task_payload(self):
+        return {
+            "id": 901,
+            "tenant_id": self.tenant_a.id,
+            "roadmap_id": 900,
+            "related_release_id": 200,
+            "related_release_version": "1.0",
+            "related_vulnerability_id": 500,
+            "related_vulnerability_title": "Rust Critical Finding",
+            "phase": "GOVERNANCE",
+            "phase_label": "Governance",
+            "title": "Rust Roadmap Task",
+            "description": "Task delivered from Rust",
+            "priority": "HIGH",
+            "owner_role": "Product Security Lead",
+            "due_in_days": 30,
+            "dependency_text": "",
+            "status": "OPEN",
+            "status_label": "Offen",
+            "created_at": "2026-04-19T10:00:00Z",
+            "updated_at": "2026-04-19T11:00:00Z",
         }
 
     def _mock_rust_response(self, mock_urlopen, payload):
