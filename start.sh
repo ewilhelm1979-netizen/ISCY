@@ -81,15 +81,16 @@ set_env_var "ROADMAP_REGISTER_BACKEND" "rust_service"
 set_env_var "WIZARD_RESULTS_BACKEND" "rust_service"
 set_env_var "IMPORT_CENTER_BACKEND" "rust_service"
 set_env_var "PRODUCT_SECURITY_BACKEND" "rust_service"
+set_env_var "RUST_ONLY_MODE" "True"
 set_env_var "RUST_STRICT_MODE" "True"
 
 if rust_backend_reachable; then
   info "Rust-Backend erreichbar unter $RUST_BACKEND_URL. Aktiviere Local-LLM-Flow."
   set_env_var "LOCAL_LLM_ENABLED" "True"
 else
-  warn "Rust-Backend unter $RUST_BACKEND_URL aktuell nicht erreichbar."
-  warn "LLM-Enrichment bleibt deaktiviert, bis der Service läuft (make rust-run)."
-  set_env_var "LOCAL_LLM_ENABLED" "False"
+  err "Rust-only Cutover ist aktiv, aber der Rust-Service ist unter $RUST_BACKEND_URL nicht erreichbar."
+  err "Starte zuerst den Rust-Service, z. B.: nix develop --command cargo run --manifest-path rust/iscy-backend/Cargo.toml"
+  exit 1
 fi
 
 info "Führe Migrationen und Seeds aus ..."

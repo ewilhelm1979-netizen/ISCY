@@ -3,7 +3,7 @@ COMPOSE_STAGE=docker compose -f docker-compose.yml -f docker-compose.stage.yml
 COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
 COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 PYTHON_BIN=$(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python; fi)
-TEAM_TEST_ENV=GUIDANCE_SCORING_BACKEND=local RISK_SCORING_BACKEND=local REPORT_SUMMARY_BACKEND=local REPORT_SNAPSHOT_BACKEND=local DASHBOARD_SUMMARY_BACKEND=local CATALOG_BACKEND=local REQUIREMENTS_BACKEND=local ASSET_INVENTORY_BACKEND=local PROCESS_REGISTER_BACKEND=local RISK_REGISTER_BACKEND=local EVIDENCE_REGISTER_BACKEND=local ASSESSMENT_REGISTER_BACKEND=local ROADMAP_REGISTER_BACKEND=local WIZARD_RESULTS_BACKEND=local IMPORT_CENTER_BACKEND=local PRODUCT_SECURITY_BACKEND=local RUST_BACKEND_URL=
+TEAM_TEST_ENV=RUST_ONLY_MODE=False GUIDANCE_SCORING_BACKEND=local RISK_SCORING_BACKEND=local REPORT_SUMMARY_BACKEND=local REPORT_SNAPSHOT_BACKEND=local DASHBOARD_SUMMARY_BACKEND=local CATALOG_BACKEND=local REQUIREMENTS_BACKEND=local ASSET_INVENTORY_BACKEND=local PROCESS_REGISTER_BACKEND=local RISK_REGISTER_BACKEND=local EVIDENCE_REGISTER_BACKEND=local ASSESSMENT_REGISTER_BACKEND=local ROADMAP_REGISTER_BACKEND=local WIZARD_RESULTS_BACKEND=local IMPORT_CENTER_BACKEND=local PRODUCT_SECURITY_BACKEND=local RUST_BACKEND_URL=
 
 .PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health handbook-pdf local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
 

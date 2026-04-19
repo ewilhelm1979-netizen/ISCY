@@ -1,8 +1,18 @@
-# ISCY Rust Cutover Plan (stufenweise Umschaltung)
+# ISCY Rust Cutover Plan
 
 ## Ziel
 
-Kontrollierter Wechsel von Python-Pfaden auf Rust-Pfade ohne Big-Bang-Risiko.
+Kontrollierter Wechsel von Python-Pfaden auf Rust-Pfade ohne Big-Bang-Risiko. Der fachlich freigegebene Runtime-Cutover ist jetzt als Rust-only-Konfiguration abgesichert.
+
+## Aktueller Cutover-Stand
+
+- `RUST_ONLY_MODE=True` ist der Default.
+- `RUST_STRICT_MODE=True` ist der Default.
+- `RUST_BACKEND_URL` ist in Rust-only-Runtime Pflicht.
+- Alle migrierten Backend-Schalter muessen auf `rust_service` stehen.
+- `VULN_INTEL_RUST_ONLY=True` ist Pflicht, damit CVE-Normalisierung und Imports nicht ueber Python-Fallbacks laufen.
+- Docker Compose startet die Django-App nur noch mit `rust-backend` als Health-Abhaengigkeit und mit Rust-only-Guards.
+- Legacy-Fallbacks sind nur noch fuer explizit markierte Tests/Debug-Laeufe mit `RUST_ONLY_MODE=False` erlaubt.
 
 ## Stufe 0 – Vorbereitung
 
@@ -31,5 +41,5 @@ Kontrollierter Wechsel von Python-Pfaden auf Rust-Pfade ohne Big-Bang-Risiko.
 ## Stufe 4 – Voll-Cutover
 
 - Rust-Normalisierung als Default
-- Python-Normalisierung nur noch Fallback/Debug
+- Python-Normalisierung nur noch in expliziten Test-/Debug-Laeufen mit `RUST_ONLY_MODE=False`
 - Runbook/Alerting auf Rust-Pfade final anpassen

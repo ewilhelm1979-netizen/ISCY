@@ -25,6 +25,7 @@ jobs:
           SECRET_KEY: ci-secret-key
           DEBUG: 'True'
           DATABASE_URL: sqlite:///db.sqlite3
+          RUST_ONLY_MODE: 'False'
         run: |
           source .venv/bin/activate
           mkdir -p static media staticfiles
@@ -53,6 +54,7 @@ jobs:
             python -m pip install --upgrade pip setuptools wheel
             python -m pip install -r requirements.txt
             cp .env.example .env
+            printf '\nRUST_ONLY_MODE=False\n' >> .env
             mkdir -p static media staticfiles
             make team-test
           '

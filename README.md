@@ -169,6 +169,7 @@ Der funktionierende Referenzpfad auf Ubuntu 24.04 ist:
 - `WIZARD_RESULTS_BACKEND=rust_service`
 - `IMPORT_CENTER_BACKEND=rust_service`
 - `PRODUCT_SECURITY_BACKEND=rust_service`
+- `RUST_ONLY_MODE=True` (verbietet lokale Legacy-Fallbacks fuer migrierte Backends)
 - `RUST_STRICT_MODE=True` (erzwingt Rust-Backends ohne Fallback)
 
 Danach kann weiter wie gewohnt gestartet werden:
@@ -199,7 +200,7 @@ python3 manage.py import_cve_context_csv <tenant-slug> /pfad/zu/cve_context.csv 
 Ab V23.5 ist der Vulnerability-Import standardmäßig auf **Rust-only-Normalisierung** gestellt (`VULN_INTEL_RUST_ONLY=True`).
 Wenn `RUST_BACKEND_URL` fehlt, brechen CVE-Upserts absichtlich mit Fehler ab, um Mischbetrieb zu vermeiden.
 NVD-Collection-Imports laufen im Rust-only-Modus nicht mehr über den Python-Service; die Django-Commands `import_nvd_cves` und `sync_nvd_recent` sind Kompatibilitäts-Wrapper um die Rust-CLI.
-Außerdem ist der Cutover-Default jetzt `RUST_STRICT_MODE=True`, damit Risk-/Guidance-/Report-Pfade ohne Rust-Backend nicht still auf Legacy-Fallbacks zurückfallen.
+Außerdem ist der Cutover-Default jetzt `RUST_ONLY_MODE=True` und `RUST_STRICT_MODE=True`, damit migrierte Pfade ohne Rust-Backend nicht still auf Legacy-Fallbacks zurückfallen.
 
 Direkte NVD-Collection-Imports koennen optional mit `--cve-tag`, `--cpe-name`, `--last-mod-start-date` und `--last-mod-end-date` gefiltert werden.
 `sync_nvd_recent` ist fuer regelmaessige Jobs gedacht (z. B. stündlich/taeglich) und nutzt automatisch `lastModStartDate/lastModEndDate`.

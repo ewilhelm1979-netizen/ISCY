@@ -164,6 +164,7 @@ LOCAL_LLM_VERBOSE_NATIVE = os.getenv('LOCAL_LLM_VERBOSE_NATIVE', 'False').lower(
 LOCAL_LLM_TEST_MAX_TOKENS = int(os.getenv('LOCAL_LLM_TEST_MAX_TOKENS', '96'))
 NVD_API_KEY = os.getenv('NVD_API_KEY', '')
 RUST_BACKEND_URL = os.getenv('RUST_BACKEND_URL', '').strip()
+RUST_ONLY_MODE = os.getenv('RUST_ONLY_MODE', 'True').lower() == 'true'
 VULN_INTEL_RUST_ONLY = os.getenv('VULN_INTEL_RUST_ONLY', 'True').lower() == 'true'
 RISK_SCORING_BACKEND = os.getenv('RISK_SCORING_BACKEND', 'rust_service')
 GUIDANCE_SCORING_BACKEND = os.getenv('GUIDANCE_SCORING_BACKEND', 'rust_service')

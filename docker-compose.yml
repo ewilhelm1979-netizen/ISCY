@@ -59,7 +59,8 @@ services:
       WIZARD_RESULTS_BACKEND: ${WIZARD_RESULTS_BACKEND:-rust_service}
       IMPORT_CENTER_BACKEND: ${IMPORT_CENTER_BACKEND:-rust_service}
       PRODUCT_SECURITY_BACKEND: ${PRODUCT_SECURITY_BACKEND:-rust_service}
-      RUST_STRICT_MODE: ${RUST_STRICT_MODE:-false}
+      RUST_ONLY_MODE: ${RUST_ONLY_MODE:-true}
+      RUST_STRICT_MODE: ${RUST_STRICT_MODE:-true}
     expose:
       - "8000"
     volumes:

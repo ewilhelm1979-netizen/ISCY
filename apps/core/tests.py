@@ -2,6 +2,8 @@ from django.test import TestCase
 from django.urls import reverse
 from django.conf import settings
 
+from apps.core.checks import rust_only_cutover_checks
+
 
 class HealthViewTests(TestCase):
     def test_live_health(self):
@@ -16,6 +18,30 @@ class HealthViewTests(TestCase):
 
     def test_rust_strict_mode_default_enabled(self):
         self.assertTrue(settings.RUST_STRICT_MODE)
+
+    def test_rust_only_cutover_check_rejects_missing_backend_url(self):
+        with self.settings(RUST_ONLY_MODE=True, RUST_BACKEND_URL=''):
+            errors = rust_only_cutover_checks(None)
+
+        self.assertIn('iscy.E001', {error.id for error in errors})
+
+    def test_rust_only_cutover_check_rejects_legacy_backend_switches(self):
+        with self.settings(
+            RUST_ONLY_MODE=True,
+            RUST_BACKEND_URL='http://rust-backend:9000',
+            RUST_STRICT_MODE=True,
+            VULN_INTEL_RUST_ONLY=True,
+            REPORT_SNAPSHOT_BACKEND='local',
+        ):
+            errors = rust_only_cutover_checks(None)
+
+        self.assertIn('iscy.E004', {error.id for error in errors})
+
+    def test_rust_only_cutover_check_allows_explicit_test_fallback_mode(self):
+        with self.settings(RUST_ONLY_MODE=False, RUST_BACKEND_URL='', REPORT_SNAPSHOT_BACKEND='local'):
+            errors = rust_only_cutover_checks(None)
+
+        self.assertEqual(errors, [])
 
 
 class WebUiParitySmokeTests(TestCase):
