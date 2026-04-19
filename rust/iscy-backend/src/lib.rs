@@ -297,6 +297,13 @@ pub struct ProductSecurityRoadmapTaskUpdateResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProductSecurityVulnerabilityUpdateResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: product_security_store::ProductSecurityVulnerabilityUpdateResult,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RiskRegisterResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
@@ -1188,6 +1195,78 @@ async fn product_security_roadmap_task_update(
                 error_code: "database_error",
                 message: format!(
                     "Product-Security-Roadmaptask konnte nicht aktualisiert werden: {err}"
+                ),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_vulnerability_update(
+    Path(vulnerability_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<product_security_store::ProductSecurityVulnerabilityUpdateRequest>,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .update_vulnerability(context.tenant_id, vulnerability_id, payload)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(ProductSecurityVulnerabilityUpdateResponse {
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "product_security_vulnerability_not_found",
+                message: "Product-Security-Vulnerability wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!(
+                    "Product-Security-Vulnerability konnte nicht aktualisiert werden: {err}"
                 ),
             }),
         )
@@ -2463,6 +2542,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/product-security/roadmap-tasks/{task_id}",
             patch(product_security_roadmap_task_update),
+        )
+        .route(
+            "/api/v1/product-security/vulnerabilities/{vulnerability_id}",
+            patch(product_security_vulnerability_update),
         )
         .route("/api/v1/risks", get(risk_register))
         .route("/api/v1/risks/{risk_id}", get(risk_detail))

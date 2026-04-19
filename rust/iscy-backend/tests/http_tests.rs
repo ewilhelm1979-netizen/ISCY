@@ -1104,6 +1104,116 @@ async fn product_security_roadmap_task_update_blocks_foreign_tenant_task() {
 }
 
 #[tokio::test]
+async fn product_security_vulnerability_update_updates_tenant_vulnerability() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/product-security/vulnerabilities/500")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{
+                        "severity": "MEDIUM",
+                        "status": "MITIGATED",
+                        "remediation_due": "2026-06-15",
+                        "summary": "Mitigated via firmware patch"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["product_id"], 100);
+    assert_eq!(payload["vulnerability"]["id"], 500);
+    assert_eq!(payload["vulnerability"]["severity"], "MEDIUM");
+    assert_eq!(payload["vulnerability"]["severity_label"], "Mittel");
+    assert_eq!(payload["vulnerability"]["status"], "MITIGATED");
+    assert_eq!(payload["vulnerability"]["status_label"], "Mitigiert");
+    assert_eq!(payload["vulnerability"]["remediation_due"], "2026-06-15");
+    assert_eq!(
+        payload["vulnerability"]["summary"],
+        "Mitigated via firmware patch"
+    );
+
+    let row = sqlx::query(
+        r#"
+        SELECT severity, status, remediation_due, summary
+        FROM product_security_vulnerability
+        WHERE id = 500
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("severity"), "MEDIUM");
+    assert_eq!(row.get::<String, _>("status"), "MITIGATED");
+    assert_eq!(
+        row.get::<Option<String>, _>("remediation_due").as_deref(),
+        Some("2026-06-15")
+    );
+    assert_eq!(
+        row.get::<String, _>("summary"),
+        "Mitigated via firmware patch"
+    );
+}
+
+#[tokio::test]
+async fn product_security_vulnerability_update_blocks_foreign_tenant_vulnerability() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/product-security/vulnerabilities/500")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "99")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(r#"{"status":"FIXED"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["error_code"],
+        "product_security_vulnerability_not_found"
+    );
+}
+
+#[tokio::test]
 async fn risk_register_requires_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(

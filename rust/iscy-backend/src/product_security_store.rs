@@ -321,6 +321,20 @@ pub struct ProductSecurityRoadmapTaskUpdateResult {
     pub task: ProductSecurityRoadmapTaskSummary,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProductSecurityVulnerabilityUpdateRequest {
+    pub severity: Option<String>,
+    pub status: Option<String>,
+    pub remediation_due: Option<String>,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityVulnerabilityUpdateResult {
+    pub product_id: i64,
+    pub vulnerability: VulnerabilitySummary,
+}
+
 #[derive(Debug, Clone)]
 struct TenantProductSecurityContext {
     sector: String,
@@ -338,6 +352,14 @@ struct ProductSecurityRoadmapTaskCurrent {
     owner_role: String,
     due_in_days: i64,
     dependency_text: String,
+}
+
+struct ProductSecurityVulnerabilityCurrent {
+    product_id: i64,
+    severity: String,
+    status: String,
+    remediation_due: Option<String>,
+    summary: String,
 }
 
 impl ProductSecurityStore {
@@ -417,6 +439,22 @@ impl ProductSecurityStore {
             }
             Self::Sqlite(pool) => {
                 update_roadmap_task_sqlite(pool, tenant_id, task_id, payload).await
+            }
+        }
+    }
+
+    pub async fn update_vulnerability(
+        &self,
+        tenant_id: i64,
+        vulnerability_id: i64,
+        payload: ProductSecurityVulnerabilityUpdateRequest,
+    ) -> anyhow::Result<Option<ProductSecurityVulnerabilityUpdateResult>> {
+        match self {
+            Self::Postgres(pool) => {
+                update_vulnerability_postgres(pool, tenant_id, vulnerability_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                update_vulnerability_sqlite(pool, tenant_id, vulnerability_id, payload).await
             }
         }
     }
@@ -1153,6 +1191,204 @@ async fn roadmap_task_by_id_sqlite(
         .map_err(Into::into)
 }
 
+async fn update_vulnerability_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    vulnerability_id: i64,
+    payload: ProductSecurityVulnerabilityUpdateRequest,
+) -> anyhow::Result<Option<ProductSecurityVulnerabilityUpdateResult>> {
+    let Some(current) = vulnerability_current_postgres(pool, tenant_id, vulnerability_id).await?
+    else {
+        return Ok(None);
+    };
+
+    let severity = payload
+        .severity
+        .as_deref()
+        .map(normalize_vulnerability_severity)
+        .unwrap_or_else(|| current.severity.clone());
+    let status = payload
+        .status
+        .as_deref()
+        .map(normalize_vulnerability_status)
+        .unwrap_or_else(|| current.status.clone());
+    let remediation_due = match payload.remediation_due.as_deref() {
+        Some(value) => normalize_optional_date_text(value),
+        None => current.remediation_due.clone(),
+    };
+    let summary = payload.summary.unwrap_or_else(|| current.summary.clone());
+
+    sqlx::query(
+        r#"
+        UPDATE product_security_vulnerability
+        SET severity = $2,
+            status = $3,
+            remediation_due = $4::date,
+            summary = $5,
+            updated_at = NOW()
+        WHERE id = $1
+        "#,
+    )
+    .bind(vulnerability_id)
+    .bind(severity)
+    .bind(status)
+    .bind(remediation_due)
+    .bind(summary)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Product-Security-Vulnerability konnte nicht aktualisiert werden")?;
+
+    let vulnerability = vulnerability_by_id_postgres(pool, tenant_id, vulnerability_id)
+        .await?
+        .context("Aktualisierte Product-Security-Vulnerability wurde nicht gefunden")?;
+    Ok(Some(ProductSecurityVulnerabilityUpdateResult {
+        product_id: current.product_id,
+        vulnerability,
+    }))
+}
+
+async fn update_vulnerability_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    vulnerability_id: i64,
+    payload: ProductSecurityVulnerabilityUpdateRequest,
+) -> anyhow::Result<Option<ProductSecurityVulnerabilityUpdateResult>> {
+    let Some(current) = vulnerability_current_sqlite(pool, tenant_id, vulnerability_id).await?
+    else {
+        return Ok(None);
+    };
+
+    let severity = payload
+        .severity
+        .as_deref()
+        .map(normalize_vulnerability_severity)
+        .unwrap_or_else(|| current.severity.clone());
+    let status = payload
+        .status
+        .as_deref()
+        .map(normalize_vulnerability_status)
+        .unwrap_or_else(|| current.status.clone());
+    let remediation_due = match payload.remediation_due.as_deref() {
+        Some(value) => normalize_optional_date_text(value),
+        None => current.remediation_due.clone(),
+    };
+    let summary = payload.summary.unwrap_or_else(|| current.summary.clone());
+
+    sqlx::query(
+        r#"
+        UPDATE product_security_vulnerability
+        SET severity = ?2,
+            status = ?3,
+            remediation_due = ?4,
+            summary = ?5,
+            updated_at = datetime('now')
+        WHERE id = ?1
+        "#,
+    )
+    .bind(vulnerability_id)
+    .bind(severity)
+    .bind(status)
+    .bind(remediation_due)
+    .bind(summary)
+    .execute(pool)
+    .await
+    .context("SQLite-Product-Security-Vulnerability konnte nicht aktualisiert werden")?;
+
+    let vulnerability = vulnerability_by_id_sqlite(pool, tenant_id, vulnerability_id)
+        .await?
+        .context("Aktualisierte Product-Security-Vulnerability wurde nicht gefunden")?;
+    Ok(Some(ProductSecurityVulnerabilityUpdateResult {
+        product_id: current.product_id,
+        vulnerability,
+    }))
+}
+
+async fn vulnerability_current_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    vulnerability_id: i64,
+) -> anyhow::Result<Option<ProductSecurityVulnerabilityCurrent>> {
+    sqlx::query(
+        r#"
+        SELECT
+            product_id,
+            severity,
+            status,
+            remediation_due::text AS remediation_due,
+            summary
+        FROM product_security_vulnerability
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(vulnerability_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Product-Security-Vulnerability konnte nicht gelesen werden")?
+    .map(vulnerability_current_from_pg_row)
+    .transpose()
+    .map_err(Into::into)
+}
+
+async fn vulnerability_current_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    vulnerability_id: i64,
+) -> anyhow::Result<Option<ProductSecurityVulnerabilityCurrent>> {
+    sqlx::query(
+        r#"
+        SELECT
+            product_id,
+            severity,
+            status,
+            CAST(remediation_due AS TEXT) AS remediation_due,
+            summary
+        FROM product_security_vulnerability
+        WHERE tenant_id = ? AND id = ?
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(vulnerability_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Product-Security-Vulnerability konnte nicht gelesen werden")?
+    .map(vulnerability_current_from_sqlite_row)
+    .transpose()
+    .map_err(Into::into)
+}
+
+async fn vulnerability_by_id_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    vulnerability_id: i64,
+) -> anyhow::Result<Option<VulnerabilitySummary>> {
+    sqlx::query(vulnerability_by_id_postgres_sql())
+        .bind(tenant_id)
+        .bind(vulnerability_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Product-Security-Vulnerability konnte nicht gelesen werden")?
+        .map(vulnerability_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn vulnerability_by_id_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    vulnerability_id: i64,
+) -> anyhow::Result<Option<VulnerabilitySummary>> {
+    sqlx::query(vulnerability_by_id_sqlite_sql())
+        .bind(tenant_id)
+        .bind(vulnerability_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Product-Security-Vulnerability konnte nicht gelesen werden")?
+        .map(vulnerability_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
 fn product_list_postgres_sql() -> &'static str {
     r#"
     SELECT
@@ -1512,6 +1748,60 @@ fn vulnerabilities_sqlite_sql() -> &'static str {
         ON component.id = vuln.component_id AND component.tenant_id = vuln.tenant_id
     WHERE vuln.tenant_id = ? AND vuln.product_id = ?
     ORDER BY vuln.product_id ASC, vuln.severity ASC, vuln.title ASC, vuln.id ASC
+    "#
+}
+
+fn vulnerability_by_id_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        vuln.id,
+        vuln.tenant_id,
+        vuln.product_id,
+        vuln.release_id,
+        release.version AS release_version,
+        vuln.component_id,
+        component.name AS component_name,
+        vuln.title,
+        vuln.cve,
+        vuln.severity,
+        vuln.status,
+        vuln.remediation_due::text AS remediation_due,
+        vuln.summary,
+        vuln.created_at::text AS created_at,
+        vuln.updated_at::text AS updated_at
+    FROM product_security_vulnerability vuln
+    LEFT JOIN product_security_productrelease release
+        ON release.id = vuln.release_id AND release.tenant_id = vuln.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = vuln.component_id AND component.tenant_id = vuln.tenant_id
+    WHERE vuln.tenant_id = $1 AND vuln.id = $2
+    "#
+}
+
+fn vulnerability_by_id_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        vuln.id,
+        vuln.tenant_id,
+        vuln.product_id,
+        vuln.release_id,
+        release.version AS release_version,
+        vuln.component_id,
+        component.name AS component_name,
+        vuln.title,
+        vuln.cve,
+        vuln.severity,
+        vuln.status,
+        CAST(vuln.remediation_due AS TEXT) AS remediation_due,
+        vuln.summary,
+        CAST(vuln.created_at AS TEXT) AS created_at,
+        CAST(vuln.updated_at AS TEXT) AS updated_at
+    FROM product_security_vulnerability vuln
+    LEFT JOIN product_security_productrelease release
+        ON release.id = vuln.release_id AND release.tenant_id = vuln.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = vuln.component_id AND component.tenant_id = vuln.tenant_id
+    WHERE vuln.tenant_id = ? AND vuln.id = ?
     "#
 }
 
@@ -2533,6 +2823,30 @@ fn roadmap_task_current_from_sqlite_row(
     })
 }
 
+fn vulnerability_current_from_pg_row(
+    row: PgRow,
+) -> Result<ProductSecurityVulnerabilityCurrent, sqlx::Error> {
+    Ok(ProductSecurityVulnerabilityCurrent {
+        product_id: row.try_get("product_id")?,
+        severity: row.try_get("severity")?,
+        status: row.try_get("status")?,
+        remediation_due: row.try_get("remediation_due")?,
+        summary: row.try_get("summary")?,
+    })
+}
+
+fn vulnerability_current_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<ProductSecurityVulnerabilityCurrent, sqlx::Error> {
+    Ok(ProductSecurityVulnerabilityCurrent {
+        product_id: row.try_get("product_id")?,
+        severity: row.try_get("severity")?,
+        status: row.try_get("status")?,
+        remediation_due: row.try_get("remediation_due")?,
+        summary: row.try_get("summary")?,
+    })
+}
+
 fn posture_from_pg_row(row: PgRow) -> anyhow::Result<ProductSecurityPosture> {
     Ok(ProductSecurityPosture {
         products: row.try_get("products")?,
@@ -2784,5 +3098,37 @@ fn normalize_roadmap_task_priority(value: &str) -> String {
         "MEDIUM" => "MEDIUM".to_string(),
         "LOW" => "LOW".to_string(),
         _ => trimmed.to_string(),
+    }
+}
+
+fn normalize_vulnerability_severity(value: &str) -> String {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "CRITICAL" => "CRITICAL",
+        "HIGH" => "HIGH",
+        "MEDIUM" => "MEDIUM",
+        "LOW" => "LOW",
+        _ => "MEDIUM",
+    }
+    .to_string()
+}
+
+fn normalize_vulnerability_status(value: &str) -> String {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "OPEN" => "OPEN",
+        "TRIAGED" => "TRIAGED",
+        "MITIGATED" => "MITIGATED",
+        "FIXED" => "FIXED",
+        "ACCEPTED" => "ACCEPTED",
+        _ => "OPEN",
+    }
+    .to_string()
+}
+
+fn normalize_optional_date_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }

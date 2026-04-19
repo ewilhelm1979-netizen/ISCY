@@ -394,6 +394,12 @@ class ProductSecurityRoadmapTaskUpdateBridgeResult:
     task: ProductSecurityRoadmapTaskItem
 
 
+@dataclass(frozen=True)
+class ProductSecurityVulnerabilityUpdateBridgeResult:
+    product_id: int
+    vulnerability: ProductSecurityVulnerabilityItem
+
+
 class ProductSecurityRustClient:
     @staticmethod
     def _base_url() -> str:
@@ -545,6 +551,47 @@ class ProductSecurityRustClient:
             product_id=ProductSecurityRustClient._int_field(payload, 'product_id'),
             roadmap_id=ProductSecurityRustClient._int_field(payload, 'roadmap_id'),
             task=ProductSecurityRustClient._roadmap_task_from_payload(task_payload, tenant),
+        )
+
+    @staticmethod
+    def update_vulnerability(
+        request,
+        tenant,
+        vulnerability_id: int,
+        data: dict,
+        timeout: int = 8,
+    ) -> ProductSecurityVulnerabilityUpdateBridgeResult | None:
+        base = ProductSecurityRustClient._base_url()
+        if not base:
+            raise RuntimeError('RUST_BACKEND_URL ist nicht gesetzt.')
+
+        rust_request = ProductSecurityRustClient._authenticated_json_request(
+            request,
+            tenant,
+            f'{base}/api/v1/product-security/vulnerabilities/{int(vulnerability_id)}',
+            {
+                'severity': data.get('severity'),
+                'status': data.get('status'),
+                'remediation_due': ProductSecurityRustClient._date_to_payload(data.get('remediation_due')),
+                'summary': data.get('summary') or '',
+            },
+            method='PATCH',
+        )
+        try:
+            with urlopen(rust_request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode('utf-8'))
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+
+        vulnerability_payload = payload.get('vulnerability') or {}
+        if not isinstance(vulnerability_payload, dict):
+            raise RuntimeError('Rust-Product-Security-Vulnerability-Update hat kein vulnerability-Objekt geliefert.')
+
+        return ProductSecurityVulnerabilityUpdateBridgeResult(
+            product_id=ProductSecurityRustClient._int_field(payload, 'product_id'),
+            vulnerability=ProductSecurityRustClient._vulnerability_from_payload(vulnerability_payload, tenant),
         )
 
     @staticmethod
@@ -878,6 +925,14 @@ class ProductSecurityRustClient:
             return None
         return str(value)
 
+    @staticmethod
+    def _date_to_payload(value) -> str:
+        if not value:
+            return ''
+        if hasattr(value, 'isoformat'):
+            return value.isoformat()
+        return str(value)
+
 
 class ProductSecurityBridge:
     @staticmethod
@@ -959,6 +1014,27 @@ class ProductSecurityBridge:
 
         try:
             return ProductSecurityRustClient.update_roadmap_task(request, tenant, task_id, data)
+        except Exception as exc:
+            if ProductSecurityBridge._strict_rust_mode():
+                raise RuntimeError('Rust product security backend ist aktiv, aber nicht erreichbar.') from exc
+            return None
+
+    @staticmethod
+    def update_vulnerability(request, tenant, vulnerability_id: int, data: dict):
+        if tenant is None:
+            return None
+
+        backend = str(getattr(settings, 'PRODUCT_SECURITY_BACKEND', 'rust_service') or '').strip().lower()
+        if backend != 'rust_service':
+            return None
+
+        if not ProductSecurityRustClient._base_url():
+            if ProductSecurityBridge._strict_rust_mode():
+                raise RuntimeError('Rust product security backend ist aktiv, aber RUST_BACKEND_URL ist nicht gesetzt.')
+            return None
+
+        try:
+            return ProductSecurityRustClient.update_vulnerability(request, tenant, vulnerability_id, data)
         except Exception as exc:
             if ProductSecurityBridge._strict_rust_mode():
                 raise RuntimeError('Rust product security backend ist aktiv, aber nicht erreichbar.') from exc

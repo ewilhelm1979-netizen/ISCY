@@ -4,6 +4,7 @@ from .views import (
     ProductListView,
     ProductRoadmapView,
     ProductSecurityRoadmapTaskUpdateView,
+    ProductSecurityVulnerabilityUpdateView,
 )
 
 app_name = 'product_security'
@@ -16,5 +17,10 @@ urlpatterns = [
         'roadmap/tasks/<int:pk>/edit/',
         ProductSecurityRoadmapTaskUpdateView.as_view(),
         name='roadmap-task-edit',
+    ),
+    path(
+        'vulnerabilities/<int:pk>/edit/',
+        ProductSecurityVulnerabilityUpdateView.as_view(),
+        name='vulnerability-edit',
     ),
 ]

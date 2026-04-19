@@ -4,8 +4,8 @@ from django.shortcuts import get_object_or_404
 from django.urls import reverse
 from django.views.generic import DetailView, ListView, TemplateView, UpdateView
 
-from .forms import ProductSecurityRoadmapTaskUpdateForm
-from .models import Product, ProductSecurityRoadmapTask, ProductSecuritySnapshot
+from .forms import ProductSecurityRoadmapTaskUpdateForm, ProductSecurityVulnerabilityUpdateForm
+from .models import Product, ProductSecurityRoadmapTask, ProductSecuritySnapshot, Vulnerability
 from .services_rust import ProductSecurityBridge
 from .services import ProductSecurityService
 
@@ -163,5 +163,36 @@ class ProductSecurityRoadmapTaskUpdateView(LoginRequiredMixin, UpdateView):
             self.object.dependency_text = rust_result.task.dependency_text
             return HttpResponseRedirect(
                 reverse('product_security:roadmap', kwargs={'pk': rust_result.product_id})
+            )
+        return super().form_valid(form)
+
+
+class ProductSecurityVulnerabilityUpdateView(LoginRequiredMixin, UpdateView):
+    model = Vulnerability
+    form_class = ProductSecurityVulnerabilityUpdateForm
+    template_name = 'product_security/vulnerability_form.html'
+    context_object_name = 'vulnerability'
+
+    def get_queryset(self):
+        tenant = getattr(self.request, 'tenant', None)
+        return Vulnerability.objects.for_tenant(tenant).select_related('product', 'release', 'component')
+
+    def get_success_url(self):
+        return reverse('product_security:detail', kwargs={'pk': self.object.product_id})
+
+    def form_valid(self, form):
+        rust_result = ProductSecurityBridge.update_vulnerability(
+            self.request,
+            getattr(self.request, 'tenant', None),
+            self.object.pk,
+            form.cleaned_data,
+        )
+        if rust_result is not None:
+            self.object.severity = rust_result.vulnerability.severity
+            self.object.status = rust_result.vulnerability.status
+            self.object.remediation_due = rust_result.vulnerability.remediation_due
+            self.object.summary = rust_result.vulnerability.summary
+            return HttpResponseRedirect(
+                reverse('product_security:detail', kwargs={'pk': rust_result.product_id})
             )
         return super().form_valid(form)

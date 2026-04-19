@@ -6,7 +6,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from apps.organizations.models import Tenant
-from apps.product_security.models import Product, ProductFamily, ProductSecuritySnapshot
+from apps.product_security.models import Product, ProductFamily, ProductSecuritySnapshot, Vulnerability
 from apps.product_security.services import ProductSecurityService
 
 
@@ -73,6 +73,24 @@ class ProductSecurityViewTests(TestCase):
             cra_applicable=True,
             cra_readiness_percent=33,
             summary="Snapshot Tenant B",
+        )
+        self.vulnerability_a = Vulnerability.objects.create(
+            tenant=self.tenant_a,
+            product=self.product_a,
+            title="Tenant A Vulnerability",
+            cve="CVE-2026-4242",
+            severity=Vulnerability.Severity.HIGH,
+            status=Vulnerability.Status.OPEN,
+            remediation_due="2026-06-01",
+            summary="Tenant A vulnerability summary",
+        )
+        self.vulnerability_b = Vulnerability.objects.create(
+            tenant=self.tenant_b,
+            product=self.product_b,
+            title="Tenant B Vulnerability",
+            severity=Vulnerability.Severity.CRITICAL,
+            status=Vulnerability.Status.OPEN,
+            summary="Tenant B vulnerability summary",
         )
 
     def test_product_list_only_shows_current_tenant_products_and_snapshots(self):
@@ -290,6 +308,93 @@ class ProductSecurityViewTests(TestCase):
                 "owner_role": "Product Security Office",
                 "due_in_days": "9",
                 "dependency_text": "Nope",
+            },
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_product_vulnerability_update_uses_local_backend(self):
+        self.client.force_login(self.user_a)
+
+        response = self.client.post(
+            reverse("product_security:vulnerability-edit", args=[self.vulnerability_a.pk]),
+            {
+                "severity": "MEDIUM",
+                "status": "MITIGATED",
+                "remediation_due": "2026-06-15",
+                "summary": "Mitigated locally",
+            },
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("product_security:detail", args=[self.product_a.pk]),
+            fetch_redirect_response=False,
+        )
+        self.vulnerability_a.refresh_from_db()
+        self.assertEqual(self.vulnerability_a.severity, "MEDIUM")
+        self.assertEqual(self.vulnerability_a.status, "MITIGATED")
+        self.assertEqual(self.vulnerability_a.remediation_due.isoformat(), "2026-06-15")
+        self.assertEqual(self.vulnerability_a.summary, "Mitigated locally")
+
+    @patch("apps.product_security.services_rust.urlopen")
+    def test_product_vulnerability_update_can_use_rust_bridge(self, mock_urlopen):
+        vulnerability_payload = self._rust_detail_payload()["vulnerabilities"][0]
+        vulnerability_payload.update({
+            "id": self.vulnerability_a.id,
+            "product_id": self.product_a.id,
+            "severity": "MEDIUM",
+            "severity_label": "Mittel",
+            "status": "MITIGATED",
+            "status_label": "Mitigiert",
+            "remediation_due": "2026-06-15",
+            "summary": "Mitigated in Rust",
+        })
+        self._mock_rust_response(mock_urlopen, {
+            "api_version": "v1",
+            "product_id": self.product_a.id,
+            "vulnerability": vulnerability_payload,
+        })
+        self.client.force_login(self.user_a)
+
+        with self.settings(PRODUCT_SECURITY_BACKEND="rust_service", RUST_BACKEND_URL="http://rust-backend:9000"):
+            response = self.client.post(
+                reverse("product_security:vulnerability-edit", args=[self.vulnerability_a.pk]),
+                {
+                    "severity": "MEDIUM",
+                    "status": "MITIGATED",
+                    "remediation_due": "2026-06-15",
+                    "summary": "Mitigated in Rust",
+                },
+            )
+
+        self.assertRedirects(
+            response,
+            reverse("product_security:detail", args=[self.product_a.pk]),
+            fetch_redirect_response=False,
+        )
+        rust_request = mock_urlopen.call_args.args[0]
+        body = json.loads(rust_request.data.decode("utf-8"))
+        self.assertEqual(
+            rust_request.full_url,
+            f"http://rust-backend:9000/api/v1/product-security/vulnerabilities/{self.vulnerability_a.id}",
+        )
+        self.assertEqual(rust_request.get_method(), "PATCH")
+        self.assertEqual(body["severity"], "MEDIUM")
+        self.assertEqual(body["status"], "MITIGATED")
+        self.assertEqual(body["remediation_due"], "2026-06-15")
+        self.assertEqual(body["summary"], "Mitigated in Rust")
+
+    def test_product_vulnerability_update_blocks_foreign_tenant_access(self):
+        self.client.force_login(self.user_a)
+
+        response = self.client.post(
+            reverse("product_security:vulnerability-edit", args=[self.vulnerability_b.pk]),
+            {
+                "severity": "LOW",
+                "status": "ACCEPTED",
+                "remediation_due": "",
+                "summary": "Nope",
             },
         )
 
