@@ -3,6 +3,7 @@ from django.shortcuts import get_object_or_404
 from django.views.generic import DetailView, ListView, TemplateView
 
 from .models import Product, ProductSecurityRoadmap, ProductSecuritySnapshot
+from .services_rust import ProductSecurityBridge
 from .services import ProductSecurityService
 
 
@@ -13,14 +14,27 @@ class ProductListView(LoginRequiredMixin, ListView):
 
     def get_queryset(self):
         tenant = getattr(self.request, 'tenant', None)
+        overview = ProductSecurityBridge.fetch_overview(self.request, tenant)
+        self._product_security_overview = overview
+        if overview:
+            return overview.products
         return Product.objects.for_tenant(tenant).select_related('family')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         tenant = getattr(self.request, 'tenant', None)
+        overview = getattr(self, '_product_security_overview', None)
+        if overview:
+            context['matrix'] = overview.matrix
+            context['snapshots'] = overview.snapshots
+            context['posture'] = overview.posture
+            context['product_security_source'] = 'rust_service'
+            return context
+
         context['matrix'] = ProductSecurityService.get_regime_matrix(tenant) if tenant else None
         context['snapshots'] = ProductSecuritySnapshot.objects.for_tenant(tenant).select_related('product')[:10] if tenant else []
         context['posture'] = ProductSecurityService.tenant_posture(tenant) if tenant else None
+        context['product_security_source'] = 'django'
         return context
 
 

@@ -4,8 +4,9 @@ use iscy_backend::{
     app_router, app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
     catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore,
     evidence_store::EvidenceStore, import_store::ImportStore, process_store::ProcessStore,
-    report_store::ReportStore, requirement_store::RequirementStore, risk_store::RiskStore,
-    roadmap_store::RoadmapStore, tenant_store::TenantStore, wizard_store::WizardStore, AppState,
+    product_security_store::ProductSecurityStore, report_store::ReportStore,
+    requirement_store::RequirementStore, risk_store::RiskStore, roadmap_store::RoadmapStore,
+    tenant_store::TenantStore, wizard_store::WizardStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use tower::util::ServiceExt;
@@ -767,6 +768,95 @@ async fn process_detail_blocks_foreign_tenant_process() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "process_not_found");
+}
+
+#[tokio::test]
+async fn product_security_overview_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/overview")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn product_security_overview_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/overview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn product_security_overview_returns_tenant_products_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/overview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["matrix"]["cra"]["applicable"], true);
+    assert_eq!(payload["matrix"]["ai_act"]["applicable"], true);
+    assert_eq!(payload["posture"]["products"], 1);
+    assert_eq!(payload["posture"]["active_releases"], 1);
+    assert_eq!(payload["posture"]["open_vulnerabilities"], 2);
+    assert_eq!(payload["posture"]["critical_open_vulnerabilities"], 1);
+    assert_eq!(payload["products"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["products"][0]["name"], "Sensor Gateway");
+    assert_eq!(payload["products"][0]["family_name"], "Gateways");
+    assert_eq!(payload["products"][0]["release_count"], 2);
+    assert_eq!(payload["products"][0]["threat_model_count"], 1);
+    assert_eq!(payload["products"][0]["tara_count"], 1);
+    assert_eq!(payload["products"][0]["vulnerability_count"], 3);
+    assert_eq!(payload["products"][0]["psirt_case_count"], 1);
+    assert_eq!(payload["snapshots"][0]["product_name"], "Sensor Gateway");
+    assert_eq!(payload["snapshots"][0]["cra_readiness_percent"], 72);
+    assert_eq!(payload["snapshots"][0]["critical_vulnerability_count"], 1);
 }
 
 #[tokio::test]
@@ -3066,6 +3156,355 @@ async fn insert_asset_fixture(pool: &SqlitePool) {
                 '2026-04-03T10:00:00Z',
                 '2026-04-03T11:00:00Z'
             )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_product_security_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_tenant (
+            id INTEGER PRIMARY KEY,
+            sector varchar(64) NOT NULL,
+            develops_digital_products bool NOT NULL,
+            uses_ai_systems bool NOT NULL,
+            ot_iacs_scope bool NOT NULL,
+            automotive_scope bool NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_productfamily (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_product (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            family_id INTEGER NULL,
+            name varchar(255) NOT NULL,
+            code varchar(100) NOT NULL,
+            description TEXT NOT NULL,
+            has_digital_elements bool NOT NULL,
+            includes_ai bool NOT NULL,
+            ot_iacs_context bool NOT NULL,
+            automotive_context bool NOT NULL,
+            support_window_months INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_productrelease (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            version varchar(64) NOT NULL,
+            status varchar(16) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_threatmodel (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL,
+            status varchar(16) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_tara (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL,
+            risk_score INTEGER NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_vulnerability (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            severity varchar(16) NOT NULL,
+            status varchar(16) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_psirtcase (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            case_id varchar(64) NOT NULL,
+            status varchar(20) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_securityadvisory (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            advisory_id varchar(64) NOT NULL,
+            status varchar(16) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_productsecuritysnapshot (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            cra_applicable bool NOT NULL,
+            ai_act_applicable bool NOT NULL,
+            iec62443_applicable bool NOT NULL,
+            iso_sae_21434_applicable bool NOT NULL,
+            cra_readiness_percent INTEGER NOT NULL,
+            ai_act_readiness_percent INTEGER NOT NULL,
+            iec62443_readiness_percent INTEGER NOT NULL,
+            iso_sae_21434_readiness_percent INTEGER NOT NULL,
+            threat_model_coverage_percent INTEGER NOT NULL,
+            psirt_readiness_percent INTEGER NOT NULL,
+            open_vulnerability_count INTEGER NOT NULL,
+            critical_vulnerability_count INTEGER NOT NULL,
+            summary TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_product_security_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_tenant (
+            id, sector, develops_digital_products, uses_ai_systems, ot_iacs_scope, automotive_scope
+        )
+        VALUES
+            (42, 'MANUFACTURING', 1, 1, 0, 0),
+            (99, 'OTHER', 1, 0, 0, 0)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_productfamily (id, tenant_id, name)
+        VALUES (10, 42, 'Gateways'), (11, 99, 'Foreign Family')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_product (
+            id,
+            tenant_id,
+            family_id,
+            name,
+            code,
+            description,
+            has_digital_elements,
+            includes_ai,
+            ot_iacs_context,
+            automotive_context,
+            support_window_months,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                100,
+                42,
+                10,
+                'Sensor Gateway',
+                'sensor-gateway',
+                'Industrial edge device',
+                1,
+                1,
+                1,
+                0,
+                36,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            ),
+            (
+                101,
+                99,
+                11,
+                'Foreign Product',
+                'foreign-product',
+                'Other tenant',
+                1,
+                0,
+                0,
+                0,
+                24,
+                '2026-04-18T10:00:00Z',
+                '2026-04-18T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_productrelease (id, tenant_id, product_id, version, status)
+        VALUES
+            (200, 42, 100, '1.0', 'ACTIVE'),
+            (201, 42, 100, '0.9', 'EOL'),
+            (202, 99, 101, '9.9', 'ACTIVE')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_threatmodel (id, tenant_id, product_id, name, status)
+        VALUES (300, 42, 100, 'Gateway Threat Model', 'APPROVED')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_tara (id, tenant_id, product_id, name, risk_score)
+        VALUES (400, 42, 100, 'Gateway TARA', 9)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_vulnerability (id, tenant_id, product_id, title, severity, status)
+        VALUES
+            (500, 42, 100, 'Critical firmware exposure', 'CRITICAL', 'OPEN'),
+            (501, 42, 100, 'Outdated dependency', 'HIGH', 'TRIAGED'),
+            (502, 42, 100, 'Fixed UI issue', 'LOW', 'FIXED')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_psirtcase (id, tenant_id, product_id, case_id, status)
+        VALUES (600, 42, 100, 'PSIRT-1', 'TRIAGE')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_securityadvisory (id, tenant_id, product_id, advisory_id, status)
+        VALUES (700, 42, 100, 'ADV-1', 'PUBLISHED')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_productsecuritysnapshot (
+            id,
+            tenant_id,
+            product_id,
+            cra_applicable,
+            ai_act_applicable,
+            iec62443_applicable,
+            iso_sae_21434_applicable,
+            cra_readiness_percent,
+            ai_act_readiness_percent,
+            iec62443_readiness_percent,
+            iso_sae_21434_readiness_percent,
+            threat_model_coverage_percent,
+            psirt_readiness_percent,
+            open_vulnerability_count,
+            critical_vulnerability_count,
+            summary,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            800,
+            42,
+            100,
+            1,
+            1,
+            1,
+            0,
+            72,
+            61,
+            58,
+            0,
+            40,
+            55,
+            2,
+            1,
+            'Snapshot Tenant 42',
+            '2026-04-18T10:00:00Z',
+            '2026-04-18T11:00:00Z'
+        )
         "#,
     )
     .execute(pool)

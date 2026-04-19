@@ -17,6 +17,7 @@ pub mod dashboard_store;
 pub mod evidence_store;
 pub mod import_store;
 pub mod process_store;
+pub mod product_security_store;
 pub mod report_store;
 pub mod request_context;
 pub mod requirement_store;
@@ -33,6 +34,7 @@ use dashboard_store::DashboardStore;
 use evidence_store::EvidenceStore;
 use import_store::ImportStore;
 use process_store::ProcessStore;
+use product_security_store::ProductSecurityStore;
 use report_store::ReportStore;
 use request_context::RequestContext;
 use requirement_store::RequirementStore;
@@ -51,6 +53,7 @@ pub struct AppState {
     pub evidence_store: Option<EvidenceStore>,
     pub import_store: Option<ImportStore>,
     pub process_store: Option<ProcessStore>,
+    pub product_security_store: Option<ProductSecurityStore>,
     pub report_store: Option<ReportStore>,
     pub requirement_store: Option<RequirementStore>,
     pub risk_store: Option<RiskStore>,
@@ -70,6 +73,7 @@ impl AppState {
             evidence_store: None,
             import_store: None,
             process_store: None,
+            product_security_store: None,
             report_store: None,
             requirement_store: None,
             risk_store: None,
@@ -89,6 +93,7 @@ impl AppState {
             evidence_store: None,
             import_store: None,
             process_store: None,
+            product_security_store: None,
             report_store: None,
             requirement_store: None,
             risk_store: None,
@@ -140,6 +145,14 @@ impl AppState {
 
     pub fn with_process_store(mut self, process_store: Option<ProcessStore>) -> Self {
         self.process_store = process_store;
+        self
+    }
+
+    pub fn with_product_security_store(
+        mut self,
+        product_security_store: Option<ProductSecurityStore>,
+    ) -> Self {
+        self.product_security_store = product_security_store;
         self
     }
 
@@ -253,6 +266,13 @@ pub struct ProcessRegisterResponse {
 pub struct ProcessDetailResponse {
     pub api_version: &'static str,
     pub process: process_store::ProcessSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductSecurityOverviewResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub overview: product_security_store::ProductSecurityOverview,
 }
 
 #[derive(Debug, Serialize)]
@@ -882,6 +902,68 @@ async fn process_detail(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Prozessdetail konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_overview(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.overview(context.tenant_id, 200, 10).await {
+        Ok(Some(overview)) => (
+            StatusCode::OK,
+            Json(ProductSecurityOverviewResponse {
+                api_version: "v1",
+                overview,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "tenant_not_found",
+                message: "Tenant wurde fuer Product Security nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Product-Security-Uebersicht konnte nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -2141,6 +2223,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/assets/information-assets", get(asset_inventory))
         .route("/api/v1/processes", get(process_register))
         .route("/api/v1/processes/{process_id}", get(process_detail))
+        .route(
+            "/api/v1/product-security/overview",
+            get(product_security_overview),
+        )
         .route("/api/v1/risks", get(risk_register))
         .route("/api/v1/risks/{risk_id}", get(risk_detail))
         .route("/api/v1/evidence", get(evidence_overview))

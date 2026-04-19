@@ -80,6 +80,7 @@ set_env_var "ASSESSMENT_REGISTER_BACKEND" "rust_service"
 set_env_var "ROADMAP_REGISTER_BACKEND" "rust_service"
 set_env_var "WIZARD_RESULTS_BACKEND" "rust_service"
 set_env_var "IMPORT_CENTER_BACKEND" "rust_service"
+set_env_var "PRODUCT_SECURITY_BACKEND" "rust_service"
 set_env_var "RUST_STRICT_MODE" "True"
 
 if rust_backend_reachable; then
