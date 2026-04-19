@@ -163,6 +163,86 @@ class RiskRustClient:
         return RiskRustClient._risk_from_payload(risk, tenant)
 
     @staticmethod
+    def create_risk(request, tenant, payload: dict, timeout: int = 8):
+        base = RiskRustClient._base_url()
+        if not base:
+            raise RuntimeError('RUST_BACKEND_URL ist nicht gesetzt.')
+
+        rust_request = RiskRustClient._authenticated_json_request(
+            request,
+            tenant,
+            f'{base}/api/v1/risks',
+            'POST',
+            payload,
+        )
+        with urlopen(rust_request, timeout=timeout) as response:
+            response_payload = json.loads(response.read().decode('utf-8'))
+
+        risk = response_payload.get('risk') or {}
+        if not isinstance(risk, dict):
+            raise RuntimeError('Rust-Risikoanlage hat kein risk-Objekt geliefert.')
+        risk_tenant_id = RiskRustClient._int_field(risk, 'tenant_id')
+        if risk_tenant_id != int(tenant.id):
+            raise RuntimeError('Rust-Risikoanlage gehoert nicht zum angefragten Tenant.')
+        return RiskRustClient._risk_from_payload(risk, tenant)
+
+    @staticmethod
+    def update_risk(request, tenant, risk_id: int, payload: dict, timeout: int = 8):
+        base = RiskRustClient._base_url()
+        if not base:
+            raise RuntimeError('RUST_BACKEND_URL ist nicht gesetzt.')
+
+        rust_request = RiskRustClient._authenticated_json_request(
+            request,
+            tenant,
+            f'{base}/api/v1/risks/{int(risk_id)}',
+            'PATCH',
+            payload,
+        )
+        with urlopen(rust_request, timeout=timeout) as response:
+            response_payload = json.loads(response.read().decode('utf-8'))
+
+        risk = response_payload.get('risk') or {}
+        if not isinstance(risk, dict):
+            raise RuntimeError('Rust-Risikoaktualisierung hat kein risk-Objekt geliefert.')
+        risk_tenant_id = RiskRustClient._int_field(risk, 'tenant_id')
+        if risk_tenant_id != int(tenant.id):
+            raise RuntimeError('Rust-Risikoaktualisierung gehoert nicht zum angefragten Tenant.')
+        return RiskRustClient._risk_from_payload(risk, tenant)
+
+    @staticmethod
+    def payload_from_form(form) -> dict:
+        cleaned_data = form.cleaned_data
+
+        def pk(field_name: str) -> int | None:
+            value = cleaned_data.get(field_name)
+            return getattr(value, 'pk', None) if value is not None else None
+
+        def date_value(field_name: str) -> str | None:
+            value = cleaned_data.get(field_name)
+            return value.isoformat() if value else None
+
+        return {
+            'category_id': pk('category'),
+            'process_id': pk('process'),
+            'asset_id': pk('asset'),
+            'owner_id': pk('owner'),
+            'title': cleaned_data.get('title') or '',
+            'description': cleaned_data.get('description') or '',
+            'threat': cleaned_data.get('threat') or '',
+            'vulnerability': cleaned_data.get('vulnerability') or '',
+            'impact': cleaned_data.get('impact') or 3,
+            'likelihood': cleaned_data.get('likelihood') or 3,
+            'residual_impact': cleaned_data.get('residual_impact'),
+            'residual_likelihood': cleaned_data.get('residual_likelihood'),
+            'status': cleaned_data.get('status') or Risk.Status.IDENTIFIED,
+            'treatment_strategy': cleaned_data.get('treatment_strategy') or '',
+            'treatment_plan': cleaned_data.get('treatment_plan') or '',
+            'treatment_due_date': date_value('treatment_due_date'),
+            'review_date': date_value('review_date'),
+        }
+
+    @staticmethod
     def _risk_from_payload(item: dict, tenant) -> RiskBridgeItem:
         category_id = RiskRustClient._optional_int_field(item, 'category_id')
         process_id = RiskRustClient._optional_int_field(item, 'process_id')
@@ -219,20 +299,27 @@ class RiskRustClient:
         )
 
     @staticmethod
-    def _authenticated_request(request, tenant, url: str) -> Request:
+    def _authenticated_request(request, tenant, url: str, *, method: str = 'GET', data: bytes | None = None) -> Request:
         user = getattr(request, 'user', None)
         user_id = getattr(user, 'id', None)
         if not user_id:
             raise RuntimeError('Risk-Rust-Bridge braucht einen authentifizierten User.')
 
-        rust_request = Request(url)
+        rust_request = Request(url, data=data, method=method)
         rust_request.add_header('Accept', 'application/json')
+        if data is not None:
+            rust_request.add_header('Content-Type', 'application/json')
         rust_request.add_header('X-ISCY-Tenant-ID', str(tenant.id))
         rust_request.add_header('X-ISCY-User-ID', str(user_id))
         user_email = (getattr(user, 'email', '') or '').strip()
         if user_email:
             rust_request.add_header('X-ISCY-User-Email', user_email)
         return rust_request
+
+    @staticmethod
+    def _authenticated_json_request(request, tenant, url: str, method: str, payload: dict) -> Request:
+        data = json.dumps(payload).encode('utf-8')
+        return RiskRustClient._authenticated_request(request, tenant, url, method=method, data=data)
 
     @staticmethod
     def _int_field(payload: dict, key: str) -> int:
@@ -308,6 +395,47 @@ class RiskRegisterBridge:
             if RiskRegisterBridge._strict_rust_mode():
                 raise RuntimeError('Rust risk register backend ist aktiv, aber nicht erreichbar.') from exc
             return None
+
+    @staticmethod
+    def create_from_form(request, tenant, form):
+        if not RiskRegisterBridge._writes_enabled(tenant):
+            return None
+
+        payload = RiskRustClient.payload_from_form(form)
+        try:
+            return RiskRustClient.create_risk(request, tenant, payload)
+        except Exception as exc:
+            if RiskRegisterBridge._strict_rust_mode():
+                raise RuntimeError('Rust risk register write backend ist aktiv, aber nicht erreichbar.') from exc
+            return None
+
+    @staticmethod
+    def update_from_form(request, tenant, risk_id: int, form):
+        if not RiskRegisterBridge._writes_enabled(tenant):
+            return None
+
+        payload = RiskRustClient.payload_from_form(form)
+        try:
+            return RiskRustClient.update_risk(request, tenant, risk_id, payload)
+        except Exception as exc:
+            if RiskRegisterBridge._strict_rust_mode():
+                raise RuntimeError('Rust risk register write backend ist aktiv, aber nicht erreichbar.') from exc
+            return None
+
+    @staticmethod
+    def _writes_enabled(tenant) -> bool:
+        if tenant is None:
+            return False
+
+        backend = str(getattr(settings, 'RISK_REGISTER_BACKEND', 'rust_service') or '').strip().lower()
+        if backend != 'rust_service':
+            return False
+
+        if not RiskRustClient._base_url():
+            if RiskRegisterBridge._strict_rust_mode():
+                raise RuntimeError('Rust risk register backend ist aktiv, aber RUST_BACKEND_URL ist nicht gesetzt.')
+            return False
+        return True
 
     @staticmethod
     def _strict_rust_mode() -> bool:

@@ -1,3 +1,4 @@
+from django.shortcuts import redirect
 from django.urls import reverse_lazy
 from django.views.generic import CreateView, DetailView, ListView, UpdateView
 from apps.core.mixins import TenantAccessMixin, TenantCreateMixin
@@ -62,8 +63,26 @@ class RiskCreateView(TenantCreateMixin, CreateView):
     template_name = 'risks/risk_form.html'
     success_url = reverse_lazy('risks:list')
 
+    def form_valid(self, form):
+        rust_risk = RiskRegisterBridge.create_from_form(self.request, self.get_tenant(), form)
+        if rust_risk is not None:
+            return redirect(str(self.success_url))
+        return super().form_valid(form)
+
+
 class RiskUpdateView(TenantAccessMixin, UpdateView):
     model = Risk
     form_class = RiskForm
     template_name = 'risks/risk_form.html'
     success_url = reverse_lazy('risks:list')
+
+    def form_valid(self, form):
+        rust_risk = RiskRegisterBridge.update_from_form(
+            self.request,
+            self.get_tenant(),
+            form.instance.pk,
+            form,
+        )
+        if rust_risk is not None:
+            return redirect(str(self.success_url))
+        return super().form_valid(form)

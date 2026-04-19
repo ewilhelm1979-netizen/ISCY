@@ -1369,6 +1369,162 @@ async fn risk_detail_blocks_foreign_tenant_risk() {
 }
 
 #[tokio::test]
+async fn risk_create_persists_tenant_risk() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/risks")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{
+                        "category_id": 1,
+                        "process_id": 1,
+                        "asset_id": 1,
+                        "owner_id": 7,
+                        "title": "Rust Created Risk",
+                        "description": "Created through the Rust risk API",
+                        "threat": "Credential stuffing",
+                        "vulnerability": "Weak account lockout",
+                        "impact": 4,
+                        "likelihood": 3,
+                        "residual_impact": 2,
+                        "residual_likelihood": 2,
+                        "status": "ANALYZING",
+                        "treatment_strategy": "MITIGATE",
+                        "treatment_plan": "Harden login controls",
+                        "treatment_due_date": "2026-06-01",
+                        "review_date": "2026-06-15"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["risk"]["tenant_id"], 42);
+    assert_eq!(payload["risk"]["title"], "Rust Created Risk");
+    assert_eq!(payload["risk"]["score"], 12);
+    assert_eq!(payload["risk"]["risk_level"], "HIGH");
+    assert_eq!(payload["risk"]["category_name"], "Cyber Risk");
+    assert_eq!(payload["risk"]["owner_display"], "Ada Lovelace");
+    assert_eq!(payload["risk"]["treatment_due_date"], "2026-06-01");
+
+    let stored_title: String =
+        sqlx::query_scalar("SELECT title FROM risks_risk WHERE tenant_id = 42 AND title = ?")
+            .bind("Rust Created Risk")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_title, "Rust Created Risk");
+}
+
+#[tokio::test]
+async fn risk_update_updates_tenant_risk() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/risks/10")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{
+                        "category_id": null,
+                        "title": "Credential Phishing Updated",
+                        "impact": 2,
+                        "status": "CLOSED",
+                        "residual_impact": null,
+                        "review_date": null
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["risk"]["id"], 10);
+    assert_eq!(payload["risk"]["title"], "Credential Phishing Updated");
+    assert_eq!(payload["risk"]["category_id"], serde_json::Value::Null);
+    assert_eq!(payload["risk"]["impact"], 2);
+    assert_eq!(payload["risk"]["score"], 8);
+    assert_eq!(payload["risk"]["status"], "CLOSED");
+    assert_eq!(payload["risk"]["residual_impact"], serde_json::Value::Null);
+    assert_eq!(payload["risk"]["review_date"], serde_json::Value::Null);
+
+    let stored_status: String = sqlx::query_scalar("SELECT status FROM risks_risk WHERE id = 10")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored_status, "CLOSED");
+}
+
+#[tokio::test]
+async fn risk_update_blocks_foreign_tenant_risk() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/risks/12")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(r#"{"title": "Should not cross tenant"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "risk_not_found");
+}
+
+#[tokio::test]
 async fn evidence_overview_requires_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(

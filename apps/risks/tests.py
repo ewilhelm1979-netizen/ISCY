@@ -138,6 +138,101 @@ class RiskViewTests(TestCase):
         self.assertContains(response, 'Rust detail risk')
         self.assertContains(response, 'Customer Portal')
 
+    @patch('apps.risks.services.urlopen')
+    def test_risk_create_can_use_rust_register_bridge(self, mock_urlopen):
+        response_mock = Mock()
+        response_mock.read.return_value = json.dumps({
+            'api_version': 'v1',
+            'risk': self._rust_risk_payload(id=99, title='Rust Created Risk'),
+        }).encode('utf-8')
+        response_ctx = Mock()
+        response_ctx.__enter__ = Mock(return_value=response_mock)
+        response_ctx.__exit__ = Mock(return_value=False)
+        mock_urlopen.return_value = response_ctx
+        self.client.force_login(self.user_a)
+
+        with self.settings(RISK_REGISTER_BACKEND='rust_service', RUST_BACKEND_URL='http://rust-backend:9000'):
+            response = self.client.post(reverse('risks:create'), data={
+                'title': 'Rust Created Risk',
+                'description': 'Created through Rust',
+                'category': self.category.pk,
+                'process': self.process.pk,
+                'asset': self.asset.pk,
+                'owner': self.user_a.pk,
+                'threat': 'Credential stuffing',
+                'vulnerability': 'Weak lockout',
+                'impact': 4,
+                'likelihood': 3,
+                'residual_impact': 2,
+                'residual_likelihood': 2,
+                'status': Risk.Status.ANALYZING,
+                'treatment_strategy': Risk.Treatment.MITIGATE,
+                'treatment_plan': 'Harden login controls',
+                'treatment_due_date': '2026-06-01',
+                'review_date': '2026-06-15',
+            })
+
+        self.assertEqual(response.status_code, 302)
+        rust_request = mock_urlopen.call_args.args[0]
+        self.assertEqual(rust_request.full_url, 'http://rust-backend:9000/api/v1/risks')
+        self.assertEqual(rust_request.get_method(), 'POST')
+        self.assertEqual(rust_request.get_header('X-iscy-tenant-id'), str(self.tenant_a.id))
+        payload = json.loads(rust_request.data.decode('utf-8'))
+        self.assertEqual(payload['title'], 'Rust Created Risk')
+        self.assertEqual(payload['category_id'], self.category.pk)
+        self.assertEqual(payload['process_id'], self.process.pk)
+        self.assertEqual(payload['asset_id'], self.asset.pk)
+        self.assertEqual(payload['owner_id'], self.user_a.pk)
+        self.assertEqual(payload['impact'], 4)
+        self.assertFalse(Risk.objects.filter(title='Rust Created Risk').exists())
+
+    @patch('apps.risks.services.urlopen')
+    def test_risk_update_can_use_rust_register_bridge(self, mock_urlopen):
+        response_mock = Mock()
+        response_mock.read.return_value = json.dumps({
+            'api_version': 'v1',
+            'risk': self._rust_risk_payload(title='Rust Updated Risk', status='CLOSED', status_label='Geschlossen'),
+        }).encode('utf-8')
+        response_ctx = Mock()
+        response_ctx.__enter__ = Mock(return_value=response_mock)
+        response_ctx.__exit__ = Mock(return_value=False)
+        mock_urlopen.return_value = response_ctx
+        self.client.force_login(self.user_a)
+
+        with self.settings(RISK_REGISTER_BACKEND='rust_service', RUST_BACKEND_URL='http://rust-backend:9000'):
+            response = self.client.post(reverse('risks:edit', args=[self.risk_a.pk]), data={
+                'title': 'Rust Updated Risk',
+                'description': self.risk_a.description,
+                'category': '',
+                'process': '',
+                'asset': '',
+                'owner': '',
+                'threat': self.risk_a.threat,
+                'vulnerability': self.risk_a.vulnerability,
+                'impact': 2,
+                'likelihood': 4,
+                'residual_impact': '',
+                'residual_likelihood': '',
+                'status': Risk.Status.CLOSED,
+                'treatment_strategy': '',
+                'treatment_plan': '',
+                'treatment_due_date': '',
+                'review_date': '',
+            })
+
+        self.assertEqual(response.status_code, 302)
+        rust_request = mock_urlopen.call_args.args[0]
+        self.assertEqual(rust_request.full_url, f'http://rust-backend:9000/api/v1/risks/{self.risk_a.pk}')
+        self.assertEqual(rust_request.get_method(), 'PATCH')
+        payload = json.loads(rust_request.data.decode('utf-8'))
+        self.assertEqual(payload['title'], 'Rust Updated Risk')
+        self.assertIsNone(payload['category_id'])
+        self.assertIsNone(payload['process_id'])
+        self.assertIsNone(payload['asset_id'])
+        self.assertIsNone(payload['owner_id'])
+        self.assertEqual(payload['status'], Risk.Status.CLOSED)
+        self.assertEqual(Risk.objects.get(pk=self.risk_a.pk).title, 'Credential Phishing')
+
     @patch('apps.risks.services.urlopen', side_effect=OSError('backend down'))
     def test_risk_list_falls_back_to_django_when_rust_unavailable_in_non_strict_mode(self, _mock_urlopen):
         self.client.force_login(self.user_a)

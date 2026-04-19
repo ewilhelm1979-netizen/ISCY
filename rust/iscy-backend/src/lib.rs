@@ -316,6 +316,13 @@ pub struct RiskDetailResponse {
     pub risk: risk_store::RiskSummary,
 }
 
+#[derive(Debug, Serialize)]
+pub struct RiskWriteResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: risk_store::RiskWriteResult,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct EvidenceOverviewQuery {
     pub session_id: Option<i64>,
@@ -1387,6 +1394,129 @@ async fn risk_detail(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Risikodetail konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn risk_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<risk_store::RiskWriteRequest>,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.risk_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Risk-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.create_risk(context.tenant_id, payload).await {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(RiskWriteResponse {
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Risiko konnte nicht erstellt werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn risk_update(
+    Path(risk_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<risk_store::RiskWriteRequest>,
+) -> Response {
+    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.risk_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Risk-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.update_risk(context.tenant_id, risk_id, payload).await {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(RiskWriteResponse {
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "risk_not_found",
+                message: format!("Risiko {} wurde nicht gefunden.", risk_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Risiko konnte nicht aktualisiert werden: {err}"),
             }),
         )
             .into_response(),
@@ -2547,8 +2677,11 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/product-security/vulnerabilities/{vulnerability_id}",
             patch(product_security_vulnerability_update),
         )
-        .route("/api/v1/risks", get(risk_register))
-        .route("/api/v1/risks/{risk_id}", get(risk_detail))
+        .route("/api/v1/risks", get(risk_register).post(risk_create))
+        .route(
+            "/api/v1/risks/{risk_id}",
+            get(risk_detail).patch(risk_update),
+        )
         .route("/api/v1/evidence", get(evidence_overview))
         .route("/api/v1/import-center/jobs", post(import_center_job))
         .route(

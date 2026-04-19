@@ -1,5 +1,5 @@
 use anyhow::{bail, Context};
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -56,6 +56,56 @@ pub struct RiskSummary {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RiskWriteRequest {
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub category_id: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub process_id: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub asset_id: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub owner_id: Option<Option<i64>>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub threat: Option<String>,
+    pub vulnerability: Option<String>,
+    pub impact: Option<i64>,
+    pub likelihood: Option<i64>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub residual_impact: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub residual_likelihood: Option<Option<i64>>,
+    pub status: Option<String>,
+    pub treatment_strategy: Option<String>,
+    pub treatment_plan: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub treatment_due_date: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub review_date: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RiskWriteResult {
+    pub risk: RiskSummary,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TenantRelation {
+    Category,
+    Process,
+    Asset,
+    User,
+}
+
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 impl RiskStore {
     pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
         let normalized_url = normalize_database_url(database_url);
@@ -98,6 +148,29 @@ impl RiskStore {
         match self {
             Self::Postgres(pool) => risk_detail_postgres(pool, tenant_id, risk_id).await,
             Self::Sqlite(pool) => risk_detail_sqlite(pool, tenant_id, risk_id).await,
+        }
+    }
+
+    pub async fn create_risk(
+        &self,
+        tenant_id: i64,
+        payload: RiskWriteRequest,
+    ) -> anyhow::Result<RiskWriteResult> {
+        match self {
+            Self::Postgres(pool) => create_risk_postgres(pool, tenant_id, payload).await,
+            Self::Sqlite(pool) => create_risk_sqlite(pool, tenant_id, payload).await,
+        }
+    }
+
+    pub async fn update_risk(
+        &self,
+        tenant_id: i64,
+        risk_id: i64,
+        payload: RiskWriteRequest,
+    ) -> anyhow::Result<Option<RiskWriteResult>> {
+        match self {
+            Self::Postgres(pool) => update_risk_postgres(pool, tenant_id, risk_id, payload).await,
+            Self::Sqlite(pool) => update_risk_sqlite(pool, tenant_id, risk_id, payload).await,
         }
     }
 }
@@ -168,6 +241,575 @@ async fn risk_detail_sqlite(
     row.map(summary_from_sqlite_row)
         .transpose()
         .map_err(Into::into)
+}
+
+async fn create_risk_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    payload: RiskWriteRequest,
+) -> anyhow::Result<RiskWriteResult> {
+    let RiskWriteRequest {
+        category_id,
+        process_id,
+        asset_id,
+        owner_id,
+        title,
+        description,
+        threat,
+        vulnerability,
+        impact,
+        likelihood,
+        residual_impact,
+        residual_likelihood,
+        status,
+        treatment_strategy,
+        treatment_plan,
+        treatment_due_date,
+        review_date,
+    } = payload;
+
+    let category_id = tenant_relation_id_postgres(
+        pool,
+        TenantRelation::Category,
+        tenant_id,
+        category_id.unwrap_or(None),
+    )
+    .await?;
+    let process_id = tenant_relation_id_postgres(
+        pool,
+        TenantRelation::Process,
+        tenant_id,
+        process_id.unwrap_or(None),
+    )
+    .await?;
+    let asset_id = tenant_relation_id_postgres(
+        pool,
+        TenantRelation::Asset,
+        tenant_id,
+        asset_id.unwrap_or(None),
+    )
+    .await?;
+    let owner_id = tenant_relation_id_postgres(
+        pool,
+        TenantRelation::User,
+        tenant_id,
+        owner_id.unwrap_or(None),
+    )
+    .await?;
+    let title = normalize_title(title, None);
+    let description = normalize_text(description, "");
+    let threat = normalize_text(threat, "");
+    let vulnerability = normalize_text(vulnerability, "");
+    let impact = normalize_matrix_value(impact, 3);
+    let likelihood = normalize_matrix_value(likelihood, 3);
+    let residual_impact = normalize_nullable_matrix_value(residual_impact.unwrap_or(None));
+    let residual_likelihood = normalize_nullable_matrix_value(residual_likelihood.unwrap_or(None));
+    let status = normalize_status(status.as_deref(), "IDENTIFIED").to_string();
+    let treatment_strategy =
+        normalize_treatment_strategy(treatment_strategy.as_deref(), "").to_string();
+    let treatment_plan = normalize_text(treatment_plan, "");
+    let treatment_due_date = normalize_optional_date_text(treatment_due_date.unwrap_or(None));
+    let review_date = normalize_optional_date_text(review_date.unwrap_or(None));
+
+    let risk_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO risks_risk (
+            tenant_id,
+            category_id,
+            process_id,
+            asset_id,
+            owner_id,
+            title,
+            description,
+            threat,
+            vulnerability,
+            impact,
+            likelihood,
+            residual_impact,
+            residual_likelihood,
+            status,
+            treatment_strategy,
+            treatment_plan,
+            treatment_due_date,
+            accepted_by_id,
+            accepted_at,
+            review_date,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6,
+            $7,
+            $8,
+            $9,
+            $10::integer,
+            $11::integer,
+            $12::integer,
+            $13::integer,
+            $14,
+            $15,
+            $16,
+            $17::date,
+            NULL,
+            NULL,
+            $18::date,
+            NOW(),
+            NOW()
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(category_id)
+    .bind(process_id)
+    .bind(asset_id)
+    .bind(owner_id)
+    .bind(title)
+    .bind(description)
+    .bind(threat)
+    .bind(vulnerability)
+    .bind(impact)
+    .bind(likelihood)
+    .bind(residual_impact)
+    .bind(residual_likelihood)
+    .bind(status)
+    .bind(treatment_strategy)
+    .bind(treatment_plan)
+    .bind(treatment_due_date)
+    .bind(review_date)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Risiko konnte nicht erstellt werden")?;
+
+    let risk = risk_detail_postgres(pool, tenant_id, risk_id)
+        .await?
+        .context("Erstelltes Risiko wurde nicht gefunden")?;
+    Ok(RiskWriteResult { risk })
+}
+
+async fn create_risk_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    payload: RiskWriteRequest,
+) -> anyhow::Result<RiskWriteResult> {
+    let RiskWriteRequest {
+        category_id,
+        process_id,
+        asset_id,
+        owner_id,
+        title,
+        description,
+        threat,
+        vulnerability,
+        impact,
+        likelihood,
+        residual_impact,
+        residual_likelihood,
+        status,
+        treatment_strategy,
+        treatment_plan,
+        treatment_due_date,
+        review_date,
+    } = payload;
+
+    let category_id = tenant_relation_id_sqlite(
+        pool,
+        TenantRelation::Category,
+        tenant_id,
+        category_id.unwrap_or(None),
+    )
+    .await?;
+    let process_id = tenant_relation_id_sqlite(
+        pool,
+        TenantRelation::Process,
+        tenant_id,
+        process_id.unwrap_or(None),
+    )
+    .await?;
+    let asset_id = tenant_relation_id_sqlite(
+        pool,
+        TenantRelation::Asset,
+        tenant_id,
+        asset_id.unwrap_or(None),
+    )
+    .await?;
+    let owner_id = tenant_relation_id_sqlite(
+        pool,
+        TenantRelation::User,
+        tenant_id,
+        owner_id.unwrap_or(None),
+    )
+    .await?;
+    let title = normalize_title(title, None);
+    let description = normalize_text(description, "");
+    let threat = normalize_text(threat, "");
+    let vulnerability = normalize_text(vulnerability, "");
+    let impact = normalize_matrix_value(impact, 3);
+    let likelihood = normalize_matrix_value(likelihood, 3);
+    let residual_impact = normalize_nullable_matrix_value(residual_impact.unwrap_or(None));
+    let residual_likelihood = normalize_nullable_matrix_value(residual_likelihood.unwrap_or(None));
+    let status = normalize_status(status.as_deref(), "IDENTIFIED").to_string();
+    let treatment_strategy =
+        normalize_treatment_strategy(treatment_strategy.as_deref(), "").to_string();
+    let treatment_plan = normalize_text(treatment_plan, "");
+    let treatment_due_date = normalize_optional_date_text(treatment_due_date.unwrap_or(None));
+    let review_date = normalize_optional_date_text(review_date.unwrap_or(None));
+
+    sqlx::query(
+        r#"
+        INSERT INTO risks_risk (
+            tenant_id,
+            category_id,
+            process_id,
+            asset_id,
+            owner_id,
+            title,
+            description,
+            threat,
+            vulnerability,
+            impact,
+            likelihood,
+            residual_impact,
+            residual_likelihood,
+            status,
+            treatment_strategy,
+            treatment_plan,
+            treatment_due_date,
+            accepted_by_id,
+            accepted_at,
+            review_date,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            ?1,
+            ?2,
+            ?3,
+            ?4,
+            ?5,
+            ?6,
+            ?7,
+            ?8,
+            ?9,
+            ?10,
+            ?11,
+            ?12,
+            ?13,
+            ?14,
+            ?15,
+            ?16,
+            ?17,
+            NULL,
+            NULL,
+            ?18,
+            datetime('now'),
+            datetime('now')
+        )
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(category_id)
+    .bind(process_id)
+    .bind(asset_id)
+    .bind(owner_id)
+    .bind(title)
+    .bind(description)
+    .bind(threat)
+    .bind(vulnerability)
+    .bind(impact)
+    .bind(likelihood)
+    .bind(residual_impact)
+    .bind(residual_likelihood)
+    .bind(status)
+    .bind(treatment_strategy)
+    .bind(treatment_plan)
+    .bind(treatment_due_date)
+    .bind(review_date)
+    .execute(pool)
+    .await
+    .context("SQLite-Risiko konnte nicht erstellt werden")?;
+
+    let risk_id: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
+        .fetch_one(pool)
+        .await
+        .context("SQLite-Risiko-ID konnte nicht gelesen werden")?;
+    let risk = risk_detail_sqlite(pool, tenant_id, risk_id)
+        .await?
+        .context("Erstelltes Risiko wurde nicht gefunden")?;
+    Ok(RiskWriteResult { risk })
+}
+
+async fn update_risk_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    risk_id: i64,
+    payload: RiskWriteRequest,
+) -> anyhow::Result<Option<RiskWriteResult>> {
+    let Some(current) = risk_detail_postgres(pool, tenant_id, risk_id).await? else {
+        return Ok(None);
+    };
+    let RiskWriteRequest {
+        category_id,
+        process_id,
+        asset_id,
+        owner_id,
+        title,
+        description,
+        threat,
+        vulnerability,
+        impact,
+        likelihood,
+        residual_impact,
+        residual_likelihood,
+        status,
+        treatment_strategy,
+        treatment_plan,
+        treatment_due_date,
+        review_date,
+    } = payload;
+
+    let category_id = match category_id {
+        Some(value) => {
+            tenant_relation_id_postgres(pool, TenantRelation::Category, tenant_id, value).await?
+        }
+        None => current.category_id,
+    };
+    let process_id = match process_id {
+        Some(value) => {
+            tenant_relation_id_postgres(pool, TenantRelation::Process, tenant_id, value).await?
+        }
+        None => current.process_id,
+    };
+    let asset_id = match asset_id {
+        Some(value) => {
+            tenant_relation_id_postgres(pool, TenantRelation::Asset, tenant_id, value).await?
+        }
+        None => current.asset_id,
+    };
+    let owner_id = match owner_id {
+        Some(value) => {
+            tenant_relation_id_postgres(pool, TenantRelation::User, tenant_id, value).await?
+        }
+        None => current.owner_id,
+    };
+    let title = normalize_title(title, Some(&current.title));
+    let description = normalize_text(description, &current.description);
+    let threat = normalize_text(threat, &current.threat);
+    let vulnerability = normalize_text(vulnerability, &current.vulnerability);
+    let impact = normalize_matrix_value(impact, current.impact);
+    let likelihood = normalize_matrix_value(likelihood, current.likelihood);
+    let residual_impact = match residual_impact {
+        Some(value) => normalize_nullable_matrix_value(value),
+        None => current.residual_impact,
+    };
+    let residual_likelihood = match residual_likelihood {
+        Some(value) => normalize_nullable_matrix_value(value),
+        None => current.residual_likelihood,
+    };
+    let status = normalize_status(status.as_deref(), &current.status).to_string();
+    let treatment_strategy =
+        normalize_treatment_strategy(treatment_strategy.as_deref(), &current.treatment_strategy)
+            .to_string();
+    let treatment_plan = normalize_text(treatment_plan, &current.treatment_plan);
+    let treatment_due_date = match treatment_due_date {
+        Some(value) => normalize_optional_date_text(value),
+        None => current.treatment_due_date,
+    };
+    let review_date = match review_date {
+        Some(value) => normalize_optional_date_text(value),
+        None => current.review_date,
+    };
+
+    sqlx::query(
+        r#"
+        UPDATE risks_risk
+        SET category_id = $2,
+            process_id = $3,
+            asset_id = $4,
+            owner_id = $5,
+            title = $6,
+            description = $7,
+            threat = $8,
+            vulnerability = $9,
+            impact = $10::integer,
+            likelihood = $11::integer,
+            residual_impact = $12::integer,
+            residual_likelihood = $13::integer,
+            status = $14,
+            treatment_strategy = $15,
+            treatment_plan = $16,
+            treatment_due_date = $17::date,
+            review_date = $18::date,
+            updated_at = NOW()
+        WHERE id = $1 AND tenant_id = $19
+        "#,
+    )
+    .bind(risk_id)
+    .bind(category_id)
+    .bind(process_id)
+    .bind(asset_id)
+    .bind(owner_id)
+    .bind(title)
+    .bind(description)
+    .bind(threat)
+    .bind(vulnerability)
+    .bind(impact)
+    .bind(likelihood)
+    .bind(residual_impact)
+    .bind(residual_likelihood)
+    .bind(status)
+    .bind(treatment_strategy)
+    .bind(treatment_plan)
+    .bind(treatment_due_date)
+    .bind(review_date)
+    .bind(tenant_id)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Risiko konnte nicht aktualisiert werden")?;
+
+    let risk = risk_detail_postgres(pool, tenant_id, risk_id)
+        .await?
+        .context("Aktualisiertes Risiko wurde nicht gefunden")?;
+    Ok(Some(RiskWriteResult { risk }))
+}
+
+async fn update_risk_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    risk_id: i64,
+    payload: RiskWriteRequest,
+) -> anyhow::Result<Option<RiskWriteResult>> {
+    let Some(current) = risk_detail_sqlite(pool, tenant_id, risk_id).await? else {
+        return Ok(None);
+    };
+    let RiskWriteRequest {
+        category_id,
+        process_id,
+        asset_id,
+        owner_id,
+        title,
+        description,
+        threat,
+        vulnerability,
+        impact,
+        likelihood,
+        residual_impact,
+        residual_likelihood,
+        status,
+        treatment_strategy,
+        treatment_plan,
+        treatment_due_date,
+        review_date,
+    } = payload;
+
+    let category_id = match category_id {
+        Some(value) => {
+            tenant_relation_id_sqlite(pool, TenantRelation::Category, tenant_id, value).await?
+        }
+        None => current.category_id,
+    };
+    let process_id = match process_id {
+        Some(value) => {
+            tenant_relation_id_sqlite(pool, TenantRelation::Process, tenant_id, value).await?
+        }
+        None => current.process_id,
+    };
+    let asset_id = match asset_id {
+        Some(value) => {
+            tenant_relation_id_sqlite(pool, TenantRelation::Asset, tenant_id, value).await?
+        }
+        None => current.asset_id,
+    };
+    let owner_id = match owner_id {
+        Some(value) => {
+            tenant_relation_id_sqlite(pool, TenantRelation::User, tenant_id, value).await?
+        }
+        None => current.owner_id,
+    };
+    let title = normalize_title(title, Some(&current.title));
+    let description = normalize_text(description, &current.description);
+    let threat = normalize_text(threat, &current.threat);
+    let vulnerability = normalize_text(vulnerability, &current.vulnerability);
+    let impact = normalize_matrix_value(impact, current.impact);
+    let likelihood = normalize_matrix_value(likelihood, current.likelihood);
+    let residual_impact = match residual_impact {
+        Some(value) => normalize_nullable_matrix_value(value),
+        None => current.residual_impact,
+    };
+    let residual_likelihood = match residual_likelihood {
+        Some(value) => normalize_nullable_matrix_value(value),
+        None => current.residual_likelihood,
+    };
+    let status = normalize_status(status.as_deref(), &current.status).to_string();
+    let treatment_strategy =
+        normalize_treatment_strategy(treatment_strategy.as_deref(), &current.treatment_strategy)
+            .to_string();
+    let treatment_plan = normalize_text(treatment_plan, &current.treatment_plan);
+    let treatment_due_date = match treatment_due_date {
+        Some(value) => normalize_optional_date_text(value),
+        None => current.treatment_due_date,
+    };
+    let review_date = match review_date {
+        Some(value) => normalize_optional_date_text(value),
+        None => current.review_date,
+    };
+
+    sqlx::query(
+        r#"
+        UPDATE risks_risk
+        SET category_id = ?2,
+            process_id = ?3,
+            asset_id = ?4,
+            owner_id = ?5,
+            title = ?6,
+            description = ?7,
+            threat = ?8,
+            vulnerability = ?9,
+            impact = ?10,
+            likelihood = ?11,
+            residual_impact = ?12,
+            residual_likelihood = ?13,
+            status = ?14,
+            treatment_strategy = ?15,
+            treatment_plan = ?16,
+            treatment_due_date = ?17,
+            review_date = ?18,
+            updated_at = datetime('now')
+        WHERE id = ?1 AND tenant_id = ?19
+        "#,
+    )
+    .bind(risk_id)
+    .bind(category_id)
+    .bind(process_id)
+    .bind(asset_id)
+    .bind(owner_id)
+    .bind(title)
+    .bind(description)
+    .bind(threat)
+    .bind(vulnerability)
+    .bind(impact)
+    .bind(likelihood)
+    .bind(residual_impact)
+    .bind(residual_likelihood)
+    .bind(status)
+    .bind(treatment_strategy)
+    .bind(treatment_plan)
+    .bind(treatment_due_date)
+    .bind(review_date)
+    .bind(tenant_id)
+    .execute(pool)
+    .await
+    .context("SQLite-Risiko konnte nicht aktualisiert werden")?;
+
+    let risk = risk_detail_sqlite(pool, tenant_id, risk_id)
+        .await?
+        .context("Aktualisiertes Risiko wurde nicht gefunden")?;
+    Ok(Some(RiskWriteResult { risk }))
 }
 
 fn summary_from_pg_row(row: PgRow) -> Result<RiskSummary, sqlx::Error> {
@@ -486,6 +1128,138 @@ fn risk_detail_sqlite_sql() -> &'static str {
         ON accepted.id = risk.accepted_by_id AND accepted.tenant_id = risk.tenant_id
     WHERE risk.tenant_id = ? AND risk.id = ?
     "#
+}
+
+async fn tenant_relation_id_postgres(
+    pool: &PgPool,
+    relation: TenantRelation,
+    tenant_id: i64,
+    value: Option<i64>,
+) -> anyhow::Result<Option<i64>> {
+    let Some(candidate_id) = value.filter(|candidate_id| *candidate_id > 0) else {
+        return Ok(None);
+    };
+    let query = match relation {
+        TenantRelation::Category => {
+            "SELECT id FROM risks_riskcategory WHERE tenant_id = $1 AND id = $2"
+        }
+        TenantRelation::Process => {
+            "SELECT id FROM processes_process WHERE tenant_id = $1 AND id = $2"
+        }
+        TenantRelation::Asset => {
+            "SELECT id FROM assets_app_informationasset WHERE tenant_id = $1 AND id = $2"
+        }
+        TenantRelation::User => "SELECT id FROM accounts_user WHERE tenant_id = $1 AND id = $2",
+    };
+    sqlx::query_scalar::<_, i64>(query)
+        .bind(tenant_id)
+        .bind(candidate_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Risiko-Relation konnte nicht validiert werden")
+}
+
+async fn tenant_relation_id_sqlite(
+    pool: &SqlitePool,
+    relation: TenantRelation,
+    tenant_id: i64,
+    value: Option<i64>,
+) -> anyhow::Result<Option<i64>> {
+    let Some(candidate_id) = value.filter(|candidate_id| *candidate_id > 0) else {
+        return Ok(None);
+    };
+    let query = match relation {
+        TenantRelation::Category => {
+            "SELECT id FROM risks_riskcategory WHERE tenant_id = ?1 AND id = ?2"
+        }
+        TenantRelation::Process => {
+            "SELECT id FROM processes_process WHERE tenant_id = ?1 AND id = ?2"
+        }
+        TenantRelation::Asset => {
+            "SELECT id FROM assets_app_informationasset WHERE tenant_id = ?1 AND id = ?2"
+        }
+        TenantRelation::User => "SELECT id FROM accounts_user WHERE tenant_id = ?1 AND id = ?2",
+    };
+    sqlx::query_scalar::<_, i64>(query)
+        .bind(tenant_id)
+        .bind(candidate_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Risiko-Relation konnte nicht validiert werden")
+}
+
+fn normalize_title(value: Option<String>, default: Option<&str>) -> String {
+    let raw = value
+        .or_else(|| default.map(ToString::to_string))
+        .unwrap_or_else(|| "Unbenanntes Risiko".to_string());
+    let cleaned = raw.trim();
+    if cleaned.is_empty() {
+        "Unbenanntes Risiko".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+fn normalize_text(value: Option<String>, default: &str) -> String {
+    value.unwrap_or_else(|| default.to_string())
+}
+
+fn normalize_optional_date_text(value: Option<String>) -> Option<String> {
+    value
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+}
+
+fn normalize_matrix_value(value: Option<i64>, default: i64) -> i64 {
+    match value {
+        Some(candidate) if (1..=5).contains(&candidate) => candidate,
+        _ if (1..=5).contains(&default) => default,
+        _ => 3,
+    }
+}
+
+fn normalize_nullable_matrix_value(value: Option<i64>) -> Option<i64> {
+    value.filter(|candidate| (1..=5).contains(candidate))
+}
+
+fn normalize_status(value: Option<&str>, default: &str) -> &'static str {
+    match value.map(str::trim).map(str::to_ascii_uppercase).as_deref() {
+        Some("IDENTIFIED") => "IDENTIFIED",
+        Some("ANALYZING") => "ANALYZING",
+        Some("TREATING") => "TREATING",
+        Some("ACCEPTED") => "ACCEPTED",
+        Some("MITIGATED") => "MITIGATED",
+        Some("TRANSFERRED") => "TRANSFERRED",
+        Some("AVOIDED") => "AVOIDED",
+        Some("CLOSED") => "CLOSED",
+        _ => match default {
+            "ANALYZING" => "ANALYZING",
+            "TREATING" => "TREATING",
+            "ACCEPTED" => "ACCEPTED",
+            "MITIGATED" => "MITIGATED",
+            "TRANSFERRED" => "TRANSFERRED",
+            "AVOIDED" => "AVOIDED",
+            "CLOSED" => "CLOSED",
+            _ => "IDENTIFIED",
+        },
+    }
+}
+
+fn normalize_treatment_strategy(value: Option<&str>, default: &str) -> &'static str {
+    match value.map(str::trim).map(str::to_ascii_uppercase).as_deref() {
+        Some("MITIGATE") => "MITIGATE",
+        Some("ACCEPT") => "ACCEPT",
+        Some("TRANSFER") => "TRANSFER",
+        Some("AVOID") => "AVOID",
+        Some("") => "",
+        _ => match default {
+            "MITIGATE" => "MITIGATE",
+            "ACCEPT" => "ACCEPT",
+            "TRANSFER" => "TRANSFER",
+            "AVOID" => "AVOID",
+            _ => "",
+        },
+    }
 }
 
 fn impact_label(value: i64) -> &'static str {
