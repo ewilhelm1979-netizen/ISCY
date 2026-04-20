@@ -1,6 +1,6 @@
 # ISCY V23.5
 
-Django-basierte ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstützung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb über einen Rust-Service.
+ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb. Der produktive Cutover laeuft schrittweise von Django/Python auf einen Rust-Axum-Service; die Kern-APIs sind weit migriert, die vollstaendige Browser-App ist bis zum Web-Cutover noch Django-gefuehrt.
 
 ## Lokale Entwicklung auf NixOS
 
@@ -30,6 +30,32 @@ make rust-run
 ```
 
 Der Dev-Shell in `flake.nix` bringt die Build- und Laufzeitbibliotheken für PostgreSQL, SQLite und den lokalen Rust-Service mit.
+
+## Rust-Backend auf NixOS starten
+
+Der Rust-Service kann direkt aus dem Repository-Root gestartet werden:
+
+```bash
+nix run .#iscy-backend
+```
+
+Mit expliziter lokaler Bind-Adresse und SQLite-Datenbank:
+
+```bash
+RUST_BACKEND_BIND=127.0.0.1:9000 DATABASE_URL=sqlite:///db.sqlite3 nix run .#iscy-backend
+```
+
+Healthcheck:
+
+```bash
+curl -fsS http://127.0.0.1:9000/health
+```
+
+Bis zum finalen Web-Cutover startet die vollstaendige Browser-App weiterhin ueber Django vor dem Rust-Service:
+
+```bash
+RUST_BACKEND_URL=http://127.0.0.1:9000 VERIFY_LOCAL_LLM=0 ./start.sh
+```
 
 ## Neu in V23.5
 
@@ -215,6 +241,7 @@ Proxmox-Produktiv-Runbook: `docs/PROXMOX_PRODUCTION_RUNBOOK.md`.
 Completion-Backlog: `docs/PROJECT_COMPLETION_BACKLOG.md`.
 Rust-Rewrite-Roadmap: `docs/RUST_REWRITE_ROADMAP.md`.
 Rust-Cutover-Plan: `docs/RUST_CUTOVER_PLAN.md`.
+Rust-Cutover-Status: `docs/RUST_CUTOVER_STATUS.md`.
 Rust-Ablöse-Checkliste: `docs/RUST_ABLOESE_CHECKLISTE.md`.
 Rust-Webstack-Umbauplan: `docs/RUST_WEBSTACK_REWRITE_PLAN.md`.
 
