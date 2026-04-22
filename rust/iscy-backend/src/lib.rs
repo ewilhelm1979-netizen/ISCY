@@ -1,8 +1,11 @@
 use axum::{
-    extract::Query,
+    extract::{Form, Query},
     extract::{Json, Path, State},
-    http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse, Response},
+    http::{
+        header::{AUTHORIZATION, COOKIE, LOCATION, SET_COOKIE},
+        HeaderMap, HeaderValue, StatusCode,
+    },
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, patch, post},
     Router,
 };
@@ -11,6 +14,7 @@ use serde_json::Value;
 
 pub mod assessment_store;
 pub mod asset_store;
+pub mod auth_store;
 pub mod catalog_store;
 pub mod cve_store;
 pub mod dashboard_store;
@@ -29,6 +33,7 @@ pub mod wizard_store;
 
 use assessment_store::AssessmentStore;
 use asset_store::AssetStore;
+use auth_store::AuthStore;
 use catalog_store::CatalogStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
@@ -37,7 +42,7 @@ use import_store::ImportStore;
 use process_store::ProcessStore;
 use product_security_store::ProductSecurityStore;
 use report_store::ReportStore;
-use request_context::RequestContext;
+use request_context::{AuthenticatedTenantContext, RequestContext, RequiredTenantContextError};
 use requirement_store::RequirementStore;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
@@ -48,6 +53,7 @@ use wizard_store::WizardStore;
 pub struct AppState {
     pub asset_store: Option<AssetStore>,
     pub assessment_store: Option<AssessmentStore>,
+    pub auth_store: Option<AuthStore>,
     pub catalog_store: Option<CatalogStore>,
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
@@ -68,6 +74,7 @@ impl AppState {
         Self {
             asset_store: None,
             assessment_store: None,
+            auth_store: None,
             catalog_store: None,
             cve_store,
             dashboard_store: None,
@@ -88,6 +95,7 @@ impl AppState {
         Self {
             asset_store: None,
             assessment_store: None,
+            auth_store: None,
             catalog_store: None,
             cve_store,
             dashboard_store: None,
@@ -106,6 +114,11 @@ impl AppState {
 
     pub fn with_dashboard_store(mut self, dashboard_store: Option<DashboardStore>) -> Self {
         self.dashboard_store = dashboard_store;
+        self
+    }
+
+    pub fn with_auth_store(mut self, auth_store: Option<AuthStore>) -> Self {
+        self.auth_store = auth_store;
         self
     }
 
@@ -227,6 +240,32 @@ pub struct TenantContextResponse {
     pub user_id: i64,
     pub user_email: Option<String>,
     pub authorization_model: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuthSessionCreateRequest {
+    pub tenant_id: i64,
+    pub user_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthSessionResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub authenticated: bool,
+    pub tenant_id: Option<i64>,
+    pub user_id: Option<i64>,
+    pub user_email: Option<String>,
+    pub expires_at: Option<String>,
+    pub authorization_model: &'static str,
+    pub session_token: Option<String>,
+    pub user: Option<auth_store::AuthUser>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebLoginForm {
+    tenant_id: i64,
+    user_id: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -576,7 +615,140 @@ async fn health_live() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "service": "iscy-rust-backend" }))
 }
 
-async fn context_whoami(headers: HeaderMap) -> Response {
+const ISCY_SESSION_COOKIE: &str = "iscy_session";
+
+async fn authenticated_tenant_context(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<AuthenticatedTenantContext, RequiredTenantContextError> {
+    if let Some(token) = session_token_from_headers(headers) {
+        let Some(store) = state.auth_store.as_ref() else {
+            return Err(RequiredTenantContextError::InvalidSession);
+        };
+        return store
+            .resolve_session(&token)
+            .await
+            .map_err(|_| RequiredTenantContextError::InvalidSession)?
+            .map(|session| session.tenant_context())
+            .ok_or(RequiredTenantContextError::InvalidSession);
+    }
+    RequestContext::authenticated_tenant_from_headers(headers)
+}
+
+async fn web_context_from_request(
+    query: &WebContextQuery,
+    headers: &HeaderMap,
+    state: &AppState,
+) -> Option<WebContext> {
+    if let Some(token) = session_token_from_headers(headers) {
+        if let Some(store) = state.auth_store.as_ref() {
+            if let Ok(Some(session)) = store.resolve_session(&token).await {
+                return Some(WebContext {
+                    tenant_id: session.tenant_id,
+                    user_id: session.user_id,
+                    user_email: session.user_email,
+                });
+            }
+        }
+    }
+    query.to_context()
+}
+
+fn session_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    bearer_token_from_headers(headers).or_else(|| session_cookie_from_headers(headers))
+}
+
+fn bearer_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|raw| raw.to_str().ok())
+        .map(str::trim)
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn session_cookie_from_headers(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(COOKIE)
+        .and_then(|raw| raw.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|cookie| {
+                let (name, value) = cookie.trim().split_once('=')?;
+                (name == ISCY_SESSION_COOKIE && !value.trim().is_empty())
+                    .then(|| value.trim().to_string())
+            })
+        })
+}
+
+fn session_cookie_value(token: &str) -> String {
+    format!("{ISCY_SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800")
+}
+
+fn expired_session_cookie_value() -> &'static str {
+    "iscy_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+}
+
+fn response_with_cookie(mut response: Response, cookie: &str) -> Response {
+    if let Ok(value) = HeaderValue::from_str(cookie) {
+        response.headers_mut().insert(SET_COOKIE, value);
+    }
+    response
+}
+
+fn redirect_with_cookie(location: &str, cookie: &str) -> Response {
+    let mut response = Redirect::to(location).into_response();
+    if let Ok(location_value) = HeaderValue::from_str(location) {
+        response.headers_mut().insert(LOCATION, location_value);
+    }
+    response_with_cookie(response, cookie)
+}
+
+async fn context_whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Some(token) = session_token_from_headers(&headers) {
+        if let Some(store) = state.auth_store.as_ref() {
+            match store.resolve_session(&token).await {
+                Ok(Some(session)) => {
+                    return (
+                        StatusCode::OK,
+                        Json(ContextWhoamiResponse {
+                            api_version: "v1",
+                            authenticated: true,
+                            tenant_id: Some(session.tenant_id),
+                            user_id: Some(session.user_id),
+                            user_email: session.user_email,
+                        }),
+                    )
+                        .into_response();
+                }
+                Ok(None) => {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        Json(ApiErrorResponse {
+                            accepted: false,
+                            api_version: "v1",
+                            error_code: "invalid_session",
+                            message: "Rust-Session ist ungueltig oder abgelaufen.".to_string(),
+                        }),
+                    )
+                        .into_response();
+                }
+                Err(err) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiErrorResponse {
+                            accepted: false,
+                            api_version: "v1",
+                            error_code: "database_error",
+                            message: format!("Rust-Session konnte nicht gelesen werden: {err}"),
+                        }),
+                    )
+                        .into_response();
+                }
+            }
+        }
+    }
     match RequestContext::from_headers(&headers) {
         Ok(context) => (
             StatusCode::OK,
@@ -602,8 +774,8 @@ async fn context_whoami(headers: HeaderMap) -> Response {
     }
 }
 
-async fn context_tenant(headers: HeaderMap) -> Response {
-    match RequestContext::authenticated_tenant_from_headers(&headers) {
+async fn context_tenant(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => (
             StatusCode::OK,
             Json(TenantContextResponse {
@@ -612,7 +784,7 @@ async fn context_tenant(headers: HeaderMap) -> Response {
                 tenant_id: context.tenant_id,
                 user_id: context.user_id,
                 user_email: context.user_email,
-                authorization_model: "header-bridged-django-context-v1",
+                authorization_model: "rust-session-or-header-context-v1",
             }),
         )
             .into_response(),
@@ -629,11 +801,165 @@ async fn context_tenant(headers: HeaderMap) -> Response {
     }
 }
 
+async fn auth_session_create(
+    State(state): State<AppState>,
+    Json(payload): Json<AuthSessionCreateRequest>,
+) -> Response {
+    let Some(store) = state.auth_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Auth-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .create_session(payload.tenant_id, payload.user_id)
+        .await
+    {
+        Ok(Some(session)) => {
+            let cookie = session_cookie_value(&session.token);
+            response_with_cookie(
+                (
+                    StatusCode::CREATED,
+                    Json(AuthSessionResponse {
+                        accepted: true,
+                        api_version: "v1",
+                        authenticated: true,
+                        tenant_id: Some(session.tenant_id),
+                        user_id: Some(session.user_id),
+                        user_email: session.user_email.clone(),
+                        expires_at: Some(session.expires_at.clone()),
+                        authorization_model: "rust-session-v1",
+                        session_token: Some(session.token),
+                        user: Some(session.user),
+                    }),
+                )
+                    .into_response(),
+                &cookie,
+            )
+        }
+        Ok(None) => (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_login_context",
+                message: "Tenant/User-Kombination ist fuer Rust-Session nicht gueltig.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Rust-Session konnte nicht erstellt werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn auth_session_current(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let Some(token) = session_token_from_headers(&headers) else {
+        return (
+            StatusCode::OK,
+            Json(AuthSessionResponse {
+                accepted: true,
+                api_version: "v1",
+                authenticated: false,
+                tenant_id: None,
+                user_id: None,
+                user_email: None,
+                expires_at: None,
+                authorization_model: "rust-session-v1",
+                session_token: None,
+                user: None,
+            }),
+        )
+            .into_response();
+    };
+    let Some(store) = state.auth_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Auth-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store.resolve_session(&token).await {
+        Ok(Some(session)) => (
+            StatusCode::OK,
+            Json(AuthSessionResponse {
+                accepted: true,
+                api_version: "v1",
+                authenticated: true,
+                tenant_id: Some(session.tenant_id),
+                user_id: Some(session.user_id),
+                user_email: session.user_email,
+                expires_at: Some(session.expires_at),
+                authorization_model: "rust-session-v1",
+                session_token: None,
+                user: Some(session.user),
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_session",
+                message: "Rust-Session ist ungueltig oder abgelaufen.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Rust-Session konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn auth_logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let (Some(store), Some(token)) = (state.auth_store, session_token_from_headers(&headers)) {
+        let _ = store.revoke_session(&token).await;
+    }
+    response_with_cookie(
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "accepted": true,
+                "api_version": "v1",
+                "authenticated": false
+            })),
+        )
+            .into_response(),
+        expired_session_cookie_value(),
+    )
+}
+
 async fn organization_tenant_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -695,7 +1021,7 @@ async fn organization_tenant_profile(
 }
 
 async fn dashboard_summary(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -747,7 +1073,7 @@ async fn dashboard_summary(State(state): State<AppState>, headers: HeaderMap) ->
 }
 
 async fn asset_inventory(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -800,7 +1126,7 @@ async fn asset_inventory(State(state): State<AppState>, headers: HeaderMap) -> R
 }
 
 async fn catalog_domains(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(err) = RequestContext::authenticated_tenant_from_headers(&headers) {
+    if let Err(err) = authenticated_tenant_context(&state, &headers).await {
         return (
             err.status_code(),
             Json(ApiErrorResponse {
@@ -849,7 +1175,7 @@ async fn catalog_domains(State(state): State<AppState>, headers: HeaderMap) -> R
 }
 
 async fn process_register(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -906,7 +1232,7 @@ async fn process_detail(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -968,7 +1294,7 @@ async fn process_detail(
 }
 
 async fn product_security_overview(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1034,7 +1360,7 @@ async fn product_security_product_detail(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1100,7 +1426,7 @@ async fn product_security_product_roadmap(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1167,7 +1493,7 @@ async fn product_security_roadmap_task_update(
     headers: HeaderMap,
     Json(payload): Json<product_security_store::ProductSecurityRoadmapTaskUpdateRequest>,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1239,7 +1565,7 @@ async fn product_security_vulnerability_update(
     headers: HeaderMap,
     Json(payload): Json<product_security_store::ProductSecurityVulnerabilityUpdateRequest>,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1306,7 +1632,7 @@ async fn product_security_vulnerability_update(
 }
 
 async fn risk_register(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1363,7 +1689,7 @@ async fn risk_detail(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1429,7 +1755,7 @@ async fn risk_create(
     headers: HeaderMap,
     Json(payload): Json<risk_store::RiskWriteRequest>,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1486,7 +1812,7 @@ async fn risk_update(
     headers: HeaderMap,
     Json(payload): Json<risk_store::RiskWriteRequest>,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1552,7 +1878,7 @@ async fn evidence_overview(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1616,7 +1942,7 @@ async fn evidence_need_sync(
     headers: HeaderMap,
     Json(payload): Json<evidence_store::EvidenceNeedSyncRequest>,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1686,7 +2012,7 @@ async fn import_center_job(
     headers: HeaderMap,
     Json(payload): Json<import_store::ImportJobRequest>,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1749,7 +2075,7 @@ async fn import_center_job(
 }
 
 async fn applicability_assessments(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1802,7 +2128,7 @@ async fn applicability_assessments(State(state): State<AppState>, headers: Heade
 }
 
 async fn assessment_register(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1855,7 +2181,7 @@ async fn assessment_register(State(state): State<AppState>, headers: HeaderMap) 
 }
 
 async fn assessment_measures(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1908,7 +2234,7 @@ async fn assessment_measures(State(state): State<AppState>, headers: HeaderMap) 
 }
 
 async fn roadmap_plans(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -1965,7 +2291,7 @@ async fn roadmap_plan_detail(
     Path(plan_id): Path<i64>,
     headers: HeaderMap,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -2032,7 +2358,7 @@ async fn roadmap_task_update(
     headers: HeaderMap,
     Json(payload): Json<roadmap_store::RoadmapTaskUpdateRequest>,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -2094,7 +2420,7 @@ async fn roadmap_task_update(
 }
 
 async fn wizard_sessions(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -2151,7 +2477,7 @@ async fn wizard_results(
     Path(session_id): Path<i64>,
     headers: HeaderMap,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -2213,7 +2539,7 @@ async fn wizard_results(
 }
 
 async fn report_snapshots(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -2270,7 +2596,7 @@ async fn report_snapshot_detail(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let context = match RequestContext::authenticated_tenant_from_headers(&headers) {
+    let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
             return (
@@ -2332,7 +2658,7 @@ async fn report_snapshot_detail(
 }
 
 async fn requirement_library(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(err) = RequestContext::authenticated_tenant_from_headers(&headers) {
+    if let Err(err) = authenticated_tenant_context(&state, &headers).await {
         return (
             err.status_code(),
             Json(ApiErrorResponse {
@@ -2380,8 +2706,12 @@ async fn requirement_library(State(state): State<AppState>, headers: HeaderMap) 
     }
 }
 
-async fn web_index(Query(query): Query<WebContextQuery>) -> Html<String> {
-    let context = query.to_context();
+async fn web_index(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
     let cards = [
         web_link_card(
             "Dashboard",
@@ -2435,16 +2765,19 @@ async fn web_index(Query(query): Query<WebContextQuery>) -> Html<String> {
     web_page("ISCY", "/", context.as_ref(), &body)
 }
 
-async fn web_login(Query(query): Query<WebContextQuery>) -> Html<String> {
-    let context = query.to_context();
+async fn web_login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
     let body = format!(
         r#"
         <section class="panel form-panel">
           <h1>Login</h1>
-          <form method="get" action="/dashboard/">
+          <form method="post" action="/login/">
             <label>Tenant-ID<input name="tenant_id" type="number" min="1" required value="{}"></label>
             <label>User-ID<input name="user_id" type="number" min="1" required value="{}"></label>
-            <label>E-Mail<input name="user_email" type="email" value="{}"></label>
             <button type="submit">Weiter</button>
           </form>
         </section>
@@ -2457,16 +2790,51 @@ async fn web_login(Query(query): Query<WebContextQuery>) -> Html<String> {
             .user_id
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        html_escape(query.user_email.as_deref().unwrap_or_default()),
     );
     web_page("Login", "/login/", context.as_ref(), &body)
 }
 
-async fn web_dashboard(
-    Query(query): Query<WebContextQuery>,
+async fn web_login_submit(
     State(state): State<AppState>,
+    Form(form): Form<WebLoginForm>,
+) -> Response {
+    let Some(store) = state.auth_store else {
+        return web_page(
+            "Login",
+            "/login/",
+            None,
+            r#"<section class="panel form-panel error"><h1>Login</h1><p>Rust-Auth-Store ist nicht konfiguriert.</p></section>"#,
+        )
+        .into_response();
+    };
+    match store.create_session(form.tenant_id, form.user_id).await {
+        Ok(Some(session)) => redirect_with_cookie("/dashboard/", &session_cookie_value(&session.token)),
+        Ok(None) => web_page(
+            "Login",
+            "/login/",
+            None,
+            r#"<section class="panel form-panel error"><h1>Login</h1><p>Tenant/User-Kombination ist nicht gueltig.</p></section>"#,
+        )
+        .into_response(),
+        Err(err) => web_page(
+            "Login",
+            "/login/",
+            None,
+            &format!(
+                r#"<section class="panel form-panel error"><h1>Login</h1><p>{}</p></section>"#,
+                html_escape(&err.to_string())
+            ),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_dashboard(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let Some(context) = query.to_context() else {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Dashboard", "/dashboard/");
     };
     let Some(store) = state.dashboard_store else {
@@ -2515,10 +2883,11 @@ async fn web_dashboard(
 }
 
 async fn web_risks(
-    Query(query): Query<WebContextQuery>,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let Some(context) = query.to_context() else {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Risks", "/risks/");
     };
     let Some(store) = state.risk_store else {
@@ -2565,10 +2934,11 @@ async fn web_risks(
 }
 
 async fn web_evidence(
-    Query(query): Query<WebContextQuery>,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let Some(context) = query.to_context() else {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Evidence", "/evidence/");
     };
     let Some(store) = state.evidence_store else {
@@ -2625,14 +2995,20 @@ async fn web_evidence(
     }
 }
 
-async fn web_catalog(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section("Catalog", "/catalog/", query.to_context().as_ref())
+async fn web_catalog(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
+    web_static_section("Catalog", "/catalog/", context.as_ref())
 }
 async fn web_reports(
-    Query(query): Query<WebContextQuery>,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let Some(context) = query.to_context() else {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Reports", "/reports/");
     };
     let Some(store) = state.report_store else {
@@ -2677,10 +3053,11 @@ async fn web_reports(
     }
 }
 async fn web_roadmap(
-    Query(query): Query<WebContextQuery>,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let Some(context) = query.to_context() else {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Roadmap", "/roadmap/");
     };
     let Some(store) = state.roadmap_store else {
@@ -2726,10 +3103,11 @@ async fn web_roadmap(
     }
 }
 async fn web_assets(
-    Query(query): Query<WebContextQuery>,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let Some(context) = query.to_context() else {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Assets", "/assets/");
     };
     let Some(store) = state.asset_store else {
@@ -2774,14 +3152,20 @@ async fn web_assets(
         Err(err) => web_error_page("Assets", "/assets/", &context, &err.to_string()),
     }
 }
-async fn web_imports(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section("Imports", "/imports/", query.to_context().as_ref())
+async fn web_imports(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
+    web_static_section("Imports", "/imports/", context.as_ref())
 }
 async fn web_processes(
-    Query(query): Query<WebContextQuery>,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let Some(context) = query.to_context() else {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Processes", "/processes/");
     };
     let Some(store) = state.process_store else {
@@ -2826,43 +3210,53 @@ async fn web_processes(
         Err(err) => web_error_page("Processes", "/processes/", &context, &err.to_string()),
     }
 }
-async fn web_requirements(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section(
-        "Requirements",
-        "/requirements/",
-        query.to_context().as_ref(),
-    )
+async fn web_requirements(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
+    web_static_section("Requirements", "/requirements/", context.as_ref())
 }
-async fn web_assessments(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section("Assessments", "/assessments/", query.to_context().as_ref())
+async fn web_assessments(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
+    web_static_section("Assessments", "/assessments/", context.as_ref())
 }
-async fn web_organizations(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section(
-        "Organizations",
-        "/organizations/",
-        query.to_context().as_ref(),
-    )
+async fn web_organizations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
+    web_static_section("Organizations", "/organizations/", context.as_ref())
 }
-async fn web_product_security(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section(
-        "Product Security",
-        "/product-security/",
-        query.to_context().as_ref(),
-    )
+async fn web_product_security(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
+    web_static_section("Product Security", "/product-security/", context.as_ref())
 }
-async fn web_cves(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section(
-        "Vulnerability Intelligence",
-        "/cves/",
-        query.to_context().as_ref(),
-    )
+async fn web_cves(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
+    web_static_section("Vulnerability Intelligence", "/cves/", context.as_ref())
 }
-async fn web_navigator(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section(
-        "Guidance Navigator",
-        "/navigator/",
-        query.to_context().as_ref(),
-    )
+async fn web_navigator(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
+    web_static_section("Guidance Navigator", "/navigator/", context.as_ref())
 }
 
 impl WebContextQuery {
@@ -3419,6 +3813,12 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/context/whoami", get(context_whoami))
         .route("/api/v1/context/tenant", get(context_tenant))
         .route(
+            "/api/v1/auth/sessions",
+            post(auth_session_create).get(auth_session_current),
+        )
+        .route("/api/v1/auth/session", get(auth_session_current))
+        .route("/api/v1/auth/logout", post(auth_logout))
+        .route(
             "/api/v1/organizations/tenant-profile",
             get(organization_tenant_profile),
         )
@@ -3482,7 +3882,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/requirements", get(requirement_library))
         .route("/", get(web_index))
-        .route("/login/", get(web_login))
+        .route("/login/", get(web_login).post(web_login_submit))
         .route("/navigator/", get(web_navigator))
         .route("/dashboard/", get(web_dashboard))
         .route("/catalog/", get(web_catalog))

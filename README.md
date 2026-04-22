@@ -1,6 +1,6 @@
 # ISCY V23.5
 
-ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb. Der produktive Cutover laeuft auf einen Rust-Axum-Service; lokale Starts und CI-Smokes laufen inzwischen Rust-first, Django/Python bleibt vorerst Legacy-Kompatibilitaet bis zur finalen Dateientfernung.
+ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb. Der produktive Cutover laeuft auf einen Rust-Axum-Service; lokale Starts, Rust-Sessions und CI-Smokes laufen inzwischen Rust-first, Django/Python bleibt vorerst Legacy-Kompatibilitaet bis zur finalen Dateientfernung.
 
 ## Lokale Entwicklung auf NixOS
 
@@ -253,7 +253,7 @@ Das Skript erzeugt `docs/ISCY_Handbuch.pdf`.
 GitHub Actions prüft:
 
 - Rust-Formatierung, Clippy und Rust-Backend-Tests
-- Rust-DB-/Bootstrap-Smoke inklusive Healthcheck und zentralen API-Probes
+- Rust-DB-/Bootstrap-Smoke inklusive Healthcheck, Rust-Session-Cookie und zentralen API-Probes
 - Nix-Rust-App-Smoke über das flake-basierte Backend
 - Validierung aller Compose-Dateien inklusive Stage und Production
 
@@ -269,7 +269,7 @@ make rust-smoke
 
 `make local-test` deckt aktuell die Basis-Gesundheitschecks, mandantenbezogene Report-Views und die Product-Security-Routen ab.
 `make team-test` ist der Legacy-Django-Kompatibilitaetscheck.
-`make rust-smoke` ist der Rust-only Betriebs-Smoke mit DB-Bootstrap, Healthcheck und zentralen API-Probes.
+`make rust-smoke` ist der Rust-only Betriebs-Smoke mit DB-Bootstrap, Healthcheck, Rust-Session-Cookie, Dashboard ohne Query-Kontext und zentralen API-Probes.
 
 ## Support-Matrix
 

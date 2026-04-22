@@ -15,6 +15,7 @@ Komplette Ablösung der produktiven Python/Django-Pfade durch Rust mit harten Ga
 - [x] **Versionierter Rust-Normalisierungsvertrag eingeführt** (`/api/v1/nvd/normalize` mit `api_version` und stabilen Fehlercodes wie `invalid_cve_id`).
 - [x] **Python-Collection-Import im Rust-only-Modus gesperrt**; `import_nvd_cves` und `sync_nvd_recent` orchestrieren den Rust-Primärpfad über die Rust-CLI.
 - [x] **CI-Policy auf Rust-first umgestellt**: Rust-Tests, Rust-DB-/HTTP-Smoke und Nix-Rust-App-Smoke sind verbindlich.
+- [x] **Rust-Session-Schicht eingefuehrt**: DB-validierte Tenant-/User-Sessions, Cookie/Bearer-Aufloesung und Web-Kontext ohne Query-Parameter.
 
 ## Verbleibende Ablösearbeiten
 - [ ] CVE-Normalisierung vollständig als produktiven Rust-Primärpfad konsolidieren (inkl. Monitoring, Betriebsdoku und finaler Entfernung des Python-Kompatibilitätsendpunkts).

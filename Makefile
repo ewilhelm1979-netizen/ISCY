@@ -57,6 +57,7 @@ rust-smoke:
 	@tmpdir=$$(mktemp -d); \
 	db_path="$$tmpdir/iscy-smoke.sqlite3"; \
 	db_url="sqlite:////$${db_path#/}"; \
+	cookie_file="$$tmpdir/iscy-smoke.cookies"; \
 	bind="$${RUST_BACKEND_BIND:-127.0.0.1:19000}"; \
 	host="$${bind%:*}"; \
 	port="$${bind##*:}"; \
@@ -78,6 +79,9 @@ rust-smoke:
 		sleep 1; \
 	done; \
 	curl -fsS "$$url/health/live" >/dev/null; \
+	curl -fsS -c "$$cookie_file" -H "content-type: application/json" -d '{"tenant_id":1,"user_id":1}' "$$url/api/v1/auth/sessions" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/api/v1/auth/session" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/dashboard/" >/dev/null; \
 	curl -fsS "$$url/dashboard/?tenant_id=1&user_id=1" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/catalog/domains" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/requirements" >/dev/null; \

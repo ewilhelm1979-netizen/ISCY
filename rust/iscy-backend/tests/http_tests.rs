@@ -1,9 +1,10 @@
 use axum::body::{to_bytes, Body};
-use axum::http::{Request, StatusCode};
+use axum::http::{header::SET_COOKIE, Request, StatusCode};
 use iscy_backend::{
     app_router, app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
-    catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore, db_admin,
-    evidence_store::EvidenceStore, import_store::ImportStore, process_store::ProcessStore,
+    auth_store::AuthStore, catalog_store::CatalogStore, cve_store::CveStore,
+    dashboard_store::DashboardStore, db_admin, evidence_store::EvidenceStore,
+    import_store::ImportStore, process_store::ProcessStore,
     product_security_store::ProductSecurityStore, report_store::ReportStore,
     requirement_store::RequirementStore, risk_store::RiskStore, roadmap_store::RoadmapStore,
     tenant_store::TenantStore, wizard_store::WizardStore, AppState,
@@ -174,8 +175,123 @@ async fn context_tenant_returns_authenticated_tenant_context() {
     assert_eq!(payload["user_email"], "security@example.test");
     assert_eq!(
         payload["authorization_model"],
-        "header-bridged-django-context-v1"
+        "rust-session-or-header-context-v1"
     );
+}
+
+#[tokio::test]
+async fn rust_auth_session_creates_cookie_and_drives_web_context() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone())))
+            .with_dashboard_store(Some(DashboardStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"tenant_id":1,"user_id":1}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let cookie = response
+        .headers()
+        .get(SET_COOKIE)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(cookie.starts_with("iscy_session="));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["authenticated"], true);
+    assert_eq!(payload["tenant_id"], 1);
+    assert_eq!(payload["user"]["username"], "demo");
+    assert_eq!(payload["authorization_model"], "rust-session-v1");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/auth/session")
+                .header("cookie", cookie.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["authenticated"], true);
+    assert_eq!(payload["user_id"], 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/context/whoami")
+                .header("cookie", cookie.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["authenticated"], true);
+    assert_eq!(payload["tenant_id"], 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/context/tenant")
+                .header("cookie", cookie.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["tenant_id"], 1);
+    assert_eq!(
+        payload["authorization_model"],
+        "rust-session-or-header-context-v1"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/")
+                .header("cookie", cookie.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Rust Demo Readiness"));
+    assert!(html.contains("Tenant 1"));
 }
 
 #[tokio::test]
@@ -3086,7 +3202,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
         vec![
             "0001_rust_operational_core",
             "0002_rust_product_security_core",
-            "0003_rust_catalog_requirement_core"
+            "0003_rust_catalog_requirement_core",
+            "0004_rust_auth_session_core"
         ]
     );
     assert!(
@@ -3114,6 +3231,9 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             .await
             .unwrap()
     );
+    assert!(db_admin::sqlite_table_exists(&pool, "iscy_auth_session")
+        .await
+        .unwrap());
 
     let applied_again = db_admin::run_sqlite_migrations(&pool).await.unwrap();
     assert!(applied_again.is_empty());

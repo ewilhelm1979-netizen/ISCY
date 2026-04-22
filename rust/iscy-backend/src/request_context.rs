@@ -25,6 +25,7 @@ pub enum RequestContextError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequiredTenantContextError {
     InvalidHeaders(RequestContextError),
+    InvalidSession,
     MissingUser,
     MissingTenant,
 }
@@ -90,6 +91,7 @@ impl RequiredTenantContextError {
     pub fn status_code(&self) -> StatusCode {
         match self {
             Self::InvalidHeaders(_) => StatusCode::BAD_REQUEST,
+            Self::InvalidSession => StatusCode::UNAUTHORIZED,
             Self::MissingUser => StatusCode::UNAUTHORIZED,
             Self::MissingTenant => StatusCode::FORBIDDEN,
         }
@@ -98,6 +100,7 @@ impl RequiredTenantContextError {
     pub fn error_code(&self) -> &'static str {
         match self {
             Self::InvalidHeaders(err) => err.error_code(),
+            Self::InvalidSession => "invalid_session",
             Self::MissingUser => "missing_user_context",
             Self::MissingTenant => "missing_tenant_context",
         }
@@ -106,6 +109,7 @@ impl RequiredTenantContextError {
     pub fn message(&self) -> &'static str {
         match self {
             Self::InvalidHeaders(err) => err.message(),
+            Self::InvalidSession => "Rust-Session ist ungueltig oder abgelaufen.",
             Self::MissingUser => "Authentifizierte Rust-App-Routen benoetigen X-ISCY-User-ID.",
             Self::MissingTenant => "Tenant-gebundene Rust-App-Routen benoetigen X-ISCY-Tenant-ID.",
         }

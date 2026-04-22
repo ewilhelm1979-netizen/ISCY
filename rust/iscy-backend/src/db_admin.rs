@@ -47,12 +47,45 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_CATALOG_REQUIREMENT_SCHEMA,
         postgres_sql: POSTGRES_CATALOG_REQUIREMENT_SCHEMA,
     },
+    Migration {
+        version: "0004_rust_auth_session_core",
+        sqlite_sql: SQLITE_AUTH_SESSION_SCHEMA,
+        postgres_sql: POSTGRES_AUTH_SESSION_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
     include_str!("../seeds/catalog_requirements_seed_sqlite.sql");
 const POSTGRES_CATALOG_REQUIREMENTS_SEED: &str =
     include_str!("../seeds/catalog_requirements_seed_postgres.sql");
+
+const SQLITE_AUTH_SESSION_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS iscy_auth_session (
+    token varchar(128) PRIMARY KEY,
+    tenant_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    user_email varchar(254) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_iscy_auth_session_user ON iscy_auth_session(tenant_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_iscy_auth_session_expires ON iscy_auth_session(expires_at);
+"#;
+
+const POSTGRES_AUTH_SESSION_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS iscy_auth_session (
+    token varchar(128) PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    user_email varchar(254) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_iscy_auth_session_user ON iscy_auth_session(tenant_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_iscy_auth_session_expires ON iscy_auth_session(expires_at);
+"#;
 
 pub async fn run_db_admin_action(
     database_url: &str,
