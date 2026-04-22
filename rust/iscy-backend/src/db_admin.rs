@@ -42,7 +42,17 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_PRODUCT_SECURITY_SCHEMA,
         postgres_sql: POSTGRES_PRODUCT_SECURITY_SCHEMA,
     },
+    Migration {
+        version: "0003_rust_catalog_requirement_core",
+        sqlite_sql: SQLITE_CATALOG_REQUIREMENT_SCHEMA,
+        postgres_sql: POSTGRES_CATALOG_REQUIREMENT_SCHEMA,
+    },
 ];
+
+const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
+    include_str!("../seeds/catalog_requirements_seed_sqlite.sql");
+const POSTGRES_CATALOG_REQUIREMENTS_SEED: &str =
+    include_str!("../seeds/catalog_requirements_seed_postgres.sql");
 
 pub async fn run_db_admin_action(
     database_url: &str,
@@ -133,7 +143,10 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'st
 pub async fn seed_sqlite_demo(pool: &SqlitePool) -> anyhow::Result<()> {
     execute_sqlite_script(pool, SQLITE_DEMO_SEED)
         .await
-        .context("SQLite-Demo-Seed fehlgeschlagen")
+        .context("SQLite-Demo-Seed fehlgeschlagen")?;
+    execute_sqlite_script(pool, SQLITE_CATALOG_REQUIREMENTS_SEED)
+        .await
+        .context("SQLite-Katalog-/Requirement-Seed fehlgeschlagen")
 }
 
 async fn run_postgres_migrations(pool: &PgPool) -> anyhow::Result<Vec<&'static str>> {
@@ -178,7 +191,10 @@ async fn run_postgres_migrations(pool: &PgPool) -> anyhow::Result<Vec<&'static s
 async fn seed_postgres_demo(pool: &PgPool) -> anyhow::Result<()> {
     execute_postgres_script(pool, POSTGRES_DEMO_SEED)
         .await
-        .context("PostgreSQL-Demo-Seed fehlgeschlagen")
+        .context("PostgreSQL-Demo-Seed fehlgeschlagen")?;
+    execute_postgres_script(pool, POSTGRES_CATALOG_REQUIREMENTS_SEED)
+        .await
+        .context("PostgreSQL-Katalog-/Requirement-Seed fehlgeschlagen")
 }
 
 async fn sqlite_migration_applied(pool: &SqlitePool, version: &str) -> anyhow::Result<bool> {
@@ -204,23 +220,62 @@ async fn postgres_migration_applied(pool: &PgPool, version: &str) -> anyhow::Res
 
 async fn execute_sqlite_script(pool: &SqlitePool, script: &str) -> anyhow::Result<()> {
     for statement in split_sql_script(script) {
-        sqlx::query(statement).execute(pool).await?;
+        sqlx::query(&statement).execute(pool).await?;
     }
     Ok(())
 }
 
 async fn execute_postgres_script(pool: &PgPool, script: &str) -> anyhow::Result<()> {
     for statement in split_sql_script(script) {
-        sqlx::query(statement).execute(pool).await?;
+        sqlx::query(&statement).execute(pool).await?;
     }
     Ok(())
 }
 
-fn split_sql_script(script: &str) -> impl Iterator<Item = &str> {
-    script
-        .split(';')
+fn split_sql_script(script: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut chars = script.chars().peekable();
+    let mut in_string = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' => {
+                current.push(ch);
+                if in_string && chars.peek() == Some(&'\'') {
+                    current.push(chars.next().expect("peeked escaped quote"));
+                } else {
+                    in_string = !in_string;
+                }
+            }
+            ';' if !in_string => {
+                if let Some(statement) = normalize_sql_statement(&current) {
+                    statements.push(statement);
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if let Some(statement) = normalize_sql_statement(&current) {
+        statements.push(statement);
+    }
+
+    statements
+}
+
+fn normalize_sql_statement(statement: &str) -> Option<String> {
+    let lines = statement
+        .lines()
         .map(str::trim)
-        .filter(|statement| !statement.is_empty() && !statement.starts_with("--"))
+        .filter(|line| !line.is_empty() && !line.starts_with("--"))
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
 }
 
 pub async fn sqlite_table_exists(pool: &SqlitePool, table_name: &str) -> anyhow::Result<bool> {
@@ -1337,6 +1392,160 @@ CREATE INDEX IF NOT EXISTS idx_product_security_vulnerability_tenant ON product_
 CREATE INDEX IF NOT EXISTS idx_product_security_roadmap_tenant ON product_security_productsecurityroadmap(tenant_id);
 "#;
 
+const SQLITE_CATALOG_REQUIREMENT_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS catalog_assessmentdomain (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    code varchar(64) NOT NULL UNIQUE,
+    name varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    weight INTEGER NOT NULL DEFAULT 10,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS catalog_assessmentquestion (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    code varchar(64) NOT NULL UNIQUE,
+    text varchar(500) NOT NULL,
+    help_text TEXT NOT NULL DEFAULT '',
+    why_it_matters TEXT NOT NULL DEFAULT '',
+    question_kind varchar(20) NOT NULL,
+    wizard_step varchar(20) NOT NULL,
+    weight INTEGER NOT NULL DEFAULT 10,
+    is_required bool NOT NULL DEFAULT 1,
+    applies_to_iso27001 bool NOT NULL DEFAULT 1,
+    applies_to_nis2 bool NOT NULL DEFAULT 0,
+    applies_to_cra bool NOT NULL DEFAULT 0,
+    applies_to_ai_act bool NOT NULL DEFAULT 0,
+    applies_to_iec62443 bool NOT NULL DEFAULT 0,
+    applies_to_iso_sae_21434 bool NOT NULL DEFAULT 0,
+    applies_to_product_security bool NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    domain_id INTEGER NULL
+);
+CREATE TABLE IF NOT EXISTS catalog_answeroption (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    slug varchar(64) NOT NULL,
+    label varchar(255) NOT NULL,
+    score INTEGER NOT NULL DEFAULT 0,
+    description TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_na bool NOT NULL DEFAULT 0,
+    question_id INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS catalog_recommendationrule (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    max_score_threshold INTEGER NOT NULL DEFAULT 2,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    priority varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    effort varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    measure_type varchar(20) NOT NULL DEFAULT 'ORGANIZATIONAL',
+    owner_role varchar(64) NOT NULL DEFAULT '',
+    target_phase varchar(64) NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    question_id INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS requirements_app_requirementquestionmapping (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    strength varchar(16) NOT NULL DEFAULT 'PRIMARY',
+    rationale TEXT NOT NULL DEFAULT '',
+    mapping_version_id INTEGER NOT NULL,
+    question_id INTEGER NOT NULL,
+    requirement_id INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_question_domain ON catalog_assessmentquestion(domain_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_option_question ON catalog_answeroption(question_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_rule_question ON catalog_recommendationrule(question_id);
+CREATE INDEX IF NOT EXISTS idx_requirement_question_mapping_requirement ON requirements_app_requirementquestionmapping(requirement_id);
+CREATE INDEX IF NOT EXISTS idx_requirement_question_mapping_question ON requirements_app_requirementquestionmapping(question_id);
+"#;
+
+const POSTGRES_CATALOG_REQUIREMENT_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS catalog_assessmentdomain (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    code varchar(64) NOT NULL UNIQUE,
+    name varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    weight INTEGER NOT NULL DEFAULT 10,
+    sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS catalog_assessmentquestion (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    code varchar(64) NOT NULL UNIQUE,
+    text varchar(500) NOT NULL,
+    help_text TEXT NOT NULL DEFAULT '',
+    why_it_matters TEXT NOT NULL DEFAULT '',
+    question_kind varchar(20) NOT NULL,
+    wizard_step varchar(20) NOT NULL,
+    weight INTEGER NOT NULL DEFAULT 10,
+    is_required BOOLEAN NOT NULL DEFAULT TRUE,
+    applies_to_iso27001 BOOLEAN NOT NULL DEFAULT TRUE,
+    applies_to_nis2 BOOLEAN NOT NULL DEFAULT FALSE,
+    applies_to_cra BOOLEAN NOT NULL DEFAULT FALSE,
+    applies_to_ai_act BOOLEAN NOT NULL DEFAULT FALSE,
+    applies_to_iec62443 BOOLEAN NOT NULL DEFAULT FALSE,
+    applies_to_iso_sae_21434 BOOLEAN NOT NULL DEFAULT FALSE,
+    applies_to_product_security BOOLEAN NOT NULL DEFAULT FALSE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    domain_id BIGINT NULL
+);
+CREATE TABLE IF NOT EXISTS catalog_answeroption (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    slug varchar(64) NOT NULL,
+    label varchar(255) NOT NULL,
+    score INTEGER NOT NULL DEFAULT 0,
+    description TEXT NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    is_na BOOLEAN NOT NULL DEFAULT FALSE,
+    question_id BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS catalog_recommendationrule (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    max_score_threshold INTEGER NOT NULL DEFAULT 2,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    priority varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    effort varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    measure_type varchar(20) NOT NULL DEFAULT 'ORGANIZATIONAL',
+    owner_role varchar(64) NOT NULL DEFAULT '',
+    target_phase varchar(64) NOT NULL DEFAULT '',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    question_id BIGINT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS requirements_app_requirementquestionmapping (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    strength varchar(16) NOT NULL DEFAULT 'PRIMARY',
+    rationale TEXT NOT NULL DEFAULT '',
+    mapping_version_id BIGINT NOT NULL,
+    question_id BIGINT NOT NULL,
+    requirement_id BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_catalog_question_domain ON catalog_assessmentquestion(domain_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_option_question ON catalog_answeroption(question_id);
+CREATE INDEX IF NOT EXISTS idx_catalog_rule_question ON catalog_recommendationrule(question_id);
+CREATE INDEX IF NOT EXISTS idx_requirement_question_mapping_requirement ON requirements_app_requirementquestionmapping(requirement_id);
+CREATE INDEX IF NOT EXISTS idx_requirement_question_mapping_question ON requirements_app_requirementquestionmapping(question_id);
+"#;
+
 const SQLITE_DEMO_SEED: &str = r#"
 INSERT OR IGNORE INTO organizations_tenant (
     id, created_at, updated_at, name, slug, country, operation_countries, description, sector,
@@ -1801,3 +2010,26 @@ INSERT INTO product_security_productsecurityroadmaptask (
     (1902, 1, 1900, 1200, 1500, 'RESPONSE', 'Remediate Rust critical firmware exposure', 'Ship remediation and prepare disclosure', 'CRITICAL', 'PSIRT Lead', 14, 'Firmware patch readiness', 'PLANNED', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z')
 ON CONFLICT (id) DO NOTHING;
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::split_sql_script;
+
+    #[test]
+    fn split_sql_script_keeps_semicolons_inside_strings() {
+        let statements = split_sql_script(
+            "INSERT INTO example (text) VALUES ('alpha; beta');\n\
+             INSERT INTO example (text) VALUES ('it''s ok');",
+        );
+
+        assert_eq!(statements.len(), 2);
+        assert_eq!(
+            statements[0],
+            "INSERT INTO example (text) VALUES ('alpha; beta')"
+        );
+        assert_eq!(
+            statements[1],
+            "INSERT INTO example (text) VALUES ('it''s ok')"
+        );
+    }
+}

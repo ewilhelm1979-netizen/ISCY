@@ -3085,7 +3085,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
         applied,
         vec![
             "0001_rust_operational_core",
-            "0002_rust_product_security_core"
+            "0002_rust_product_security_core",
+            "0003_rust_catalog_requirement_core"
         ]
     );
     assert!(
@@ -3100,6 +3101,16 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     );
     assert!(
         db_admin::sqlite_table_exists(&pool, "product_security_product")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "catalog_assessmentquestion")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "requirements_app_requirementquestionmapping")
             .await
             .unwrap()
     );
@@ -3197,6 +3208,54 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["roadmap"]["title"], "Rust Gateway Roadmap");
     assert_eq!(payload["tasks"].as_array().unwrap().len(), 2);
+
+    let app = app_router_with_state(
+        AppState::default()
+            .with_catalog_store(Some(CatalogStore::from_sqlite_pool(pool.clone())))
+            .with_requirement_store(Some(RequirementStore::from_sqlite_pool(pool.clone()))),
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/catalog/domains")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["question_count"], 74);
+    assert_eq!(payload["domains"].as_array().unwrap().len(), 19);
+    assert_eq!(payload["domains"][0]["code"], "GOV");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/requirements")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["requirements"].as_array().unwrap().len(), 39);
+    assert_eq!(payload["mapping_versions"].as_array().unwrap().len(), 4);
+
+    let mapping_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM requirements_app_requirementquestionmapping")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(mapping_count, 67);
 }
 
 #[tokio::test]
