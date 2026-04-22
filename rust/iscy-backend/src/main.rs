@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use iscy_backend::{
+    account_store::AccountStore,
     app_router_with_state,
     assessment_store::AssessmentStore,
     asset_store::AssetStore,
@@ -54,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
         .parse()?;
     let (
         cve_store,
+        account_store,
         auth_store,
         tenant_store,
         dashboard_store,
@@ -72,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
     ) = match std::env::var("DATABASE_URL") {
         Ok(database_url) if !database_url.trim().is_empty() => {
             let cve_store = CveStore::connect(&database_url).await?;
+            let account_store = AccountStore::connect(&database_url).await?;
             let auth_store = AuthStore::connect(&database_url).await?;
             let tenant_store = TenantStore::connect(&database_url).await?;
             let dashboard_store = DashboardStore::connect(&database_url).await?;
@@ -89,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
             let product_security_store = ProductSecurityStore::connect(&database_url).await?;
             (
                 Some(cve_store),
+                Some(account_store),
                 Some(auth_store),
                 Some(tenant_store),
                 Some(dashboard_store),
@@ -108,10 +112,11 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => (
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None,
+            None, None, None,
         ),
     };
     let state = AppState::with_stores(cve_store, tenant_store)
+        .with_account_store(account_store)
         .with_auth_store(auth_store)
         .with_dashboard_store(dashboard_store)
         .with_report_store(report_store)

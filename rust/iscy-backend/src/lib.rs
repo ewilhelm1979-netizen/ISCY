@@ -12,6 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod account_store;
 pub mod assessment_store;
 pub mod asset_store;
 pub mod auth_store;
@@ -31,6 +32,7 @@ pub mod roadmap_store;
 pub mod tenant_store;
 pub mod wizard_store;
 
+use account_store::AccountStore;
 use assessment_store::AssessmentStore;
 use asset_store::AssetStore;
 use auth_store::AuthStore;
@@ -51,6 +53,7 @@ use wizard_store::WizardStore;
 
 #[derive(Clone, Default)]
 pub struct AppState {
+    pub account_store: Option<AccountStore>,
     pub asset_store: Option<AssetStore>,
     pub assessment_store: Option<AssessmentStore>,
     pub auth_store: Option<AuthStore>,
@@ -72,6 +75,7 @@ pub struct AppState {
 impl AppState {
     pub fn new(cve_store: Option<CveStore>) -> Self {
         Self {
+            account_store: None,
             asset_store: None,
             assessment_store: None,
             auth_store: None,
@@ -93,6 +97,7 @@ impl AppState {
 
     pub fn with_stores(cve_store: Option<CveStore>, tenant_store: Option<TenantStore>) -> Self {
         Self {
+            account_store: None,
             asset_store: None,
             assessment_store: None,
             auth_store: None,
@@ -114,6 +119,11 @@ impl AppState {
 
     pub fn with_dashboard_store(mut self, dashboard_store: Option<DashboardStore>) -> Self {
         self.dashboard_store = dashboard_store;
+        self
+    }
+
+    pub fn with_account_store(mut self, account_store: Option<AccountStore>) -> Self {
+        self.account_store = account_store;
         self
     }
 
@@ -270,11 +280,44 @@ pub struct AuthSessionResponse {
     pub user: Option<auth_store::AuthUser>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AccountUsersResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub users: Vec<account_store::AccountUser>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccountRolesResponse {
+    pub api_version: &'static str,
+    pub roles: Vec<account_store::AccountRole>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccountUserWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub user: account_store::AccountUser,
+}
+
 #[derive(Debug, Deserialize)]
 struct WebLoginForm {
     tenant_id: Option<i64>,
     username: String,
     password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAccountUserCreateForm {
+    username: String,
+    password: String,
+    first_name: Option<String>,
+    last_name: Option<String>,
+    email: Option<String>,
+    role: Option<String>,
+    job_title: Option<String>,
+    is_staff: Option<String>,
+    is_superuser: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -662,6 +705,56 @@ fn write_permission_error(context: &AuthenticatedTenantContext) -> Option<Respon
     )
 }
 
+fn admin_permission_error(context: &AuthenticatedTenantContext) -> Option<Response> {
+    if context.is_superuser || context.is_staff || context.has_role("ADMIN") {
+        return None;
+    }
+    Some(
+        (
+            StatusCode::FORBIDDEN,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "insufficient_admin_role",
+                message: "Diese Rust-Route benoetigt eine Admin-Rolle.".to_string(),
+            }),
+        )
+            .into_response(),
+    )
+}
+
+fn account_payload_error(err: &anyhow::Error) -> bool {
+    err.chain()
+        .any(|cause| cause.to_string().contains("Account-Feld"))
+}
+
+fn account_store_error_response(err: anyhow::Error, action: &'static str) -> Response {
+    let payload_error = account_payload_error(&err);
+    let details = err
+        .chain()
+        .map(|cause| cause.to_string())
+        .collect::<Vec<_>>()
+        .join(": ");
+    (
+        if payload_error {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        },
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: if payload_error {
+                "invalid_account_payload"
+            } else {
+                "database_error"
+            },
+            message: format!("{action}: {details}"),
+        }),
+    )
+        .into_response()
+}
+
 async fn web_context_from_request(
     query: &WebContextQuery,
     headers: &HeaderMap,
@@ -1014,6 +1107,222 @@ async fn auth_logout(State(state): State<AppState>, headers: HeaderMap) -> Respo
             .into_response(),
         expired_session_cookie_value(),
     )
+}
+
+async fn account_users(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.account_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Account-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_users(context.tenant_id).await {
+        Ok(users) => (
+            StatusCode::OK,
+            Json(AccountUsersResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                users,
+            }),
+        )
+            .into_response(),
+        Err(err) => account_store_error_response(err, "Account-User konnten nicht gelesen werden"),
+    }
+}
+
+async fn account_roles(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.account_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Account-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_roles().await {
+        Ok(roles) => (
+            StatusCode::OK,
+            Json(AccountRolesResponse {
+                api_version: "v1",
+                roles,
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            account_store_error_response(err, "Account-Rollen konnten nicht gelesen werden")
+        }
+    }
+}
+
+async fn account_user_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<account_store::AccountUserWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.account_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Account-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .create_user(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(user) => (
+            StatusCode::CREATED,
+            Json(AccountUserWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                user,
+            }),
+        )
+            .into_response(),
+        Err(err) => account_store_error_response(err, "Account-User konnte nicht erstellt werden"),
+    }
+}
+
+async fn account_user_update(
+    Path(user_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<account_store::AccountUserWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.account_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Account-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .update_user(context.tenant_id, user_id, context.user_id, payload)
+        .await
+    {
+        Ok(Some(user)) => (
+            StatusCode::OK,
+            Json(AccountUserWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                user,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "account_user_not_found",
+                message: "Account-User wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            account_store_error_response(err, "Account-User konnte nicht aktualisiert werden")
+        }
+    }
 }
 
 async fn organization_tenant_profile(
@@ -3315,6 +3624,173 @@ async fn web_organizations(
     let context = web_context_from_request(&query, &headers, &state).await;
     web_static_section("Organizations", "/organizations/", context.as_ref())
 }
+async fn web_admin_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let display_context = web_context_from_request(&query, &headers, &state).await;
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            if let Some(context) = display_context.as_ref() {
+                return web_error_page("Users", "/admin/users/", context, err.message());
+            }
+            return web_missing_context("Users", "/admin/users/");
+        }
+    };
+    let context = display_context.unwrap_or_else(|| WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    });
+    if admin_permission_error(&auth_context).is_some() {
+        return web_error_page(
+            "Users",
+            "/admin/users/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine Admin-Rolle.",
+        );
+    }
+    let Some(store) = state.account_store else {
+        return web_store_missing("Users", "/admin/users/", &context, "Account");
+    };
+
+    let users = match store.list_users(context.tenant_id).await {
+        Ok(users) => users,
+        Err(err) => return web_error_page("Users", "/admin/users/", &context, &err.to_string()),
+    };
+    let roles = match store.list_roles().await {
+        Ok(roles) => roles,
+        Err(err) => return web_error_page("Users", "/admin/users/", &context, &err.to_string()),
+    };
+    let role_options = roles
+        .iter()
+        .map(|role| {
+            let selected = if role.code == "CONTRIBUTOR" {
+                " selected"
+            } else {
+                ""
+            };
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                html_escape(&role.code),
+                selected,
+                html_escape(&role.label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let rows = users
+        .iter()
+        .map(|user| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&user.username),
+                html_escape(&user.display_name),
+                html_escape(&user.email),
+                html_escape(&user.roles.join(", ")),
+                yes_no(user.is_active),
+                yes_no(user.is_staff),
+                yes_no(user.is_superuser),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>Users</h1><p>{} Accounts fuer Tenant {}</p></section>
+        <section class="grid">
+          <article class="panel wide">
+            <h2>Accounts</h2>
+            <table>
+              <thead><tr><th>User</th><th>Name</th><th>E-Mail</th><th>Rollen</th><th>Aktiv</th><th>Staff</th><th>Superuser</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <h2>User anlegen</h2>
+            <form method="post" action="/admin/users/">
+              <label>Benutzername<input name="username" type="text" autocomplete="username" required></label>
+              <label>Passwort<input name="password" type="password" autocomplete="new-password" required></label>
+              <label>Vorname<input name="first_name" type="text" autocomplete="given-name"></label>
+              <label>Nachname<input name="last_name" type="text" autocomplete="family-name"></label>
+              <label>E-Mail<input name="email" type="email" autocomplete="email"></label>
+              <label>Jobtitel<input name="job_title" type="text"></label>
+              <label>Rolle<select name="role">{}</select></label>
+              <label class="checkbox-row"><input name="is_staff" type="checkbox" value="1"> Staff</label>
+              <label class="checkbox-row"><input name="is_superuser" type="checkbox" value="1"> Superuser</label>
+              <button type="submit">User anlegen</button>
+            </form>
+          </article>
+        </section>
+        "#,
+        users.len(),
+        context.tenant_id,
+        if rows.is_empty() {
+            web_empty_row(7, "Keine Accounts vorhanden.")
+        } else {
+            rows
+        },
+        role_options,
+    );
+    web_page("Users", "/admin/users/", Some(&context), &body)
+}
+async fn web_admin_users_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAccountUserCreateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Users", "/admin/users/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if admin_permission_error(&auth_context).is_some() {
+        return web_error_page(
+            "Users",
+            "/admin/users/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine Admin-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.account_store else {
+        return web_store_missing("Users", "/admin/users/", &context, "Account").into_response();
+    };
+    let role = form
+        .role
+        .as_ref()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let roles = role.as_ref().map(|role| vec![role.clone()]);
+    let payload = account_store::AccountUserWriteRequest {
+        username: Some(form.username),
+        password: Some(form.password),
+        first_name: form.first_name,
+        last_name: form.last_name,
+        email: form.email,
+        role,
+        roles,
+        job_title: form.job_title,
+        is_staff: Some(form.is_staff.is_some()),
+        is_superuser: Some(form.is_superuser.is_some()),
+        is_active: Some(true),
+    };
+    match store
+        .create_user(auth_context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(_) => Redirect::to("/admin/users/").into_response(),
+        Err(err) => {
+            web_error_page("Users", "/admin/users/", &context, &err.to_string()).into_response()
+        }
+    }
+}
 async fn web_product_security(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3444,6 +3920,7 @@ fn web_page(
         ("/assets/", "Assets"),
         ("/processes/", "Processes"),
         ("/product-security/", "Product Security"),
+        ("/admin/users/", "Users"),
     ]
     .iter()
     .map(|(path, label)| {
@@ -3509,7 +3986,9 @@ fn web_page(
     td a {{ color:var(--accent); text-decoration:none; }}
     form {{ display:grid; gap:12px; }}
     label {{ display:grid; gap:6px; font-weight:600; }}
-    input {{ width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; }}
+    input, select {{ width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; background:#fff; }}
+    input[type="checkbox"] {{ width:auto; }}
+    .checkbox-row {{ display:flex; align-items:center; gap:8px; }}
     button {{ justify-self:start; border:0; border-radius:6px; background:var(--accent); color:#fff; padding:10px 14px; font-weight:700; cursor:pointer; }}
     @media (max-width: 720px) {{ header {{ align-items:flex-start; flex-direction:column; }} h1 {{ font-size:32px; }} .context {{ justify-content:flex-start; }} }}
   </style>
@@ -3900,6 +4379,15 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/auth/session", get(auth_session_current))
         .route("/api/v1/auth/logout", post(auth_logout))
         .route(
+            "/api/v1/accounts/users",
+            get(account_users).post(account_user_create),
+        )
+        .route(
+            "/api/v1/accounts/users/{user_id}",
+            patch(account_user_update),
+        )
+        .route("/api/v1/accounts/roles", get(account_roles))
+        .route(
             "/api/v1/organizations/tenant-profile",
             get(organization_tenant_profile),
         )
@@ -3977,6 +4465,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/risks/", get(web_risks))
         .route("/assessments/", get(web_assessments))
         .route("/organizations/", get(web_organizations))
+        .route(
+            "/admin/users/",
+            get(web_admin_users).post(web_admin_users_submit),
+        )
         .route("/product-security/", get(web_product_security))
         .route("/cves/", get(web_cves))
         .route("/api/v1/nvd/normalize", post(nvd_normalize))

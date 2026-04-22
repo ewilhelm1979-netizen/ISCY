@@ -21,6 +21,7 @@ pub enum AuthStore {
 }
 
 type HmacSha256 = Hmac<Sha256>;
+const DJANGO_PBKDF2_SHA256_ITERATIONS: u32 = 720_000;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthUser {
@@ -657,6 +658,21 @@ fn verify_django_pbkdf2_sha256_password(password: &str, encoded: &str) -> bool {
     constant_time_eq(&actual, &expected)
 }
 
+pub(crate) fn make_django_pbkdf2_sha256_password(password: &str, salt: &str) -> String {
+    let digest = pbkdf2_hmac_sha256(
+        password.as_bytes(),
+        salt.as_bytes(),
+        DJANGO_PBKDF2_SHA256_ITERATIONS,
+        32,
+    );
+    format!(
+        "pbkdf2_sha256${}${}${}",
+        DJANGO_PBKDF2_SHA256_ITERATIONS,
+        salt,
+        BASE64_STANDARD.encode(digest)
+    )
+}
+
 fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32, output_len: usize) -> Vec<u8> {
     let mut output = vec![0_u8; output_len];
     let mut block_index = 1_u32;
@@ -729,7 +745,11 @@ fn display_name(first_name: &str, last_name: &str, username: &str) -> String {
     }
 }
 
-fn roles_from_codes(legacy_role: &str, role_codes: &str, is_superuser: bool) -> Vec<String> {
+pub(crate) fn roles_from_codes(
+    legacy_role: &str,
+    role_codes: &str,
+    is_superuser: bool,
+) -> Vec<String> {
     let mut roles = Vec::new();
     push_role(&mut roles, legacy_role);
     for role in role_codes.split(',') {

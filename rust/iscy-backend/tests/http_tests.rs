@@ -1,10 +1,10 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{header::SET_COOKIE, Request, StatusCode};
 use iscy_backend::{
-    app_router, app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
-    auth_store::AuthStore, catalog_store::CatalogStore, cve_store::CveStore,
-    dashboard_store::DashboardStore, db_admin, evidence_store::EvidenceStore,
-    import_store::ImportStore, process_store::ProcessStore,
+    account_store::AccountStore, app_router, app_router_with_state,
+    assessment_store::AssessmentStore, asset_store::AssetStore, auth_store::AuthStore,
+    catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore, db_admin,
+    evidence_store::EvidenceStore, import_store::ImportStore, process_store::ProcessStore,
     product_security_store::ProductSecurityStore, report_store::ReportStore,
     requirement_store::RequirementStore, risk_store::RiskStore, roadmap_store::RoadmapStore,
     tenant_store::TenantStore, wizard_store::WizardStore, AppState,
@@ -311,6 +311,135 @@ async fn rust_auth_session_creates_cookie_and_drives_web_context() {
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Rust Demo Readiness"));
     assert!(html.contains("Tenant 1"));
+}
+
+#[tokio::test]
+async fn account_users_require_admin_role() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/accounts/users")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "insufficient_admin_role");
+}
+
+#[tokio::test]
+async fn account_users_return_seeded_admin_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_account_store(Some(AccountStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/accounts/users")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["tenant_id"], 1);
+    assert_eq!(payload["users"][0]["username"], "admin");
+    assert_eq!(payload["users"][0]["roles"][0], "ADMIN");
+}
+
+#[tokio::test]
+async fn account_user_create_persists_user_role_and_login() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_account_store(Some(AccountStore::from_sqlite_pool(pool.clone())))
+            .with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/accounts/users")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "username":"auditor",
+                        "password":"Audit123!",
+                        "email":"audit@example.com",
+                        "first_name":"Ada",
+                        "last_name":"Audit",
+                        "role":"AUDITOR",
+                        "roles":["AUDITOR"],
+                        "is_active":true
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "unexpected account create response: {payload}"
+    );
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["user"]["username"], "auditor");
+    assert_eq!(payload["user"]["roles"][0], "AUDITOR");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"tenant_id":1,"username":"auditor","password":"Audit123!"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["user"]["username"], "auditor");
+    assert_eq!(payload["user"]["roles"][0], "AUDITOR");
 }
 
 #[tokio::test]
@@ -2997,6 +3126,7 @@ async fn rust_web_surface_routes_return_ok() {
         "/risks/",
         "/assessments/",
         "/organizations/",
+        "/admin/users/",
         "/product-security/",
         "/cves/",
     ];

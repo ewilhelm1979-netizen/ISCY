@@ -10,7 +10,7 @@ Fuer NixOS und andere lokale Linux-Setups ist der bevorzugte lokale Pfad jetzt R
 ./start.sh
 ```
 
-Danach ist die Rust-Weboberflaeche unter `http://127.0.0.1:9000/login/` erreichbar. Der Rust-Demo-Login lautet `admin / Admin123!`.
+Danach ist die Rust-Weboberflaeche unter `http://127.0.0.1:9000/login/` erreichbar. Der Rust-Demo-Login lautet `admin / Admin123!`; die Rust-Userverwaltung liegt unter `http://127.0.0.1:9000/admin/users/`.
 
 Explizit ohne Wrapper:
 
@@ -54,7 +54,7 @@ Der lokale Wrapper startet denselben Rust-only-Pfad und initialisiert vorher die
 ./start.sh
 ```
 
-Login im Browser: `http://127.0.0.1:9000/login/` mit `admin / Admin123!`.
+Login im Browser: `http://127.0.0.1:9000/login/` mit `admin / Admin123!`. Danach ist `/admin/users/` fuer User-Liste und User-Anlage ueber Rust verfuegbar.
 
 ## Neu in V23.5
 
@@ -89,7 +89,7 @@ make rust-test
 make rust-run
 ```
 
-Zusätzlich stellt `rust-backend` eine erste Rust-Weboberflächen-Route-Map für die bisherigen Django-Mountpoints bereit (z. B. `/dashboard/`, `/reports/`, `/cves/`) als Migrationsgrundlage.
+Zusätzlich stellt `rust-backend` eine Rust-Weboberflächen-Route-Map für die bisherigen Django-Mountpoints bereit (z. B. `/dashboard/`, `/reports/`, `/admin/users/`, `/cves/`) als Migrationsgrundlage.
 
 ## Vordefinierte Security-Template-Pakete (im Fragenkatalog)
 
