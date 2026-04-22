@@ -644,20 +644,22 @@ async fn authenticated_tenant_context(
     RequestContext::authenticated_tenant_from_headers(headers)
 }
 
-fn require_write_permission(context: &AuthenticatedTenantContext) -> Result<(), Response> {
+fn write_permission_error(context: &AuthenticatedTenantContext) -> Option<Response> {
     if context.can_write() {
-        return Ok(());
+        return None;
     }
-    Err((
-        StatusCode::FORBIDDEN,
-        Json(ApiErrorResponse {
-            accepted: false,
-            api_version: "v1",
-            error_code: "insufficient_role",
-            message: "Diese Rust-Route benoetigt eine schreibende ISCY-Rolle.".to_string(),
-        }),
+    Some(
+        (
+            StatusCode::FORBIDDEN,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "insufficient_role",
+                message: "Diese Rust-Route benoetigt eine schreibende ISCY-Rolle.".to_string(),
+            }),
+        )
+            .into_response(),
     )
-        .into_response())
 }
 
 async fn web_context_from_request(
@@ -1566,7 +1568,7 @@ async fn product_security_roadmap_task_update(
                 .into_response();
         }
     };
-    if let Err(response) = require_write_permission(&context) {
+    if let Some(response) = write_permission_error(&context) {
         return response;
     }
 
@@ -1641,7 +1643,7 @@ async fn product_security_vulnerability_update(
                 .into_response();
         }
     };
-    if let Err(response) = require_write_permission(&context) {
+    if let Some(response) = write_permission_error(&context) {
         return response;
     }
 
@@ -1834,7 +1836,7 @@ async fn risk_create(
                 .into_response();
         }
     };
-    if let Err(response) = require_write_permission(&context) {
+    if let Some(response) = write_permission_error(&context) {
         return response;
     }
 
@@ -1894,7 +1896,7 @@ async fn risk_update(
                 .into_response();
         }
     };
-    if let Err(response) = require_write_permission(&context) {
+    if let Some(response) = write_permission_error(&context) {
         return response;
     }
 
@@ -2027,7 +2029,7 @@ async fn evidence_need_sync(
                 .into_response();
         }
     };
-    if let Err(response) = require_write_permission(&context) {
+    if let Some(response) = write_permission_error(&context) {
         return response;
     }
 
@@ -2100,7 +2102,7 @@ async fn import_center_job(
                 .into_response();
         }
     };
-    if let Err(response) = require_write_permission(&context) {
+    if let Some(response) = write_permission_error(&context) {
         return response;
     }
 
@@ -2449,7 +2451,7 @@ async fn roadmap_task_update(
                 .into_response();
         }
     };
-    if let Err(response) = require_write_permission(&context) {
+    if let Some(response) = write_permission_error(&context) {
         return response;
     }
 
