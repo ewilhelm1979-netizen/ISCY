@@ -328,6 +328,21 @@ pub struct EvidenceOverviewQuery {
     pub session_id: Option<i64>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct WebContextQuery {
+    pub tenant_id: Option<i64>,
+    pub user_id: Option<i64>,
+    pub user_email: Option<String>,
+    pub session_id: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct WebContext {
+    tenant_id: i64,
+    user_id: i64,
+    user_email: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct EvidenceOverviewResponse {
     pub api_version: &'static str,
@@ -2364,79 +2379,531 @@ async fn requirement_library(State(state): State<AppState>, headers: HeaderMap) 
     }
 }
 
-async fn web_index() -> Html<String> {
-    Html(
-        r#"<!doctype html>
-<html lang="de">
-<head><meta charset="utf-8"><title>ISCY Rust Web</title></head>
-<body>
-  <h1>ISCY Rust Web Surface</h1>
-  <p>Diese Rust-Route bildet die Django-Weboberfläche schrittweise nach.</p>
-  <ul>
-    <li><a href="/dashboard/">Dashboard</a></li>
-    <li><a href="/catalog/">Catalog</a></li>
-    <li><a href="/reports/">Reports</a></li>
-    <li><a href="/cves/">Vulnerability Intelligence</a></li>
-  </ul>
-</body>
-</html>"#
-            .to_string(),
+async fn web_index(Query(query): Query<WebContextQuery>) -> Html<String> {
+    let context = query.to_context();
+    let body = format!(
+        r#"
+        <section class="hero">
+          <h1>ISCY</h1>
+          <p>Rust Core fuer ISMS, NIS2, KRITIS und Product Security.</p>
+        </section>
+        <section class="grid">
+          {}
+          {}
+          {}
+        </section>
+        "#,
+        web_link_card(
+            "Dashboard",
+            &web_path_with_context("/dashboard/", context.as_ref()),
+            "KPI-Ueberblick"
+        ),
+        web_link_card(
+            "Risks",
+            &web_path_with_context("/risks/", context.as_ref()),
+            "Aktive Risiken"
+        ),
+        web_link_card(
+            "Evidence",
+            &web_path_with_context("/evidence/", context.as_ref()),
+            "Nachweise und Luecken"
+        ),
+    );
+    web_page("ISCY", "/", context.as_ref(), &body)
+}
+
+async fn web_login(Query(query): Query<WebContextQuery>) -> Html<String> {
+    let context = query.to_context();
+    let body = format!(
+        r#"
+        <section class="panel form-panel">
+          <h1>Login</h1>
+          <form method="get" action="/dashboard/">
+            <label>Tenant-ID<input name="tenant_id" type="number" min="1" required value="{}"></label>
+            <label>User-ID<input name="user_id" type="number" min="1" required value="{}"></label>
+            <label>E-Mail<input name="user_email" type="email" value="{}"></label>
+            <button type="submit">Weiter</button>
+          </form>
+        </section>
+        "#,
+        query
+            .tenant_id
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        query
+            .user_id
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        html_escape(query.user_email.as_deref().unwrap_or_default()),
+    );
+    web_page("Login", "/login/", context.as_ref(), &body)
+}
+
+async fn web_dashboard(
+    Query(query): Query<WebContextQuery>,
+    State(state): State<AppState>,
+) -> Html<String> {
+    let Some(context) = query.to_context() else {
+        return web_missing_context("Dashboard", "/dashboard/");
+    };
+    let Some(store) = state.dashboard_store else {
+        return web_store_missing("Dashboard", "/dashboard/", &context, "Dashboard");
+    };
+    match store.dashboard_summary(context.tenant_id).await {
+        Ok(summary) => {
+            let latest_report = summary
+                .latest_report
+                .map(|report| {
+                    format!(
+                        r#"<article class="panel wide"><h2>{}</h2><p>ISO {}% · NIS2 {}%</p><p class="muted">{}</p></article>"#,
+                        html_escape(&report.title),
+                        report.iso_readiness_percent,
+                        report.nis2_readiness_percent,
+                        html_escape(&report.created_at),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    r#"<article class="panel wide"><h2>Kein Report</h2><p>Noch kein Snapshot vorhanden.</p></article>"#.to_string()
+                });
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Dashboard</h1><p>Tenant {}</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">{}</section>
+                "#,
+                context.tenant_id,
+                metric_card("Prozesse", summary.process_count),
+                metric_card("Assets", summary.asset_count),
+                metric_card("Offene Risiken", summary.open_risk_count),
+                metric_card("Evidenzen", summary.evidence_count),
+                metric_card("Offene Tasks", summary.open_task_count),
+                latest_report,
+            );
+            web_page("Dashboard", "/dashboard/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Dashboard", "/dashboard/", &context, &err.to_string()),
+    }
+}
+
+async fn web_risks(
+    Query(query): Query<WebContextQuery>,
+    State(state): State<AppState>,
+) -> Html<String> {
+    let Some(context) = query.to_context() else {
+        return web_missing_context("Risks", "/risks/");
+    };
+    let Some(store) = state.risk_store else {
+        return web_store_missing("Risks", "/risks/", &context, "Risk");
+    };
+    match store.list_risks(context.tenant_id, 50).await {
+        Ok(risks) => {
+            let rows = risks
+                .iter()
+                .map(|risk| {
+                    format!(
+                        r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        web_path_with_context(&format!("/api/v1/risks/{}", risk.id), Some(&context)),
+                        html_escape(&risk.title),
+                        risk.score,
+                        html_escape(&risk.risk_level_label),
+                        html_escape(&risk.status_label),
+                        html_escape(risk.owner_display.as_deref().unwrap_or("-")),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Risks</h1><p>{} Risiken</p></section>
+                <section class="panel wide">
+                  <table>
+                    <thead><tr><th>Titel</th><th>Score</th><th>Level</th><th>Status</th><th>Owner</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                risks.len(),
+                if rows.is_empty() {
+                    r#"<tr><td colspan="5">Keine Risiken vorhanden.</td></tr>"#.to_string()
+                } else {
+                    rows
+                },
+            );
+            web_page("Risks", "/risks/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Risks", "/risks/", &context, &err.to_string()),
+    }
+}
+
+async fn web_evidence(
+    Query(query): Query<WebContextQuery>,
+    State(state): State<AppState>,
+) -> Html<String> {
+    let Some(context) = query.to_context() else {
+        return web_missing_context("Evidence", "/evidence/");
+    };
+    let Some(store) = state.evidence_store else {
+        return web_store_missing("Evidence", "/evidence/", &context, "Evidence");
+    };
+    match store
+        .evidence_overview(context.tenant_id, query.session_id, 50, 20)
+        .await
+    {
+        Ok(overview) => {
+            let rows = overview
+                .evidence_items
+                .iter()
+                .map(|item| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&item.title),
+                        html_escape(&item.status_label),
+                        html_escape(item.owner_display.as_deref().unwrap_or("-")),
+                        html_escape(item.requirement_code.as_deref().unwrap_or("-")),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Evidence</h1><p>{} Nachweise · {} offene Needs</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="panel wide">
+                  <table>
+                    <thead><tr><th>Titel</th><th>Status</th><th>Owner</th><th>Requirement</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                overview.evidence_items.len(),
+                overview.need_summary.open,
+                metric_card("Offen", overview.need_summary.open),
+                metric_card("Teilweise", overview.need_summary.partial),
+                metric_card("Abgedeckt", overview.need_summary.covered),
+                if rows.is_empty() {
+                    r#"<tr><td colspan="4">Keine Evidenzen vorhanden.</td></tr>"#.to_string()
+                } else {
+                    rows
+                },
+            );
+            web_page("Evidence", "/evidence/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Evidence", "/evidence/", &context, &err.to_string()),
+    }
+}
+
+async fn web_catalog(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section("Catalog", "/catalog/", query.to_context().as_ref())
+}
+async fn web_reports(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section("Reports", "/reports/", query.to_context().as_ref())
+}
+async fn web_roadmap(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section("Roadmap", "/roadmap/", query.to_context().as_ref())
+}
+async fn web_assets(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section("Assets", "/assets/", query.to_context().as_ref())
+}
+async fn web_imports(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section("Imports", "/imports/", query.to_context().as_ref())
+}
+async fn web_processes(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section("Processes", "/processes/", query.to_context().as_ref())
+}
+async fn web_requirements(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section(
+        "Requirements",
+        "/requirements/",
+        query.to_context().as_ref(),
+    )
+}
+async fn web_assessments(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section("Assessments", "/assessments/", query.to_context().as_ref())
+}
+async fn web_organizations(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section(
+        "Organizations",
+        "/organizations/",
+        query.to_context().as_ref(),
+    )
+}
+async fn web_product_security(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section(
+        "Product Security",
+        "/product-security/",
+        query.to_context().as_ref(),
+    )
+}
+async fn web_cves(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section(
+        "Vulnerability Intelligence",
+        "/cves/",
+        query.to_context().as_ref(),
+    )
+}
+async fn web_navigator(Query(query): Query<WebContextQuery>) -> Html<String> {
+    web_static_section(
+        "Guidance Navigator",
+        "/navigator/",
+        query.to_context().as_ref(),
     )
 }
 
-async fn web_placeholder(path: &'static str, title: &'static str) -> Html<String> {
+impl WebContextQuery {
+    fn to_context(&self) -> Option<WebContext> {
+        let tenant_id = self.tenant_id?;
+        let user_id = self.user_id?;
+        if tenant_id < 1 || user_id < 1 {
+            return None;
+        }
+        Some(WebContext {
+            tenant_id,
+            user_id,
+            user_email: self
+                .user_email
+                .clone()
+                .filter(|value| !value.trim().is_empty()),
+        })
+    }
+}
+
+fn web_static_section(
+    title: &'static str,
+    path: &'static str,
+    context: Option<&WebContext>,
+) -> Html<String> {
+    let body = format!(
+        r#"<section class="hero compact"><h1>{}</h1><p>Rust-Webroute aktiv.</p></section>
+        <section class="grid">
+          {}
+          {}
+        </section>"#,
+        html_escape(title),
+        web_link_card(
+            "JSON API",
+            &web_path_with_context(&format!("/api/v1{}", path.trim_end_matches('/')), context),
+            "Datenvertrag"
+        ),
+        web_link_card(
+            "Dashboard",
+            &web_path_with_context("/dashboard/", context),
+            "Zurueck zur Uebersicht"
+        ),
+    );
+    web_page(title, path, context, &body)
+}
+
+fn web_missing_context(title: &'static str, active_path: &'static str) -> Html<String> {
+    let body = format!(
+        r#"<section class="panel form-panel"><h1>{}</h1>
+        <form method="get" action="{}">
+          <label>Tenant-ID<input name="tenant_id" type="number" min="1" required></label>
+          <label>User-ID<input name="user_id" type="number" min="1" required></label>
+          <label>E-Mail<input name="user_email" type="email"></label>
+          <button type="submit">Oeffnen</button>
+        </form></section>"#,
+        html_escape(title),
+        html_escape(active_path),
+    );
+    web_page(title, active_path, None, &body)
+}
+
+fn web_store_missing(
+    title: &'static str,
+    active_path: &'static str,
+    context: &WebContext,
+    store_name: &'static str,
+) -> Html<String> {
+    let body = format!(
+        r#"<section class="hero compact"><h1>{}</h1></section>
+        <section class="panel wide"><h2>{}-Store nicht konfiguriert</h2><p>DATABASE_URL pruefen.</p></section>"#,
+        html_escape(title),
+        html_escape(store_name),
+    );
+    web_page(title, active_path, Some(context), &body)
+}
+
+fn web_error_page(
+    title: &'static str,
+    active_path: &'static str,
+    context: &WebContext,
+    message: &str,
+) -> Html<String> {
+    let body = format!(
+        r#"<section class="hero compact"><h1>{}</h1></section>
+        <section class="panel wide error"><h2>Fehler</h2><p>{}</p></section>"#,
+        html_escape(title),
+        html_escape(message),
+    );
+    web_page(title, active_path, Some(context), &body)
+}
+
+fn web_page(
+    title: &str,
+    active_path: &str,
+    context: Option<&WebContext>,
+    body: &str,
+) -> Html<String> {
+    let nav_items = [
+        ("/dashboard/", "Dashboard"),
+        ("/risks/", "Risks"),
+        ("/evidence/", "Evidence"),
+        ("/roadmap/", "Roadmap"),
+        ("/reports/", "Reports"),
+        ("/product-security/", "Product Security"),
+    ]
+    .iter()
+    .map(|(path, label)| {
+        let class_name = if *path == active_path { "active" } else { "" };
+        format!(
+            r#"<a class="{}" href="{}">{}</a>"#,
+            class_name,
+            web_path_with_context(path, context),
+            html_escape(label),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("");
+    let context_badge = context
+        .map(|context| {
+            format!(
+                r#"<span>Tenant {}</span><span>User {}</span>{}"#,
+                context.tenant_id,
+                context.user_id,
+                context
+                    .user_email
+                    .as_ref()
+                    .map(|email| format!("<span>{}</span>", html_escape(email)))
+                    .unwrap_or_default(),
+            )
+        })
+        .unwrap_or_else(|| r#"<a href="/login/">Login</a>"#.to_string());
     Html(format!(
-        "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\"><title>{title}</title></head><body><h1>{title}</h1><p>Rust-Web-Migrationsroute für <code>{path}</code>.</p></body></html>"
+        r#"<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{}</title>
+  <style>
+    :root {{ color-scheme: light; --ink:#17202a; --muted:#617080; --line:#d8dee6; --bg:#f6f8fb; --panel:#ffffff; --accent:#0f766e; --warn:#b45309; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg); }}
+    header {{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 24px; background:#ffffff; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:1; }}
+    .brand {{ font-weight:800; letter-spacing:0; color:var(--ink); text-decoration:none; }}
+    nav {{ display:flex; flex-wrap:wrap; gap:8px; }}
+    nav a, .context a {{ color:var(--ink); text-decoration:none; padding:8px 10px; border-radius:6px; border:1px solid transparent; }}
+    nav a.active, nav a:hover, .context a:hover {{ border-color:var(--line); background:#eef6f4; }}
+    .context {{ display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; font-size:14px; color:var(--muted); }}
+    .context span {{ padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; }}
+    main {{ width:min(1180px, 100%); margin:0 auto; padding:28px 20px 44px; }}
+    .hero {{ padding:32px 0; }}
+    .hero.compact {{ padding:16px 0 24px; }}
+    h1 {{ margin:0 0 8px; font-size:40px; line-height:1.1; }}
+    h2 {{ margin:0 0 10px; font-size:20px; }}
+    p {{ margin:0 0 8px; color:var(--muted); }}
+    .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:14px; }}
+    .metrics {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:16px; }}
+    .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px; box-shadow:0 1px 2px rgba(20, 30, 40, 0.04); }}
+    .panel.wide {{ grid-column:1 / -1; }}
+    .panel.error {{ border-color:#fed7aa; background:#fff7ed; }}
+    .card-link {{ display:block; min-height:120px; color:var(--ink); text-decoration:none; }}
+    .metric strong {{ display:block; font-size:30px; margin-top:6px; }}
+    .muted {{ color:var(--muted); }}
+    table {{ width:100%; border-collapse:collapse; }}
+    th, td {{ padding:10px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }}
+    th {{ color:var(--muted); font-size:13px; text-transform:uppercase; }}
+    td a {{ color:var(--accent); text-decoration:none; }}
+    form {{ display:grid; gap:12px; }}
+    label {{ display:grid; gap:6px; font-weight:600; }}
+    input {{ width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; }}
+    button {{ justify-self:start; border:0; border-radius:6px; background:var(--accent); color:#fff; padding:10px 14px; font-weight:700; cursor:pointer; }}
+    @media (max-width: 720px) {{ header {{ align-items:flex-start; flex-direction:column; }} h1 {{ font-size:32px; }} .context {{ justify-content:flex-start; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <a class="brand" href="{}">ISCY</a>
+    <nav>{}</nav>
+    <div class="context">{}</div>
+  </header>
+  <main>{}</main>
+</body>
+</html>"#,
+        html_escape(title),
+        web_path_with_context("/", context),
+        nav_items,
+        context_badge,
+        body,
     ))
 }
 
-async fn web_login() -> Html<String> {
-    web_placeholder("/login/", "Login").await
+fn metric_card(label: &str, value: i64) -> String {
+    format!(
+        r#"<article class="panel metric"><span>{}</span><strong>{}</strong></article>"#,
+        html_escape(label),
+        value,
+    )
 }
-async fn web_dashboard() -> Html<String> {
-    web_placeholder("/dashboard/", "Dashboard").await
+
+fn web_link_card(title: &str, href: &str, subtitle: &str) -> String {
+    format!(
+        r#"<a class="panel card-link" href="{}"><h2>{}</h2><p>{}</p></a>"#,
+        html_escape(href),
+        html_escape(title),
+        html_escape(subtitle),
+    )
 }
-async fn web_catalog() -> Html<String> {
-    web_placeholder("/catalog/", "Catalog").await
+
+fn web_path_with_context(path: &str, context: Option<&WebContext>) -> String {
+    let Some(context) = context else {
+        return path.to_string();
+    };
+    let separator = if path.contains('?') { '&' } else { '?' };
+    let email = context
+        .user_email
+        .as_ref()
+        .map(|value| format!("&user_email={}", url_component(value)))
+        .unwrap_or_default();
+    format!(
+        "{path}{separator}tenant_id={}&user_id={}{}",
+        context.tenant_id, context.user_id, email
+    )
 }
-async fn web_reports() -> Html<String> {
-    web_placeholder("/reports/", "Reports").await
+
+fn url_component(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                vec![byte as char]
+            }
+            b' ' => vec!['+'],
+            _ => {
+                let encoded = format!("%{byte:02X}");
+                encoded.chars().collect()
+            }
+        })
+        .collect()
 }
-async fn web_roadmap() -> Html<String> {
-    web_placeholder("/roadmap/", "Roadmap").await
-}
-async fn web_evidence() -> Html<String> {
-    web_placeholder("/evidence/", "Evidence").await
-}
-async fn web_assets() -> Html<String> {
-    web_placeholder("/assets/", "Assets").await
-}
-async fn web_imports() -> Html<String> {
-    web_placeholder("/imports/", "Imports").await
-}
-async fn web_processes() -> Html<String> {
-    web_placeholder("/processes/", "Processes").await
-}
-async fn web_requirements() -> Html<String> {
-    web_placeholder("/requirements/", "Requirements").await
-}
-async fn web_risks() -> Html<String> {
-    web_placeholder("/risks/", "Risks").await
-}
-async fn web_assessments() -> Html<String> {
-    web_placeholder("/assessments/", "Assessments").await
-}
-async fn web_organizations() -> Html<String> {
-    web_placeholder("/organizations/", "Organizations").await
-}
-async fn web_product_security() -> Html<String> {
-    web_placeholder("/product-security/", "Product Security").await
-}
-async fn web_cves() -> Html<String> {
-    web_placeholder("/cves/", "Vulnerability Intelligence").await
-}
-async fn web_navigator() -> Html<String> {
-    web_placeholder("/navigator/", "Guidance Navigator").await
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 async fn nvd_normalize(Json(payload): Json<NvdImportRequest>) -> Response {

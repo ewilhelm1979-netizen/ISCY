@@ -2852,6 +2852,93 @@ async fn rust_web_surface_routes_return_ok() {
 }
 
 #[tokio::test]
+async fn rust_web_dashboard_without_context_renders_context_form() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Tenant-ID"));
+    assert!(html.contains("User-ID"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_dashboard_renders_summary_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_dashboard_tables(&pool).await;
+    insert_dashboard_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_dashboard_store(Some(DashboardStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/?tenant_id=42&user_id=7&user_email=ada%40example.test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Dashboard"));
+    assert!(html.contains("Prozesse"));
+    assert!(html.contains("April Readiness"));
+    assert!(html.contains("ISO 78%"));
+    assert!(html.contains("ada@example.test"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_risks_renders_rows_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/risks/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Credential Phishing"));
+    assert!(html.contains("Kritisch"));
+    assert!(html.contains("Ada Lovelace"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
 async fn nvd_import_endpoint_normalizes_cve_id() {
     let response = app_router()
         .oneshot(

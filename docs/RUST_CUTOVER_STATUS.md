@@ -1,10 +1,10 @@
 # ISCY Rust-Cutover-Status
 
-Stand: 2026-04-20
+Stand: 2026-04-22
 
 ## Kurzfassung
 
-ISCY ist fachlich weit in Richtung Rust migriert, aber noch nicht sicher Python-frei. Der Rust-Axum-Service ist als Backend direkt startbar und viele produktive Lese-/Schreibpfade laufen bereits ueber `rust_service`. Die Django-Schicht ist aber weiterhin die Browser-App, Auth-/Session-Schicht, Form-/Template-Schicht, Migrations-/Seed-Schicht und ein Teil der Datei-/Import-Orchestrierung.
+ISCY ist fachlich weit in Richtung Rust migriert, aber noch nicht sicher Python-frei. Der Rust-Axum-Service ist als Backend direkt startbar und viele produktive Lese-/Schreibpfade laufen bereits ueber `rust_service`. Die erste Rust-Web-Shell ist aktiv und ersetzt die frueheren Platzhalter fuer Dashboard, Risks und Evidence durch serverseitig gerenderte, datengetriebene Seiten. Die Django-Schicht ist aber weiterhin fuer vollstaendige Browser-Workflows, Auth-/Session-Schicht, Form-/Template-Schicht, Migrations-/Seed-Schicht und einen Teil der Datei-/Import-Orchestrierung relevant.
 
 Deshalb ist der finale Loeschschritt fuer Python noch nicht fachlich freigegeben. Python jetzt zu entfernen wuerde die Anwendung nicht abschliessen, sondern zentrale UI- und Betriebsfunktionen abschalten.
 
@@ -41,6 +41,7 @@ RUST_BACKEND_URL=http://127.0.0.1:9000 VERIFY_LOCAL_LLM=0 ./start.sh
 - Dashboard-, Report-, Catalog-, Requirements-, Asset-, Process- und Assessment-Read-Flows.
 - Risk-Register Read-, Detail-, Create- und Update-Flows.
 - Evidence Read-/Detail-Flows und Evidence-Need-Sync.
+- Rust-Web-Shell mit Kontext-Formular sowie datengetriebenem Dashboard, Risk-Register und Evidence-Ueberblick.
 - Roadmap Liste, Detail, Kanban, Task-Updates und Exportdaten.
 - Wizard Start-/Result-Flows.
 - Import-Center bestaetigte Importjobs.
@@ -49,8 +50,8 @@ RUST_BACKEND_URL=http://127.0.0.1:9000 VERIFY_LOCAL_LLM=0 ./start.sh
 
 ## Blocker vor Python-Loeschung
 
-1. **Weboberflaeche:** Rust liefert fuer `/dashboard/`, `/reports/`, `/evidence/`, `/risks/` usw. aktuell noch Platzhalterseiten; die echte UI liegt in Django-Templates und Django-Views.
-2. **Auth, Sessions und Admin:** Login, Benutzer-/Tenant-Kontext, Admin-Funktionen und Berechtigungsoberflaechen sind noch nicht als Rust-Web-/API-Schicht ersetzt.
+1. **Weboberflaeche:** Rust liefert fuer `/dashboard/`, `/risks/` und `/evidence/` bereits echte serverseitige Seiten. Die restlichen Views, Detail-/Form-Flows und Exporte liegen noch in Django-Templates und Django-Views.
+2. **Auth, Sessions und Admin:** Login, Benutzer-/Tenant-Kontext, Admin-Funktionen und Berechtigungsoberflaechen sind noch nicht als produktive Rust-Session-/RBAC-Schicht ersetzt; der Rust-Web-Slice nutzt vorerst expliziten Tenant-/User-Kontext.
 3. **Migrations und Seeds:** Datenbankschema, Initialdaten und Demo-/Katalog-Seedings laufen noch ueber Django-Migrations und Management-Commands.
 4. **Formulare und Uploads:** Validierung, Form-Flows, Evidence-Dateiuploads sowie CSV/XLSX-Import-Mapping sind noch teilweise Django-orchestriert.
 5. **CI und Startskripte:** `.github/workflows/ci.yml`, `start.sh`, Teile des `Makefile` und lokale Smoke-Flows erwarten noch Python/Django.
