@@ -48,7 +48,7 @@ RUST_BACKEND_URL=http://127.0.0.1:9000 VERIFY_LOCAL_LLM=0 ./start.sh
 - Risk-Register Read-, Detail-, Create- und Update-Flows.
 - Evidence Read-/Detail-Flows und Evidence-Need-Sync.
 - Rust-Web-Shell mit Kontext-Formular sowie datengetriebenem Dashboard, Risk-Register, Evidence-Ueberblick, Reports, Roadmap, Assets und Processes.
-- Rust-DB-Admin-CLI mit `migrate`, `seed-demo` und `init-demo` fuer einen ersten Rust-eigenen SQLite/PostgreSQL-Bootstrap der operativen Kern-Tabellen.
+- Rust-DB-Admin-CLI mit `migrate`, `seed-demo` und `init-demo` fuer Rust-eigenen SQLite/PostgreSQL-Bootstrap der operativen Kern-Tabellen inklusive Product-Security.
 - Roadmap Liste, Detail, Kanban, Task-Updates und Exportdaten.
 - Wizard Start-/Result-Flows.
 - Import-Center bestaetigte Importjobs.
@@ -59,7 +59,7 @@ RUST_BACKEND_URL=http://127.0.0.1:9000 VERIFY_LOCAL_LLM=0 ./start.sh
 
 1. **Weboberflaeche:** Rust liefert fuer `/dashboard/`, `/risks/`, `/evidence/`, `/reports/`, `/roadmap/`, `/assets/` und `/processes/` bereits echte serverseitige Seiten. Die restlichen Views, Detail-/Form-Flows und Exporte liegen noch in Django-Templates und Django-Views.
 2. **Auth, Sessions und Admin:** Login, Benutzer-/Tenant-Kontext, Admin-Funktionen und Berechtigungsoberflaechen sind noch nicht als produktive Rust-Session-/RBAC-Schicht ersetzt; der Rust-Web-Slice nutzt vorerst expliziten Tenant-/User-Kontext.
-3. **Migrations und Seeds:** Ein erster Rust-eigener Bootstrap fuer operative Kern-Tabellen ist vorhanden. Vollstaendige Katalog-/Requirement-/Product-Security-Seeds und alle historischen Django-Schema-Details sind noch nicht vollstaendig abgeloest.
+3. **Migrations und Seeds:** Ein Rust-eigener Bootstrap fuer operative Kern-Tabellen inklusive Product-Security ist vorhanden. Vollstaendige Katalog-/Requirement-Seeds und alle historischen Django-Schema-Details sind noch nicht vollstaendig abgeloest.
 4. **Formulare und Uploads:** Validierung, Form-Flows, Evidence-Dateiuploads sowie CSV/XLSX-Import-Mapping sind noch teilweise Django-orchestriert.
 5. **CI und Startskripte:** `.github/workflows/ci.yml`, `start.sh`, Teile des `Makefile` und lokale Smoke-Flows erwarten noch Python/Django.
 
@@ -67,7 +67,7 @@ RUST_BACKEND_URL=http://127.0.0.1:9000 VERIFY_LOCAL_LLM=0 ./start.sh
 
 Der naechste Abschlussblock ist nicht mehr ein weiterer einzelner API-Endpunkt, sondern die Web- und Betriebsablösung:
 
-1. Rust-Migrationen und Seed-Commands fuer die bestehenden Tabellen bereitstellen.
+1. Katalog-/Requirement-Seeds vollstaendig aus Django nach Rust ziehen.
 2. Auth-/Tenant-/Session-API in Rust finalisieren.
 3. Django-Templates durch Rust-Web oder ein separates Frontend auf Rust-API ersetzen.
 4. Upload-/Import-Dateifluss ohne Django bereitstellen.

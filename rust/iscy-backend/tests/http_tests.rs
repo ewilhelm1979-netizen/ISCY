@@ -3081,7 +3081,13 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
         .unwrap();
 
     let applied = db_admin::run_sqlite_migrations(&pool).await.unwrap();
-    assert_eq!(applied, vec!["0001_rust_operational_core"]);
+    assert_eq!(
+        applied,
+        vec![
+            "0001_rust_operational_core",
+            "0002_rust_product_security_core"
+        ]
+    );
     assert!(
         db_admin::sqlite_table_exists(&pool, "iscy_schema_migrations")
             .await
@@ -3089,6 +3095,11 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     );
     assert!(
         db_admin::sqlite_table_exists(&pool, "reports_reportsnapshot")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "product_security_product")
             .await
             .unwrap()
     );
@@ -3145,6 +3156,47 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains(expected), "path {path}");
     }
+
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/overview")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["posture"]["products"], 1);
+    assert_eq!(payload["posture"]["open_vulnerabilities"], 2);
+    assert_eq!(payload["products"][0]["name"], "Rust Sensor Gateway");
+    assert_eq!(payload["snapshots"][0]["cra_readiness_percent"], 73);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/products/1100/roadmap")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["roadmap"]["title"], "Rust Gateway Roadmap");
+    assert_eq!(payload["tasks"].as_array().unwrap().len(), 2);
 }
 
 #[tokio::test]

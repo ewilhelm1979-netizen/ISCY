@@ -31,11 +31,18 @@ struct Migration {
     postgres_sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: "0001_rust_operational_core",
-    sqlite_sql: SQLITE_OPERATIONAL_CORE_SCHEMA,
-    postgres_sql: POSTGRES_OPERATIONAL_CORE_SCHEMA,
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: "0001_rust_operational_core",
+        sqlite_sql: SQLITE_OPERATIONAL_CORE_SCHEMA,
+        postgres_sql: POSTGRES_OPERATIONAL_CORE_SCHEMA,
+    },
+    Migration {
+        version: "0002_rust_product_security_core",
+        sqlite_sql: SQLITE_PRODUCT_SECURITY_SCHEMA,
+        postgres_sql: POSTGRES_PRODUCT_SECURITY_SCHEMA,
+    },
+];
 
 pub async fn run_db_admin_action(
     database_url: &str,
@@ -930,6 +937,406 @@ CREATE INDEX IF NOT EXISTS idx_reports_tenant ON reports_reportsnapshot(tenant_i
 CREATE INDEX IF NOT EXISTS idx_roadmap_plan_tenant ON roadmap_roadmapplan(tenant_id);
 "#;
 
+const SQLITE_PRODUCT_SECURITY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS product_security_productfamily (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    name varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_product (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    family_id INTEGER NULL,
+    name varchar(255) NOT NULL,
+    code varchar(100) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    has_digital_elements bool NOT NULL DEFAULT 1,
+    includes_ai bool NOT NULL DEFAULT 0,
+    ot_iacs_context bool NOT NULL DEFAULT 0,
+    automotive_context bool NOT NULL DEFAULT 0,
+    support_window_months INTEGER NOT NULL DEFAULT 24,
+    regulatory_profile_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_productrelease (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    version varchar(64) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'PLANNED',
+    release_date TEXT NULL,
+    support_end_date TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_component (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    supplier_id INTEGER NULL,
+    name varchar(255) NOT NULL,
+    component_type varchar(16) NOT NULL DEFAULT 'SOFTWARE',
+    version varchar(64) NOT NULL DEFAULT '',
+    is_open_source bool NOT NULL DEFAULT 0,
+    has_sbom bool NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_aisystem (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NULL,
+    name varchar(255) NOT NULL,
+    use_case TEXT NOT NULL DEFAULT '',
+    provider varchar(255) NOT NULL DEFAULT '',
+    risk_classification varchar(16) NOT NULL DEFAULT 'LIMITED',
+    in_scope bool NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_threatmodel (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    release_id INTEGER NULL,
+    name varchar(255) NOT NULL,
+    methodology varchar(100) NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    status varchar(16) NOT NULL DEFAULT 'DRAFT',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_threatscenario (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    threat_model_id INTEGER NOT NULL,
+    component_id INTEGER NULL,
+    title varchar(255) NOT NULL,
+    category varchar(32) NOT NULL DEFAULT '',
+    attack_path TEXT NOT NULL DEFAULT '',
+    impact TEXT NOT NULL DEFAULT '',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    mitigation_status varchar(64) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_tara (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    release_id INTEGER NULL,
+    scenario_id INTEGER NULL,
+    name varchar(255) NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    attack_feasibility INTEGER NOT NULL DEFAULT 1,
+    impact_score INTEGER NOT NULL DEFAULT 1,
+    risk_score INTEGER NOT NULL DEFAULT 1,
+    status varchar(16) NOT NULL DEFAULT 'OPEN',
+    treatment_decision varchar(128) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_vulnerability (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    release_id INTEGER NULL,
+    component_id INTEGER NULL,
+    title varchar(255) NOT NULL,
+    cve varchar(50) NOT NULL DEFAULT '',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    status varchar(16) NOT NULL DEFAULT 'OPEN',
+    remediation_due TEXT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_psirtcase (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    release_id INTEGER NULL,
+    vulnerability_id INTEGER NULL,
+    case_id varchar(64) NOT NULL,
+    title varchar(255) NOT NULL,
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    status varchar(20) NOT NULL DEFAULT 'TRIAGE',
+    disclosure_due TEXT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_securityadvisory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    release_id INTEGER NULL,
+    psirt_case_id INTEGER NULL,
+    advisory_id varchar(64) NOT NULL,
+    title varchar(255) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'DRAFT',
+    published_on TEXT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_productsecuritysnapshot (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    cra_applicable bool NOT NULL DEFAULT 0,
+    ai_act_applicable bool NOT NULL DEFAULT 0,
+    iec62443_applicable bool NOT NULL DEFAULT 0,
+    iso_sae_21434_applicable bool NOT NULL DEFAULT 0,
+    cra_readiness_percent INTEGER NOT NULL DEFAULT 0,
+    ai_act_readiness_percent INTEGER NOT NULL DEFAULT 0,
+    iec62443_readiness_percent INTEGER NOT NULL DEFAULT 0,
+    iso_sae_21434_readiness_percent INTEGER NOT NULL DEFAULT 0,
+    threat_model_coverage_percent INTEGER NOT NULL DEFAULT 0,
+    psirt_readiness_percent INTEGER NOT NULL DEFAULT 0,
+    open_vulnerability_count INTEGER NOT NULL DEFAULT 0,
+    critical_vulnerability_count INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_productsecurityroadmap (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    title varchar(255) NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    generated_from_snapshot_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_productsecurityroadmaptask (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    roadmap_id INTEGER NOT NULL,
+    related_release_id INTEGER NULL,
+    related_vulnerability_id INTEGER NULL,
+    phase varchar(16) NOT NULL DEFAULT 'GOVERNANCE',
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    priority varchar(32) NOT NULL DEFAULT 'MEDIUM',
+    owner_role varchar(64) NOT NULL DEFAULT '',
+    due_in_days INTEGER NOT NULL DEFAULT 30,
+    dependency_text TEXT NOT NULL DEFAULT '',
+    status varchar(16) NOT NULL DEFAULT 'OPEN',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_product_security_product_tenant ON product_security_product(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_product_security_release_tenant ON product_security_productrelease(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_product_security_vulnerability_tenant ON product_security_vulnerability(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_product_security_roadmap_tenant ON product_security_productsecurityroadmap(tenant_id);
+"#;
+
+const POSTGRES_PRODUCT_SECURITY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS product_security_productfamily (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    name varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_product (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    family_id BIGINT NULL,
+    name varchar(255) NOT NULL,
+    code varchar(100) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    has_digital_elements BOOLEAN NOT NULL DEFAULT TRUE,
+    includes_ai BOOLEAN NOT NULL DEFAULT FALSE,
+    ot_iacs_context BOOLEAN NOT NULL DEFAULT FALSE,
+    automotive_context BOOLEAN NOT NULL DEFAULT FALSE,
+    support_window_months INTEGER NOT NULL DEFAULT 24,
+    regulatory_profile_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_productrelease (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    version varchar(64) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'PLANNED',
+    release_date TEXT NULL,
+    support_end_date TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_component (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    supplier_id BIGINT NULL,
+    name varchar(255) NOT NULL,
+    component_type varchar(16) NOT NULL DEFAULT 'SOFTWARE',
+    version varchar(64) NOT NULL DEFAULT '',
+    is_open_source BOOLEAN NOT NULL DEFAULT FALSE,
+    has_sbom BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_aisystem (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NULL,
+    name varchar(255) NOT NULL,
+    use_case TEXT NOT NULL DEFAULT '',
+    provider varchar(255) NOT NULL DEFAULT '',
+    risk_classification varchar(16) NOT NULL DEFAULT 'LIMITED',
+    in_scope BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_threatmodel (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    release_id BIGINT NULL,
+    name varchar(255) NOT NULL,
+    methodology varchar(100) NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    status varchar(16) NOT NULL DEFAULT 'DRAFT',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_threatscenario (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    threat_model_id BIGINT NOT NULL,
+    component_id BIGINT NULL,
+    title varchar(255) NOT NULL,
+    category varchar(32) NOT NULL DEFAULT '',
+    attack_path TEXT NOT NULL DEFAULT '',
+    impact TEXT NOT NULL DEFAULT '',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    mitigation_status varchar(64) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_tara (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    release_id BIGINT NULL,
+    scenario_id BIGINT NULL,
+    name varchar(255) NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    attack_feasibility INTEGER NOT NULL DEFAULT 1,
+    impact_score INTEGER NOT NULL DEFAULT 1,
+    risk_score INTEGER NOT NULL DEFAULT 1,
+    status varchar(16) NOT NULL DEFAULT 'OPEN',
+    treatment_decision varchar(128) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_vulnerability (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    release_id BIGINT NULL,
+    component_id BIGINT NULL,
+    title varchar(255) NOT NULL,
+    cve varchar(50) NOT NULL DEFAULT '',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    status varchar(16) NOT NULL DEFAULT 'OPEN',
+    remediation_due TEXT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_psirtcase (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    release_id BIGINT NULL,
+    vulnerability_id BIGINT NULL,
+    case_id varchar(64) NOT NULL,
+    title varchar(255) NOT NULL,
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    status varchar(20) NOT NULL DEFAULT 'TRIAGE',
+    disclosure_due TEXT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_securityadvisory (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    release_id BIGINT NULL,
+    psirt_case_id BIGINT NULL,
+    advisory_id varchar(64) NOT NULL,
+    title varchar(255) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'DRAFT',
+    published_on TEXT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_productsecuritysnapshot (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    cra_applicable BOOLEAN NOT NULL DEFAULT FALSE,
+    ai_act_applicable BOOLEAN NOT NULL DEFAULT FALSE,
+    iec62443_applicable BOOLEAN NOT NULL DEFAULT FALSE,
+    iso_sae_21434_applicable BOOLEAN NOT NULL DEFAULT FALSE,
+    cra_readiness_percent INTEGER NOT NULL DEFAULT 0,
+    ai_act_readiness_percent INTEGER NOT NULL DEFAULT 0,
+    iec62443_readiness_percent INTEGER NOT NULL DEFAULT 0,
+    iso_sae_21434_readiness_percent INTEGER NOT NULL DEFAULT 0,
+    threat_model_coverage_percent INTEGER NOT NULL DEFAULT 0,
+    psirt_readiness_percent INTEGER NOT NULL DEFAULT 0,
+    open_vulnerability_count INTEGER NOT NULL DEFAULT 0,
+    critical_vulnerability_count INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_productsecurityroadmap (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    title varchar(255) NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    generated_from_snapshot_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_productsecurityroadmaptask (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    roadmap_id BIGINT NOT NULL,
+    related_release_id BIGINT NULL,
+    related_vulnerability_id BIGINT NULL,
+    phase varchar(16) NOT NULL DEFAULT 'GOVERNANCE',
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    priority varchar(32) NOT NULL DEFAULT 'MEDIUM',
+    owner_role varchar(64) NOT NULL DEFAULT '',
+    due_in_days INTEGER NOT NULL DEFAULT 30,
+    dependency_text TEXT NOT NULL DEFAULT '',
+    status varchar(16) NOT NULL DEFAULT 'OPEN',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_product_security_product_tenant ON product_security_product(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_product_security_release_tenant ON product_security_productrelease(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_product_security_vulnerability_tenant ON product_security_vulnerability(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_product_security_roadmap_tenant ON product_security_productsecurityroadmap(tenant_id);
+"#;
+
 const SQLITE_DEMO_SEED: &str = r#"
 INSERT OR IGNORE INTO organizations_tenant (
     id, created_at, updated_at, name, slug, country, operation_countries, description, sector,
@@ -1061,6 +1468,103 @@ INSERT OR IGNORE INTO roadmap_roadmaptask (
     'HIGH', 'Rust Engineer', 14, '', 'OPEN', '2026-05-01', '2026-05-14', '',
     '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
 );
+INSERT OR IGNORE INTO organizations_supplier (id, tenant_id, name, service_description, criticality, owner_id, created_at, updated_at)
+VALUES (1000, 1, 'Rust Secure Supplier', 'Firmware component supplier', 'HIGH', 1, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z');
+INSERT OR IGNORE INTO product_security_productfamily (id, tenant_id, name, description, created_at, updated_at)
+VALUES (1000, 1, 'Rust Gateways', 'Rust-native secure product family', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z');
+INSERT OR IGNORE INTO product_security_product (
+    id, tenant_id, family_id, name, code, description, has_digital_elements, includes_ai,
+    ot_iacs_context, automotive_context, support_window_months, regulatory_profile_json,
+    created_at, updated_at
+) VALUES (
+    1100, 1, 1000, 'Rust Sensor Gateway', 'rust-sensor-gateway',
+    'Rust demo industrial edge device', 1, 1, 1, 0, 36, '{}',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_security_productrelease (
+    id, tenant_id, product_id, version, status, release_date, support_end_date, created_at, updated_at
+) VALUES
+    (1200, 1, 1100, '1.0', 'ACTIVE', '2026-04-01', '2028-04-01', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'),
+    (1201, 1, 1100, '0.9', 'EOL', '2025-01-01', '2026-01-01', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z');
+INSERT OR IGNORE INTO product_security_component (
+    id, tenant_id, product_id, supplier_id, name, component_type, version, is_open_source, has_sbom, created_at, updated_at
+) VALUES (
+    1250, 1, 1100, 1000, 'Rust Gateway Firmware', 'FIRMWARE', '1.0.3',
+    0, 1, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_security_aisystem (
+    id, tenant_id, product_id, name, use_case, provider, risk_classification, in_scope, created_at, updated_at
+) VALUES (
+    1260, 1, 1100, 'Rust Gateway Assistant', 'Firmware triage and support guidance',
+    'Internal', 'LIMITED', 1, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_security_threatmodel (
+    id, tenant_id, product_id, release_id, name, methodology, summary, status, created_at, updated_at
+) VALUES (
+    1300, 1, 1100, 1200, 'Rust Gateway Threat Model', 'STRIDE',
+    'Rust demo threat model summary', 'APPROVED', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_security_threatscenario (
+    id, tenant_id, threat_model_id, component_id, title, category, attack_path, impact,
+    severity, mitigation_status, created_at, updated_at
+) VALUES (
+    1301, 1, 1300, 1250, 'Unsigned Rust firmware update', 'TAMPERING',
+    'Attacker replaces firmware package', 'Remote code execution', 'CRITICAL', 'Open',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_security_tara (
+    id, tenant_id, product_id, release_id, scenario_id, name, summary, attack_feasibility,
+    impact_score, risk_score, status, treatment_decision, created_at, updated_at
+) VALUES (
+    1400, 1, 1100, 1200, 1301, 'Rust Gateway TARA', 'TARA for firmware update abuse',
+    3, 4, 12, 'OPEN', 'Mitigate in next firmware release',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_security_vulnerability (
+    id, tenant_id, product_id, release_id, component_id, title, cve, severity, status,
+    remediation_due, summary, created_at, updated_at
+) VALUES
+    (1500, 1, 1100, 1200, 1250, 'Rust critical firmware exposure', 'CVE-2026-0001', 'CRITICAL', 'OPEN', '2026-05-18', 'Critical issue in firmware updater', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'),
+    (1501, 1, 1100, 1200, 1250, 'Rust outdated dependency', '', 'HIGH', 'TRIAGED', '2026-06-01', 'Dependency needs update', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'),
+    (1502, 1, 1100, 1200, 1250, 'Rust fixed UI issue', '', 'LOW', 'FIXED', NULL, 'Already fixed', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z');
+INSERT OR IGNORE INTO product_security_psirtcase (
+    id, tenant_id, product_id, release_id, vulnerability_id, case_id, title, severity,
+    status, disclosure_due, summary, created_at, updated_at
+) VALUES (
+    1600, 1, 1100, 1200, 1500, 'RUST-PSIRT-1', 'Rust critical firmware disclosure',
+    'CRITICAL', 'TRIAGE', '2026-05-20', 'PSIRT case for Rust firmware exposure',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_security_securityadvisory (
+    id, tenant_id, product_id, release_id, psirt_case_id, advisory_id, title, status,
+    published_on, summary, created_at, updated_at
+) VALUES (
+    1700, 1, 1100, 1200, 1600, 'RUST-ADV-1', 'Rust gateway firmware advisory',
+    'PUBLISHED', '2026-05-21', 'Advisory for Rust firmware exposure',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_security_productsecuritysnapshot (
+    id, tenant_id, product_id, cra_applicable, ai_act_applicable, iec62443_applicable,
+    iso_sae_21434_applicable, cra_readiness_percent, ai_act_readiness_percent,
+    iec62443_readiness_percent, iso_sae_21434_readiness_percent,
+    threat_model_coverage_percent, psirt_readiness_percent, open_vulnerability_count,
+    critical_vulnerability_count, summary, created_at, updated_at
+) VALUES (
+    1800, 1, 1100, 1, 1, 1, 0, 73, 62, 59, 0, 41, 56, 2, 1,
+    'Rust Product Security snapshot', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_security_productsecurityroadmap (
+    id, tenant_id, product_id, title, summary, generated_from_snapshot_id, created_at, updated_at
+) VALUES (
+    1900, 1, 1100, 'Rust Gateway Roadmap', 'Roadmap from Rust DB bootstrap',
+    1800, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_security_productsecurityroadmaptask (
+    id, tenant_id, roadmap_id, related_release_id, related_vulnerability_id, phase, title,
+    description, priority, owner_role, due_in_days, dependency_text, status, created_at, updated_at
+) VALUES
+    (1901, 1, 1900, 1200, NULL, 'GOVERNANCE', 'Define Rust product security ownership', 'Clarify owner roles and release gates', 'HIGH', 'Product Security Lead', 30, '', 'OPEN', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'),
+    (1902, 1, 1900, 1200, 1500, 'RESPONSE', 'Remediate Rust critical firmware exposure', 'Ship remediation and prepare disclosure', 'CRITICAL', 'PSIRT Lead', 14, 'Firmware patch readiness', 'PLANNED', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z');
 "#;
 
 const POSTGRES_DEMO_SEED: &str = r#"
@@ -1194,4 +1698,106 @@ INSERT INTO roadmap_roadmaptask (
     'HIGH', 'Rust Engineer', 14, '', 'OPEN', '2026-05-01', '2026-05-14', '',
     '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
 ) ON CONFLICT (id) DO NOTHING;
+INSERT INTO organizations_supplier (id, tenant_id, name, service_description, criticality, owner_id, created_at, updated_at)
+VALUES (1000, 1, 'Rust Secure Supplier', 'Firmware component supplier', 'HIGH', 1, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_productfamily (id, tenant_id, name, description, created_at, updated_at)
+VALUES (1000, 1, 'Rust Gateways', 'Rust-native secure product family', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_product (
+    id, tenant_id, family_id, name, code, description, has_digital_elements, includes_ai,
+    ot_iacs_context, automotive_context, support_window_months, regulatory_profile_json,
+    created_at, updated_at
+) VALUES (
+    1100, 1, 1000, 'Rust Sensor Gateway', 'rust-sensor-gateway',
+    'Rust demo industrial edge device', TRUE, TRUE, TRUE, FALSE, 36, '{}',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_productrelease (
+    id, tenant_id, product_id, version, status, release_date, support_end_date, created_at, updated_at
+) VALUES
+    (1200, 1, 1100, '1.0', 'ACTIVE', '2026-04-01', '2028-04-01', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'),
+    (1201, 1, 1100, '0.9', 'EOL', '2025-01-01', '2026-01-01', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_component (
+    id, tenant_id, product_id, supplier_id, name, component_type, version, is_open_source, has_sbom, created_at, updated_at
+) VALUES (
+    1250, 1, 1100, 1000, 'Rust Gateway Firmware', 'FIRMWARE', '1.0.3',
+    FALSE, TRUE, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_aisystem (
+    id, tenant_id, product_id, name, use_case, provider, risk_classification, in_scope, created_at, updated_at
+) VALUES (
+    1260, 1, 1100, 'Rust Gateway Assistant', 'Firmware triage and support guidance',
+    'Internal', 'LIMITED', TRUE, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_threatmodel (
+    id, tenant_id, product_id, release_id, name, methodology, summary, status, created_at, updated_at
+) VALUES (
+    1300, 1, 1100, 1200, 'Rust Gateway Threat Model', 'STRIDE',
+    'Rust demo threat model summary', 'APPROVED', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_threatscenario (
+    id, tenant_id, threat_model_id, component_id, title, category, attack_path, impact,
+    severity, mitigation_status, created_at, updated_at
+) VALUES (
+    1301, 1, 1300, 1250, 'Unsigned Rust firmware update', 'TAMPERING',
+    'Attacker replaces firmware package', 'Remote code execution', 'CRITICAL', 'Open',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_tara (
+    id, tenant_id, product_id, release_id, scenario_id, name, summary, attack_feasibility,
+    impact_score, risk_score, status, treatment_decision, created_at, updated_at
+) VALUES (
+    1400, 1, 1100, 1200, 1301, 'Rust Gateway TARA', 'TARA for firmware update abuse',
+    3, 4, 12, 'OPEN', 'Mitigate in next firmware release',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_vulnerability (
+    id, tenant_id, product_id, release_id, component_id, title, cve, severity, status,
+    remediation_due, summary, created_at, updated_at
+) VALUES
+    (1500, 1, 1100, 1200, 1250, 'Rust critical firmware exposure', 'CVE-2026-0001', 'CRITICAL', 'OPEN', '2026-05-18', 'Critical issue in firmware updater', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'),
+    (1501, 1, 1100, 1200, 1250, 'Rust outdated dependency', '', 'HIGH', 'TRIAGED', '2026-06-01', 'Dependency needs update', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'),
+    (1502, 1, 1100, 1200, 1250, 'Rust fixed UI issue', '', 'LOW', 'FIXED', NULL, 'Already fixed', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_psirtcase (
+    id, tenant_id, product_id, release_id, vulnerability_id, case_id, title, severity,
+    status, disclosure_due, summary, created_at, updated_at
+) VALUES (
+    1600, 1, 1100, 1200, 1500, 'RUST-PSIRT-1', 'Rust critical firmware disclosure',
+    'CRITICAL', 'TRIAGE', '2026-05-20', 'PSIRT case for Rust firmware exposure',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_securityadvisory (
+    id, tenant_id, product_id, release_id, psirt_case_id, advisory_id, title, status,
+    published_on, summary, created_at, updated_at
+) VALUES (
+    1700, 1, 1100, 1200, 1600, 'RUST-ADV-1', 'Rust gateway firmware advisory',
+    'PUBLISHED', '2026-05-21', 'Advisory for Rust firmware exposure',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_productsecuritysnapshot (
+    id, tenant_id, product_id, cra_applicable, ai_act_applicable, iec62443_applicable,
+    iso_sae_21434_applicable, cra_readiness_percent, ai_act_readiness_percent,
+    iec62443_readiness_percent, iso_sae_21434_readiness_percent,
+    threat_model_coverage_percent, psirt_readiness_percent, open_vulnerability_count,
+    critical_vulnerability_count, summary, created_at, updated_at
+) VALUES (
+    1800, 1, 1100, TRUE, TRUE, TRUE, FALSE, 73, 62, 59, 0, 41, 56, 2, 1,
+    'Rust Product Security snapshot', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_productsecurityroadmap (
+    id, tenant_id, product_id, title, summary, generated_from_snapshot_id, created_at, updated_at
+) VALUES (
+    1900, 1, 1100, 'Rust Gateway Roadmap', 'Roadmap from Rust DB bootstrap',
+    1800, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_security_productsecurityroadmaptask (
+    id, tenant_id, roadmap_id, related_release_id, related_vulnerability_id, phase, title,
+    description, priority, owner_role, due_in_days, dependency_text, status, created_at, updated_at
+) VALUES
+    (1901, 1, 1900, 1200, NULL, 'GOVERNANCE', 'Define Rust product security ownership', 'Clarify owner roles and release gates', 'HIGH', 'Product Security Lead', 30, '', 'OPEN', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'),
+    (1902, 1, 1900, 1200, 1500, 'RESPONSE', 'Remediate Rust critical firmware exposure', 'Ship remediation and prepare disclosure', 'CRITICAL', 'PSIRT Lead', 14, 'Firmware patch readiness', 'PLANNED', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z')
+ON CONFLICT (id) DO NOTHING;
 "#;
