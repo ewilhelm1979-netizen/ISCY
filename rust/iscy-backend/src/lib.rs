@@ -2381,6 +2381,44 @@ async fn requirement_library(State(state): State<AppState>, headers: HeaderMap) 
 
 async fn web_index(Query(query): Query<WebContextQuery>) -> Html<String> {
     let context = query.to_context();
+    let cards = [
+        web_link_card(
+            "Dashboard",
+            &web_path_with_context("/dashboard/", context.as_ref()),
+            "KPI-Ueberblick",
+        ),
+        web_link_card(
+            "Risks",
+            &web_path_with_context("/risks/", context.as_ref()),
+            "Aktive Risiken",
+        ),
+        web_link_card(
+            "Evidence",
+            &web_path_with_context("/evidence/", context.as_ref()),
+            "Nachweise und Luecken",
+        ),
+        web_link_card(
+            "Reports",
+            &web_path_with_context("/reports/", context.as_ref()),
+            "Readiness-Snapshots",
+        ),
+        web_link_card(
+            "Roadmap",
+            &web_path_with_context("/roadmap/", context.as_ref()),
+            "Plaene und offene Tasks",
+        ),
+        web_link_card(
+            "Assets",
+            &web_path_with_context("/assets/", context.as_ref()),
+            "Informationswerte",
+        ),
+        web_link_card(
+            "Processes",
+            &web_path_with_context("/processes/", context.as_ref()),
+            "Prozessregister",
+        ),
+    ]
+    .join("");
     let body = format!(
         r#"
         <section class="hero">
@@ -2389,25 +2427,9 @@ async fn web_index(Query(query): Query<WebContextQuery>) -> Html<String> {
         </section>
         <section class="grid">
           {}
-          {}
-          {}
         </section>
         "#,
-        web_link_card(
-            "Dashboard",
-            &web_path_with_context("/dashboard/", context.as_ref()),
-            "KPI-Ueberblick"
-        ),
-        web_link_card(
-            "Risks",
-            &web_path_with_context("/risks/", context.as_ref()),
-            "Aktive Risiken"
-        ),
-        web_link_card(
-            "Evidence",
-            &web_path_with_context("/evidence/", context.as_ref()),
-            "Nachweise und Luecken"
-        ),
+        cards,
     );
     web_page("ISCY", "/", context.as_ref(), &body)
 }
@@ -2605,20 +2627,203 @@ async fn web_evidence(
 async fn web_catalog(Query(query): Query<WebContextQuery>) -> Html<String> {
     web_static_section("Catalog", "/catalog/", query.to_context().as_ref())
 }
-async fn web_reports(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section("Reports", "/reports/", query.to_context().as_ref())
+async fn web_reports(
+    Query(query): Query<WebContextQuery>,
+    State(state): State<AppState>,
+) -> Html<String> {
+    let Some(context) = query.to_context() else {
+        return web_missing_context("Reports", "/reports/");
+    };
+    let Some(store) = state.report_store else {
+        return web_store_missing("Reports", "/reports/", &context, "Report");
+    };
+    match store.list_snapshots(context.tenant_id, 50).await {
+        Ok(reports) => {
+            let rows = reports
+                .iter()
+                .map(|report| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}%</td><td>{}%</td><td>{}</td></tr>"#,
+                        html_escape(&report.title),
+                        html_escape(&report.applicability_result),
+                        report.iso_readiness_percent,
+                        report.nis2_readiness_percent,
+                        html_escape(&report.created_at),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Reports</h1><p>{} Readiness-Snapshots</p></section>
+                <section class="panel wide">
+                  <table>
+                    <thead><tr><th>Titel</th><th>Applicability</th><th>ISO</th><th>NIS2</th><th>Erstellt</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                reports.len(),
+                if rows.is_empty() {
+                    web_empty_row(5, "Keine Reports vorhanden.")
+                } else {
+                    rows
+                },
+            );
+            web_page("Reports", "/reports/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Reports", "/reports/", &context, &err.to_string()),
+    }
 }
-async fn web_roadmap(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section("Roadmap", "/roadmap/", query.to_context().as_ref())
+async fn web_roadmap(
+    Query(query): Query<WebContextQuery>,
+    State(state): State<AppState>,
+) -> Html<String> {
+    let Some(context) = query.to_context() else {
+        return web_missing_context("Roadmap", "/roadmap/");
+    };
+    let Some(store) = state.roadmap_store else {
+        return web_store_missing("Roadmap", "/roadmap/", &context, "Roadmap");
+    };
+    match store.list_plans(context.tenant_id, 50).await {
+        Ok(plans) => {
+            let rows = plans
+                .iter()
+                .map(|plan| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&plan.title),
+                        html_escape(&plan.overall_priority),
+                        plan.phase_count,
+                        plan.task_count,
+                        plan.open_task_count,
+                        html_escape(plan.planned_start.as_deref().unwrap_or("-")),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Roadmap</h1><p>{} Plaene</p></section>
+                <section class="panel wide">
+                  <table>
+                    <thead><tr><th>Titel</th><th>Prioritaet</th><th>Phasen</th><th>Tasks</th><th>Offen</th><th>Start</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                plans.len(),
+                if rows.is_empty() {
+                    web_empty_row(6, "Keine Roadmaps vorhanden.")
+                } else {
+                    rows
+                },
+            );
+            web_page("Roadmap", "/roadmap/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Roadmap", "/roadmap/", &context, &err.to_string()),
+    }
 }
-async fn web_assets(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section("Assets", "/assets/", query.to_context().as_ref())
+async fn web_assets(
+    Query(query): Query<WebContextQuery>,
+    State(state): State<AppState>,
+) -> Html<String> {
+    let Some(context) = query.to_context() else {
+        return web_missing_context("Assets", "/assets/");
+    };
+    let Some(store) = state.asset_store else {
+        return web_store_missing("Assets", "/assets/", &context, "Asset");
+    };
+    match store.list_information_assets(context.tenant_id, 100).await {
+        Ok(assets) => {
+            let rows = assets
+                .iter()
+                .map(|asset| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&asset.name),
+                        html_escape(&asset.asset_type_label),
+                        html_escape(&asset.criticality_label),
+                        html_escape(asset.owner_display.as_deref().unwrap_or("-")),
+                        html_escape(asset.business_unit_name.as_deref().unwrap_or("-")),
+                        yes_no(asset.is_in_scope),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Assets</h1><p>{} Informationswerte</p></section>
+                <section class="panel wide">
+                  <table>
+                    <thead><tr><th>Name</th><th>Typ</th><th>Kritikalitaet</th><th>Owner</th><th>Business Unit</th><th>Scope</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                assets.len(),
+                if rows.is_empty() {
+                    web_empty_row(6, "Keine Assets vorhanden.")
+                } else {
+                    rows
+                },
+            );
+            web_page("Assets", "/assets/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Assets", "/assets/", &context, &err.to_string()),
+    }
 }
 async fn web_imports(Query(query): Query<WebContextQuery>) -> Html<String> {
     web_static_section("Imports", "/imports/", query.to_context().as_ref())
 }
-async fn web_processes(Query(query): Query<WebContextQuery>) -> Html<String> {
-    web_static_section("Processes", "/processes/", query.to_context().as_ref())
+async fn web_processes(
+    Query(query): Query<WebContextQuery>,
+    State(state): State<AppState>,
+) -> Html<String> {
+    let Some(context) = query.to_context() else {
+        return web_missing_context("Processes", "/processes/");
+    };
+    let Some(store) = state.process_store else {
+        return web_store_missing("Processes", "/processes/", &context, "Process");
+    };
+    match store.list_processes(context.tenant_id, 100).await {
+        Ok(processes) => {
+            let rows = processes
+                .iter()
+                .map(|process| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&process.name),
+                        html_escape(&process.status_label),
+                        html_escape(process.business_unit_name.as_deref().unwrap_or("-")),
+                        html_escape(process.owner_display.as_deref().unwrap_or("-")),
+                        yes_no(process.documented),
+                        yes_no(process.evidenced),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Processes</h1><p>{} Prozesse</p></section>
+                <section class="panel wide">
+                  <table>
+                    <thead><tr><th>Name</th><th>Status</th><th>Business Unit</th><th>Owner</th><th>Dokumentiert</th><th>Evidenced</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                processes.len(),
+                if rows.is_empty() {
+                    web_empty_row(6, "Keine Prozesse vorhanden.")
+                } else {
+                    rows
+                },
+            );
+            web_page("Processes", "/processes/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Processes", "/processes/", &context, &err.to_string()),
+    }
 }
 async fn web_requirements(Query(query): Query<WebContextQuery>) -> Html<String> {
     web_static_section(
@@ -2760,6 +2965,8 @@ fn web_page(
         ("/evidence/", "Evidence"),
         ("/roadmap/", "Roadmap"),
         ("/reports/", "Reports"),
+        ("/assets/", "Assets"),
+        ("/processes/", "Processes"),
         ("/product-security/", "Product Security"),
     ]
     .iter()
@@ -2815,7 +3022,7 @@ fn web_page(
     .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:14px; }}
     .metrics {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:16px; }}
     .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px; box-shadow:0 1px 2px rgba(20, 30, 40, 0.04); }}
-    .panel.wide {{ grid-column:1 / -1; }}
+    .panel.wide {{ grid-column:1 / -1; overflow-x:auto; }}
     .panel.error {{ border-color:#fed7aa; background:#fff7ed; }}
     .card-link {{ display:block; min-height:120px; color:var(--ink); text-decoration:none; }}
     .metric strong {{ display:block; font-size:30px; margin-top:6px; }}
@@ -2854,6 +3061,22 @@ fn metric_card(label: &str, value: i64) -> String {
         html_escape(label),
         value,
     )
+}
+
+fn web_empty_row(colspan: usize, message: &str) -> String {
+    format!(
+        r#"<tr><td colspan="{}">{}</td></tr>"#,
+        colspan,
+        html_escape(message),
+    )
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value {
+        "Ja"
+    } else {
+        "Nein"
+    }
 }
 
 fn web_link_card(title: &str, href: &str, subtitle: &str) -> String {

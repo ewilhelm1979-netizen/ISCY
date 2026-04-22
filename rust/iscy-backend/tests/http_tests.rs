@@ -2939,6 +2939,140 @@ async fn rust_web_risks_renders_rows_from_database() {
 }
 
 #[tokio::test]
+async fn rust_web_reports_renders_snapshots_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_report_table(&pool).await;
+    insert_report_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/reports/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("April Readiness"));
+    assert!(html.contains("ISO"));
+    assert!(html.contains("78%"));
+    assert!(html.contains("82%"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_roadmap_renders_plans_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/roadmap/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Security Roadmap"));
+    assert!(html.contains("HIGH"));
+    assert!(html.contains("2026-05-01"));
+    assert!(!html.contains("Foreign Roadmap"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_assets_renders_inventory_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_asset_tables(&pool).await;
+    insert_asset_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_asset_store(Some(AssetStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/assets/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Customer Portal"));
+    assert!(html.contains("Digital Services"));
+    assert!(html.contains("Ada Lovelace"));
+    assert!(html.contains("Anwendung"));
+    assert!(!html.contains("Foreign BU"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_processes_renders_register_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_process_tables(&pool).await;
+    insert_process_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_process_store(Some(ProcessStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/processes/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Incident Intake"));
+    assert!(html.contains("Security Operations"));
+    assert!(html.contains("Ada Lovelace"));
+    assert!(html.contains("Vorhanden, aber unvollständig"));
+    assert!(!html.contains("Foreign BU"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
 async fn nvd_import_endpoint_normalizes_cve_id() {
     let response = app_router()
         .oneshot(
