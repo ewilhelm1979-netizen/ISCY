@@ -45,6 +45,13 @@ Mit expliziter lokaler Bind-Adresse und SQLite-Datenbank:
 RUST_BACKEND_BIND=127.0.0.1:9000 DATABASE_URL=sqlite:///db.sqlite3 nix run .#iscy-backend
 ```
 
+Eine lokale Rust-Demo-Datenbank ohne Django-Migration initialisieren:
+
+```bash
+DATABASE_URL=sqlite:///db.sqlite3 nix run .#iscy-backend -- init-demo
+RUST_BACKEND_BIND=127.0.0.1:9000 DATABASE_URL=sqlite:///db.sqlite3 nix run .#iscy-backend
+```
+
 Healthcheck:
 
 ```bash

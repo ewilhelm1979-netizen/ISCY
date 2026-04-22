@@ -14,6 +14,7 @@ pub mod asset_store;
 pub mod catalog_store;
 pub mod cve_store;
 pub mod dashboard_store;
+pub mod db_admin;
 pub mod evidence_store;
 pub mod import_store;
 pub mod process_store;

@@ -2,7 +2,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use iscy_backend::{
     app_router, app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
-    catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore,
+    catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore, db_admin,
     evidence_store::EvidenceStore, import_store::ImportStore, process_store::ProcessStore,
     product_security_store::ProductSecurityStore, report_store::ReportStore,
     requirement_store::RequirementStore, risk_store::RiskStore, roadmap_store::RoadmapStore,
@@ -3070,6 +3070,81 @@ async fn rust_web_processes_renders_register_from_database() {
     assert!(html.contains("Vorhanden, aber unvollständig"));
     assert!(!html.contains("Foreign BU"));
     assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+
+    let applied = db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    assert_eq!(applied, vec!["0001_rust_operational_core"]);
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "iscy_schema_migrations")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "reports_reportsnapshot")
+            .await
+            .unwrap()
+    );
+
+    let applied_again = db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    assert!(applied_again.is_empty());
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+
+    let app = app_router_with_state(
+        AppState::default()
+            .with_dashboard_store(Some(DashboardStore::from_sqlite_pool(pool.clone())))
+            .with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone())))
+            .with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone())))
+            .with_asset_store(Some(AssetStore::from_sqlite_pool(pool.clone())))
+            .with_process_store(Some(ProcessStore::from_sqlite_pool(pool.clone())))
+            .with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/?tenant_id=1&user_id=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Rust Demo Readiness"));
+    assert!(html.contains("Offene Risiken"));
+
+    let app = app_router_with_state(
+        AppState::default()
+            .with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone())))
+            .with_asset_store(Some(AssetStore::from_sqlite_pool(pool.clone())))
+            .with_process_store(Some(ProcessStore::from_sqlite_pool(pool.clone()))),
+    );
+    for (path, expected) in [
+        ("/roadmap/?tenant_id=1&user_id=1", "Rust Cutover Roadmap"),
+        ("/assets/?tenant_id=1&user_id=1", "Customer Portal"),
+        ("/processes/?tenant_id=1&user_id=1", "Incident Intake"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "path {path}");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains(expected), "path {path}");
+    }
 }
 
 #[tokio::test]

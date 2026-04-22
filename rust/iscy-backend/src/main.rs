@@ -1,17 +1,53 @@
 use std::net::SocketAddr;
 
 use iscy_backend::{
-    app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
-    catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore,
-    evidence_store::EvidenceStore, import_store::ImportStore, process_store::ProcessStore,
-    product_security_store::ProductSecurityStore, report_store::ReportStore,
-    requirement_store::RequirementStore, risk_store::RiskStore, roadmap_store::RoadmapStore,
-    tenant_store::TenantStore, wizard_store::WizardStore, AppState,
+    app_router_with_state,
+    assessment_store::AssessmentStore,
+    asset_store::AssetStore,
+    catalog_store::CatalogStore,
+    cve_store::CveStore,
+    dashboard_store::DashboardStore,
+    db_admin::{run_db_admin_action, DbAdminAction},
+    evidence_store::EvidenceStore,
+    import_store::ImportStore,
+    process_store::ProcessStore,
+    product_security_store::ProductSecurityStore,
+    report_store::ReportStore,
+    requirement_store::RequirementStore,
+    risk_store::RiskStore,
+    roadmap_store::RoadmapStore,
+    tenant_store::TenantStore,
+    wizard_store::WizardStore,
+    AppState,
 };
 use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if let Some(command) = std::env::args().nth(1) {
+        match command.as_str() {
+            "migrate" => {
+                run_database_admin(DbAdminAction::Migrate).await?;
+                return Ok(());
+            }
+            "seed-demo" => {
+                run_database_admin(DbAdminAction::SeedDemo).await?;
+                return Ok(());
+            }
+            "init-demo" => {
+                run_database_admin(DbAdminAction::InitDemo).await?;
+                return Ok(());
+            }
+            "help" | "--help" | "-h" => {
+                print_usage();
+                return Ok(());
+            }
+            unknown => anyhow::bail!(
+                "Unbekannter iscy-backend Command: {unknown}. Nutze --help fuer Optionen."
+            ),
+        }
+    }
+
     let addr: SocketAddr = std::env::var("RUST_BACKEND_BIND")
         .unwrap_or_else(|_| "0.0.0.0:9000".to_string())
         .parse()?;
@@ -90,4 +126,31 @@ async fn main() -> anyhow::Result<()> {
     println!("ISCY Rust backend listening on http://{}", addr);
     axum::serve(listener, app_router_with_state(state)).await?;
     Ok(())
+}
+
+async fn run_database_admin(action: DbAdminAction) -> anyhow::Result<()> {
+    let database_url = std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "sqlite:///db.sqlite3".to_string());
+    let outcome = run_db_admin_action(&database_url, action).await?;
+    println!(
+        "ISCY Rust DB admin completed: kind={}, migrations_applied={}, demo_seeded={}",
+        outcome.database_kind,
+        outcome.applied_migrations.len(),
+        outcome.seeded_demo
+    );
+    if !outcome.applied_migrations.is_empty() {
+        println!(
+            "Applied migrations: {}",
+            outcome.applied_migrations.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn print_usage() {
+    println!(
+        "ISCY Rust backend\n\nCommands:\n  migrate    Apply Rust-owned DB migrations\n  seed-demo  Seed Rust demo data into an already migrated DB\n  init-demo  Apply migrations and seed demo data\n\nWithout a command the HTTP server starts."
+    );
 }
