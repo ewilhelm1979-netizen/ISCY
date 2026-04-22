@@ -69,7 +69,7 @@ jobs:
           done
 
           curl -fsS "$RUST_BACKEND_URL/health/live" >/dev/null
-          curl -fsS -c "$cookie_file" -H "content-type: application/json" -d '{"tenant_id":1,"user_id":1}' "$RUST_BACKEND_URL/api/v1/auth/sessions" >/dev/null
+          curl -fsS -c "$cookie_file" -H "content-type: application/json" -d '{"tenant_id":1,"username":"admin","password":"Admin123!"}' "$RUST_BACKEND_URL/api/v1/auth/sessions" >/dev/null
           curl -fsS -b "$cookie_file" "$RUST_BACKEND_URL/api/v1/auth/session" >/dev/null
           curl -fsS -b "$cookie_file" "$RUST_BACKEND_URL/dashboard/" >/dev/null
           curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$RUST_BACKEND_URL/api/v1/catalog/domains" >/dev/null

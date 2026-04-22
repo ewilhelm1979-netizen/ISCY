@@ -201,7 +201,25 @@ async fn rust_auth_session_creates_cookie_and_drives_web_context() {
                 .method("POST")
                 .uri("/api/v1/auth/sessions")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"tenant_id":1,"user_id":1}"#))
+                .body(Body::from(
+                    r#"{"tenant_id":1,"username":"admin","password":"wrong"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"tenant_id":1,"username":"admin","password":"Admin123!"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -220,7 +238,7 @@ async fn rust_auth_session_creates_cookie_and_drives_web_context() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["authenticated"], true);
     assert_eq!(payload["tenant_id"], 1);
-    assert_eq!(payload["user"]["username"], "demo");
+    assert_eq!(payload["user"]["username"], "admin");
     assert_eq!(payload["authorization_model"], "rust-session-v1");
 
     let response = app

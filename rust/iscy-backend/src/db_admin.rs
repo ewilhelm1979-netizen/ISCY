@@ -1591,12 +1591,23 @@ INSERT OR IGNORE INTO organizations_tenant (
     'Managed security services', 'B2B security provider', 1, 0, 1, 1, 0, 0, 1, 1,
     'Product security scope prepared for Rust cutover'
 );
-INSERT OR IGNORE INTO accounts_user (
-    id, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
+INSERT INTO accounts_user (
+    id, password, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
 ) VALUES (
-    1, 'demo', 'Demo', 'Admin', 'demo@example.test', 1, 1, '2026-04-22T10:00:00Z',
+    1, 'pbkdf2_sha256$720000$iscy-demo-salt$dHYZBIWxS3abL+0r4Rp7w3kbLXLSAFUrGq/HaPlAVrY=',
+    'admin', 'Demo', 'Admin', 'admin@example.com', 1, 1, '2026-04-22T10:00:00Z',
     'ADMIN', 'Security Lead', 1
-);
+) ON CONFLICT(id) DO UPDATE SET
+    password = excluded.password,
+    username = excluded.username,
+    first_name = excluded.first_name,
+    last_name = excluded.last_name,
+    email = excluded.email,
+    is_staff = excluded.is_staff,
+    is_active = excluded.is_active,
+    role = excluded.role,
+    job_title = excluded.job_title,
+    tenant_id = excluded.tenant_id;
 INSERT OR IGNORE INTO organizations_businessunit (
     id, tenant_id, name, owner_id, created_at, updated_at
 ) VALUES (
@@ -1822,11 +1833,22 @@ INSERT INTO organizations_tenant (
     'Product security scope prepared for Rust cutover'
 ) ON CONFLICT (id) DO NOTHING;
 INSERT INTO accounts_user (
-    id, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
+    id, password, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
 ) VALUES (
-    1, 'demo', 'Demo', 'Admin', 'demo@example.test', TRUE, TRUE, '2026-04-22T10:00:00Z',
+    1, 'pbkdf2_sha256$720000$iscy-demo-salt$dHYZBIWxS3abL+0r4Rp7w3kbLXLSAFUrGq/HaPlAVrY=',
+    'admin', 'Demo', 'Admin', 'admin@example.com', TRUE, TRUE, '2026-04-22T10:00:00Z',
     'ADMIN', 'Security Lead', 1
-) ON CONFLICT (id) DO NOTHING;
+) ON CONFLICT (id) DO UPDATE SET
+    password = EXCLUDED.password,
+    username = EXCLUDED.username,
+    first_name = EXCLUDED.first_name,
+    last_name = EXCLUDED.last_name,
+    email = EXCLUDED.email,
+    is_staff = EXCLUDED.is_staff,
+    is_active = EXCLUDED.is_active,
+    role = EXCLUDED.role,
+    job_title = EXCLUDED.job_title,
+    tenant_id = EXCLUDED.tenant_id;
 INSERT INTO organizations_businessunit (
     id, tenant_id, name, owner_id, created_at, updated_at
 ) VALUES (

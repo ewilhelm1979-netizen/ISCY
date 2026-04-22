@@ -244,8 +244,10 @@ pub struct TenantContextResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct AuthSessionCreateRequest {
-    pub tenant_id: i64,
-    pub user_id: i64,
+    pub tenant_id: Option<i64>,
+    pub user_id: Option<i64>,
+    pub username: Option<String>,
+    pub password: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -264,8 +266,9 @@ pub struct AuthSessionResponse {
 
 #[derive(Debug, Deserialize)]
 struct WebLoginForm {
-    tenant_id: i64,
-    user_id: i64,
+    tenant_id: Option<i64>,
+    username: String,
+    password: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -817,10 +820,35 @@ async fn auth_session_create(
         )
             .into_response();
     };
-    match store
-        .create_session(payload.tenant_id, payload.user_id)
-        .await
-    {
+    let session_result = match (
+        payload.username.as_deref(),
+        payload.password.as_deref(),
+        payload.tenant_id,
+        payload.user_id,
+    ) {
+        (Some(username), Some(password), tenant_id, _) => {
+            store
+                .create_session_for_login(tenant_id, username, password)
+                .await
+        }
+        (None, None, Some(tenant_id), Some(user_id)) => {
+            store.create_session(tenant_id, user_id).await
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_login_payload",
+                    message: "Login benoetigt username/password oder tenant_id/user_id."
+                        .to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    match session_result {
         Ok(Some(session)) => {
             let cookie = session_cookie_value(&session.token);
             response_with_cookie(
@@ -849,7 +877,7 @@ async fn auth_session_create(
                 accepted: false,
                 api_version: "v1",
                 error_code: "invalid_login_context",
-                message: "Tenant/User-Kombination ist fuer Rust-Session nicht gueltig.".to_string(),
+                message: "Login-Daten sind fuer Rust-Session nicht gueltig.".to_string(),
             }),
         )
             .into_response(),
@@ -2777,7 +2805,8 @@ async fn web_login(
           <h1>Login</h1>
           <form method="post" action="/login/">
             <label>Tenant-ID<input name="tenant_id" type="number" min="1" required value="{}"></label>
-            <label>User-ID<input name="user_id" type="number" min="1" required value="{}"></label>
+            <label>Benutzername<input name="username" type="text" autocomplete="username" required value="admin"></label>
+            <label>Passwort<input name="password" type="password" autocomplete="current-password" required></label>
             <button type="submit">Weiter</button>
           </form>
         </section>
@@ -2785,11 +2814,7 @@ async fn web_login(
         query
             .tenant_id
             .map(|value| value.to_string())
-            .unwrap_or_default(),
-        query
-            .user_id
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
+            .unwrap_or_else(|| "1".to_string()),
     );
     web_page("Login", "/login/", context.as_ref(), &body)
 }
@@ -2807,13 +2832,16 @@ async fn web_login_submit(
         )
         .into_response();
     };
-    match store.create_session(form.tenant_id, form.user_id).await {
+    match store
+        .create_session_for_login(form.tenant_id, &form.username, &form.password)
+        .await
+    {
         Ok(Some(session)) => redirect_with_cookie("/dashboard/", &session_cookie_value(&session.token)),
         Ok(None) => web_page(
             "Login",
             "/login/",
             None,
-            r#"<section class="panel form-panel error"><h1>Login</h1><p>Tenant/User-Kombination ist nicht gueltig.</p></section>"#,
+            r#"<section class="panel form-panel error"><h1>Login</h1><p>Benutzername oder Passwort ist nicht gueltig.</p></section>"#,
         )
         .into_response(),
         Err(err) => web_page(

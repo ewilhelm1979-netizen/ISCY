@@ -1,8 +1,11 @@
-use std::{fs::File, io::Read};
+use std::{cmp, fs::File, io::Read};
 
 use anyhow::{bail, Context};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{Duration, Utc};
+use hmac::{Hmac, Mac};
 use serde::Serialize;
+use sha2::Sha256;
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -16,6 +19,8 @@ pub enum AuthStore {
     Postgres(PgPool),
     Sqlite(SqlitePool),
 }
+
+type HmacSha256 = Hmac<Sha256>;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthUser {
@@ -38,6 +43,11 @@ pub struct AuthSession {
     pub user_email: Option<String>,
     pub expires_at: String,
     pub user: AuthUser,
+}
+
+struct AuthLoginCandidate {
+    user: AuthUser,
+    password_hash: String,
 }
 
 impl AuthStore {
@@ -78,9 +88,37 @@ impl AuthStore {
         let Some(user) = self.active_user_for_tenant(tenant_id, user_id).await? else {
             return Ok(None);
         };
+        self.insert_session_for_user(user).await.map(Some)
+    }
+
+    pub async fn create_session_for_login(
+        &self,
+        tenant_id: Option<i64>,
+        username_or_email: &str,
+        password: &str,
+    ) -> anyhow::Result<Option<AuthSession>> {
+        let username_or_email = username_or_email.trim();
+        if username_or_email.is_empty() || password.is_empty() {
+            return Ok(None);
+        }
+        let Some(candidate) = self
+            .active_user_for_login(tenant_id, username_or_email)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !verify_django_pbkdf2_sha256_password(password, &candidate.password_hash) {
+            return Ok(None);
+        }
+        self.insert_session_for_user(candidate.user).await.map(Some)
+    }
+
+    async fn insert_session_for_user(&self, user: AuthUser) -> anyhow::Result<AuthSession> {
         let token = generate_session_token()?;
         let created_at = Utc::now().to_rfc3339();
         let expires_at = (Utc::now() + Duration::hours(8)).to_rfc3339();
+        let tenant_id = user.tenant_id;
+        let user_id = user.id;
         let user_email = non_empty(user.email.clone());
 
         match self {
@@ -122,14 +160,14 @@ impl AuthStore {
             }
         }
 
-        Ok(Some(AuthSession {
+        Ok(AuthSession {
             token,
             tenant_id,
             user_id,
             user_email,
             expires_at,
             user,
-        }))
+        })
     }
 
     pub async fn resolve_session(&self, token: &str) -> anyhow::Result<Option<AuthSession>> {
@@ -219,6 +257,37 @@ impl AuthStore {
             }
         }
     }
+
+    async fn active_user_for_login(
+        &self,
+        tenant_id: Option<i64>,
+        username_or_email: &str,
+    ) -> anyhow::Result<Option<AuthLoginCandidate>> {
+        match self {
+            Self::Postgres(pool) => {
+                let row = sqlx::query(login_user_postgres_sql())
+                    .bind(username_or_email)
+                    .bind(tenant_id)
+                    .fetch_optional(pool)
+                    .await
+                    .context("PostgreSQL-User konnte nicht fuer Rust-Login gelesen werden")?;
+                row.map(login_candidate_from_pg_row)
+                    .transpose()
+                    .map_err(Into::into)
+            }
+            Self::Sqlite(pool) => {
+                let row = sqlx::query(login_user_sqlite_sql())
+                    .bind(username_or_email)
+                    .bind(tenant_id)
+                    .fetch_optional(pool)
+                    .await
+                    .context("SQLite-User konnte nicht fuer Rust-Login gelesen werden")?;
+                row.map(login_candidate_from_sqlite_row)
+                    .transpose()
+                    .map_err(Into::into)
+            }
+        }
+    }
 }
 
 impl AuthSession {
@@ -268,6 +337,52 @@ fn active_user_sqlite_sql() -> &'static str {
     WHERE id = ?2
       AND is_active = 1
       AND (tenant_id = ?1 OR (tenant_id IS NULL AND is_superuser = 1))
+    "#
+}
+
+fn login_user_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        id,
+        COALESCE(tenant_id, $2, 1)::bigint AS tenant_id,
+        username,
+        first_name,
+        last_name,
+        email,
+        role,
+        job_title,
+        is_staff,
+        is_superuser,
+        password
+    FROM accounts_user
+    WHERE is_active = TRUE
+      AND (LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1))
+      AND ($2::bigint IS NULL OR tenant_id = $2 OR (tenant_id IS NULL AND is_superuser = TRUE))
+    ORDER BY CASE WHEN tenant_id = $2 THEN 0 ELSE 1 END, id
+    LIMIT 1
+    "#
+}
+
+fn login_user_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        id,
+        COALESCE(tenant_id, ?2, 1) AS tenant_id,
+        username,
+        first_name,
+        last_name,
+        email,
+        role,
+        job_title,
+        is_staff,
+        is_superuser,
+        password
+    FROM accounts_user
+    WHERE is_active = 1
+      AND (LOWER(username) = LOWER(?1) OR LOWER(email) = LOWER(?1))
+      AND (?2 IS NULL OR tenant_id = ?2 OR (tenant_id IS NULL AND is_superuser = 1))
+    ORDER BY CASE WHEN tenant_id = ?2 THEN 0 ELSE 1 END, id
+    LIMIT 1
     "#
 }
 
@@ -361,6 +476,22 @@ fn user_from_sqlite_row(row: SqliteRow) -> Result<AuthUser, sqlx::Error> {
     })
 }
 
+fn login_candidate_from_pg_row(row: PgRow) -> Result<AuthLoginCandidate, sqlx::Error> {
+    let password_hash: String = row.try_get("password")?;
+    Ok(AuthLoginCandidate {
+        user: user_from_pg_row(row)?,
+        password_hash,
+    })
+}
+
+fn login_candidate_from_sqlite_row(row: SqliteRow) -> Result<AuthLoginCandidate, sqlx::Error> {
+    let password_hash: String = row.try_get("password")?;
+    Ok(AuthLoginCandidate {
+        user: user_from_sqlite_row(row)?,
+        password_hash,
+    })
+}
+
 fn session_from_pg_row(row: PgRow) -> Result<AuthSession, sqlx::Error> {
     let user_email: String = row.try_get("user_email")?;
     let first_name: String = row.try_get("first_name")?;
@@ -413,6 +544,74 @@ fn session_from_sqlite_row(row: SqliteRow) -> Result<AuthSession, sqlx::Error> {
     })
 }
 
+fn verify_django_pbkdf2_sha256_password(password: &str, encoded: &str) -> bool {
+    let parts = encoded.split('$').collect::<Vec<_>>();
+    if parts.len() != 4 || parts[0] != "pbkdf2_sha256" {
+        return false;
+    }
+    let Ok(iterations) = parts[1].parse::<u32>() else {
+        return false;
+    };
+    if iterations == 0 {
+        return false;
+    }
+    let Ok(expected) = BASE64_STANDARD.decode(parts[3]) else {
+        return false;
+    };
+    if expected.is_empty() {
+        return false;
+    }
+    let actual = pbkdf2_hmac_sha256(
+        password.as_bytes(),
+        parts[2].as_bytes(),
+        iterations,
+        expected.len(),
+    );
+    constant_time_eq(&actual, &expected)
+}
+
+fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32, output_len: usize) -> Vec<u8> {
+    let mut output = vec![0_u8; output_len];
+    let mut block_index = 1_u32;
+    let mut offset = 0_usize;
+
+    while offset < output_len {
+        let mut mac = HmacSha256::new_from_slice(password).expect("HMAC accepts any key length");
+        mac.update(salt);
+        mac.update(&block_index.to_be_bytes());
+        let mut u = mac.finalize().into_bytes().to_vec();
+        let mut block = u.clone();
+
+        for _ in 1..iterations {
+            let mut mac =
+                HmacSha256::new_from_slice(password).expect("HMAC accepts any key length");
+            mac.update(&u);
+            u = mac.finalize().into_bytes().to_vec();
+            for (left, right) in block.iter_mut().zip(u.iter()) {
+                *left ^= *right;
+            }
+        }
+
+        let take = cmp::min(block.len(), output_len - offset);
+        output[offset..offset + take].copy_from_slice(&block[..take]);
+        offset += take;
+        block_index = block_index.saturating_add(1);
+    }
+
+    output
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0_u8;
+    for (left_byte, right_byte) in left.iter().zip(right.iter()) {
+        diff |= left_byte ^ right_byte;
+    }
+    diff == 0
+}
+
 fn generate_session_token() -> anyhow::Result<String> {
     let mut bytes = [0_u8; 32];
     File::open("/dev/urandom")
@@ -454,7 +653,7 @@ fn non_empty(value: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_name, hex_encode};
+    use super::{display_name, hex_encode, verify_django_pbkdf2_sha256_password};
 
     #[test]
     fn hex_encode_writes_lowercase_hex() {
@@ -465,5 +664,19 @@ mod tests {
     fn display_name_prefers_full_name() {
         assert_eq!(display_name("Ada", "Lovelace", "ada"), "Ada Lovelace");
         assert_eq!(display_name("", " ", "demo"), "demo");
+    }
+
+    #[test]
+    fn verifies_django_pbkdf2_sha256_passwords() {
+        let encoded = "pbkdf2_sha256$1$salt$Eg+2z/z4syxD5yJSVsT4N6hlSMkszDVICAWYfLcL4Xs=";
+        assert!(verify_django_pbkdf2_sha256_password("password", encoded));
+        assert!(!verify_django_pbkdf2_sha256_password(
+            "wrong-password",
+            encoded
+        ));
+        assert!(!verify_django_pbkdf2_sha256_password(
+            "password",
+            "argon2$1$salt$hash"
+        ));
     }
 }

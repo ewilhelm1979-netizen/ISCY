@@ -10,6 +10,8 @@ Fuer NixOS und andere lokale Linux-Setups ist der bevorzugte lokale Pfad jetzt R
 ./start.sh
 ```
 
+Danach ist die Rust-Weboberflaeche unter `http://127.0.0.1:9000/login/` erreichbar. Der Rust-Demo-Login lautet `admin / Admin123!`.
+
 Explizit ohne Wrapper:
 
 ```bash
@@ -51,6 +53,8 @@ Der lokale Wrapper startet denselben Rust-only-Pfad und initialisiert vorher die
 ```bash
 ./start.sh
 ```
+
+Login im Browser: `http://127.0.0.1:9000/login/` mit `admin / Admin123!`.
 
 ## Neu in V23.5
 

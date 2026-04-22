@@ -79,7 +79,7 @@ rust-smoke:
 		sleep 1; \
 	done; \
 	curl -fsS "$$url/health/live" >/dev/null; \
-	curl -fsS -c "$$cookie_file" -H "content-type: application/json" -d '{"tenant_id":1,"user_id":1}' "$$url/api/v1/auth/sessions" >/dev/null; \
+	curl -fsS -c "$$cookie_file" -H "content-type: application/json" -d '{"tenant_id":1,"username":"admin","password":"Admin123!"}' "$$url/api/v1/auth/sessions" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/auth/session" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/dashboard/" >/dev/null; \
 	curl -fsS "$$url/dashboard/?tenant_id=1&user_id=1" >/dev/null; \
