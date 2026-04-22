@@ -239,6 +239,7 @@ async fn rust_auth_session_creates_cookie_and_drives_web_context() {
     assert_eq!(payload["authenticated"], true);
     assert_eq!(payload["tenant_id"], 1);
     assert_eq!(payload["user"]["username"], "admin");
+    assert_eq!(payload["user"]["roles"][0], "ADMIN");
     assert_eq!(payload["authorization_model"], "rust-session-v1");
 
     let response = app
@@ -1500,6 +1501,29 @@ async fn risk_detail_blocks_foreign_tenant_risk() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "risk_not_found");
+}
+
+#[tokio::test]
+async fn risk_create_rejects_read_only_auditor_role() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/risks")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"title":"Blocked"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "insufficient_role");
 }
 
 #[tokio::test]
@@ -3221,7 +3245,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0001_rust_operational_core",
             "0002_rust_product_security_core",
             "0003_rust_catalog_requirement_core",
-            "0004_rust_auth_session_core"
+            "0004_rust_auth_session_core",
+            "0005_rust_auth_rbac_core"
         ]
     );
     assert!(
@@ -3239,6 +3264,9 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             .await
             .unwrap()
     );
+    assert!(db_admin::sqlite_table_exists(&pool, "accounts_role")
+        .await
+        .unwrap());
     assert!(
         db_admin::sqlite_table_exists(&pool, "catalog_assessmentquestion")
             .await

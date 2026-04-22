@@ -7,6 +7,9 @@ pub struct RequestContext {
     pub tenant_id: Option<i64>,
     pub user_id: Option<i64>,
     pub user_email: Option<String>,
+    pub roles: Vec<String>,
+    pub is_staff: bool,
+    pub is_superuser: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -14,6 +17,9 @@ pub struct AuthenticatedTenantContext {
     pub tenant_id: i64,
     pub user_id: i64,
     pub user_email: Option<String>,
+    pub roles: Vec<String>,
+    pub is_staff: bool,
+    pub is_superuser: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,12 +43,21 @@ impl RequestContext {
         let user_id = optional_i64_header(headers, "x-iscy-user-id")
             .map_err(|_| RequestContextError::InvalidUserId)?;
         let user_email = optional_string_header(headers, "x-iscy-user-email");
+        let mut roles = optional_roles_header(headers, "x-iscy-roles");
+        if user_id.is_some() && roles.is_empty() {
+            roles.push("CONTRIBUTOR".to_string());
+        }
+        let is_staff = optional_bool_header(headers, "x-iscy-is-staff").unwrap_or(false);
+        let is_superuser = optional_bool_header(headers, "x-iscy-is-superuser").unwrap_or(false);
 
         Ok(Self {
             authenticated: user_id.is_some(),
             tenant_id,
             user_id,
             user_email,
+            roles,
+            is_staff,
+            is_superuser,
         })
     }
 
@@ -67,7 +82,36 @@ impl RequestContext {
             tenant_id,
             user_id,
             user_email: self.user_email,
+            roles: self.roles,
+            is_staff: self.is_staff,
+            is_superuser: self.is_superuser,
         })
+    }
+}
+
+impl AuthenticatedTenantContext {
+    pub fn has_role(&self, role: &str) -> bool {
+        let role = role.trim().to_ascii_uppercase();
+        self.roles
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&role))
+    }
+
+    pub fn can_write(&self) -> bool {
+        self.is_superuser
+            || self.is_staff
+            || [
+                "ADMIN",
+                "MANAGEMENT",
+                "CISO",
+                "ISMS_MANAGER",
+                "COMPLIANCE_MANAGER",
+                "PROCESS_OWNER",
+                "RISK_OWNER",
+                "CONTRIBUTOR",
+            ]
+            .iter()
+            .any(|role| self.has_role(role))
     }
 }
 
@@ -140,6 +184,33 @@ fn optional_string_header(headers: &HeaderMap, name: &'static str) -> Option<Str
         .map(ToString::to_string)
 }
 
+fn optional_roles_header(headers: &HeaderMap, name: &'static str) -> Vec<String> {
+    headers
+        .get(name)
+        .and_then(|raw| raw.to_str().ok())
+        .map(|raw| {
+            raw.split(',')
+                .map(str::trim)
+                .filter(|role| !role.is_empty())
+                .map(|role| role.to_ascii_uppercase())
+                .fold(Vec::<String>::new(), |mut roles, role| {
+                    if !roles.iter().any(|existing| existing == &role) {
+                        roles.push(role);
+                    }
+                    roles
+                })
+        })
+        .unwrap_or_default()
+}
+
+fn optional_bool_header(headers: &HeaderMap, name: &'static str) -> Option<bool> {
+    headers
+        .get(name)
+        .and_then(|raw| raw.to_str().ok())
+        .map(str::trim)
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+}
+
 #[cfg(test)]
 mod tests {
     use axum::http::{HeaderMap, HeaderValue};
@@ -153,6 +224,7 @@ mod tests {
         assert!(!context.authenticated);
         assert_eq!(context.tenant_id, None);
         assert_eq!(context.user_id, None);
+        assert!(context.roles.is_empty());
     }
 
     #[test]
@@ -164,6 +236,7 @@ mod tests {
             "x-iscy-user-email",
             HeaderValue::from_static("security@example.test"),
         );
+        headers.insert("x-iscy-roles", HeaderValue::from_static("auditor, ciso"));
 
         let context = RequestContext::from_headers(&headers).unwrap();
 
@@ -171,6 +244,7 @@ mod tests {
         assert_eq!(context.tenant_id, Some(42));
         assert_eq!(context.user_id, Some(7));
         assert_eq!(context.user_email.as_deref(), Some("security@example.test"));
+        assert_eq!(context.roles, vec!["AUDITOR", "CISO"]);
     }
 
     #[test]
@@ -216,5 +290,20 @@ mod tests {
 
         assert_eq!(context.tenant_id, 42);
         assert_eq!(context.user_id, 7);
+        assert_eq!(context.roles, vec!["CONTRIBUTOR"]);
+        assert!(context.can_write());
+    }
+
+    #[test]
+    fn auditor_role_is_read_only() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iscy-tenant-id", HeaderValue::from_static("42"));
+        headers.insert("x-iscy-user-id", HeaderValue::from_static("7"));
+        headers.insert("x-iscy-roles", HeaderValue::from_static("AUDITOR"));
+
+        let context = RequestContext::authenticated_tenant_from_headers(&headers).unwrap();
+
+        assert!(context.has_role("AUDITOR"));
+        assert!(!context.can_write());
     }
 }

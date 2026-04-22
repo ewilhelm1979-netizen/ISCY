@@ -30,6 +30,7 @@ pub struct AuthUser {
     pub display_name: String,
     pub email: String,
     pub role: String,
+    pub roles: Vec<String>,
     pub job_title: String,
     pub is_staff: bool,
     pub is_superuser: bool,
@@ -296,6 +297,9 @@ impl AuthSession {
             tenant_id: self.tenant_id,
             user_id: self.user_id,
             user_email: self.user_email.clone(),
+            roles: self.user.roles.clone(),
+            is_staff: self.user.is_staff,
+            is_superuser: self.user.is_superuser,
         }
     }
 }
@@ -303,62 +307,93 @@ impl AuthSession {
 fn active_user_postgres_sql() -> &'static str {
     r#"
     SELECT
-        id,
-        COALESCE(tenant_id, $1)::bigint AS tenant_id,
-        username,
-        first_name,
-        last_name,
-        email,
-        role,
-        job_title,
-        is_staff,
-        is_superuser
-    FROM accounts_user
-    WHERE id = $2
-      AND is_active = TRUE
-      AND (tenant_id = $1 OR (tenant_id IS NULL AND is_superuser = TRUE))
+        u.id,
+        COALESCE(u.tenant_id, $1)::bigint AS tenant_id,
+        u.username,
+        u.first_name,
+        u.last_name,
+        u.email,
+        u.role,
+        COALESCE((
+            SELECT string_agg(role_code, ',' ORDER BY role_code)
+            FROM (
+                SELECT DISTINCT r.code AS role_code
+                FROM accounts_userrole ur
+                JOIN accounts_role r ON r.id = ur.role_id
+                WHERE ur.user_id = u.id
+                  AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = $1)
+            ) scoped_roles
+        ), '') AS role_codes,
+        u.job_title,
+        u.is_staff,
+        u.is_superuser
+    FROM accounts_user u
+    WHERE u.id = $2
+      AND u.is_active = TRUE
+      AND (u.tenant_id = $1 OR (u.tenant_id IS NULL AND u.is_superuser = TRUE))
     "#
 }
 
 fn active_user_sqlite_sql() -> &'static str {
     r#"
     SELECT
-        id,
-        COALESCE(tenant_id, ?1) AS tenant_id,
-        username,
-        first_name,
-        last_name,
-        email,
-        role,
-        job_title,
-        is_staff,
-        is_superuser
-    FROM accounts_user
-    WHERE id = ?2
-      AND is_active = 1
-      AND (tenant_id = ?1 OR (tenant_id IS NULL AND is_superuser = 1))
+        u.id,
+        COALESCE(u.tenant_id, ?1) AS tenant_id,
+        u.username,
+        u.first_name,
+        u.last_name,
+        u.email,
+        u.role,
+        COALESCE((
+            SELECT group_concat(role_code, ',')
+            FROM (
+                SELECT DISTINCT r.code AS role_code
+                FROM accounts_userrole ur
+                JOIN accounts_role r ON r.id = ur.role_id
+                WHERE ur.user_id = u.id
+                  AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = ?1)
+                ORDER BY r.code
+            )
+        ), '') AS role_codes,
+        u.job_title,
+        u.is_staff,
+        u.is_superuser
+    FROM accounts_user u
+    WHERE u.id = ?2
+      AND u.is_active = 1
+      AND (u.tenant_id = ?1 OR (u.tenant_id IS NULL AND u.is_superuser = 1))
     "#
 }
 
 fn login_user_postgres_sql() -> &'static str {
     r#"
     SELECT
-        id,
-        COALESCE(tenant_id, $2, 1)::bigint AS tenant_id,
-        username,
-        first_name,
-        last_name,
-        email,
-        role,
-        job_title,
-        is_staff,
-        is_superuser,
-        password
-    FROM accounts_user
-    WHERE is_active = TRUE
-      AND (LOWER(username) = LOWER($1) OR LOWER(email) = LOWER($1))
-      AND ($2::bigint IS NULL OR tenant_id = $2 OR (tenant_id IS NULL AND is_superuser = TRUE))
-    ORDER BY CASE WHEN tenant_id = $2 THEN 0 ELSE 1 END, id
+        u.id,
+        COALESCE(u.tenant_id, $2, 1)::bigint AS tenant_id,
+        u.username,
+        u.first_name,
+        u.last_name,
+        u.email,
+        u.role,
+        COALESCE((
+            SELECT string_agg(role_code, ',' ORDER BY role_code)
+            FROM (
+                SELECT DISTINCT r.code AS role_code
+                FROM accounts_userrole ur
+                JOIN accounts_role r ON r.id = ur.role_id
+                WHERE ur.user_id = u.id
+                  AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = $2)
+            ) scoped_roles
+        ), '') AS role_codes,
+        u.job_title,
+        u.is_staff,
+        u.is_superuser,
+        u.password
+    FROM accounts_user u
+    WHERE u.is_active = TRUE
+      AND (LOWER(u.username) = LOWER($1) OR LOWER(u.email) = LOWER($1))
+      AND ($2::bigint IS NULL OR u.tenant_id = $2 OR (u.tenant_id IS NULL AND u.is_superuser = TRUE))
+    ORDER BY CASE WHEN u.tenant_id = $2 THEN 0 ELSE 1 END, u.id
     LIMIT 1
     "#
 }
@@ -366,22 +401,33 @@ fn login_user_postgres_sql() -> &'static str {
 fn login_user_sqlite_sql() -> &'static str {
     r#"
     SELECT
-        id,
-        COALESCE(tenant_id, ?2, 1) AS tenant_id,
-        username,
-        first_name,
-        last_name,
-        email,
-        role,
-        job_title,
-        is_staff,
-        is_superuser,
-        password
-    FROM accounts_user
-    WHERE is_active = 1
-      AND (LOWER(username) = LOWER(?1) OR LOWER(email) = LOWER(?1))
-      AND (?2 IS NULL OR tenant_id = ?2 OR (tenant_id IS NULL AND is_superuser = 1))
-    ORDER BY CASE WHEN tenant_id = ?2 THEN 0 ELSE 1 END, id
+        u.id,
+        COALESCE(u.tenant_id, ?2, 1) AS tenant_id,
+        u.username,
+        u.first_name,
+        u.last_name,
+        u.email,
+        u.role,
+        COALESCE((
+            SELECT group_concat(role_code, ',')
+            FROM (
+                SELECT DISTINCT r.code AS role_code
+                FROM accounts_userrole ur
+                JOIN accounts_role r ON r.id = ur.role_id
+                WHERE ur.user_id = u.id
+                  AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = ?2)
+                ORDER BY r.code
+            )
+        ), '') AS role_codes,
+        u.job_title,
+        u.is_staff,
+        u.is_superuser,
+        u.password
+    FROM accounts_user u
+    WHERE u.is_active = 1
+      AND (LOWER(u.username) = LOWER(?1) OR LOWER(u.email) = LOWER(?1))
+      AND (?2 IS NULL OR u.tenant_id = ?2 OR (u.tenant_id IS NULL AND u.is_superuser = 1))
+    ORDER BY CASE WHEN u.tenant_id = ?2 THEN 0 ELSE 1 END, u.id
     LIMIT 1
     "#
 }
@@ -401,6 +447,16 @@ fn session_select_postgres_sql() -> &'static str {
         u.last_name,
         u.email,
         u.role,
+        COALESCE((
+            SELECT string_agg(role_code, ',' ORDER BY role_code)
+            FROM (
+                SELECT DISTINCT r.code AS role_code
+                FROM accounts_userrole ur
+                JOIN accounts_role r ON r.id = ur.role_id
+                WHERE ur.user_id = u.id
+                  AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = s.tenant_id)
+            ) scoped_roles
+        ), '') AS role_codes,
         u.job_title,
         u.is_staff,
         u.is_superuser
@@ -429,6 +485,17 @@ fn session_select_sqlite_sql() -> &'static str {
         u.last_name,
         u.email,
         u.role,
+        COALESCE((
+            SELECT group_concat(role_code, ',')
+            FROM (
+                SELECT DISTINCT r.code AS role_code
+                FROM accounts_userrole ur
+                JOIN accounts_role r ON r.id = ur.role_id
+                WHERE ur.user_id = u.id
+                  AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = s.tenant_id)
+                ORDER BY r.code
+            )
+        ), '') AS role_codes,
         u.job_title,
         u.is_staff,
         u.is_superuser
@@ -446,16 +513,21 @@ fn user_from_pg_row(row: PgRow) -> Result<AuthUser, sqlx::Error> {
     let first_name: String = row.try_get("first_name")?;
     let last_name: String = row.try_get("last_name")?;
     let username: String = row.try_get("username")?;
+    let role: String = row.try_get("role")?;
+    let role_codes: String = row.try_get("role_codes")?;
+    let is_staff: bool = row.try_get("is_staff")?;
+    let is_superuser: bool = row.try_get("is_superuser")?;
     Ok(AuthUser {
         id: row.try_get("id")?,
         tenant_id: row.try_get("tenant_id")?,
         display_name: display_name(&first_name, &last_name, &username),
         username,
         email: row.try_get("email")?,
-        role: row.try_get("role")?,
+        roles: roles_from_codes(&role, &role_codes, is_superuser),
+        role,
         job_title: row.try_get("job_title")?,
-        is_staff: row.try_get("is_staff")?,
-        is_superuser: row.try_get("is_superuser")?,
+        is_staff,
+        is_superuser,
     })
 }
 
@@ -463,16 +535,21 @@ fn user_from_sqlite_row(row: SqliteRow) -> Result<AuthUser, sqlx::Error> {
     let first_name: String = row.try_get("first_name")?;
     let last_name: String = row.try_get("last_name")?;
     let username: String = row.try_get("username")?;
+    let role: String = row.try_get("role")?;
+    let role_codes: String = row.try_get("role_codes")?;
+    let is_staff: bool = row.try_get("is_staff")?;
+    let is_superuser: bool = row.try_get("is_superuser")?;
     Ok(AuthUser {
         id: row.try_get("id")?,
         tenant_id: row.try_get("tenant_id")?,
         display_name: display_name(&first_name, &last_name, &username),
         username,
         email: row.try_get("email")?,
-        role: row.try_get("role")?,
+        roles: roles_from_codes(&role, &role_codes, is_superuser),
+        role,
         job_title: row.try_get("job_title")?,
-        is_staff: row.try_get("is_staff")?,
-        is_superuser: row.try_get("is_superuser")?,
+        is_staff,
+        is_superuser,
     })
 }
 
@@ -497,16 +574,21 @@ fn session_from_pg_row(row: PgRow) -> Result<AuthSession, sqlx::Error> {
     let first_name: String = row.try_get("first_name")?;
     let last_name: String = row.try_get("last_name")?;
     let username: String = row.try_get("username")?;
+    let role: String = row.try_get("role")?;
+    let role_codes: String = row.try_get("role_codes")?;
+    let is_staff: bool = row.try_get("is_staff")?;
+    let is_superuser: bool = row.try_get("is_superuser")?;
     let user = AuthUser {
         id: row.try_get("id")?,
         tenant_id: row.try_get("user_tenant_id")?,
         display_name: display_name(&first_name, &last_name, &username),
         username,
         email: row.try_get("email")?,
-        role: row.try_get("role")?,
+        roles: roles_from_codes(&role, &role_codes, is_superuser),
+        role,
         job_title: row.try_get("job_title")?,
-        is_staff: row.try_get("is_staff")?,
-        is_superuser: row.try_get("is_superuser")?,
+        is_staff,
+        is_superuser,
     };
     Ok(AuthSession {
         token: row.try_get("token")?,
@@ -523,16 +605,21 @@ fn session_from_sqlite_row(row: SqliteRow) -> Result<AuthSession, sqlx::Error> {
     let first_name: String = row.try_get("first_name")?;
     let last_name: String = row.try_get("last_name")?;
     let username: String = row.try_get("username")?;
+    let role: String = row.try_get("role")?;
+    let role_codes: String = row.try_get("role_codes")?;
+    let is_staff: bool = row.try_get("is_staff")?;
+    let is_superuser: bool = row.try_get("is_superuser")?;
     let user = AuthUser {
         id: row.try_get("id")?,
         tenant_id: row.try_get("user_tenant_id")?,
         display_name: display_name(&first_name, &last_name, &username),
         username,
         email: row.try_get("email")?,
-        role: row.try_get("role")?,
+        roles: roles_from_codes(&role, &role_codes, is_superuser),
+        role,
         job_title: row.try_get("job_title")?,
-        is_staff: row.try_get("is_staff")?,
-        is_superuser: row.try_get("is_superuser")?,
+        is_staff,
+        is_superuser,
     };
     Ok(AuthSession {
         token: row.try_get("token")?,
@@ -642,6 +729,32 @@ fn display_name(first_name: &str, last_name: &str, username: &str) -> String {
     }
 }
 
+fn roles_from_codes(legacy_role: &str, role_codes: &str, is_superuser: bool) -> Vec<String> {
+    let mut roles = Vec::new();
+    push_role(&mut roles, legacy_role);
+    for role in role_codes.split(',') {
+        push_role(&mut roles, role);
+    }
+    if is_superuser {
+        push_role(&mut roles, "ADMIN");
+    }
+    if roles.is_empty() {
+        roles.push("CONTRIBUTOR".to_string());
+    }
+    roles
+}
+
+fn push_role(roles: &mut Vec<String>, role: &str) {
+    let role = role.trim();
+    if role.is_empty() {
+        return;
+    }
+    let role = role.to_ascii_uppercase();
+    if !roles.iter().any(|existing| existing == &role) {
+        roles.push(role);
+    }
+}
+
 fn non_empty(value: String) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -653,7 +766,7 @@ fn non_empty(value: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_name, hex_encode, verify_django_pbkdf2_sha256_password};
+    use super::{display_name, hex_encode, roles_from_codes, verify_django_pbkdf2_sha256_password};
 
     #[test]
     fn hex_encode_writes_lowercase_hex() {
@@ -664,6 +777,19 @@ mod tests {
     fn display_name_prefers_full_name() {
         assert_eq!(display_name("Ada", "Lovelace", "ada"), "Ada Lovelace");
         assert_eq!(display_name("", " ", "demo"), "demo");
+    }
+
+    #[test]
+    fn roles_merge_legacy_and_scoped_codes() {
+        assert_eq!(
+            roles_from_codes("contributor", "ADMIN,RISK_OWNER,ADMIN", false),
+            vec!["CONTRIBUTOR", "ADMIN", "RISK_OWNER"]
+        );
+        assert_eq!(roles_from_codes("", "", false), vec!["CONTRIBUTOR"]);
+        assert_eq!(
+            roles_from_codes("auditor", "", true),
+            vec!["AUDITOR", "ADMIN"]
+        );
     }
 
     #[test]

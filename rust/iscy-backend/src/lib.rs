@@ -230,6 +230,9 @@ pub struct ContextWhoamiResponse {
     pub tenant_id: Option<i64>,
     pub user_id: Option<i64>,
     pub user_email: Option<String>,
+    pub roles: Vec<String>,
+    pub is_staff: bool,
+    pub is_superuser: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -239,6 +242,9 @@ pub struct TenantContextResponse {
     pub tenant_id: i64,
     pub user_id: i64,
     pub user_email: Option<String>,
+    pub roles: Vec<String>,
+    pub is_staff: bool,
+    pub is_superuser: bool,
     pub authorization_model: &'static str,
 }
 
@@ -638,6 +644,22 @@ async fn authenticated_tenant_context(
     RequestContext::authenticated_tenant_from_headers(headers)
 }
 
+fn require_write_permission(context: &AuthenticatedTenantContext) -> Result<(), Response> {
+    if context.can_write() {
+        return Ok(());
+    }
+    Err((
+        StatusCode::FORBIDDEN,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "insufficient_role",
+            message: "Diese Rust-Route benoetigt eine schreibende ISCY-Rolle.".to_string(),
+        }),
+    )
+        .into_response())
+}
+
 async fn web_context_from_request(
     query: &WebContextQuery,
     headers: &HeaderMap,
@@ -721,6 +743,9 @@ async fn context_whoami(State(state): State<AppState>, headers: HeaderMap) -> Re
                             tenant_id: Some(session.tenant_id),
                             user_id: Some(session.user_id),
                             user_email: session.user_email,
+                            roles: session.user.roles,
+                            is_staff: session.user.is_staff,
+                            is_superuser: session.user.is_superuser,
                         }),
                     )
                         .into_response();
@@ -761,6 +786,9 @@ async fn context_whoami(State(state): State<AppState>, headers: HeaderMap) -> Re
                 tenant_id: context.tenant_id,
                 user_id: context.user_id,
                 user_email: context.user_email,
+                roles: context.roles,
+                is_staff: context.is_staff,
+                is_superuser: context.is_superuser,
             }),
         )
             .into_response(),
@@ -787,6 +815,9 @@ async fn context_tenant(State(state): State<AppState>, headers: HeaderMap) -> Re
                 tenant_id: context.tenant_id,
                 user_id: context.user_id,
                 user_email: context.user_email,
+                roles: context.roles,
+                is_staff: context.is_staff,
+                is_superuser: context.is_superuser,
                 authorization_model: "rust-session-or-header-context-v1",
             }),
         )
@@ -1337,7 +1368,6 @@ async fn product_security_overview(State(state): State<AppState>, headers: Heade
                 .into_response();
         }
     };
-
     let Some(store) = state.product_security_store else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1536,6 +1566,9 @@ async fn product_security_roadmap_task_update(
                 .into_response();
         }
     };
+    if let Err(response) = require_write_permission(&context) {
+        return response;
+    }
 
     let Some(store) = state.product_security_store else {
         return (
@@ -1608,6 +1641,9 @@ async fn product_security_vulnerability_update(
                 .into_response();
         }
     };
+    if let Err(response) = require_write_permission(&context) {
+        return response;
+    }
 
     let Some(store) = state.product_security_store else {
         return (
@@ -1798,6 +1834,9 @@ async fn risk_create(
                 .into_response();
         }
     };
+    if let Err(response) = require_write_permission(&context) {
+        return response;
+    }
 
     let Some(store) = state.risk_store else {
         return (
@@ -1855,6 +1894,9 @@ async fn risk_update(
                 .into_response();
         }
     };
+    if let Err(response) = require_write_permission(&context) {
+        return response;
+    }
 
     let Some(store) = state.risk_store else {
         return (
@@ -1985,6 +2027,9 @@ async fn evidence_need_sync(
                 .into_response();
         }
     };
+    if let Err(response) = require_write_permission(&context) {
+        return response;
+    }
 
     let Some(store) = state.evidence_store else {
         return (
@@ -2055,6 +2100,9 @@ async fn import_center_job(
                 .into_response();
         }
     };
+    if let Err(response) = require_write_permission(&context) {
+        return response;
+    }
 
     let Some(store) = state.import_store else {
         return (
@@ -2401,6 +2449,9 @@ async fn roadmap_task_update(
                 .into_response();
         }
     };
+    if let Err(response) = require_write_permission(&context) {
+        return response;
+    }
 
     let Some(store) = state.roadmap_store else {
         return (

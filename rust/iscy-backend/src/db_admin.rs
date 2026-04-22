@@ -52,6 +52,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AUTH_SESSION_SCHEMA,
         postgres_sql: POSTGRES_AUTH_SESSION_SCHEMA,
     },
+    Migration {
+        version: "0005_rust_auth_rbac_core",
+        sqlite_sql: SQLITE_AUTH_RBAC_SCHEMA,
+        postgres_sql: POSTGRES_AUTH_RBAC_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -85,6 +90,48 @@ CREATE TABLE IF NOT EXISTS iscy_auth_session (
 );
 CREATE INDEX IF NOT EXISTS idx_iscy_auth_session_user ON iscy_auth_session(tenant_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_iscy_auth_session_expires ON iscy_auth_session(expires_at);
+"#;
+
+const SQLITE_AUTH_RBAC_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS accounts_role (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code varchar(32) NOT NULL UNIQUE,
+    label varchar(100) NOT NULL,
+    description TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS accounts_userrole (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    role_id INTEGER NOT NULL,
+    scope_tenant_id INTEGER NULL,
+    granted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    granted_by_id INTEGER NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_userrole_unique_scope
+    ON accounts_userrole(user_id, role_id, COALESCE(scope_tenant_id, 0));
+CREATE INDEX IF NOT EXISTS idx_accounts_userrole_user ON accounts_userrole(user_id);
+CREATE INDEX IF NOT EXISTS idx_accounts_userrole_scope ON accounts_userrole(scope_tenant_id);
+"#;
+
+const POSTGRES_AUTH_RBAC_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS accounts_role (
+    id BIGSERIAL PRIMARY KEY,
+    code varchar(32) NOT NULL UNIQUE,
+    label varchar(100) NOT NULL,
+    description TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS accounts_userrole (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL,
+    scope_tenant_id BIGINT NULL,
+    granted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    granted_by_id BIGINT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_userrole_unique_scope
+    ON accounts_userrole(user_id, role_id, COALESCE(scope_tenant_id, 0));
+CREATE INDEX IF NOT EXISTS idx_accounts_userrole_user ON accounts_userrole(user_id);
+CREATE INDEX IF NOT EXISTS idx_accounts_userrole_scope ON accounts_userrole(scope_tenant_id);
 "#;
 
 pub async fn run_db_admin_action(
@@ -1608,6 +1655,18 @@ INSERT INTO accounts_user (
     role = excluded.role,
     job_title = excluded.job_title,
     tenant_id = excluded.tenant_id;
+INSERT OR IGNORE INTO accounts_role (code, label, description) VALUES
+    ('ADMIN', 'Administrator', 'Full tenant administration and write access'),
+    ('MANAGEMENT', 'Management', 'Management oversight'),
+    ('CISO', 'CISO / Security Officer', 'Security leadership'),
+    ('ISMS_MANAGER', 'ISMS Manager', 'ISMS program management'),
+    ('COMPLIANCE_MANAGER', 'Compliance Manager', 'Compliance program management'),
+    ('PROCESS_OWNER', 'Process Owner', 'Process ownership'),
+    ('RISK_OWNER', 'Risk Owner', 'Risk ownership'),
+    ('AUDITOR', 'Auditor', 'Read-only audit access'),
+    ('CONTRIBUTOR', 'Contributor', 'Operational write access');
+INSERT OR IGNORE INTO accounts_userrole (user_id, role_id, scope_tenant_id, granted_at, granted_by_id)
+SELECT 1, id, 1, '2026-04-22T10:00:00Z', NULL FROM accounts_role WHERE code = 'ADMIN';
 INSERT OR IGNORE INTO organizations_businessunit (
     id, tenant_id, name, owner_id, created_at, updated_at
 ) VALUES (
@@ -1849,6 +1908,22 @@ INSERT INTO accounts_user (
     role = EXCLUDED.role,
     job_title = EXCLUDED.job_title,
     tenant_id = EXCLUDED.tenant_id;
+INSERT INTO accounts_role (code, label, description) VALUES
+    ('ADMIN', 'Administrator', 'Full tenant administration and write access'),
+    ('MANAGEMENT', 'Management', 'Management oversight'),
+    ('CISO', 'CISO / Security Officer', 'Security leadership'),
+    ('ISMS_MANAGER', 'ISMS Manager', 'ISMS program management'),
+    ('COMPLIANCE_MANAGER', 'Compliance Manager', 'Compliance program management'),
+    ('PROCESS_OWNER', 'Process Owner', 'Process ownership'),
+    ('RISK_OWNER', 'Risk Owner', 'Risk ownership'),
+    ('AUDITOR', 'Auditor', 'Read-only audit access'),
+    ('CONTRIBUTOR', 'Contributor', 'Operational write access')
+ON CONFLICT (code) DO UPDATE SET
+    label = EXCLUDED.label,
+    description = EXCLUDED.description;
+INSERT INTO accounts_userrole (user_id, role_id, scope_tenant_id, granted_at, granted_by_id)
+SELECT 1, id, 1, '2026-04-22T10:00:00Z', NULL FROM accounts_role WHERE code = 'ADMIN'
+ON CONFLICT DO NOTHING;
 INSERT INTO organizations_businessunit (
     id, tenant_id, name, owner_id, created_at, updated_at
 ) VALUES (
