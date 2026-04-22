@@ -1,32 +1,20 @@
 # ISCY V23.5
 
-ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb. Der produktive Cutover laeuft schrittweise von Django/Python auf einen Rust-Axum-Service; die Kern-APIs sind weit migriert, die vollstaendige Browser-App ist bis zum Web-Cutover noch Django-gefuehrt.
+ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb. Der produktive Cutover laeuft auf einen Rust-Axum-Service; lokale Starts und CI-Smokes laufen inzwischen Rust-first, Django/Python bleibt vorerst Legacy-Kompatibilitaet bis zur finalen Dateientfernung.
 
 ## Lokale Entwicklung auf NixOS
 
-Für NixOS und andere lokale Linux-Setups ist jetzt ein reproduzierbarer Dev-Shell-Pfad vorhanden:
+Fuer NixOS und andere lokale Linux-Setups ist der bevorzugte lokale Pfad jetzt Rust-only:
 
 ```bash
-nix develop
-python -m venv .venv
-source .venv/bin/activate
-python -m ensurepip --upgrade
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
-mkdir -p static media staticfiles models
-cp .env.example .env
-python manage.py migrate
-python manage.py check
-python manage.py runserver
+./start.sh
 ```
 
-Falls du den lokalen Rust-LLM-Service aktivieren willst:
+Explizit ohne Wrapper:
 
 ```bash
-nix develop
-source .venv/bin/activate
-make rust-build
-make rust-run
+nix run .#iscy-backend -- init-demo
+DATABASE_URL=sqlite:///db.sqlite3 RUST_BACKEND_BIND=127.0.0.1:9000 nix run .#iscy-backend
 ```
 
 Der Dev-Shell in `flake.nix` bringt die Build- und Laufzeitbibliotheken für PostgreSQL, SQLite und den lokalen Rust-Service mit.
@@ -58,10 +46,10 @@ Healthcheck:
 curl -fsS http://127.0.0.1:9000/health
 ```
 
-Bis zum finalen Web-Cutover startet die vollstaendige Browser-App weiterhin ueber Django vor dem Rust-Service:
+Der lokale Wrapper startet denselben Rust-only-Pfad und initialisiert vorher die Rust-Datenbank:
 
 ```bash
-RUST_BACKEND_URL=http://127.0.0.1:9000 VERIFY_LOCAL_LLM=0 ./start.sh
+./start.sh
 ```
 
 ## Neu in V23.5
@@ -75,7 +63,7 @@ RUST_BACKEND_URL=http://127.0.0.1:9000 VERIFY_LOCAL_LLM=0 ./start.sh
   - lokale Modelle
 - **Backup-/Restore-Skripte** für Compose-Deployments
 - **Support-Matrix** für offiziell getestete Plattformen und Betriebsmodi
-- erweitertes **CI** für Django, LLM-Runtime und Compose-Dateien
+- erweitertes **CI** fuer Rust-Tests, Rust-Bootstrap-Smoke, Nix-Rust-Smoke und Compose-Dateien
 
 ## Kernmodule
 
@@ -120,7 +108,7 @@ make easy-start
 Der Wrapper `scripts/easy_start.sh` nimmt automatisch den einfacheren Weg:
 
 - mit Docker vorhanden -> `make dev-up`
-- ohne Docker -> lokaler Fallback via `./start.sh`
+- ohne Docker -> lokaler Rust-Fallback via `./start.sh`
 
 ### 1. Lokale Entwicklung
 
@@ -205,10 +193,10 @@ Der funktionierende Referenzpfad auf Ubuntu 24.04 ist:
 - `RUST_ONLY_MODE=True` (verbietet lokale Legacy-Fallbacks fuer migrierte Backends)
 - `RUST_STRICT_MODE=True` (erzwingt Rust-Backends ohne Fallback)
 
-Danach kann weiter wie gewohnt gestartet werden:
+Danach kann Rust direkt gestartet werden:
 
 ```bash
-RUST_BACKEND_URL=http://127.0.0.1:9000 VERIFY_LOCAL_LLM=1 ./start.sh
+./start.sh
 ```
 
 Auf NixOS bitte bevorzugt ueber `nix develop` arbeiten.
@@ -264,8 +252,9 @@ Das Skript erzeugt `docs/ISCY_Handbuch.pdf`.
 
 GitHub Actions prüft:
 
-- Django-Konfiguration, Migrationen, Seeds und Health-Endpoints
-- Rust-Backend-Tests (inkl. LLM-/NVD-API-Endpunkte)
+- Rust-Formatierung, Clippy und Rust-Backend-Tests
+- Rust-DB-/Bootstrap-Smoke inklusive Healthcheck und zentralen API-Probes
+- Nix-Rust-App-Smoke über das flake-basierte Backend
 - Validierung aller Compose-Dateien inklusive Stage und Production
 
 ## Lokale Kurzbefehle
@@ -275,10 +264,12 @@ make local-bootstrap
 make local-check
 make local-test
 make team-test
+make rust-smoke
 ```
 
 `make local-test` deckt aktuell die Basis-Gesundheitschecks, mandantenbezogene Report-Views und die Product-Security-Routen ab.
-`make team-test` entspricht einem breiteren Team-Check (Django-Check + zentrale Testpakete inkl. Guidance und Vulnerability-Intelligence).
+`make team-test` ist der Legacy-Django-Kompatibilitaetscheck.
+`make rust-smoke` ist der Rust-only Betriebs-Smoke mit DB-Bootstrap, Healthcheck und zentralen API-Probes.
 
 ## Support-Matrix
 

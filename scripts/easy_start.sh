@@ -13,6 +13,6 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
   exec make dev-up
 fi
 
-warn "Docker nicht verfügbar. Fallback auf lokalen Python-Start (start.sh)."
-info "Hinweis: Lokaler Start nutzt virtuelle Umgebung, Migrationen und runserver."
+warn "Docker nicht verfügbar. Fallback auf lokalen Rust-Start (start.sh)."
+info "Hinweis: Lokaler Start nutzt Rust-DB-Initialisierung und den Axum-Server."
 exec ./start.sh

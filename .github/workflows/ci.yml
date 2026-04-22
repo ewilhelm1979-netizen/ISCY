@@ -6,59 +6,6 @@ on:
   pull_request:
 
 jobs:
-  django-core:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Install app dependencies
-        run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install -r requirements-prod.txt
-      - name: Django checks and smoke setup
-        env:
-          SECRET_KEY: ci-secret-key
-          DEBUG: 'True'
-          DATABASE_URL: sqlite:///db.sqlite3
-          RUST_ONLY_MODE: 'False'
-        run: |
-          source .venv/bin/activate
-          mkdir -p static media staticfiles
-          python manage.py makemigrations --check --dry-run
-          python manage.py migrate --noinput
-          python manage.py seed_demo || true
-          python manage.py seed_catalog || true
-          python manage.py seed_requirements || true
-          python manage.py seed_product_security || true
-          make team-test
-
-  nix-devshell:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v30
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-      - name: Nix dev shell smoke test
-        run: |
-          nix develop --command bash -lc '
-            python -m venv .venv-nix-ci
-            source .venv-nix-ci/bin/activate
-            python -m ensurepip --upgrade
-            python -m pip install --upgrade pip setuptools wheel
-            python -m pip install -r requirements.txt
-            cp .env.example .env
-            printf '\nRUST_ONLY_MODE=False\n' >> .env
-            mkdir -p static media staticfiles
-            make team-test
-          '
-
   rust-backend-tests:
     runs-on: ubuntu-24.04
     steps:
@@ -76,6 +23,54 @@ jobs:
       - name: Run Rust backend tests
         run: |
           cargo test --manifest-path rust/iscy-backend/Cargo.toml
+
+  rust-bootstrap-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Run Rust DB/bootstrap HTTP smoke
+        run: |
+          make rust-smoke
+
+  nix-rust-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Run Nix Rust app smoke
+        run: |
+          tmpdir="$(mktemp -d)"
+          db_path="$tmpdir/iscy-nix-smoke.sqlite3"
+          export DATABASE_URL="sqlite:////${db_path#/}"
+          export RUST_BACKEND_BIND="127.0.0.1:19001"
+          export RUST_BACKEND_URL="http://127.0.0.1:19001"
+
+          nix run .#iscy-backend -- init-demo
+          nix run .#iscy-backend >"$tmpdir/iscy-backend.log" 2>&1 &
+          pid="$!"
+          trap 'kill "$pid" >/dev/null 2>&1 || true' EXIT
+
+          for _ in $(seq 1 60); do
+            if curl -fsS "$RUST_BACKEND_URL/health/live" >/dev/null 2>&1; then
+              break
+            fi
+            if ! kill -0 "$pid" >/dev/null 2>&1; then
+              cat "$tmpdir/iscy-backend.log"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          curl -fsS "$RUST_BACKEND_URL/health/live" >/dev/null
+          curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$RUST_BACKEND_URL/api/v1/catalog/domains" >/dev/null
+          curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$RUST_BACKEND_URL/api/v1/requirements" >/dev/null
+          curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$RUST_BACKEND_URL/api/v1/product-security/overview" >/dev/null
 
   docker-config:
     runs-on: ubuntu-24.04

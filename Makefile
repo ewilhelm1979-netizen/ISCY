@@ -4,8 +4,9 @@ COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
 COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 PYTHON_BIN=$(shell if [ -x .venv/bin/python ]; then echo .venv/bin/python; else echo python; fi)
 TEAM_TEST_ENV=RUST_ONLY_MODE=False GUIDANCE_SCORING_BACKEND=local RISK_SCORING_BACKEND=local REPORT_SUMMARY_BACKEND=local REPORT_SNAPSHOT_BACKEND=local DASHBOARD_SUMMARY_BACKEND=local CATALOG_BACKEND=local REQUIREMENTS_BACKEND=local ASSET_INVENTORY_BACKEND=local PROCESS_REGISTER_BACKEND=local RISK_REGISTER_BACKEND=local EVIDENCE_REGISTER_BACKEND=local ASSESSMENT_REGISTER_BACKEND=local ROADMAP_REGISTER_BACKEND=local WIZARD_RESULTS_BACKEND=local IMPORT_CENTER_BACKEND=local PRODUCT_SECURITY_BACKEND=local RUST_BACKEND_URL=
+RUST_BACKEND_MANIFEST=rust/iscy-backend/Cargo.toml
 
-.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health handbook-pdf local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
+.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health handbook-pdf local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
 
 local-bootstrap:
 	python3 -m venv .venv
@@ -41,13 +42,47 @@ prod-readiness:
 	./scripts/production_readiness_check.sh
 
 rust-build:
-	cargo build --manifest-path rust/iscy-backend/Cargo.toml
+	cargo build --manifest-path $(RUST_BACKEND_MANIFEST)
 
 rust-test:
-	cargo test --manifest-path rust/iscy-backend/Cargo.toml
+	cargo test --manifest-path $(RUST_BACKEND_MANIFEST)
 
 rust-run:
-	cargo run --manifest-path rust/iscy-backend/Cargo.toml
+	cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend
+
+rust-init:
+	cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- init-demo
+
+rust-smoke:
+	@tmpdir=$$(mktemp -d); \
+	db_path="$$tmpdir/iscy-smoke.sqlite3"; \
+	db_url="sqlite:////$${db_path#/}"; \
+	bind="$${RUST_BACKEND_BIND:-127.0.0.1:19000}"; \
+	host="$${bind%:*}"; \
+	port="$${bind##*:}"; \
+	if [ "$$host" = "0.0.0.0" ]; then host="127.0.0.1"; fi; \
+	url="$${RUST_BACKEND_URL:-http://$$host:$$port}"; \
+	echo "Rust smoke DB: $$db_url"; \
+	DATABASE_URL="$$db_url" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- init-demo; \
+	DATABASE_URL="$$db_url" RUST_BACKEND_BIND="$$bind" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend >"$$tmpdir/iscy-backend.log" 2>&1 & \
+	pid="$$!"; \
+	trap 'kill "$$pid" >/dev/null 2>&1 || true' EXIT INT TERM; \
+	for _ in $$(seq 1 60); do \
+		if curl -fsS "$$url/health/live" >/dev/null 2>&1; then \
+			break; \
+		fi; \
+		if ! kill -0 "$$pid" >/dev/null 2>&1; then \
+			cat "$$tmpdir/iscy-backend.log"; \
+			exit 1; \
+		fi; \
+		sleep 1; \
+	done; \
+	curl -fsS "$$url/health/live" >/dev/null; \
+	curl -fsS "$$url/dashboard/?tenant_id=1&user_id=1" >/dev/null; \
+	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/catalog/domains" >/dev/null; \
+	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/requirements" >/dev/null; \
+	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/product-security/overview" >/dev/null; \
+	echo "Rust smoke OK: $$url"
 
 canary-daily:
 	./scripts/run_daily_canary.sh

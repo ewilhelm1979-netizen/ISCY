@@ -86,6 +86,7 @@
             pkgs.clang
             pkgs.gcc14
             pkgs.gnumake
+            pkgs.curl
             pkgs.rustc
             pkgs.cargo
             pkgs.rustfmt

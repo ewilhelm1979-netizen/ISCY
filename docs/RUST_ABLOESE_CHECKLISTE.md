@@ -1,9 +1,9 @@
 # Rust-Ablöse-Checkliste (Python -> Rust)
 
-Stand: 2026-04-18
+Stand: 2026-04-22
 
 ## Ziel
-Komplette Ablösung der CVE-Normalisierungspfade in der Vulnerability-Intelligence von Python auf Rust mit harten Gates gegen Mischbetrieb.
+Komplette Ablösung der produktiven Python/Django-Pfade durch Rust mit harten Gates gegen Mischbetrieb. Die CVE-Normalisierung war der erste harte Gate-Bereich; CI und lokaler Start laufen inzwischen Rust-first.
 
 ## Umgesetzte Punkte
 - [x] **Rust-only Gate in den Django-Settings aktiviert** (`VULN_INTEL_RUST_ONLY=True` per Default).
@@ -14,13 +14,13 @@ Komplette Ablösung der CVE-Normalisierungspfade in der Vulnerability-Intelligen
 - [x] **Regression-Tests ergänzt/angepasst** (Rust-only Verhalten und Legacy-Command).
 - [x] **Versionierter Rust-Normalisierungsvertrag eingeführt** (`/api/v1/nvd/normalize` mit `api_version` und stabilen Fehlercodes wie `invalid_cve_id`).
 - [x] **Python-Collection-Import im Rust-only-Modus gesperrt**; `import_nvd_cves` und `sync_nvd_recent` orchestrieren den Rust-Primärpfad über die Rust-CLI.
+- [x] **CI-Policy auf Rust-first umgestellt**: Rust-Tests, Rust-DB-/HTTP-Smoke und Nix-Rust-App-Smoke sind verbindlich.
 
 ## Verbleibende Ablösearbeiten
 - [ ] CVE-Normalisierung vollständig als produktiven Rust-Primärpfad konsolidieren (inkl. Monitoring, Betriebsdoku und finaler Entfernung des Python-Kompatibilitätsendpunkts).
 - [ ] NVD-Collection-Import in Rust um Persistenz-/DB-Schreibpfad erweitern, damit Django nicht mehr für CVE-Upserts benötigt wird.
 - [ ] Parity-Reports als optionales Audit-Feature markieren (nicht als Betriebsnotwendigkeit).
 - [ ] Betriebsdoku für Stage/Prod um verpflichtende Rust-Health-SLOs und Alerting ergänzen.
-- [ ] CI-Policy: Fail, wenn `VULN_INTEL_RUST_ONLY=True` und rust-backend Integrationstests nicht grün.
 
 ## Abnahmekriterien („komplett zu Rust“)
 1. **Kein produktiver Python-Fallback** für CVE-Normalisierung mehr aktiv.
