@@ -1,17 +1,23 @@
 use axum::{
+    body::Bytes,
+    extract::{DefaultBodyLimit, Json, Path, State},
     extract::{Form, Query},
-    extract::{Json, Path, State},
     http::{
-        header::{AUTHORIZATION, COOKIE, LOCATION, SET_COOKIE},
+        header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE},
         HeaderMap, HeaderValue, StatusCode,
     },
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, patch, post},
     Router,
 };
+use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path as FsPath, PathBuf},
+};
 
 pub mod account_store;
 pub mod assessment_store;
@@ -71,6 +77,7 @@ pub struct AppState {
     pub roadmap_store: Option<RoadmapStore>,
     pub tenant_store: Option<TenantStore>,
     pub wizard_store: Option<WizardStore>,
+    pub evidence_media_root: Option<PathBuf>,
 }
 
 impl AppState {
@@ -93,6 +100,7 @@ impl AppState {
             roadmap_store: None,
             tenant_store: None,
             wizard_store: None,
+            evidence_media_root: None,
         }
     }
 
@@ -115,6 +123,7 @@ impl AppState {
             roadmap_store: None,
             tenant_store,
             wizard_store: None,
+            evidence_media_root: None,
         }
     }
 
@@ -135,6 +144,11 @@ impl AppState {
 
     pub fn with_evidence_store(mut self, evidence_store: Option<EvidenceStore>) -> Self {
         self.evidence_store = evidence_store;
+        self
+    }
+
+    pub fn with_evidence_media_root(mut self, evidence_media_root: Option<PathBuf>) -> Self {
+        self.evidence_media_root = evidence_media_root;
         self
     }
 
@@ -500,6 +514,42 @@ struct WebContext {
 
 type ImportCsvRows = Vec<HashMap<String, Value>>;
 type ParsedImportCsv = (Vec<String>, ImportCsvRows);
+const EVIDENCE_MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
+const EVIDENCE_UPLOAD_BODY_LIMIT_BYTES: usize = EVIDENCE_MAX_UPLOAD_BYTES + 1024 * 1024;
+const EVIDENCE_ALLOWED_EXTENSIONS: &[&str] =
+    &["pdf", "docx", "xlsx", "png", "jpg", "jpeg", "csv", "txt"];
+const EVIDENCE_BLOCKED_CONTENT_TYPES: &[&str] = &[
+    "application/x-executable",
+    "application/x-msdos-program",
+    "text/html",
+];
+
+#[derive(Debug, Clone)]
+struct MultipartPart {
+    name: String,
+    filename: Option<String>,
+    content_type: Option<String>,
+    data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct EvidenceUploadFormData {
+    fields: HashMap<String, String>,
+    file: Option<EvidenceUploadFile>,
+}
+
+#[derive(Debug, Clone)]
+struct EvidenceUploadFile {
+    filename: String,
+    content_type: Option<String>,
+    data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct SavedEvidenceFile {
+    relative_path: String,
+    absolute_path: PathBuf,
+}
 
 #[derive(Debug, Serialize)]
 pub struct EvidenceOverviewResponse {
@@ -517,6 +567,14 @@ pub struct EvidenceNeedSyncResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub result: evidence_store::EvidenceNeedSyncResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceUploadResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub item: evidence_store::EvidenceItemSummary,
+    pub need_sync: Option<evidence_store::EvidenceNeedSyncResult>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2569,6 +2627,158 @@ async fn evidence_need_sync(
     }
 }
 
+async fn evidence_upload(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.evidence_store.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Evidence-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    let form = match parse_evidence_upload_form(&headers, &body) {
+        Ok(form) => form,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_evidence_upload",
+                    message,
+                }),
+            )
+                .into_response();
+        }
+    };
+    let media_root = evidence_media_root(&state);
+    let saved_file = match form
+        .file
+        .as_ref()
+        .map(|file| save_evidence_upload(&media_root, file))
+        .transpose()
+    {
+        Ok(file) => file,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_evidence_file",
+                    message,
+                }),
+            )
+                .into_response();
+        }
+    };
+    let payload = evidence_store::EvidenceItemCreateRequest {
+        session_id: optional_i64_form_field(&form.fields, "session_id"),
+        domain_id: optional_i64_form_field(&form.fields, "domain_id"),
+        measure_id: optional_i64_form_field(&form.fields, "measure_id"),
+        requirement_id: optional_i64_form_field(&form.fields, "requirement_id"),
+        title: form.fields.get("title").cloned().unwrap_or_default(),
+        description: form.fields.get("description").cloned().unwrap_or_default(),
+        linked_requirement: form
+            .fields
+            .get("linked_requirement")
+            .cloned()
+            .unwrap_or_default(),
+        file_name: saved_file.as_ref().map(|file| file.relative_path.clone()),
+        status: form.fields.get("status").cloned(),
+        review_notes: form.fields.get("review_notes").cloned().unwrap_or_default(),
+    };
+
+    match store
+        .create_evidence_item(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(item) => {
+            let need_sync = if let Some(session_id) = item.session_id {
+                store
+                    .sync_evidence_needs(
+                        context.tenant_id,
+                        session_id,
+                        evidence_store::EvidenceNeedSyncRequest {
+                            covered_threshold: None,
+                            partial_threshold: None,
+                        },
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            };
+            (
+                StatusCode::CREATED,
+                Json(EvidenceUploadResponse {
+                    accepted: true,
+                    api_version: "v1",
+                    item,
+                    need_sync,
+                }),
+            )
+                .into_response()
+        }
+        Err(err) => {
+            if let Some(file) = saved_file.as_ref() {
+                let _ = fs::remove_file(&file.absolute_path);
+            }
+            let message = err.to_string();
+            let status = if message.contains("wurde nicht gefunden")
+                || message.contains("darf nicht leer sein")
+            {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (
+                status,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: if status == StatusCode::BAD_REQUEST {
+                        "invalid_evidence_upload"
+                    } else {
+                        "database_error"
+                    },
+                    message: format!("Evidence konnte nicht erstellt werden: {message}"),
+                }),
+            )
+                .into_response()
+        }
+    }
+}
+
 async fn import_center_job(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3631,11 +3841,28 @@ async fn web_evidence(
                   {}
                   {}
                 </section>
-                <section class="panel wide">
-                  <table>
-                    <thead><tr><th>Titel</th><th>Status</th><th>Owner</th><th>Requirement</th></tr></thead>
-                    <tbody>{}</tbody>
-                  </table>
+                <section class="grid">
+                  <article class="panel wide">
+                    <table>
+                      <thead><tr><th>Titel</th><th>Status</th><th>Owner</th><th>Requirement</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Evidence hochladen</h2>
+                    <form method="post" action="/evidence/" enctype="multipart/form-data">
+                      <div class="form-grid">
+                        <label>Titel<input name="title" type="text" required></label>
+                        <label>Status<select name="status">{}</select></label>
+                        <label>Session-ID<input name="session_id" type="number" min="1"></label>
+                        <label>Requirement-ID<input name="requirement_id" type="number" min="1"></label>
+                      </div>
+                      <label>Linked Requirement<input name="linked_requirement" type="text"></label>
+                      <label>Beschreibung<textarea name="description" rows="4"></textarea></label>
+                      <label>Datei<input name="file" type="file" accept=".pdf,.docx,.xlsx,.png,.jpg,.jpeg,.csv,.txt"></label>
+                      <button type="submit">Evidence speichern</button>
+                    </form>
+                  </article>
                 </section>
                 "#,
                 overview.evidence_items.len(),
@@ -3648,10 +3875,105 @@ async fn web_evidence(
                 } else {
                     rows
                 },
+                evidence_status_options_for("SUBMITTED"),
             );
             web_page("Evidence", "/evidence/", Some(&context), &body)
         }
         Err(err) => web_error_page("Evidence", "/evidence/", &context, &err.to_string()),
+    }
+}
+
+async fn web_evidence_upload(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Evidence", "/evidence/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Evidence",
+            "/evidence/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return web_store_missing("Evidence", "/evidence/", &context, "Evidence").into_response();
+    };
+    let form = match parse_evidence_upload_form(&headers, &body) {
+        Ok(form) => form,
+        Err(message) => {
+            return web_error_page("Evidence", "/evidence/", &context, &message).into_response();
+        }
+    };
+    let media_root = evidence_media_root(&state);
+    let saved_file = match form
+        .file
+        .as_ref()
+        .map(|file| save_evidence_upload(&media_root, file))
+        .transpose()
+    {
+        Ok(file) => file,
+        Err(message) => {
+            return web_error_page("Evidence", "/evidence/", &context, &message).into_response();
+        }
+    };
+    let payload = evidence_store::EvidenceItemCreateRequest {
+        session_id: optional_i64_form_field(&form.fields, "session_id"),
+        domain_id: optional_i64_form_field(&form.fields, "domain_id"),
+        measure_id: optional_i64_form_field(&form.fields, "measure_id"),
+        requirement_id: optional_i64_form_field(&form.fields, "requirement_id"),
+        title: form.fields.get("title").cloned().unwrap_or_default(),
+        description: form.fields.get("description").cloned().unwrap_or_default(),
+        linked_requirement: form
+            .fields
+            .get("linked_requirement")
+            .cloned()
+            .unwrap_or_default(),
+        file_name: saved_file.as_ref().map(|file| file.relative_path.clone()),
+        status: form.fields.get("status").cloned(),
+        review_notes: form.fields.get("review_notes").cloned().unwrap_or_default(),
+    };
+    match store
+        .create_evidence_item(auth_context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(item) => {
+            if let Some(session_id) = item.session_id {
+                let _ = store
+                    .sync_evidence_needs(
+                        auth_context.tenant_id,
+                        session_id,
+                        evidence_store::EvidenceNeedSyncRequest {
+                            covered_threshold: None,
+                            partial_threshold: None,
+                        },
+                    )
+                    .await;
+            }
+            let body = format!(
+                r#"<section class="hero compact"><h1>Evidence gespeichert</h1><p>{}</p></section>
+                <section class="panel wide"><a href="{}">Zur Evidence-Uebersicht</a></section>"#,
+                html_escape(&item.title),
+                web_path_with_context("/evidence/", Some(&context)),
+            );
+            web_page("Evidence", "/evidence/", Some(&context), &body).into_response()
+        }
+        Err(err) => {
+            if let Some(file) = saved_file.as_ref() {
+                let _ = fs::remove_file(&file.absolute_path);
+            }
+            web_error_page("Evidence", "/evidence/", &context, &err.to_string()).into_response()
+        }
     }
 }
 
@@ -4701,6 +5023,324 @@ fn detect_csv_delimiter(raw: &str) -> char {
     }
 }
 
+fn parse_evidence_upload_form(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<EvidenceUploadFormData, String> {
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "Content-Type fuer Upload fehlt.".to_string())?;
+    let boundary = multipart_boundary(content_type)
+        .ok_or_else(|| "Multipart-Boundary fuer Upload fehlt.".to_string())?;
+    let parts = parse_multipart_parts(body, &boundary)?;
+    let mut fields = HashMap::new();
+    let mut file = None;
+
+    for part in parts {
+        if part.name == "file" {
+            if let Some(filename) = part
+                .filename
+                .map(|filename| filename.trim().to_string())
+                .filter(|filename| !filename.is_empty())
+            {
+                file = Some(EvidenceUploadFile {
+                    filename,
+                    content_type: part.content_type,
+                    data: part.data,
+                });
+            }
+        } else {
+            fields.insert(
+                part.name,
+                String::from_utf8_lossy(&part.data)
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(EvidenceUploadFormData { fields, file })
+}
+
+fn multipart_boundary(content_type: &str) -> Option<String> {
+    content_type.split(';').find_map(|part| {
+        let part = part.trim();
+        let (name, value) = part.split_once('=')?;
+        if !name.trim().eq_ignore_ascii_case("boundary") {
+            return None;
+        }
+        let value = value.trim().trim_matches('"');
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    })
+}
+
+fn parse_multipart_parts(body: &[u8], boundary: &str) -> Result<Vec<MultipartPart>, String> {
+    if boundary.len() > 200 {
+        return Err("Multipart-Boundary ist zu lang.".to_string());
+    }
+    let marker = format!("--{boundary}").into_bytes();
+    let mut parts = Vec::new();
+    let mut pos = find_subslice(body, &marker)
+        .ok_or_else(|| "Multipart-Boundary wurde im Upload nicht gefunden.".to_string())?;
+
+    loop {
+        pos += marker.len();
+        if body.get(pos..pos + 2) == Some(b"--") {
+            break;
+        }
+        if body.get(pos..pos + 2) == Some(b"\r\n") {
+            pos += 2;
+        } else if body.get(pos..pos + 1) == Some(b"\n") {
+            pos += 1;
+        }
+
+        let header_end = find_subslice(&body[pos..], b"\r\n\r\n")
+            .or_else(|| find_subslice(&body[pos..], b"\n\n"))
+            .ok_or_else(|| "Multipart-Header ist unvollstaendig.".to_string())?;
+        let header_separator_len = if body[pos + header_end..].starts_with(b"\r\n\r\n") {
+            4
+        } else {
+            2
+        };
+        let header_bytes = &body[pos..pos + header_end];
+        let data_start = pos + header_end + header_separator_len;
+        let next = find_subslice(&body[data_start..], &marker)
+            .ok_or_else(|| "Multipart-Ende wurde nicht gefunden.".to_string())?;
+        let mut data = body[data_start..data_start + next].to_vec();
+        trim_multipart_data_end(&mut data);
+        if let Some(part) = multipart_part_from_headers(header_bytes, data)? {
+            parts.push(part);
+        }
+        pos = data_start + next;
+    }
+
+    Ok(parts)
+}
+
+fn multipart_part_from_headers(
+    header_bytes: &[u8],
+    data: Vec<u8>,
+) -> Result<Option<MultipartPart>, String> {
+    let headers = String::from_utf8_lossy(header_bytes);
+    let mut name = None;
+    let mut filename = None;
+    let mut content_type = None;
+    for line in headers.lines() {
+        let Some((header_name, header_value)) = line.split_once(':') else {
+            continue;
+        };
+        if header_name
+            .trim()
+            .eq_ignore_ascii_case("content-disposition")
+        {
+            for param in header_value.split(';').map(str::trim) {
+                let Some((key, value)) = param.split_once('=') else {
+                    continue;
+                };
+                let value = unquote_multipart_param(value.trim());
+                if key.trim().eq_ignore_ascii_case("name") {
+                    name = Some(value);
+                } else if key.trim().eq_ignore_ascii_case("filename") {
+                    filename = Some(value);
+                }
+            }
+        } else if header_name.trim().eq_ignore_ascii_case("content-type") {
+            content_type = Some(header_value.trim().to_ascii_lowercase());
+        }
+    }
+
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    Ok(Some(MultipartPart {
+        name,
+        filename,
+        content_type,
+        data,
+    }))
+}
+
+fn unquote_multipart_param(value: &str) -> String {
+    let value = value.trim();
+    if value.len() >= 2 && value.starts_with('"') && value.ends_with('"') {
+        value[1..value.len() - 1].replace("\\\"", "\"")
+    } else {
+        value.to_string()
+    }
+}
+
+fn trim_multipart_data_end(data: &mut Vec<u8>) {
+    if data.ends_with(b"\r\n") {
+        data.truncate(data.len() - 2);
+    } else if data.ends_with(b"\n") {
+        data.truncate(data.len() - 1);
+    }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() {
+        return Some(0);
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn optional_i64_form_field(fields: &HashMap<String, String>, name: &str) -> Option<i64> {
+    fields
+        .get(name)
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|value| *value > 0)
+}
+
+fn evidence_media_root(state: &AppState) -> PathBuf {
+    state
+        .evidence_media_root
+        .clone()
+        .or_else(|| {
+            std::env::var("ISCY_MEDIA_ROOT")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| {
+            std::env::var("MEDIA_ROOT")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .map(PathBuf::from)
+        })
+        .unwrap_or_else(|| PathBuf::from("media"))
+}
+
+fn save_evidence_upload(
+    media_root: &FsPath,
+    file: &EvidenceUploadFile,
+) -> Result<SavedEvidenceFile, String> {
+    validate_evidence_upload_file(file)?;
+    let now = chrono::Utc::now();
+    let relative_dir = format!("evidence/{:04}/{:02}", now.year(), now.month());
+    let directory = media_root.join(&relative_dir);
+    fs::create_dir_all(&directory).map_err(|err| {
+        format!("Evidence-Upload-Verzeichnis konnte nicht erstellt werden: {err}")
+    })?;
+    let file_name = evidence_storage_filename(&file.filename, &relative_dir)?;
+    let relative_path = format!("{relative_dir}/{file_name}");
+    let absolute_path = directory.join(file_name);
+    fs::write(&absolute_path, &file.data)
+        .map_err(|err| format!("Evidence-Datei konnte nicht gespeichert werden: {err}"))?;
+    Ok(SavedEvidenceFile {
+        relative_path,
+        absolute_path,
+    })
+}
+
+fn validate_evidence_upload_file(file: &EvidenceUploadFile) -> Result<(), String> {
+    if file.data.len() > EVIDENCE_MAX_UPLOAD_BYTES {
+        return Err(format!(
+            "Datei ist zu gross ({:.1} MB). Maximum: 25 MB.",
+            file.data.len() as f64 / 1024.0 / 1024.0
+        ));
+    }
+    if let Some(content_type) = file.content_type.as_deref() {
+        if EVIDENCE_BLOCKED_CONTENT_TYPES
+            .iter()
+            .any(|blocked| content_type.eq_ignore_ascii_case(blocked))
+        {
+            return Err(format!(
+                "Dateityp \"{}\" ist aus Sicherheitsgruenden nicht erlaubt.",
+                content_type
+            ));
+        }
+    }
+    let extension = file_extension(&file.filename).ok_or_else(|| {
+        "Datei braucht eine erlaubte Endung: pdf, docx, xlsx, png, jpg, jpeg, csv oder txt."
+            .to_string()
+    })?;
+    if !EVIDENCE_ALLOWED_EXTENSIONS
+        .iter()
+        .any(|allowed| extension.eq_ignore_ascii_case(allowed))
+    {
+        return Err(format!(
+            "Dateityp \".{}\" ist nicht erlaubt. Erlaubt: .pdf, .docx, .xlsx, .png, .jpg, .jpeg, .csv, .txt",
+            html_escape(&extension)
+        ));
+    }
+    Ok(())
+}
+
+fn evidence_storage_filename(original_name: &str, relative_dir: &str) -> Result<String, String> {
+    let safe_name = sanitize_filename(original_name);
+    let extension = file_extension(&safe_name).ok_or_else(|| {
+        "Datei braucht eine erlaubte Endung: pdf, docx, xlsx, png, jpg, jpeg, csv oder txt."
+            .to_string()
+    })?;
+    let extension_with_dot = format!(".{extension}");
+    let stem = safe_name
+        .strip_suffix(&extension_with_dot)
+        .unwrap_or(&safe_name)
+        .trim_matches('.');
+    let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S%3f").to_string();
+    let reserved = relative_dir.len() + 1 + timestamp.len() + 1 + extension_with_dot.len();
+    let stem_budget = 100usize.saturating_sub(reserved).max(12);
+    let stem = truncate_ascii(stem, stem_budget);
+    let file_name = format!("{timestamp}_{stem}{extension_with_dot}");
+    if relative_dir.len() + 1 + file_name.len() > 100 {
+        return Err("Evidence-Dateiname ist zu lang.".to_string());
+    }
+    Ok(file_name)
+}
+
+fn sanitize_filename(original_name: &str) -> String {
+    let basename = FsPath::new(original_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("evidence");
+    let sanitized = basename
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('.')
+        .to_string();
+    if sanitized.is_empty() {
+        "evidence.txt".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn file_extension(filename: &str) -> Option<String> {
+    FsPath::new(filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn truncate_ascii(value: &str, max_len: usize) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii())
+        .take(max_len)
+        .collect::<String>()
+        .trim_matches('.')
+        .to_string()
+}
+
 fn yes_no(value: bool) -> &'static str {
     if value {
         "Ja"
@@ -4727,6 +5367,31 @@ fn import_type_options_for(selected_type: &str) -> String {
     .iter()
     .map(|(code, label)| {
         let selected = if *code == selected_type {
+            " selected"
+        } else {
+            ""
+        };
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            html_escape(code),
+            selected,
+            html_escape(label),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn evidence_status_options_for(selected_status: &str) -> String {
+    [
+        ("DRAFT", "Entwurf"),
+        ("SUBMITTED", "Zur Pruefung eingereicht"),
+        ("APPROVED", "Freigegeben"),
+        ("REJECTED", "Abgelehnt"),
+    ]
+    .iter()
+    .map(|(code, label)| {
+        let selected = if *code == selected_status {
             " selected"
         } else {
             ""
@@ -5202,6 +5867,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(risk_detail).patch(risk_update),
         )
         .route("/api/v1/evidence", get(evidence_overview))
+        .route("/api/v1/evidence/uploads", post(evidence_upload))
         .route(
             "/api/v1/evidence/sessions/{session_id}/needs/sync",
             post(evidence_need_sync),
@@ -5238,7 +5904,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/catalog/", get(web_catalog))
         .route("/reports/", get(web_reports))
         .route("/roadmap/", get(web_roadmap))
-        .route("/evidence/", get(web_evidence))
+        .route("/evidence/", get(web_evidence).post(web_evidence_upload))
         .route("/assets/", get(web_assets))
         .route("/imports/", get(web_imports).post(web_imports_submit))
         .route("/processes/", get(web_processes))
@@ -5260,6 +5926,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/risk/priority", post(risk_priority))
         .route("/api/v1/guidance/evaluate", post(guidance_evaluate))
         .route("/api/v1/reports/cve-summary", post(report_cve_summary))
+        .layer(DefaultBodyLimit::max(EVIDENCE_UPLOAD_BODY_LIMIT_BYTES))
         .with_state(state)
 }
 

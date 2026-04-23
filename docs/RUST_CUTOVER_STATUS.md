@@ -4,7 +4,7 @@ Stand: 2026-04-23
 
 ## Kurzfassung
 
-ISCY ist fachlich weit in Richtung Rust migriert, aber noch nicht sicher Python-frei. Der Rust-Axum-Service ist als Backend direkt startbar, lokale Starts laufen Rust-only, Rust kann eigene Session-Cookies aus Django-kompatiblen Passwort-Hashes oder DB-validierten Tenant-/User-Kontexten ausstellen, liest Rollen, Gruppen und Django-kompatible Permissions aus der Rust-DB-Schicht, und erzwingt schreibende Rollen fuer migrierte Write-Flows. Die Rust-Web-Shell ist aktiv und ersetzt die frueheren Platzhalter fuer Dashboard, Risks, Evidence, Reports, Roadmap, Assets, Processes, Imports und User-Administration durch serverseitig gerenderte, datengetriebene Seiten. Die Django-Schicht ist aber weiterhin fuer vollstaendige Browser-Workflows, Detail-/Form-Flows und einzelne Datei-/Upload-Orchestrierungen relevant.
+ISCY ist fachlich weit in Richtung Rust migriert, aber noch nicht sicher Python-frei. Der Rust-Axum-Service ist als Backend direkt startbar, lokale Starts laufen Rust-only, Rust kann eigene Session-Cookies aus Django-kompatiblen Passwort-Hashes oder DB-validierten Tenant-/User-Kontexten ausstellen, liest Rollen, Gruppen und Django-kompatible Permissions aus der Rust-DB-Schicht, und erzwingt schreibende Rollen fuer migrierte Write-Flows. Die Rust-Web-Shell ist aktiv und ersetzt die frueheren Platzhalter fuer Dashboard, Risks, Evidence, Reports, Roadmap, Assets, Processes, Imports und User-Administration durch serverseitig gerenderte, datengetriebene Seiten. Die Django-Schicht ist aber weiterhin fuer einzelne komplexe Browser-/Mapping-Flows relevant.
 
 Deshalb ist der finale Loeschschritt fuer Python noch nicht fachlich freigegeben. Python jetzt zu entfernen wuerde die Anwendung nicht abschliessen, sondern zentrale UI- und Betriebsfunktionen abschalten.
 
@@ -50,7 +50,7 @@ Der alte Django-Runserver ist damit nicht mehr der lokale Standardpfad.
 - Lokaler LLM-Endpunkt, Risiko-Priorisierung, Guidance-Auswertung und CVE-Report-Summary.
 - Dashboard-, Report-, Catalog-, Requirements-, Asset-, Process- und Assessment-Read-Flows.
 - Risk-Register Read-, Detail-, Create- und Update-Flows.
-- Evidence Read-/Detail-Flows und Evidence-Need-Sync.
+- Evidence Read-/Detail-Flows, Evidence-Need-Sync und Evidence-Dateiuploads ueber Rust-Web/API.
 - Rust-Web-Shell mit Kontext-Formular sowie datengetriebenem Dashboard, Risk-Register, Evidence-Ueberblick, Reports, Roadmap, Assets, Imports und Processes.
 - Rust-DB-Admin-CLI mit `migrate`, `seed-demo` und `init-demo` fuer Rust-eigenen SQLite/PostgreSQL-Bootstrap der operativen Kern-Tabellen inklusive Product-Security sowie vollstaendigem Katalog-/Requirement-Seed.
 - Rust-Session-Schicht mit `iscy_auth_session`, `/api/v1/auth/sessions`, `/api/v1/auth/session`, Logout, Cookie/Bearer-Aufloesung, Django-kompatibler `pbkdf2_sha256`-Passwortpruefung und Web-Kontext ohne Query-Parameter.
@@ -61,6 +61,7 @@ Der alte Django-Runserver ist damit nicht mehr der lokale Standardpfad.
 - Roadmap Liste, Detail, Kanban, Task-Updates und Exportdaten.
 - Wizard Start-/Result-Flows.
 - Import-Center bestaetigte Importjobs plus Rust-CSV-API `/api/v1/import-center/csv` und Rust-Webroute `/imports/` fuer CSV-Importe von Business-Units, Prozessen, Lieferanten und Assets.
+- Evidence-Upload-API `/api/v1/evidence/uploads` und Rust-Webupload unter `/evidence/` mit Django-kompatibler Dateiablage `evidence/YYYY/MM/...`.
 - Product-Security Liste, Produktdetail, Roadmap, Task-Updates und Vulnerability-Updates.
 - Rust-only-/Strict-Guards fuer migrierte Backend-Schalter.
 
@@ -69,7 +70,7 @@ Der alte Django-Runserver ist damit nicht mehr der lokale Standardpfad.
 1. **Weboberflaeche:** Rust liefert fuer `/dashboard/`, `/risks/`, `/evidence/`, `/reports/`, `/roadmap/`, `/assets/`, `/imports/` und `/processes/` bereits echte serverseitige Seiten. Die restlichen Views, Detail-/Form-Flows und Exporte liegen noch in Django-Templates und Django-Views.
 2. **Auth, Sessions und Admin:** Rust-Sessions, Passwort-Login, Rollen-/Schreibrechte sowie Account-Administration fuer User/Rollen-/Gruppen-/Direktrechtewechsel sind vorhanden. Die Django-kompatiblen Tabellen fuer Gruppen, Permissions und User-Zuordnung sind gebootstrapped; vollstaendige Django-Admin-Paritaet ist noch nicht komplett ersetzt.
 3. **Migrations und Seeds:** Ein Rust-eigener Bootstrap fuer operative Kern-Tabellen inklusive Product-Security, Catalog und Requirements ist vorhanden. Einzelne historische Django-Schema-Details ausserhalb dieser Cutover-Slices sind noch nicht vollstaendig abgeloest.
-4. **Formulare und Uploads:** CSV-Importe fuer Business-Units, Prozesse, Lieferanten und Assets laufen direkt ueber Rust-Web/API. Evidence-Dateiuploads, XLSX-Importe und Mapping-Vorschauen sind noch teilweise Django-orchestriert.
+4. **Formulare und Uploads:** CSV-Importe fuer Business-Units, Prozesse, Lieferanten und Assets sowie Evidence-Dateiuploads laufen direkt ueber Rust-Web/API. XLSX-Importe und Mapping-Vorschauen sind noch teilweise Django-orchestriert.
 5. **Python-Dateien im Repo:** CI und lokaler Start sind Rust-first. Python/Django-Dateien bleiben noch als Legacy-Kompatibilitaet und muessen nach Abschluss von Auth/Web/Form-Flows gezielt entfernt werden.
 
 ## Naechster fachlich sinnvoller Cutover-Schritt
@@ -78,7 +79,7 @@ Der naechste Abschlussblock ist nicht mehr ein weiterer einzelner API-Endpunkt, 
 
 1. Letzte Admin-Paritaet in Rust finalisieren.
 2. Django-Templates durch Rust-Web oder ein separates Frontend auf Rust-API ersetzen.
-3. Evidence-Dateiuploads, XLSX-Importe und Mapping-Vorschauen ohne Django bereitstellen.
+3. XLSX-Importe und Mapping-Vorschauen ohne Django bereitstellen.
 4. Python-Dateien, Requirements, Django-Settings und Django-Startpfade entfernen.
 
 ## Cutover-Entscheidung

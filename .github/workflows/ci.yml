@@ -48,9 +48,12 @@ jobs:
           tmpdir="$(mktemp -d)"
           db_path="$tmpdir/iscy-nix-smoke.sqlite3"
           cookie_file="$tmpdir/iscy-nix-smoke.cookies"
+          evidence_file="$tmpdir/evidence.txt"
           export DATABASE_URL="sqlite:////${db_path#/}"
+          export ISCY_MEDIA_ROOT="$tmpdir/media"
           export RUST_BACKEND_BIND="127.0.0.1:19001"
           export RUST_BACKEND_URL="http://127.0.0.1:19001"
+          printf 'rust smoke evidence\n' > "$evidence_file"
 
           nix run .#iscy-backend -- init-demo
           nix run .#iscy-backend >"$tmpdir/iscy-backend.log" 2>&1 &
@@ -79,6 +82,7 @@ jobs:
           curl -fsS -b "$cookie_file" "$RUST_BACKEND_URL/api/v1/accounts/groups" >/dev/null
           curl -fsS -b "$cookie_file" "$RUST_BACKEND_URL/api/v1/accounts/permissions" >/dev/null
           curl -fsS -b "$cookie_file" -H "content-type: application/json" -d '{"import_type":"business_units","replace_existing":false,"csv_data":"name\nRust Smoke Import"}' "$RUST_BACKEND_URL/api/v1/import-center/csv" >/dev/null
+          curl -fsS -b "$cookie_file" -F title='Rust Smoke Evidence' -F status='SUBMITTED' -F session_id='1' -F requirement_id='1' -F "file=@$evidence_file;filename=evidence.txt;type=text/plain" "$RUST_BACKEND_URL/api/v1/evidence/uploads" >/dev/null
           curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$RUST_BACKEND_URL/api/v1/catalog/domains" >/dev/null
           curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$RUST_BACKEND_URL/api/v1/requirements" >/dev/null
           curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$RUST_BACKEND_URL/api/v1/product-security/overview" >/dev/null

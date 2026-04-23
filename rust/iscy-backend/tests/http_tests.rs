@@ -10,6 +10,11 @@ use iscy_backend::{
     tenant_store::TenantStore, wizard_store::WizardStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
+use std::{
+    fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tower::util::ServiceExt;
 
 #[tokio::test]
@@ -2299,6 +2304,152 @@ async fn evidence_need_sync_blocks_foreign_tenant_session() {
 }
 
 #[tokio::test]
+async fn evidence_upload_creates_item_writes_file_and_syncs_needs() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let media_root = test_media_root("api-evidence-upload");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+    let boundary = "iscy-evidence-upload-boundary";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("title", "Uploaded Rust Evidence"),
+            ("description", "Uploaded from Rust API"),
+            ("session_id", "100"),
+            ("requirement_id", "2"),
+            ("status", "SUBMITTED"),
+        ],
+        Some((
+            "file",
+            "evidence.txt",
+            "text/plain",
+            b"rust evidence file\n",
+        )),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/uploads")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["item"]["title"], "Uploaded Rust Evidence");
+    assert_eq!(payload["item"]["owner_id"], 7);
+    assert_eq!(payload["item"]["linked_requirement"], "NIS2 21.2");
+    assert_eq!(payload["need_sync"]["session_id"], 100);
+    let relative_file = payload["item"]["file_name"].as_str().unwrap();
+    assert!(relative_file.starts_with("evidence/"));
+    assert!(media_root.join(relative_file).exists());
+
+    let evidence_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM evidence_evidenceitem WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(evidence_count, 3);
+    let synced: (String, i64) = sqlx::query_as(
+        r#"
+        SELECT status, covered_count
+        FROM evidence_requirementevidenceneed
+        WHERE tenant_id = 42 AND session_id = 100 AND requirement_id = 2
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(synced.0, "COVERED");
+    assert_eq!(synced.1, 2);
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn rust_web_evidence_accepts_file_upload_from_form() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let media_root = test_media_root("web-evidence-upload");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+    let boundary = "iscy-web-evidence-upload-boundary";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("title", "Browser Rust Evidence"),
+            ("description", "Uploaded from Rust web form"),
+            ("session_id", "100"),
+            ("requirement_id", "1"),
+            ("status", "SUBMITTED"),
+        ],
+        Some(("file", "browser.csv", "text/csv", b"name,value\nmfa,done\n")),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/evidence/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Evidence gespeichert"));
+    assert!(html.contains("Browser Rust Evidence"));
+
+    let file_name: String = sqlx::query_scalar(
+        "SELECT file FROM evidence_evidenceitem WHERE tenant_id = 42 AND title = 'Browser Rust Evidence'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(media_root.join(file_name).exists());
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
 async fn import_center_jobs_require_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(
@@ -4119,6 +4270,44 @@ async fn report_cve_summary_endpoint_returns_ok() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+fn test_media_root(name: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("iscy-{name}-{}-{nonce}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    root
+}
+
+fn multipart_body(
+    boundary: &str,
+    fields: &[(&str, &str)],
+    file: Option<(&str, &str, &str, &[u8])>,
+) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (name, value) in fields {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+        );
+        body.extend_from_slice(value.as_bytes());
+        body.extend_from_slice(b"\r\n");
+    }
+    if let Some((name, filename, content_type, data)) = file {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(format!("Content-Type: {content_type}\r\n\r\n").as_bytes());
+        body.extend_from_slice(data);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    body
 }
 
 async fn create_catalog_tables(pool: &SqlitePool) {

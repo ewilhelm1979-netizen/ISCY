@@ -74,6 +74,8 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
 - `evidence` hat die erste tenantgeschuetzte Read-API in Rust:
   - `GET /api/v1/evidence` liefert Evidenzliste, Nachweispflichten und Coverage-Summary fuer den aktuellen Tenant
   - optional filtert `session_id` die Evidenzen und Nachweispflichten auf eine Assessment-Session
+  - `POST /api/v1/evidence/uploads` nimmt Evidence-Dateien als Multipart-Upload entgegen, speichert sie Django-kompatibel unter `evidence/YYYY/MM/...`, erstellt den Evidence-Datensatz und synchronisiert sessionbezogene Needs
+  - `/evidence/` stellt den Upload als Rust-Webformular bereit
   - Django kann die Evidence-Liste ueber `EVIDENCE_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Evidenzen zurueckfallen
 - `assessments` hat erste tenantgeschuetzte Listen-APIs in Rust:
   - `GET /api/v1/assessments/applicability` liefert Betroffenheitsanalysen fuer den aktuellen Tenant

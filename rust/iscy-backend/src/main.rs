@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, path::PathBuf};
 
 use iscy_backend::{
     account_store::AccountStore,
@@ -126,6 +126,7 @@ async fn main() -> anyhow::Result<()> {
         .with_process_store(process_store)
         .with_risk_store(risk_store)
         .with_evidence_store(evidence_store)
+        .with_evidence_media_root(Some(evidence_media_root_from_env()))
         .with_import_store(import_store)
         .with_assessment_store(assessment_store)
         .with_roadmap_store(roadmap_store)
@@ -157,6 +158,19 @@ async fn run_database_admin(action: DbAdminAction) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+fn evidence_media_root_from_env() -> PathBuf {
+    std::env::var("ISCY_MEDIA_ROOT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("MEDIA_ROOT")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("media"))
 }
 
 fn print_usage() {

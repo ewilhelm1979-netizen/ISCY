@@ -101,6 +101,20 @@ pub struct EvidenceNeedSyncResult {
 }
 
 #[derive(Debug, Clone)]
+pub struct EvidenceItemCreateRequest {
+    pub session_id: Option<i64>,
+    pub domain_id: Option<i64>,
+    pub measure_id: Option<i64>,
+    pub requirement_id: Option<i64>,
+    pub title: String,
+    pub description: String,
+    pub linked_requirement: String,
+    pub file_name: Option<String>,
+    pub status: Option<String>,
+    pub review_notes: String,
+}
+
+#[derive(Debug, Clone)]
 struct TenantEvidenceContext {
     sector: String,
     kritis_relevant: bool,
@@ -182,6 +196,22 @@ impl EvidenceStore {
             }
             Self::Sqlite(pool) => {
                 sync_evidence_needs_sqlite(pool, tenant_id, session_id, payload).await
+            }
+        }
+    }
+
+    pub async fn create_evidence_item(
+        &self,
+        tenant_id: i64,
+        owner_id: i64,
+        payload: EvidenceItemCreateRequest,
+    ) -> anyhow::Result<EvidenceItemSummary> {
+        match self {
+            Self::Postgres(pool) => {
+                create_evidence_item_postgres(pool, tenant_id, owner_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                create_evidence_item_sqlite(pool, tenant_id, owner_id, payload).await
             }
         }
     }
@@ -417,6 +447,121 @@ async fn sync_evidence_needs_sqlite(
     }))
 }
 
+async fn create_evidence_item_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    owner_id: i64,
+    payload: EvidenceItemCreateRequest,
+) -> anyhow::Result<EvidenceItemSummary> {
+    validate_evidence_item_refs_postgres(pool, tenant_id, &payload).await?;
+    let title = normalize_required_text(&payload.title, "Evidence-Titel")?;
+    let status = normalize_evidence_status(payload.status.as_deref());
+    let linked_requirement =
+        linked_requirement_for_postgres(pool, payload.requirement_id, &payload.linked_requirement)
+            .await?;
+    let description = payload.description.trim().to_string();
+    let review_notes = payload.review_notes.trim().to_string();
+    let file_name = payload.file_name.clone();
+    let id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO evidence_evidenceitem (
+            tenant_id,
+            session_id,
+            domain_id,
+            measure_id,
+            requirement_id,
+            title,
+            description,
+            linked_requirement,
+            file,
+            status,
+            owner_id,
+            review_notes,
+            reviewed_by_id,
+            reviewed_at,
+            created_at,
+            updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, NULL, NOW(), NOW())
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(payload.session_id)
+    .bind(payload.domain_id)
+    .bind(payload.measure_id)
+    .bind(payload.requirement_id)
+    .bind(title)
+    .bind(description)
+    .bind(linked_requirement)
+    .bind(file_name)
+    .bind(status)
+    .bind(owner_id)
+    .bind(review_notes)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Evidence konnte nicht erstellt werden")?;
+
+    evidence_item_by_id_postgres(pool, tenant_id, id).await
+}
+
+async fn create_evidence_item_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    owner_id: i64,
+    payload: EvidenceItemCreateRequest,
+) -> anyhow::Result<EvidenceItemSummary> {
+    validate_evidence_item_refs_sqlite(pool, tenant_id, &payload).await?;
+    let title = normalize_required_text(&payload.title, "Evidence-Titel")?;
+    let status = normalize_evidence_status(payload.status.as_deref());
+    let linked_requirement =
+        linked_requirement_for_sqlite(pool, payload.requirement_id, &payload.linked_requirement)
+            .await?;
+    let description = payload.description.trim().to_string();
+    let review_notes = payload.review_notes.trim().to_string();
+    let file_name = payload.file_name.clone();
+    let result = sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (
+            tenant_id,
+            session_id,
+            domain_id,
+            measure_id,
+            requirement_id,
+            title,
+            description,
+            linked_requirement,
+            file,
+            status,
+            owner_id,
+            review_notes,
+            reviewed_by_id,
+            reviewed_at,
+            created_at,
+            updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, NULL, datetime('now'), datetime('now'))
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(payload.session_id)
+    .bind(payload.domain_id)
+    .bind(payload.measure_id)
+    .bind(payload.requirement_id)
+    .bind(title)
+    .bind(description)
+    .bind(linked_requirement)
+    .bind(file_name)
+    .bind(status)
+    .bind(owner_id)
+    .bind(review_notes)
+    .execute(pool)
+    .await
+    .context("SQLite-Evidence konnte nicht erstellt werden")?;
+
+    evidence_item_by_id_sqlite(pool, tenant_id, result.last_insert_rowid()).await
+}
+
 async fn list_evidence_items_postgres(
     pool: &PgPool,
     tenant_id: i64,
@@ -566,6 +711,34 @@ async fn list_evidence_items_sqlite(
         .map(evidence_item_from_sqlite_row)
         .collect::<Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+async fn evidence_item_by_id_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+) -> anyhow::Result<EvidenceItemSummary> {
+    let row = sqlx::query(evidence_item_detail_postgres_sql())
+        .bind(tenant_id)
+        .bind(evidence_id)
+        .fetch_one(pool)
+        .await
+        .context("PostgreSQL-Evidence konnte nicht gelesen werden")?;
+    evidence_item_from_pg_row(row).map_err(Into::into)
+}
+
+async fn evidence_item_by_id_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+) -> anyhow::Result<EvidenceItemSummary> {
+    let row = sqlx::query(evidence_item_detail_sqlite_sql())
+        .bind(tenant_id)
+        .bind(evidence_id)
+        .fetch_one(pool)
+        .await
+        .context("SQLite-Evidence konnte nicht gelesen werden")?;
+    evidence_item_from_sqlite_row(row).map_err(Into::into)
 }
 
 async fn list_evidence_needs_postgres(
@@ -738,6 +911,114 @@ async fn evidence_need_summary_sqlite(
     })
 }
 
+fn evidence_item_detail_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        item.id,
+        item.tenant_id,
+        item.session_id,
+        item.domain_id,
+        item.measure_id,
+        measure.title AS measure_title,
+        item.requirement_id,
+        req.framework AS requirement_framework,
+        req.code AS requirement_code,
+        req.title AS requirement_title,
+        mv.program_name AS mapping_program_name,
+        mv.version AS mapping_version,
+        src.authority AS source_authority,
+        src.citation AS source_citation,
+        src.title AS source_title,
+        item.title,
+        item.description,
+        item.linked_requirement,
+        item.file AS file_name,
+        item.status,
+        item.owner_id,
+        COALESCE(
+            NULLIF(BTRIM(CONCAT(COALESCE(owner.first_name, ''), ' ', COALESCE(owner.last_name, ''))), ''),
+            owner.username
+        ) AS owner_display,
+        item.review_notes,
+        item.reviewed_by_id,
+        COALESCE(
+            NULLIF(BTRIM(CONCAT(COALESCE(reviewer.first_name, ''), ' ', COALESCE(reviewer.last_name, ''))), ''),
+            reviewer.username
+        ) AS reviewed_by_display,
+        item.reviewed_at::text AS reviewed_at,
+        item.created_at::text AS created_at,
+        item.updated_at::text AS updated_at
+    FROM evidence_evidenceitem item
+    LEFT JOIN wizard_generatedmeasure measure
+        ON measure.id = item.measure_id
+    LEFT JOIN requirements_app_requirement req
+        ON req.id = item.requirement_id
+    LEFT JOIN requirements_app_mappingversion mv
+        ON mv.id = req.mapping_version_id
+    LEFT JOIN requirements_app_regulatorysource src
+        ON src.id = req.primary_source_id
+    LEFT JOIN accounts_user owner
+        ON owner.id = item.owner_id AND owner.tenant_id = item.tenant_id
+    LEFT JOIN accounts_user reviewer
+        ON reviewer.id = item.reviewed_by_id AND reviewer.tenant_id = item.tenant_id
+    WHERE item.tenant_id = $1 AND item.id = $2
+    "#
+}
+
+fn evidence_item_detail_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        item.id,
+        item.tenant_id,
+        item.session_id,
+        item.domain_id,
+        item.measure_id,
+        measure.title AS measure_title,
+        item.requirement_id,
+        req.framework AS requirement_framework,
+        req.code AS requirement_code,
+        req.title AS requirement_title,
+        mv.program_name AS mapping_program_name,
+        mv.version AS mapping_version,
+        src.authority AS source_authority,
+        src.citation AS source_citation,
+        src.title AS source_title,
+        item.title,
+        item.description,
+        item.linked_requirement,
+        item.file AS file_name,
+        item.status,
+        item.owner_id,
+        COALESCE(
+            NULLIF(TRIM(COALESCE(owner.first_name, '') || ' ' || COALESCE(owner.last_name, '')), ''),
+            owner.username
+        ) AS owner_display,
+        item.review_notes,
+        item.reviewed_by_id,
+        COALESCE(
+            NULLIF(TRIM(COALESCE(reviewer.first_name, '') || ' ' || COALESCE(reviewer.last_name, '')), ''),
+            reviewer.username
+        ) AS reviewed_by_display,
+        CAST(item.reviewed_at AS TEXT) AS reviewed_at,
+        CAST(item.created_at AS TEXT) AS created_at,
+        CAST(item.updated_at AS TEXT) AS updated_at
+    FROM evidence_evidenceitem item
+    LEFT JOIN wizard_generatedmeasure measure
+        ON measure.id = item.measure_id
+    LEFT JOIN requirements_app_requirement req
+        ON req.id = item.requirement_id
+    LEFT JOIN requirements_app_mappingversion mv
+        ON mv.id = req.mapping_version_id
+    LEFT JOIN requirements_app_regulatorysource src
+        ON src.id = req.primary_source_id
+    LEFT JOIN accounts_user owner
+        ON owner.id = item.owner_id AND owner.tenant_id = item.tenant_id
+    LEFT JOIN accounts_user reviewer
+        ON reviewer.id = item.reviewed_by_id AND reviewer.tenant_id = item.tenant_id
+    WHERE item.tenant_id = ?1 AND item.id = ?2
+    "#
+}
+
 fn evidence_item_from_pg_row(row: PgRow) -> Result<EvidenceItemSummary, sqlx::Error> {
     let status: String = row.try_get("status")?;
     Ok(EvidenceItemSummary {
@@ -894,6 +1175,128 @@ async fn session_exists_sqlite(
     .await
     .context("SQLite-Assessment-Session konnte nicht validiert werden")?;
     Ok(exists.is_some())
+}
+
+async fn validate_evidence_item_refs_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    payload: &EvidenceItemCreateRequest,
+) -> anyhow::Result<()> {
+    if let Some(session_id) = payload.session_id {
+        if !session_exists_postgres(pool, tenant_id, session_id).await? {
+            bail!("Assessment-Session {session_id} wurde nicht gefunden.");
+        }
+    }
+    if let Some(measure_id) = payload.measure_id {
+        let exists: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT measure.id
+            FROM wizard_generatedmeasure measure
+            JOIN wizard_assessmentsession session
+                ON session.id = measure.session_id
+            WHERE measure.id = $1 AND session.tenant_id = $2
+            "#,
+        )
+        .bind(measure_id)
+        .bind(tenant_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Massnahme fuer Evidence konnte nicht validiert werden")?;
+        if exists.is_none() {
+            bail!("Massnahme {measure_id} wurde fuer diesen Tenant nicht gefunden.");
+        }
+    }
+    Ok(())
+}
+
+async fn validate_evidence_item_refs_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    payload: &EvidenceItemCreateRequest,
+) -> anyhow::Result<()> {
+    if let Some(session_id) = payload.session_id {
+        if !session_exists_sqlite(pool, tenant_id, session_id).await? {
+            bail!("Assessment-Session {session_id} wurde nicht gefunden.");
+        }
+    }
+    if let Some(measure_id) = payload.measure_id {
+        let exists: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT measure.id
+            FROM wizard_generatedmeasure measure
+            JOIN wizard_assessmentsession session
+                ON session.id = measure.session_id
+            WHERE measure.id = ?1 AND session.tenant_id = ?2
+            "#,
+        )
+        .bind(measure_id)
+        .bind(tenant_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Massnahme fuer Evidence konnte nicht validiert werden")?;
+        if exists.is_none() {
+            bail!("Massnahme {measure_id} wurde fuer diesen Tenant nicht gefunden.");
+        }
+    }
+    Ok(())
+}
+
+async fn linked_requirement_for_postgres(
+    pool: &PgPool,
+    requirement_id: Option<i64>,
+    fallback: &str,
+) -> anyhow::Result<String> {
+    let fallback = fallback.trim();
+    if !fallback.is_empty() {
+        return Ok(fallback.to_string());
+    }
+    let Some(requirement_id) = requirement_id else {
+        return Ok(String::new());
+    };
+    let row = sqlx::query(
+        "SELECT framework, code FROM requirements_app_requirement WHERE id = $1 AND is_active = TRUE",
+    )
+    .bind(requirement_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Requirement fuer Evidence konnte nicht gelesen werden")?;
+    match row {
+        Some(row) => Ok(format!(
+            "{} {}",
+            row.try_get::<String, _>("framework")?,
+            row.try_get::<String, _>("code")?
+        )),
+        None => bail!("Requirement {requirement_id} wurde nicht gefunden."),
+    }
+}
+
+async fn linked_requirement_for_sqlite(
+    pool: &SqlitePool,
+    requirement_id: Option<i64>,
+    fallback: &str,
+) -> anyhow::Result<String> {
+    let fallback = fallback.trim();
+    if !fallback.is_empty() {
+        return Ok(fallback.to_string());
+    }
+    let Some(requirement_id) = requirement_id else {
+        return Ok(String::new());
+    };
+    let row = sqlx::query(
+        "SELECT framework, code FROM requirements_app_requirement WHERE id = ?1 AND is_active = 1",
+    )
+    .bind(requirement_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Requirement fuer Evidence konnte nicht gelesen werden")?;
+    match row {
+        Some(row) => Ok(format!(
+            "{} {}",
+            row.try_get::<String, _>("framework")?,
+            row.try_get::<String, _>("code")?
+        )),
+        None => bail!("Requirement {requirement_id} wurde nicht gefunden."),
+    }
 }
 
 async fn tenant_context_postgres(
@@ -1174,6 +1577,30 @@ fn sector_packages(sector: &str, kritis_relevant: bool) -> Vec<String> {
 
 fn normalize_threshold(value: Option<i64>, default: i64) -> i64 {
     value.filter(|item| *item > 0).unwrap_or(default)
+}
+
+fn normalize_required_text<'a>(value: &'a str, label: &str) -> anyhow::Result<&'a str> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("{label} darf nicht leer sein.");
+    }
+    Ok(value)
+}
+
+fn normalize_evidence_status(value: Option<&str>) -> &'static str {
+    match value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("DRAFT")
+        .to_ascii_uppercase()
+        .as_str()
+    {
+        "DRAFT" => "DRAFT",
+        "SUBMITTED" => "SUBMITTED",
+        "APPROVED" => "APPROVED",
+        "REJECTED" => "REJECTED",
+        _ => "DRAFT",
+    }
 }
 
 fn need_status_for_count(
