@@ -258,12 +258,14 @@ impl AccountStore {
             .and_then(|roles| roles.first().cloned())
             .or_else(|| payload.role.as_deref().map(normalize_role))
             .unwrap_or(existing.role);
-        let username = optional_text(payload.username.as_deref()).unwrap_or(existing.username);
-        let first_name =
-            optional_text(payload.first_name.as_deref()).unwrap_or(existing.first_name);
-        let last_name = optional_text(payload.last_name.as_deref()).unwrap_or(existing.last_name);
-        let email = optional_text(payload.email.as_deref()).unwrap_or(existing.email);
-        let job_title = optional_text(payload.job_title.as_deref()).unwrap_or(existing.job_title);
+        let username = match payload.username.as_deref() {
+            Some(username) => required_text(Some(username), "username")?,
+            None => existing.username,
+        };
+        let first_name = text_update(payload.first_name.as_deref()).unwrap_or(existing.first_name);
+        let last_name = text_update(payload.last_name.as_deref()).unwrap_or(existing.last_name);
+        let email = text_update(payload.email.as_deref()).unwrap_or(existing.email);
+        let job_title = text_update(payload.job_title.as_deref()).unwrap_or(existing.job_title);
         let is_staff = payload.is_staff.unwrap_or(existing.is_staff);
         let is_superuser = payload.is_superuser.unwrap_or(existing.is_superuser);
         let is_active = payload.is_active.unwrap_or(existing.is_active);
@@ -657,6 +659,10 @@ fn optional_text(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
+}
+
+fn text_update(value: Option<&str>) -> Option<String> {
+    value.map(str::trim).map(ToString::to_string)
 }
 
 fn role_codes_for_create(role: Option<&str>, roles: Option<&[String]>) -> Vec<String> {

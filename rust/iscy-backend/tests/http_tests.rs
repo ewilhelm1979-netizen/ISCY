@@ -420,8 +420,10 @@ async fn account_user_create_persists_user_role_and_login() {
     assert_eq!(payload["accepted"], true);
     assert_eq!(payload["user"]["username"], "auditor");
     assert_eq!(payload["user"]["roles"][0], "AUDITOR");
+    let auditor_id = payload["user"]["id"].as_i64().unwrap();
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -440,6 +442,138 @@ async fn account_user_create_persists_user_role_and_login() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["user"]["username"], "auditor");
     assert_eq!(payload["user"]["roles"][0], "AUDITOR");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/accounts/users/{auditor_id}"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "username":"auditor",
+                        "password":"Audit456!",
+                        "email":"",
+                        "first_name":"Ada",
+                        "last_name":"Reviewer",
+                        "job_title":"Audit Owner",
+                        "role":"CONTRIBUTOR",
+                        "roles":["CONTRIBUTOR"],
+                        "is_active":true,
+                        "is_staff":true
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["user"]["roles"][0], "CONTRIBUTOR");
+    assert_eq!(payload["user"]["last_name"], "Reviewer");
+    assert_eq!(payload["user"]["email"], "");
+    assert_eq!(payload["user"]["job_title"], "Audit Owner");
+    assert_eq!(payload["user"]["is_staff"], true);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"tenant_id":1,"username":"auditor","password":"Audit456!"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["user"]["roles"][0], "CONTRIBUTOR");
+}
+
+#[tokio::test]
+async fn web_admin_users_renders_and_updates_user_edit_forms() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_account_store(Some(AccountStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/admin/users/?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("User bearbeiten"));
+    assert!(html.contains(r#"action="/admin/users/1""#));
+    assert!(html.contains("Aenderungen speichern"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/admin/users/1")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "username=admin&first_name=Demo&last_name=Lead&email=lead%40example.com&job_title=Lead&role=ADMIN&is_active=1&is_staff=1",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/accounts/users")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["users"][0]["last_name"], "Lead");
+    assert_eq!(payload["users"][0]["email"], "lead@example.com");
+    assert_eq!(payload["users"][0]["job_title"], "Lead");
 }
 
 #[tokio::test]

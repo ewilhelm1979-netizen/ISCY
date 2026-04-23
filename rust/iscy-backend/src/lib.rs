@@ -320,6 +320,20 @@ struct WebAccountUserCreateForm {
     is_superuser: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebAccountUserUpdateForm {
+    username: String,
+    password: Option<String>,
+    first_name: Option<String>,
+    last_name: Option<String>,
+    email: Option<String>,
+    role: Option<String>,
+    job_title: Option<String>,
+    is_active: Option<String>,
+    is_staff: Option<String>,
+    is_superuser: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TenantProfileResponse {
     pub api_version: &'static str,
@@ -3664,23 +3678,7 @@ async fn web_admin_users(
         Ok(roles) => roles,
         Err(err) => return web_error_page("Users", "/admin/users/", &context, &err.to_string()),
     };
-    let role_options = roles
-        .iter()
-        .map(|role| {
-            let selected = if role.code == "CONTRIBUTOR" {
-                " selected"
-            } else {
-                ""
-            };
-            format!(
-                r#"<option value="{}"{}>{}</option>"#,
-                html_escape(&role.code),
-                selected,
-                html_escape(&role.label),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("");
+    let create_role_options = role_options_for(&roles, "CONTRIBUTOR");
     let rows = users
         .iter()
         .map(|user| {
@@ -3693,6 +3691,50 @@ async fn web_admin_users(
                 yes_no(user.is_active),
                 yes_no(user.is_staff),
                 yes_no(user.is_superuser),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let edit_forms = users
+        .iter()
+        .map(|user| {
+            let selected_role = user
+                .roles
+                .first()
+                .map(String::as_str)
+                .unwrap_or(user.role.as_str());
+            format!(
+                r#"
+                <form class="user-editor" method="post" action="/admin/users/{}">
+                  <h3>{}</h3>
+                  <div class="form-grid">
+                    <label>Benutzername<input name="username" type="text" autocomplete="username" required value="{}"></label>
+                    <label>Neues Passwort<input name="password" type="password" autocomplete="new-password"></label>
+                    <label>Vorname<input name="first_name" type="text" autocomplete="given-name" value="{}"></label>
+                    <label>Nachname<input name="last_name" type="text" autocomplete="family-name" value="{}"></label>
+                    <label>E-Mail<input name="email" type="email" autocomplete="email" value="{}"></label>
+                    <label>Jobtitel<input name="job_title" type="text" value="{}"></label>
+                    <label>Rolle<select name="role">{}</select></label>
+                  </div>
+                  <div class="toggle-row">
+                    <label class="checkbox-row"><input name="is_active" type="checkbox" value="1"{}> Aktiv</label>
+                    <label class="checkbox-row"><input name="is_staff" type="checkbox" value="1"{}> Staff</label>
+                    <label class="checkbox-row"><input name="is_superuser" type="checkbox" value="1"{}> Superuser</label>
+                  </div>
+                  <button type="submit">Aenderungen speichern</button>
+                </form>
+                "#,
+                user.id,
+                html_escape(&user.display_name),
+                html_escape(&user.username),
+                html_escape(&user.first_name),
+                html_escape(&user.last_name),
+                html_escape(&user.email),
+                html_escape(&user.job_title),
+                role_options_for(&roles, selected_role),
+                checked_attr(user.is_active),
+                checked_attr(user.is_staff),
+                checked_attr(user.is_superuser),
             )
         })
         .collect::<Vec<_>>()
@@ -3723,6 +3765,10 @@ async fn web_admin_users(
               <button type="submit">User anlegen</button>
             </form>
           </article>
+          <article class="panel wide">
+            <h2>User bearbeiten</h2>
+            <div class="editor-stack">{}</div>
+          </article>
         </section>
         "#,
         users.len(),
@@ -3732,10 +3778,16 @@ async fn web_admin_users(
         } else {
             rows
         },
-        role_options,
+        create_role_options,
+        if edit_forms.is_empty() {
+            "<p>Keine Accounts vorhanden.</p>".to_string()
+        } else {
+            edit_forms
+        },
     );
     web_page("Users", "/admin/users/", Some(&context), &body)
 }
+
 async fn web_admin_users_submit(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3786,6 +3838,75 @@ async fn web_admin_users_submit(
         .await
     {
         Ok(_) => Redirect::to("/admin/users/").into_response(),
+        Err(err) => {
+            web_error_page("Users", "/admin/users/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
+async fn web_admin_user_update(
+    Path(user_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAccountUserUpdateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Users", "/admin/users/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if admin_permission_error(&auth_context).is_some() {
+        return web_error_page(
+            "Users",
+            "/admin/users/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine Admin-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.account_store else {
+        return web_store_missing("Users", "/admin/users/", &context, "Account").into_response();
+    };
+    let role = form
+        .role
+        .as_ref()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let roles = role.as_ref().map(|role| vec![role.clone()]);
+    let payload = account_store::AccountUserWriteRequest {
+        username: Some(form.username),
+        password: form.password,
+        first_name: form.first_name,
+        last_name: form.last_name,
+        email: form.email,
+        role,
+        roles,
+        job_title: form.job_title,
+        is_staff: Some(form.is_staff.is_some()),
+        is_superuser: Some(form.is_superuser.is_some()),
+        is_active: Some(form.is_active.is_some()),
+    };
+    match store
+        .update_user(
+            auth_context.tenant_id,
+            user_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => Redirect::to("/admin/users/").into_response(),
+        Ok(None) => web_error_page(
+            "Users",
+            "/admin/users/",
+            &context,
+            "Account-User wurde nicht gefunden.",
+        )
+        .into_response(),
         Err(err) => {
             web_error_page("Users", "/admin/users/", &context, &err.to_string()).into_response()
         }
@@ -3971,6 +4092,7 @@ fn web_page(
     .hero.compact {{ padding:16px 0 24px; }}
     h1 {{ margin:0 0 8px; font-size:40px; line-height:1.1; }}
     h2 {{ margin:0 0 10px; font-size:20px; }}
+    h3 {{ margin:0; font-size:17px; }}
     p {{ margin:0 0 8px; color:var(--muted); }}
     .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:14px; }}
     .metrics {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:16px; }}
@@ -3989,6 +4111,11 @@ fn web_page(
     input, select {{ width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; background:#fff; }}
     input[type="checkbox"] {{ width:auto; }}
     .checkbox-row {{ display:flex; align-items:center; gap:8px; }}
+    .form-grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px; }}
+    .editor-stack {{ display:grid; gap:16px; }}
+    .user-editor {{ padding:14px 0; border-top:1px solid var(--line); }}
+    .user-editor:first-child {{ padding-top:0; border-top:0; }}
+    .toggle-row {{ display:flex; flex-wrap:wrap; gap:12px; }}
     button {{ justify-self:start; border:0; border-radius:6px; background:var(--accent); color:#fff; padding:10px 14px; font-weight:700; cursor:pointer; }}
     @media (max-width: 720px) {{ header {{ align-items:flex-start; flex-direction:column; }} h1 {{ font-size:32px; }} .context {{ justify-content:flex-start; }} }}
   </style>
@@ -4032,6 +4159,34 @@ fn yes_no(value: bool) -> &'static str {
     } else {
         "Nein"
     }
+}
+
+fn checked_attr(value: bool) -> &'static str {
+    if value {
+        " checked"
+    } else {
+        ""
+    }
+}
+
+fn role_options_for(roles: &[account_store::AccountRole], selected_code: &str) -> String {
+    roles
+        .iter()
+        .map(|role| {
+            let selected = if role.code.eq_ignore_ascii_case(selected_code) {
+                " selected"
+            } else {
+                ""
+            };
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                html_escape(&role.code),
+                selected,
+                html_escape(&role.label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn web_link_card(title: &str, href: &str, subtitle: &str) -> String {
@@ -4469,6 +4624,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/admin/users/",
             get(web_admin_users).post(web_admin_users_submit),
         )
+        .route("/admin/users/{user_id}", post(web_admin_user_update))
         .route("/product-security/", get(web_product_security))
         .route("/cves/", get(web_cves))
         .route("/api/v1/nvd/normalize", post(nvd_normalize))
