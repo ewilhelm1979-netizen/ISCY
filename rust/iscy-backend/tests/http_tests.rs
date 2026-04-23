@@ -2528,6 +2528,106 @@ async fn import_center_job_replaces_tenant_assets() {
 }
 
 #[tokio::test]
+async fn import_center_csv_job_applies_business_units_from_csv() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/csv")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{
+                        "import_type":"business_units",
+                        "replace_existing":false,
+                        "csv_data":"name\nSecurity Operations\n\"Cloud, Platform\"\n"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["headers"][0], "name");
+    assert_eq!(payload["result"]["row_count"], 2);
+    assert_eq!(payload["result"]["created"], 1);
+    assert_eq!(payload["result"]["updated"], 1);
+
+    let business_unit_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(business_unit_count, 3);
+}
+
+#[tokio::test]
+async fn rust_web_imports_applies_csv_import_from_form() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/imports/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "import_type=business_units&replace_existing=1&csv_data=name%0ACloud%20Security%0AGovernance%0A",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Import uebernommen"));
+    assert!(html.contains("business_units"));
+
+    let tenant_business_units: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(tenant_business_units, 2);
+    let foreign_business_units: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 99")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(foreign_business_units, 1);
+}
+
+#[tokio::test]
 async fn assessment_applicability_requires_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(

@@ -11,6 +11,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 
 pub mod account_store;
 pub mod assessment_store;
@@ -356,6 +357,13 @@ struct WebAccountUserUpdateForm {
     is_superuser: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebImportCsvForm {
+    import_type: String,
+    replace_existing: Option<String>,
+    csv_data: String,
+}
+
 fn deserialize_optional_form_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -490,6 +498,9 @@ struct WebContext {
     user_email: Option<String>,
 }
 
+type ImportCsvRows = Vec<HashMap<String, Value>>;
+type ParsedImportCsv = (Vec<String>, ImportCsvRows);
+
 #[derive(Debug, Serialize)]
 pub struct EvidenceOverviewResponse {
     pub api_version: &'static str,
@@ -512,6 +523,22 @@ pub struct EvidenceNeedSyncResponse {
 pub struct ImportJobResponse {
     pub accepted: bool,
     pub api_version: &'static str,
+    pub result: import_store::ImportJobResult,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportCsvRequest {
+    pub import_type: String,
+    #[serde(default)]
+    pub replace_existing: bool,
+    pub csv_data: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportCsvResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub headers: Vec<String>,
     pub result: import_store::ImportJobResult,
 }
 
@@ -2612,6 +2639,98 @@ async fn import_center_job(
     }
 }
 
+async fn import_center_csv_job(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ImportCsvRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.import_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Import-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    let (headers, rows) = match parse_import_csv(&payload.csv_data) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_import_csv",
+                    message,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let job = import_store::ImportJobRequest {
+        import_type: payload.import_type,
+        replace_existing: payload.replace_existing,
+        rows,
+    };
+    match store.apply_job(context.tenant_id, job).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(ImportCsvResponse {
+                accepted: true,
+                api_version: "v1",
+                headers,
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) if err.to_string().contains("Importtyp") => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_import_type",
+                message: err.to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("CSV-Import konnte nicht angewendet werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn applicability_assessments(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
@@ -3698,9 +3817,69 @@ async fn web_imports(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let context = web_context_from_request(&query, &headers, &state).await;
-    web_static_section("Imports", "/imports/", context.as_ref())
+    let display_context = web_context_from_request(&query, &headers, &state).await;
+    let auth_context = authenticated_tenant_context(&state, &headers).await.ok();
+    let Some(context) = display_context.or_else(|| {
+        auth_context.as_ref().map(|context| WebContext {
+            tenant_id: context.tenant_id,
+            user_id: context.user_id,
+            user_email: context.user_email.clone(),
+        })
+    }) else {
+        return web_missing_context("Imports", "/imports/");
+    };
+    let Some(_) = state.import_store else {
+        return web_store_missing("Imports", "/imports/", &context, "Import");
+    };
+
+    web_imports_page(&context, None)
 }
+
+async fn web_imports_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebImportCsvForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Imports", "/imports/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Imports",
+            "/imports/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.import_store else {
+        return web_store_missing("Imports", "/imports/", &context, "Import").into_response();
+    };
+    let (headers, rows) = match parse_import_csv(&form.csv_data) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            return web_error_page("Imports", "/imports/", &context, &message).into_response();
+        }
+    };
+    let job = import_store::ImportJobRequest {
+        import_type: form.import_type,
+        replace_existing: form.replace_existing.is_some(),
+        rows,
+    };
+    match store.apply_job(auth_context.tenant_id, job).await {
+        Ok(result) => web_imports_page(&context, Some((&headers, &result))).into_response(),
+        Err(err) => {
+            web_error_page("Imports", "/imports/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
 async fn web_processes(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4184,6 +4363,74 @@ fn web_store_missing(
     web_page(title, active_path, Some(context), &body)
 }
 
+fn web_imports_page(
+    context: &WebContext,
+    result: Option<(&[String], &import_store::ImportJobResult)>,
+) -> Html<String> {
+    let result_panel = result
+        .map(|(headers, result)| {
+            format!(
+                r#"
+                <article class="panel wide">
+                  <h2>Import uebernommen</h2>
+                  <table>
+                    <tbody>
+                      <tr><th>Typ</th><td>{}</td></tr>
+                      <tr><th>CSV-Spalten</th><td>{}</td></tr>
+                      <tr><th>Zeilen</th><td>{}</td></tr>
+                      <tr><th>Angelegt</th><td>{}</td></tr>
+                      <tr><th>Aktualisiert</th><td>{}</td></tr>
+                      <tr><th>Uebersprungen</th><td>{}</td></tr>
+                    </tbody>
+                  </table>
+                </article>
+                "#,
+                html_escape(&result.import_type),
+                html_escape(&headers.join(", ")),
+                result.row_count,
+                result.created,
+                result.updated,
+                result.skipped,
+            )
+        })
+        .unwrap_or_default();
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>Imports</h1><p>CSV-Import fuer Tenant {}</p></section>
+        <section class="grid">
+          {}
+          <article class="panel wide">
+            <h2>CSV einspielen</h2>
+            <form method="post" action="/imports/">
+              <div class="form-grid">
+                <label>Importtyp<select name="import_type">{}</select></label>
+                <label class="checkbox-row"><input name="replace_existing" type="checkbox" value="1"> Bestehende Tenant-Daten ersetzen</label>
+              </div>
+              <label>CSV-Inhalt<textarea name="csv_data" rows="12" spellcheck="false" required placeholder="name&#10;Security Operations&#10;Governance"></textarea></label>
+              <button type="submit">Import starten</button>
+            </form>
+          </article>
+          <article class="panel wide">
+            <h2>Unterstuetzte Typen</h2>
+            <table>
+              <thead><tr><th>Typ</th><th>Schluesselspalten</th></tr></thead>
+              <tbody>
+                <tr><td>business_units</td><td>name</td></tr>
+                <tr><td>processes</td><td>name, business_unit, status, scope, description</td></tr>
+                <tr><td>suppliers</td><td>name, service_description, criticality</td></tr>
+                <tr><td>assets</td><td>name, business_unit, asset_type, criticality, description</td></tr>
+              </tbody>
+            </table>
+          </article>
+        </section>
+        "#,
+        context.tenant_id,
+        result_panel,
+        import_type_options_for("business_units"),
+    );
+    web_page("Imports", "/imports/", Some(context), &body)
+}
+
 fn web_error_page(
     title: &'static str,
     active_path: &'static str,
@@ -4212,6 +4459,7 @@ fn web_page(
         ("/roadmap/", "Roadmap"),
         ("/reports/", "Reports"),
         ("/assets/", "Assets"),
+        ("/imports/", "Imports"),
         ("/processes/", "Processes"),
         ("/product-security/", "Product Security"),
         ("/admin/users/", "Users"),
@@ -4281,7 +4529,8 @@ fn web_page(
     td a {{ color:var(--accent); text-decoration:none; }}
     form {{ display:grid; gap:12px; }}
     label {{ display:grid; gap:6px; font-weight:600; }}
-    input, select {{ width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; background:#fff; }}
+    input, select, textarea {{ width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; background:#fff; }}
+    textarea {{ min-height:220px; resize:vertical; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }}
     input[type="checkbox"] {{ width:auto; }}
     .checkbox-row {{ display:flex; align-items:center; gap:8px; }}
     .form-grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px; }}
@@ -4326,6 +4575,132 @@ fn web_empty_row(colspan: usize, message: &str) -> String {
     )
 }
 
+fn parse_import_csv(raw: &str) -> Result<ParsedImportCsv, String> {
+    let records = parse_csv_records(raw)?;
+    if records.is_empty() {
+        return Err("CSV braucht eine Kopfzeile.".to_string());
+    }
+
+    let mut headers = Vec::new();
+    for header in &records[0] {
+        let header = header.trim().trim_start_matches('\u{feff}').to_string();
+        if header.is_empty() {
+            continue;
+        }
+        if headers
+            .iter()
+            .any(|existing: &String| existing.eq_ignore_ascii_case(&header))
+        {
+            return Err(format!("CSV-Spalte kommt mehrfach vor: {header}"));
+        }
+        headers.push(header);
+    }
+    if headers.is_empty() {
+        return Err("CSV braucht mindestens eine benannte Spalte.".to_string());
+    }
+
+    let rows = records
+        .into_iter()
+        .skip(1)
+        .map(|record| {
+            headers
+                .iter()
+                .enumerate()
+                .map(|(index, header)| {
+                    let value = record
+                        .get(index)
+                        .map(|value| value.trim().to_string())
+                        .unwrap_or_default();
+                    (header.clone(), Value::String(value))
+                })
+                .collect::<HashMap<_, _>>()
+        })
+        .collect::<Vec<_>>();
+
+    Ok((headers, rows))
+}
+
+fn parse_csv_records(raw: &str) -> Result<Vec<Vec<String>>, String> {
+    let normalized = raw.replace("\r\n", "\n").replace('\r', "\n");
+    let delimiter = detect_csv_delimiter(&normalized);
+    let mut records = Vec::new();
+    let mut record = Vec::new();
+    let mut field = String::new();
+    let mut in_quotes = false;
+    let mut saw_field_content = false;
+    let mut chars = normalized.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                if in_quotes && chars.peek() == Some(&'"') {
+                    field.push('"');
+                    chars.next();
+                } else {
+                    in_quotes = !in_quotes;
+                    saw_field_content = true;
+                }
+            }
+            value if value == delimiter && !in_quotes => {
+                record.push(std::mem::take(&mut field));
+                saw_field_content = true;
+            }
+            '\n' if !in_quotes => {
+                record.push(std::mem::take(&mut field));
+                if saw_field_content || record.iter().any(|value| !value.is_empty()) {
+                    records.push(std::mem::take(&mut record));
+                } else {
+                    record.clear();
+                }
+                saw_field_content = false;
+            }
+            value => {
+                field.push(value);
+                saw_field_content = true;
+            }
+        }
+    }
+
+    if in_quotes {
+        return Err("CSV enthaelt ein nicht geschlossenes Anfuehrungszeichen.".to_string());
+    }
+    if saw_field_content || !field.is_empty() || !record.is_empty() {
+        record.push(field);
+        records.push(record);
+    }
+
+    Ok(records)
+}
+
+fn detect_csv_delimiter(raw: &str) -> char {
+    let mut comma_count = 0;
+    let mut semicolon_count = 0;
+    let mut in_quotes = false;
+    let mut chars = raw.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                if in_quotes && chars.peek() == Some(&'"') {
+                    chars.next();
+                } else {
+                    in_quotes = !in_quotes;
+                }
+            }
+            ',' if !in_quotes => comma_count += 1,
+            ';' if !in_quotes => semicolon_count += 1,
+            '\n' if !in_quotes && comma_count + semicolon_count > 0 => break,
+            _ => {}
+        }
+    }
+
+    if semicolon_count > comma_count {
+        ';'
+    } else {
+        ','
+    }
+}
+
 fn yes_no(value: bool) -> &'static str {
     if value {
         "Ja"
@@ -4340,6 +4715,31 @@ fn checked_attr(value: bool) -> &'static str {
     } else {
         ""
     }
+}
+
+fn import_type_options_for(selected_type: &str) -> String {
+    [
+        ("business_units", "Business Units"),
+        ("processes", "Processes"),
+        ("suppliers", "Suppliers"),
+        ("assets", "Assets"),
+    ]
+    .iter()
+    .map(|(code, label)| {
+        let selected = if *code == selected_type {
+            " selected"
+        } else {
+            ""
+        };
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            html_escape(code),
+            selected,
+            html_escape(label),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
 }
 
 fn role_options_for(roles: &[account_store::AccountRole], selected_code: &str) -> String {
@@ -4807,6 +5207,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(evidence_need_sync),
         )
         .route("/api/v1/import-center/jobs", post(import_center_job))
+        .route("/api/v1/import-center/csv", post(import_center_csv_job))
         .route(
             "/api/v1/assessments/applicability",
             get(applicability_assessments),
@@ -4839,7 +5240,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/roadmap/", get(web_roadmap))
         .route("/evidence/", get(web_evidence))
         .route("/assets/", get(web_assets))
-        .route("/imports/", get(web_imports))
+        .route("/imports/", get(web_imports).post(web_imports_submit))
         .route("/processes/", get(web_processes))
         .route("/requirements/", get(web_requirements))
         .route("/risks/", get(web_risks))

@@ -83,10 +83,12 @@ rust-smoke:
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/auth/session" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/dashboard/" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/admin/users/" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/imports/" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/users" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/roles" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/groups" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/permissions" >/dev/null; \
+	curl -fsS -b "$$cookie_file" -H "content-type: application/json" -d '{"import_type":"business_units","replace_existing":false,"csv_data":"name\nRust Smoke Import"}' "$$url/api/v1/import-center/csv" >/dev/null; \
 	curl -fsS "$$url/dashboard/?tenant_id=1&user_id=1" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/catalog/domains" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/requirements" >/dev/null; \

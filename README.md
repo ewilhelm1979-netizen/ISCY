@@ -89,7 +89,7 @@ make rust-test
 make rust-run
 ```
 
-Zusätzlich stellt `rust-backend` eine Rust-Weboberflächen-Route-Map für die bisherigen Django-Mountpoints bereit (z. B. `/dashboard/`, `/reports/`, `/admin/users/`, `/cves/`) als Migrationsgrundlage.
+Zusätzlich stellt `rust-backend` Rust-Weboberflächen für zentrale bisherige Django-Mountpoints bereit (z. B. `/dashboard/`, `/reports/`, `/imports/`, `/admin/users/`, `/cves/`) als Migrationsgrundlage.
 
 ## Vordefinierte Security-Template-Pakete (im Fragenkatalog)
 
@@ -273,7 +273,7 @@ make rust-smoke
 
 `make local-test` deckt aktuell die Basis-Gesundheitschecks, mandantenbezogene Report-Views und die Product-Security-Routen ab.
 `make team-test` ist der Legacy-Django-Kompatibilitaetscheck.
-`make rust-smoke` ist der Rust-only Betriebs-Smoke mit DB-Bootstrap, Healthcheck, Rust-Session-Cookie, Dashboard ohne Query-Kontext und zentralen API-Probes.
+`make rust-smoke` ist der Rust-only Betriebs-Smoke mit DB-Bootstrap, Healthcheck, Rust-Session-Cookie, Dashboard ohne Query-Kontext, Import-Center-CSV-Probe und zentralen API-Probes.
 
 ## Support-Matrix
 
