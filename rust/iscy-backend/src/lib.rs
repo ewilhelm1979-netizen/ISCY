@@ -294,6 +294,18 @@ pub struct AccountRolesResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct AccountGroupsResponse {
+    pub api_version: &'static str,
+    pub groups: Vec<account_store::AccountGroup>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AccountPermissionsResponse {
+    pub api_version: &'static str,
+    pub permissions: Vec<account_store::AccountPermission>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct AccountUserWriteResponse {
     pub accepted: bool,
     pub api_version: &'static str,
@@ -315,6 +327,8 @@ struct WebAccountUserCreateForm {
     last_name: Option<String>,
     email: Option<String>,
     role: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_form_list")]
+    groups: Option<Vec<String>>,
     job_title: Option<String>,
     is_staff: Option<String>,
     is_superuser: Option<String>,
@@ -328,10 +342,32 @@ struct WebAccountUserUpdateForm {
     last_name: Option<String>,
     email: Option<String>,
     role: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_form_list")]
+    groups: Option<Vec<String>>,
+    groups_present: Option<String>,
     job_title: Option<String>,
     is_active: Option<String>,
     is_staff: Option<String>,
     is_superuser: Option<String>,
+}
+
+fn deserialize_optional_form_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Ok(
+        Option::<OneOrMany>::deserialize(deserializer)?.map(|value| match value {
+            OneOrMany::One(value) => vec![value],
+            OneOrMany::Many(values) => values,
+        }),
+    )
 }
 
 #[derive(Debug, Serialize)]
@@ -1214,6 +1250,102 @@ async fn account_roles(State(state): State<AppState>, headers: HeaderMap) -> Res
             .into_response(),
         Err(err) => {
             account_store_error_response(err, "Account-Rollen konnten nicht gelesen werden")
+        }
+    }
+}
+
+async fn account_groups(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.account_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Account-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_groups().await {
+        Ok(groups) => (
+            StatusCode::OK,
+            Json(AccountGroupsResponse {
+                api_version: "v1",
+                groups,
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            account_store_error_response(err, "Account-Gruppen konnten nicht gelesen werden")
+        }
+    }
+}
+
+async fn account_permissions(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.account_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Account-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_permissions().await {
+        Ok(permissions) => (
+            StatusCode::OK,
+            Json(AccountPermissionsResponse {
+                api_version: "v1",
+                permissions,
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            account_store_error_response(err, "Account-Permissions konnten nicht gelesen werden")
         }
     }
 }
@@ -3678,16 +3810,22 @@ async fn web_admin_users(
         Ok(roles) => roles,
         Err(err) => return web_error_page("Users", "/admin/users/", &context, &err.to_string()),
     };
+    let groups = match store.list_groups().await {
+        Ok(groups) => groups,
+        Err(err) => return web_error_page("Users", "/admin/users/", &context, &err.to_string()),
+    };
     let create_role_options = role_options_for(&roles, "CONTRIBUTOR");
+    let create_group_options = group_options_for(&groups, &[]);
     let rows = users
         .iter()
         .map(|user| {
             format!(
-                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                 html_escape(&user.username),
                 html_escape(&user.display_name),
                 html_escape(&user.email),
                 html_escape(&user.roles.join(", ")),
+                html_escape(&user.groups.join(", ")),
                 yes_no(user.is_active),
                 yes_no(user.is_staff),
                 yes_no(user.is_superuser),
@@ -3707,6 +3845,7 @@ async fn web_admin_users(
                 r#"
                 <form class="user-editor" method="post" action="/admin/users/{}">
                   <h3>{}</h3>
+                  <input name="groups_present" type="hidden" value="1">
                   <div class="form-grid">
                     <label>Benutzername<input name="username" type="text" autocomplete="username" required value="{}"></label>
                     <label>Neues Passwort<input name="password" type="password" autocomplete="new-password"></label>
@@ -3715,6 +3854,7 @@ async fn web_admin_users(
                     <label>E-Mail<input name="email" type="email" autocomplete="email" value="{}"></label>
                     <label>Jobtitel<input name="job_title" type="text" value="{}"></label>
                     <label>Rolle<select name="role">{}</select></label>
+                    <label>Gruppen<select name="groups" multiple size="3">{}</select></label>
                   </div>
                   <div class="toggle-row">
                     <label class="checkbox-row"><input name="is_active" type="checkbox" value="1"{}> Aktiv</label>
@@ -3732,6 +3872,7 @@ async fn web_admin_users(
                 html_escape(&user.email),
                 html_escape(&user.job_title),
                 role_options_for(&roles, selected_role),
+                group_options_for(&groups, &user.groups),
                 checked_attr(user.is_active),
                 checked_attr(user.is_staff),
                 checked_attr(user.is_superuser),
@@ -3746,7 +3887,7 @@ async fn web_admin_users(
           <article class="panel wide">
             <h2>Accounts</h2>
             <table>
-              <thead><tr><th>User</th><th>Name</th><th>E-Mail</th><th>Rollen</th><th>Aktiv</th><th>Staff</th><th>Superuser</th></tr></thead>
+              <thead><tr><th>User</th><th>Name</th><th>E-Mail</th><th>Rollen</th><th>Gruppen</th><th>Aktiv</th><th>Staff</th><th>Superuser</th></tr></thead>
               <tbody>{}</tbody>
             </table>
           </article>
@@ -3760,6 +3901,7 @@ async fn web_admin_users(
               <label>E-Mail<input name="email" type="email" autocomplete="email"></label>
               <label>Jobtitel<input name="job_title" type="text"></label>
               <label>Rolle<select name="role">{}</select></label>
+              <label>Gruppen<select name="groups" multiple size="3">{}</select></label>
               <label class="checkbox-row"><input name="is_staff" type="checkbox" value="1"> Staff</label>
               <label class="checkbox-row"><input name="is_superuser" type="checkbox" value="1"> Superuser</label>
               <button type="submit">User anlegen</button>
@@ -3774,11 +3916,12 @@ async fn web_admin_users(
         users.len(),
         context.tenant_id,
         if rows.is_empty() {
-            web_empty_row(7, "Keine Accounts vorhanden.")
+            web_empty_row(8, "Keine Accounts vorhanden.")
         } else {
             rows
         },
         create_role_options,
+        create_group_options,
         if edit_forms.is_empty() {
             "<p>Keine Accounts vorhanden.</p>".to_string()
         } else {
@@ -3828,6 +3971,7 @@ async fn web_admin_users_submit(
         email: form.email,
         role,
         roles,
+        groups: form.groups,
         job_title: form.job_title,
         is_staff: Some(form.is_staff.is_some()),
         is_superuser: Some(form.is_superuser.is_some()),
@@ -3877,6 +4021,11 @@ async fn web_admin_user_update(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let roles = role.as_ref().map(|role| vec![role.clone()]);
+    let groups = if form.groups_present.is_some() {
+        Some(form.groups.unwrap_or_default())
+    } else {
+        form.groups
+    };
     let payload = account_store::AccountUserWriteRequest {
         username: Some(form.username),
         password: form.password,
@@ -3885,6 +4034,7 @@ async fn web_admin_user_update(
         email: form.email,
         role,
         roles,
+        groups,
         job_title: form.job_title,
         is_staff: Some(form.is_staff.is_some()),
         is_superuser: Some(form.is_superuser.is_some()),
@@ -4183,6 +4333,26 @@ fn role_options_for(roles: &[account_store::AccountRole], selected_code: &str) -
                 html_escape(&role.code),
                 selected,
                 html_escape(&role.label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn group_options_for(groups: &[account_store::AccountGroup], selected_names: &[String]) -> String {
+    groups
+        .iter()
+        .map(|group| {
+            let selected = if selected_names.iter().any(|name| name == &group.name) {
+                " selected"
+            } else {
+                ""
+            };
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                html_escape(&group.name),
+                selected,
+                html_escape(&group.name),
             )
         })
         .collect::<Vec<_>>()
@@ -4542,6 +4712,8 @@ pub fn app_router_with_state(state: AppState) -> Router {
             patch(account_user_update),
         )
         .route("/api/v1/accounts/roles", get(account_roles))
+        .route("/api/v1/accounts/groups", get(account_groups))
+        .route("/api/v1/accounts/permissions", get(account_permissions))
         .route(
             "/api/v1/organizations/tenant-profile",
             get(organization_tenant_profile),

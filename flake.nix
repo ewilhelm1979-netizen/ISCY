@@ -52,8 +52,8 @@
             export RUST_BACKEND_BIND="''${RUST_BACKEND_BIND:-127.0.0.1:9000}"
             export DATABASE_URL="''${DATABASE_URL:-sqlite:///db.sqlite3}"
             export LD_LIBRARY_PATH="${runtimeLibs}:''${LD_LIBRARY_PATH:-}"
-            export CC=${pkgs.clang}/bin/clang
-            export CXX=${pkgs.clang}/bin/clang++
+            export CC=${pkgs.gcc14}/bin/gcc
+            export CXX=${pkgs.gcc14}/bin/g++
             export FORCE_CMAKE=1
             export CARGO_INCREMENTAL="''${CARGO_INCREMENTAL:-0}"
             export RUST_MIN_STACK="''${RUST_MIN_STACK:-67108864}"
@@ -99,8 +99,8 @@
           shellHook = ''
             export PIP_DISABLE_PIP_VERSION_CHECK=1
             export LD_LIBRARY_PATH="${runtimeLibs}:$LD_LIBRARY_PATH"
-            export CC=${pkgs.clang}/bin/clang
-            export CXX=${pkgs.clang}/bin/clang++
+            export CC=${pkgs.gcc14}/bin/gcc
+            export CXX=${pkgs.gcc14}/bin/g++
             export FORCE_CMAKE=1
             export CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF"
             echo "ISCY dev shell ready"

@@ -10,7 +10,7 @@ Fuer NixOS und andere lokale Linux-Setups ist der bevorzugte lokale Pfad jetzt R
 ./start.sh
 ```
 
-Danach ist die Rust-Weboberflaeche unter `http://127.0.0.1:9000/login/` erreichbar. Der Rust-Demo-Login lautet `admin / Admin123!`; die Rust-Userverwaltung fuer Anlage, Bearbeitung, Rollenwechsel und Passwortreset liegt unter `http://127.0.0.1:9000/admin/users/`.
+Danach ist die Rust-Weboberflaeche unter `http://127.0.0.1:9000/login/` erreichbar. Der Rust-Demo-Login lautet `admin / Admin123!`; die Rust-Userverwaltung fuer Anlage, Bearbeitung, Rollen-/Gruppenwechsel und Passwortreset liegt unter `http://127.0.0.1:9000/admin/users/`.
 
 Explizit ohne Wrapper:
 
@@ -54,7 +54,7 @@ Der lokale Wrapper startet denselben Rust-only-Pfad und initialisiert vorher die
 ./start.sh
 ```
 
-Login im Browser: `http://127.0.0.1:9000/login/` mit `admin / Admin123!`. Danach ist `/admin/users/` fuer User-Liste, User-Anlage, Bearbeitung, Rollenwechsel und Passwortreset ueber Rust verfuegbar.
+Login im Browser: `http://127.0.0.1:9000/login/` mit `admin / Admin123!`. Danach ist `/admin/users/` fuer User-Liste, User-Anlage, Bearbeitung, Rollen-/Gruppenwechsel und Passwortreset ueber Rust verfuegbar.
 
 ## Neu in V23.5
 

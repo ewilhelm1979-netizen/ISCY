@@ -28,6 +28,22 @@ pub struct AccountRole {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AccountGroup {
+    pub id: i64,
+    pub name: String,
+    pub permissions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountPermission {
+    pub id: i64,
+    pub codename: String,
+    pub name: String,
+    pub app_label: String,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct AccountUser {
     pub id: i64,
     pub tenant_id: Option<i64>,
@@ -38,6 +54,7 @@ pub struct AccountUser {
     pub email: String,
     pub role: String,
     pub roles: Vec<String>,
+    pub groups: Vec<String>,
     pub job_title: String,
     pub is_staff: bool,
     pub is_superuser: bool,
@@ -53,6 +70,7 @@ pub struct AccountUserWriteRequest {
     pub email: Option<String>,
     pub role: Option<String>,
     pub roles: Option<Vec<String>>,
+    pub groups: Option<Vec<String>>,
     pub job_title: Option<String>,
     pub is_staff: Option<bool>,
     pub is_superuser: Option<bool>,
@@ -138,6 +156,56 @@ impl AccountStore {
         }
     }
 
+    pub async fn list_groups(&self) -> anyhow::Result<Vec<AccountGroup>> {
+        match self {
+            Self::Postgres(pool) => {
+                let rows = sqlx::query(account_groups_postgres_sql())
+                    .fetch_all(pool)
+                    .await
+                    .context("PostgreSQL-Account-Gruppen konnten nicht gelesen werden")?;
+                rows.into_iter()
+                    .map(group_from_pg_row)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            }
+            Self::Sqlite(pool) => {
+                let rows = sqlx::query(account_groups_sqlite_sql())
+                    .fetch_all(pool)
+                    .await
+                    .context("SQLite-Account-Gruppen konnten nicht gelesen werden")?;
+                rows.into_iter()
+                    .map(group_from_sqlite_row)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            }
+        }
+    }
+
+    pub async fn list_permissions(&self) -> anyhow::Result<Vec<AccountPermission>> {
+        match self {
+            Self::Postgres(pool) => {
+                let rows = sqlx::query(account_permissions_sql())
+                    .fetch_all(pool)
+                    .await
+                    .context("PostgreSQL-Account-Permissions konnten nicht gelesen werden")?;
+                rows.into_iter()
+                    .map(permission_from_pg_row)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            }
+            Self::Sqlite(pool) => {
+                let rows = sqlx::query(account_permissions_sql())
+                    .fetch_all(pool)
+                    .await
+                    .context("SQLite-Account-Permissions konnten nicht gelesen werden")?;
+                rows.into_iter()
+                    .map(permission_from_sqlite_row)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(Into::into)
+            }
+        }
+    }
+
     pub async fn create_user(
         &self,
         tenant_id: i64,
@@ -147,6 +215,11 @@ impl AccountStore {
         let username = required_text(payload.username.as_deref(), "username")?;
         let password = required_text(payload.password.as_deref(), "password")?;
         let roles = role_codes_for_create(payload.role.as_deref(), payload.roles.as_deref());
+        let groups = payload
+            .groups
+            .as_deref()
+            .map(group_names_from_list)
+            .unwrap_or_default();
         let legacy_role = roles
             .first()
             .cloned()
@@ -163,6 +236,7 @@ impl AccountStore {
         match self {
             Self::Postgres(pool) => {
                 ensure_roles_exist_postgres(pool, &roles).await?;
+                ensure_groups_exist_postgres(pool, &groups).await?;
                 let row = sqlx::query(
                     r#"
                     INSERT INTO accounts_user (
@@ -192,12 +266,14 @@ impl AccountStore {
                 let user_id: i64 = row.try_get("id")?;
                 replace_user_roles_postgres(pool, tenant_id, user_id, granted_by_id, &roles)
                     .await?;
+                replace_user_groups_postgres(pool, user_id, &groups).await?;
                 self.user_detail(tenant_id, user_id)
                     .await?
                     .context("Erstellter Account-User wurde nicht gefunden")
             }
             Self::Sqlite(pool) => {
                 ensure_roles_exist_sqlite(pool, &roles).await?;
+                ensure_groups_exist_sqlite(pool, &groups).await?;
                 let row = sqlx::query(
                     r#"
                     INSERT INTO accounts_user (
@@ -226,6 +302,7 @@ impl AccountStore {
                 .context("SQLite-Account-User konnte nicht erstellt werden")?;
                 let user_id: i64 = row.try_get("id")?;
                 replace_user_roles_sqlite(pool, tenant_id, user_id, granted_by_id, &roles).await?;
+                replace_user_groups_sqlite(pool, user_id, &groups).await?;
                 self.user_detail(tenant_id, user_id)
                     .await?
                     .context("Erstellter Account-User wurde nicht gefunden")
@@ -253,6 +330,7 @@ impl AccountStore {
                     .as_deref()
                     .map(|role| vec![normalize_role(role)])
             });
+        let groups = payload.groups.as_deref().map(group_names_from_list);
         let legacy_role = roles
             .as_ref()
             .and_then(|roles| roles.first().cloned())
@@ -282,6 +360,9 @@ impl AccountStore {
             Self::Postgres(pool) => {
                 if let Some(roles) = roles.as_ref() {
                     ensure_roles_exist_postgres(pool, roles).await?;
+                }
+                if let Some(groups) = groups.as_ref() {
+                    ensure_groups_exist_postgres(pool, groups).await?;
                 }
                 sqlx::query(
                     r#"
@@ -318,10 +399,16 @@ impl AccountStore {
                     replace_user_roles_postgres(pool, tenant_id, user_id, granted_by_id, &roles)
                         .await?;
                 }
+                if let Some(groups) = groups {
+                    replace_user_groups_postgres(pool, user_id, &groups).await?;
+                }
             }
             Self::Sqlite(pool) => {
                 if let Some(roles) = roles.as_ref() {
                     ensure_roles_exist_sqlite(pool, roles).await?;
+                }
+                if let Some(groups) = groups.as_ref() {
+                    ensure_groups_exist_sqlite(pool, groups).await?;
                 }
                 sqlx::query(
                     r#"
@@ -357,6 +444,9 @@ impl AccountStore {
                 if let Some(roles) = roles {
                     replace_user_roles_sqlite(pool, tenant_id, user_id, granted_by_id, &roles)
                         .await?;
+                }
+                if let Some(groups) = groups {
+                    replace_user_groups_sqlite(pool, user_id, &groups).await?;
                 }
             }
         }
@@ -397,6 +487,49 @@ fn account_roles_sql() -> &'static str {
     "SELECT id, code, label, description FROM accounts_role ORDER BY code"
 }
 
+fn account_groups_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        g.id,
+        g.name,
+        COALESCE(string_agg(p.codename, ',' ORDER BY p.codename), '') AS permission_codes
+    FROM auth_group g
+    LEFT JOIN auth_group_permissions gp ON gp.group_id = g.id
+    LEFT JOIN auth_permission p ON p.id = gp.permission_id
+    GROUP BY g.id, g.name
+    ORDER BY g.name
+    "#
+}
+
+fn account_groups_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        g.id,
+        g.name,
+        COALESCE((
+            SELECT group_concat(permission_code, ',')
+            FROM (
+                SELECT DISTINCT p.codename AS permission_code
+                FROM auth_group_permissions gp
+                JOIN auth_permission p ON p.id = gp.permission_id
+                WHERE gp.group_id = g.id
+                ORDER BY p.codename
+            )
+        ), '') AS permission_codes
+    FROM auth_group g
+    ORDER BY g.name
+    "#
+}
+
+fn account_permissions_sql() -> &'static str {
+    r#"
+    SELECT p.id, p.codename, p.name, ct.app_label, ct.model
+    FROM auth_permission p
+    JOIN django_content_type ct ON ct.id = p.content_type_id
+    ORDER BY ct.app_label, ct.model, p.codename
+    "#
+}
+
 fn account_users_postgres_sql() -> &'static str {
     r#"
     SELECT
@@ -411,6 +544,15 @@ fn account_users_postgres_sql() -> &'static str {
                   AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = $1)
             ) scoped_roles
         ), '') AS role_codes,
+        COALESCE((
+            SELECT string_agg(group_name, ',' ORDER BY group_name)
+            FROM (
+                SELECT DISTINCT g.name AS group_name
+                FROM accounts_user_groups ug
+                JOIN auth_group g ON g.id = ug.group_id
+                WHERE ug.user_id = u.id
+            ) user_groups
+        ), '') AS group_names,
         u.job_title, u.is_staff, u.is_superuser, u.is_active
     FROM accounts_user u
     WHERE u.tenant_id = $1 OR (u.tenant_id IS NULL AND u.is_superuser = TRUE)
@@ -433,6 +575,16 @@ fn account_users_sqlite_sql() -> &'static str {
                 ORDER BY r.code
             )
         ), '') AS role_codes,
+        COALESCE((
+            SELECT group_concat(group_name, ',')
+            FROM (
+                SELECT DISTINCT g.name AS group_name
+                FROM accounts_user_groups ug
+                JOIN auth_group g ON g.id = ug.group_id
+                WHERE ug.user_id = u.id
+                ORDER BY g.name
+            )
+        ), '') AS group_names,
         u.job_title, u.is_staff, u.is_superuser, u.is_active
     FROM accounts_user u
     WHERE u.tenant_id = ?1 OR (u.tenant_id IS NULL AND u.is_superuser = 1)
@@ -456,6 +608,15 @@ fn account_user_detail_postgres_sql() -> &'static str {
                       AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = $1)
                 ) scoped_roles
             ), '') AS role_codes,
+            COALESCE((
+                SELECT string_agg(group_name, ',' ORDER BY group_name)
+                FROM (
+                    SELECT DISTINCT g.name AS group_name
+                    FROM accounts_user_groups ug
+                    JOIN auth_group g ON g.id = ug.group_id
+                    WHERE ug.user_id = u.id
+                ) user_groups
+            ), '') AS group_names,
             u.job_title, u.is_staff, u.is_superuser, u.is_active
         FROM accounts_user u
         WHERE u.id = $2
@@ -481,6 +642,16 @@ fn account_user_detail_sqlite_sql() -> &'static str {
                     ORDER BY r.code
                 )
             ), '') AS role_codes,
+            COALESCE((
+                SELECT group_concat(group_name, ',')
+                FROM (
+                    SELECT DISTINCT g.name AS group_name
+                    FROM accounts_user_groups ug
+                    JOIN auth_group g ON g.id = ug.group_id
+                    WHERE ug.user_id = u.id
+                    ORDER BY g.name
+                )
+            ), '') AS group_names,
             u.job_title, u.is_staff, u.is_superuser, u.is_active
         FROM accounts_user u
         WHERE u.id = ?2
@@ -514,6 +685,34 @@ async fn ensure_roles_exist_sqlite(pool: &SqlitePool, roles: &[String]) -> anyho
                 .context("SQLite-Account-Rolle konnte nicht validiert werden")?;
         if role_id.is_none() {
             bail!("Account-Feld roles enthaelt unbekannte Rolle {role}");
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_groups_exist_postgres(pool: &PgPool, groups: &[String]) -> anyhow::Result<()> {
+    for group in groups.iter().filter(|group| !group.is_empty()) {
+        let group_id: Option<i64> = sqlx::query_scalar("SELECT id FROM auth_group WHERE name = $1")
+            .bind(group)
+            .fetch_optional(pool)
+            .await
+            .context("PostgreSQL-Account-Gruppe konnte nicht validiert werden")?;
+        if group_id.is_none() {
+            bail!("Account-Feld groups enthaelt unbekannte Gruppe {group}");
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_groups_exist_sqlite(pool: &SqlitePool, groups: &[String]) -> anyhow::Result<()> {
+    for group in groups.iter().filter(|group| !group.is_empty()) {
+        let group_id: Option<i64> = sqlx::query_scalar("SELECT id FROM auth_group WHERE name = ?1")
+            .bind(group)
+            .fetch_optional(pool)
+            .await
+            .context("SQLite-Account-Gruppe konnte nicht validiert werden")?;
+        if group_id.is_none() {
+            bail!("Account-Feld groups enthaelt unbekannte Gruppe {group}");
         }
     }
     Ok(())
@@ -582,12 +781,66 @@ async fn replace_user_roles_sqlite(
     Ok(())
 }
 
+async fn replace_user_groups_postgres(
+    pool: &PgPool,
+    user_id: i64,
+    groups: &[String],
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM accounts_user_groups WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .context("PostgreSQL-Account-Gruppen konnten nicht entfernt werden")?;
+    for group in groups {
+        sqlx::query(
+            r#"
+            INSERT INTO accounts_user_groups (user_id, group_id)
+            SELECT $1, id FROM auth_group WHERE name = $2
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(user_id)
+        .bind(group)
+        .execute(pool)
+        .await
+        .context("PostgreSQL-Account-Gruppe konnte nicht zugeordnet werden")?;
+    }
+    Ok(())
+}
+
+async fn replace_user_groups_sqlite(
+    pool: &SqlitePool,
+    user_id: i64,
+    groups: &[String],
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM accounts_user_groups WHERE user_id = ?1")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .context("SQLite-Account-Gruppen konnten nicht entfernt werden")?;
+    for group in groups {
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO accounts_user_groups (user_id, group_id)
+            SELECT ?1, id FROM auth_group WHERE name = ?2
+            "#,
+        )
+        .bind(user_id)
+        .bind(group)
+        .execute(pool)
+        .await
+        .context("SQLite-Account-Gruppe konnte nicht zugeordnet werden")?;
+    }
+    Ok(())
+}
+
 fn user_from_pg_row(row: PgRow) -> Result<AccountUser, sqlx::Error> {
     let first_name: String = row.try_get("first_name")?;
     let last_name: String = row.try_get("last_name")?;
     let username: String = row.try_get("username")?;
     let role: String = row.try_get("role")?;
     let role_codes: String = row.try_get("role_codes")?;
+    let group_names: String = row.try_get("group_names")?;
     let is_superuser: bool = row.try_get("is_superuser")?;
     Ok(AccountUser {
         id: row.try_get("id")?,
@@ -598,6 +851,7 @@ fn user_from_pg_row(row: PgRow) -> Result<AccountUser, sqlx::Error> {
         last_name,
         email: row.try_get("email")?,
         roles: roles_from_codes(&role, &role_codes, is_superuser),
+        groups: names_from_csv(&group_names),
         role,
         job_title: row.try_get("job_title")?,
         is_staff: row.try_get("is_staff")?,
@@ -612,6 +866,7 @@ fn user_from_sqlite_row(row: SqliteRow) -> Result<AccountUser, sqlx::Error> {
     let username: String = row.try_get("username")?;
     let role: String = row.try_get("role")?;
     let role_codes: String = row.try_get("role_codes")?;
+    let group_names: String = row.try_get("group_names")?;
     let is_superuser: bool = row.try_get("is_superuser")?;
     Ok(AccountUser {
         id: row.try_get("id")?,
@@ -622,6 +877,7 @@ fn user_from_sqlite_row(row: SqliteRow) -> Result<AccountUser, sqlx::Error> {
         last_name,
         email: row.try_get("email")?,
         roles: roles_from_codes(&role, &role_codes, is_superuser),
+        groups: names_from_csv(&group_names),
         role,
         job_title: row.try_get("job_title")?,
         is_staff: row.try_get("is_staff")?,
@@ -645,6 +901,44 @@ fn role_from_sqlite_row(row: SqliteRow) -> Result<AccountRole, sqlx::Error> {
         code: row.try_get("code")?,
         label: row.try_get("label")?,
         description: row.try_get("description")?,
+    })
+}
+
+fn group_from_pg_row(row: PgRow) -> Result<AccountGroup, sqlx::Error> {
+    let permission_codes: String = row.try_get("permission_codes")?;
+    Ok(AccountGroup {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        permissions: names_from_csv(&permission_codes),
+    })
+}
+
+fn group_from_sqlite_row(row: SqliteRow) -> Result<AccountGroup, sqlx::Error> {
+    let permission_codes: String = row.try_get("permission_codes")?;
+    Ok(AccountGroup {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        permissions: names_from_csv(&permission_codes),
+    })
+}
+
+fn permission_from_pg_row(row: PgRow) -> Result<AccountPermission, sqlx::Error> {
+    Ok(AccountPermission {
+        id: row.try_get("id")?,
+        codename: row.try_get("codename")?,
+        name: row.try_get("name")?,
+        app_label: row.try_get("app_label")?,
+        model: row.try_get("model")?,
+    })
+}
+
+fn permission_from_sqlite_row(row: SqliteRow) -> Result<AccountPermission, sqlx::Error> {
+    Ok(AccountPermission {
+        id: row.try_get("id")?,
+        codename: row.try_get("codename")?,
+        name: row.try_get("name")?,
+        app_label: row.try_get("app_label")?,
+        model: row.try_get("model")?,
     })
 }
 
@@ -686,6 +980,24 @@ fn role_codes_from_list(roles: &[String]) -> Vec<String> {
     })
 }
 
+fn group_names_from_list(groups: &[String]) -> Vec<String> {
+    groups.iter().fold(Vec::new(), |mut normalized, group| {
+        let group = group.trim().to_string();
+        if !group.is_empty() && !normalized.iter().any(|existing| existing == &group) {
+            normalized.push(group);
+        }
+        normalized
+    })
+}
+
+fn names_from_csv(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
 fn normalize_role(role: &str) -> String {
     role.trim().to_ascii_uppercase()
 }
@@ -722,7 +1034,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_name, role_codes_for_create, role_codes_from_list};
+    use super::{display_name, group_names_from_list, role_codes_for_create, role_codes_from_list};
 
     #[test]
     fn account_roles_normalize_and_deduplicate() {
@@ -745,5 +1057,17 @@ mod tests {
     fn account_display_name_prefers_full_name() {
         assert_eq!(display_name("Ada", "Lovelace", "ada"), "Ada Lovelace");
         assert_eq!(display_name("", "", "admin"), "admin");
+    }
+
+    #[test]
+    fn account_groups_trim_and_deduplicate() {
+        assert_eq!(
+            group_names_from_list(&[
+                " Administrators ".to_string(),
+                "Administrators".to_string(),
+                "Auditors".to_string()
+            ]),
+            vec!["Administrators", "Auditors"]
+        );
     }
 }

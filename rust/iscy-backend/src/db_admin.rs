@@ -57,6 +57,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AUTH_RBAC_SCHEMA,
         postgres_sql: POSTGRES_AUTH_RBAC_SCHEMA,
     },
+    Migration {
+        version: "0006_rust_auth_group_permission_core",
+        sqlite_sql: SQLITE_AUTH_GROUP_PERMISSION_SCHEMA,
+        postgres_sql: POSTGRES_AUTH_GROUP_PERMISSION_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -132,6 +137,87 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_userrole_unique_scope
     ON accounts_userrole(user_id, role_id, COALESCE(scope_tenant_id, 0));
 CREATE INDEX IF NOT EXISTS idx_accounts_userrole_user ON accounts_userrole(user_id);
 CREATE INDEX IF NOT EXISTS idx_accounts_userrole_scope ON accounts_userrole(scope_tenant_id);
+"#;
+
+const SQLITE_AUTH_GROUP_PERMISSION_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS django_content_type (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_label varchar(100) NOT NULL,
+    model varchar(100) NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS django_content_type_app_label_model_uniq
+    ON django_content_type(app_label, model);
+CREATE TABLE IF NOT EXISTS auth_permission (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name varchar(255) NOT NULL,
+    content_type_id INTEGER NOT NULL,
+    codename varchar(100) NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS auth_permission_content_type_codename_uniq
+    ON auth_permission(content_type_id, codename);
+CREATE TABLE IF NOT EXISTS auth_group (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name varchar(150) NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS auth_group_permissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    permission_id INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS auth_group_permissions_group_permission_uniq
+    ON auth_group_permissions(group_id, permission_id);
+CREATE TABLE IF NOT EXISTS accounts_user_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    group_id INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS accounts_user_groups_user_group_uniq
+    ON accounts_user_groups(user_id, group_id);
+CREATE TABLE IF NOT EXISTS accounts_user_user_permissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    permission_id INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS accounts_user_permissions_user_permission_uniq
+    ON accounts_user_user_permissions(user_id, permission_id);
+"#;
+
+const POSTGRES_AUTH_GROUP_PERMISSION_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS django_content_type (
+    id BIGSERIAL PRIMARY KEY,
+    app_label varchar(100) NOT NULL,
+    model varchar(100) NOT NULL,
+    CONSTRAINT django_content_type_app_label_model_uniq UNIQUE (app_label, model)
+);
+CREATE TABLE IF NOT EXISTS auth_permission (
+    id BIGSERIAL PRIMARY KEY,
+    name varchar(255) NOT NULL,
+    content_type_id BIGINT NOT NULL,
+    codename varchar(100) NOT NULL,
+    CONSTRAINT auth_permission_content_type_codename_uniq UNIQUE (content_type_id, codename)
+);
+CREATE TABLE IF NOT EXISTS auth_group (
+    id BIGSERIAL PRIMARY KEY,
+    name varchar(150) NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS auth_group_permissions (
+    id BIGSERIAL PRIMARY KEY,
+    group_id BIGINT NOT NULL,
+    permission_id BIGINT NOT NULL,
+    CONSTRAINT auth_group_permissions_group_permission_uniq UNIQUE (group_id, permission_id)
+);
+CREATE TABLE IF NOT EXISTS accounts_user_groups (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    group_id BIGINT NOT NULL,
+    CONSTRAINT accounts_user_groups_user_group_uniq UNIQUE (user_id, group_id)
+);
+CREATE TABLE IF NOT EXISTS accounts_user_user_permissions (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    permission_id BIGINT NOT NULL,
+    CONSTRAINT accounts_user_permissions_user_permission_uniq UNIQUE (user_id, permission_id)
+);
 "#;
 
 pub async fn run_db_admin_action(
@@ -1667,6 +1753,43 @@ INSERT OR IGNORE INTO accounts_role (code, label, description) VALUES
     ('CONTRIBUTOR', 'Contributor', 'Operational write access');
 INSERT OR IGNORE INTO accounts_userrole (user_id, role_id, scope_tenant_id, granted_at, granted_by_id)
 SELECT 1, id, 1, '2026-04-22T10:00:00Z', NULL FROM accounts_role WHERE code = 'ADMIN';
+INSERT OR IGNORE INTO django_content_type (app_label, model) VALUES
+    ('accounts', 'user'),
+    ('accounts', 'role'),
+    ('organizations', 'tenant');
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view user', id, 'view_user' FROM django_content_type WHERE app_label = 'accounts' AND model = 'user';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can add user', id, 'add_user' FROM django_content_type WHERE app_label = 'accounts' AND model = 'user';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can change user', id, 'change_user' FROM django_content_type WHERE app_label = 'accounts' AND model = 'user';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can delete user', id, 'delete_user' FROM django_content_type WHERE app_label = 'accounts' AND model = 'user';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view role', id, 'view_role' FROM django_content_type WHERE app_label = 'accounts' AND model = 'role';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can change tenant', id, 'change_tenant' FROM django_content_type WHERE app_label = 'organizations' AND model = 'tenant';
+INSERT OR IGNORE INTO auth_group (name) VALUES
+    ('Administrators'),
+    ('Auditors'),
+    ('Contributors');
+INSERT OR IGNORE INTO auth_group_permissions (group_id, permission_id)
+SELECT g.id, p.id
+FROM auth_group g
+JOIN auth_permission p ON 1 = 1
+WHERE g.name = 'Administrators';
+INSERT OR IGNORE INTO auth_group_permissions (group_id, permission_id)
+SELECT g.id, p.id
+FROM auth_group g
+JOIN auth_permission p ON p.codename IN ('view_user', 'view_role')
+WHERE g.name = 'Auditors';
+INSERT OR IGNORE INTO auth_group_permissions (group_id, permission_id)
+SELECT g.id, p.id
+FROM auth_group g
+JOIN auth_permission p ON p.codename IN ('view_user')
+WHERE g.name = 'Contributors';
+INSERT OR IGNORE INTO accounts_user_groups (user_id, group_id)
+SELECT 1, id FROM auth_group WHERE name = 'Administrators';
 INSERT OR IGNORE INTO organizations_businessunit (
     id, tenant_id, name, owner_id, created_at, updated_at
 ) VALUES (
@@ -1923,6 +2046,55 @@ ON CONFLICT (code) DO UPDATE SET
     description = EXCLUDED.description;
 INSERT INTO accounts_userrole (user_id, role_id, scope_tenant_id, granted_at, granted_by_id)
 SELECT 1, id, 1, '2026-04-22T10:00:00Z', NULL FROM accounts_role WHERE code = 'ADMIN'
+ON CONFLICT DO NOTHING;
+INSERT INTO django_content_type (app_label, model) VALUES
+    ('accounts', 'user'),
+    ('accounts', 'role'),
+    ('organizations', 'tenant')
+ON CONFLICT (app_label, model) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view user', id, 'view_user' FROM django_content_type WHERE app_label = 'accounts' AND model = 'user'
+ON CONFLICT (content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can add user', id, 'add_user' FROM django_content_type WHERE app_label = 'accounts' AND model = 'user'
+ON CONFLICT (content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can change user', id, 'change_user' FROM django_content_type WHERE app_label = 'accounts' AND model = 'user'
+ON CONFLICT (content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can delete user', id, 'delete_user' FROM django_content_type WHERE app_label = 'accounts' AND model = 'user'
+ON CONFLICT (content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view role', id, 'view_role' FROM django_content_type WHERE app_label = 'accounts' AND model = 'role'
+ON CONFLICT (content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can change tenant', id, 'change_tenant' FROM django_content_type WHERE app_label = 'organizations' AND model = 'tenant'
+ON CONFLICT (content_type_id, codename) DO NOTHING;
+INSERT INTO auth_group (name) VALUES
+    ('Administrators'),
+    ('Auditors'),
+    ('Contributors')
+ON CONFLICT (name) DO NOTHING;
+INSERT INTO auth_group_permissions (group_id, permission_id)
+SELECT g.id, p.id
+FROM auth_group g
+JOIN auth_permission p ON TRUE
+WHERE g.name = 'Administrators'
+ON CONFLICT DO NOTHING;
+INSERT INTO auth_group_permissions (group_id, permission_id)
+SELECT g.id, p.id
+FROM auth_group g
+JOIN auth_permission p ON p.codename IN ('view_user', 'view_role')
+WHERE g.name = 'Auditors'
+ON CONFLICT DO NOTHING;
+INSERT INTO auth_group_permissions (group_id, permission_id)
+SELECT g.id, p.id
+FROM auth_group g
+JOIN auth_permission p ON p.codename IN ('view_user')
+WHERE g.name = 'Contributors'
+ON CONFLICT DO NOTHING;
+INSERT INTO accounts_user_groups (user_id, group_id)
+SELECT 1, id FROM auth_group WHERE name = 'Administrators'
 ON CONFLICT DO NOTHING;
 INSERT INTO organizations_businessunit (
     id, tenant_id, name, owner_id, created_at, updated_at

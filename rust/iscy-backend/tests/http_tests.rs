@@ -365,6 +365,7 @@ async fn account_users_return_seeded_admin_from_database() {
     assert_eq!(payload["tenant_id"], 1);
     assert_eq!(payload["users"][0]["username"], "admin");
     assert_eq!(payload["users"][0]["roles"][0], "ADMIN");
+    assert_eq!(payload["users"][0]["groups"][0], "Administrators");
 }
 
 #[tokio::test]
@@ -401,6 +402,7 @@ async fn account_user_create_persists_user_role_and_login() {
                         "last_name":"Audit",
                         "role":"AUDITOR",
                         "roles":["AUDITOR"],
+                        "groups":["Auditors"],
                         "is_active":true
                     }"#,
                 ))
@@ -420,6 +422,7 @@ async fn account_user_create_persists_user_role_and_login() {
     assert_eq!(payload["accepted"], true);
     assert_eq!(payload["user"]["username"], "auditor");
     assert_eq!(payload["user"]["roles"][0], "AUDITOR");
+    assert_eq!(payload["user"]["groups"][0], "Auditors");
     let auditor_id = payload["user"]["id"].as_i64().unwrap();
 
     let response = app
@@ -463,6 +466,7 @@ async fn account_user_create_persists_user_role_and_login() {
                         "job_title":"Audit Owner",
                         "role":"CONTRIBUTOR",
                         "roles":["CONTRIBUTOR"],
+                        "groups":["Contributors"],
                         "is_active":true,
                         "is_staff":true
                     }"#,
@@ -476,6 +480,7 @@ async fn account_user_create_persists_user_role_and_login() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["user"]["roles"][0], "CONTRIBUTOR");
+    assert_eq!(payload["user"]["groups"][0], "Contributors");
     assert_eq!(payload["user"]["last_name"], "Reviewer");
     assert_eq!(payload["user"]["email"], "");
     assert_eq!(payload["user"]["job_title"], "Audit Owner");
@@ -499,6 +504,74 @@ async fn account_user_create_persists_user_role_and_login() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["user"]["roles"][0], "CONTRIBUTOR");
+}
+
+#[tokio::test]
+async fn account_groups_and_permissions_return_seeded_django_auth_data() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_account_store(Some(AccountStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/accounts/groups")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let groups = payload["groups"].as_array().unwrap();
+    let admin_group = groups
+        .iter()
+        .find(|group| group["name"] == "Administrators")
+        .unwrap();
+    assert!(admin_group["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|permission| permission == "change_user"));
+    assert!(groups.iter().any(|group| group["name"] == "Auditors"));
+    assert!(groups.iter().any(|group| group["name"] == "Contributors"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/accounts/permissions")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|permission| permission["codename"] == "view_user"
+            && permission["app_label"] == "accounts"
+            && permission["model"] == "user"));
 }
 
 #[tokio::test]
@@ -534,6 +607,8 @@ async fn web_admin_users_renders_and_updates_user_edit_forms() {
     assert!(html.contains("User bearbeiten"));
     assert!(html.contains(r#"action="/admin/users/1""#));
     assert!(html.contains("Aenderungen speichern"));
+    assert!(html.contains("Gruppen"));
+    assert!(html.contains("Administrators"));
 
     let response = app
         .clone()
@@ -546,7 +621,7 @@ async fn web_admin_users_renders_and_updates_user_edit_forms() {
                 .header("x-iscy-user-id", "1")
                 .header("x-iscy-roles", "ADMIN")
                 .body(Body::from(
-                    "username=admin&first_name=Demo&last_name=Lead&email=lead%40example.com&job_title=Lead&role=ADMIN&is_active=1&is_staff=1",
+                    "username=admin&first_name=Demo&last_name=Lead&email=lead%40example.com&job_title=Lead&role=ADMIN&groups_present=1&groups=Auditors&is_active=1&is_staff=1",
                 ))
                 .unwrap(),
         )
@@ -574,6 +649,7 @@ async fn web_admin_users_renders_and_updates_user_edit_forms() {
     assert_eq!(payload["users"][0]["last_name"], "Lead");
     assert_eq!(payload["users"][0]["email"], "lead@example.com");
     assert_eq!(payload["users"][0]["job_title"], "Lead");
+    assert_eq!(payload["users"][0]["groups"][0], "Auditors");
 }
 
 #[tokio::test]
@@ -3510,7 +3586,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0002_rust_product_security_core",
             "0003_rust_catalog_requirement_core",
             "0004_rust_auth_session_core",
-            "0005_rust_auth_rbac_core"
+            "0005_rust_auth_rbac_core",
+            "0006_rust_auth_group_permission_core"
         ]
     );
     assert!(
@@ -3531,6 +3608,23 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     assert!(db_admin::sqlite_table_exists(&pool, "accounts_role")
         .await
         .unwrap());
+    assert!(db_admin::sqlite_table_exists(&pool, "django_content_type")
+        .await
+        .unwrap());
+    assert!(db_admin::sqlite_table_exists(&pool, "auth_permission")
+        .await
+        .unwrap());
+    assert!(db_admin::sqlite_table_exists(&pool, "auth_group")
+        .await
+        .unwrap());
+    assert!(db_admin::sqlite_table_exists(&pool, "accounts_user_groups")
+        .await
+        .unwrap());
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "accounts_user_user_permissions")
+            .await
+            .unwrap()
+    );
     assert!(
         db_admin::sqlite_table_exists(&pool, "catalog_assessmentquestion")
             .await
