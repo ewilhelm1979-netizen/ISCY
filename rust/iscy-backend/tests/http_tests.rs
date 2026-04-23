@@ -403,6 +403,7 @@ async fn account_user_create_persists_user_role_and_login() {
                         "role":"AUDITOR",
                         "roles":["AUDITOR"],
                         "groups":["Auditors"],
+                        "permissions":["view_user"],
                         "is_active":true
                     }"#,
                 ))
@@ -423,6 +424,7 @@ async fn account_user_create_persists_user_role_and_login() {
     assert_eq!(payload["user"]["username"], "auditor");
     assert_eq!(payload["user"]["roles"][0], "AUDITOR");
     assert_eq!(payload["user"]["groups"][0], "Auditors");
+    assert_eq!(payload["user"]["permissions"][0], "view_user");
     let auditor_id = payload["user"]["id"].as_i64().unwrap();
 
     let response = app
@@ -467,6 +469,7 @@ async fn account_user_create_persists_user_role_and_login() {
                         "role":"CONTRIBUTOR",
                         "roles":["CONTRIBUTOR"],
                         "groups":["Contributors"],
+                        "permissions":["change_user"],
                         "is_active":true,
                         "is_staff":true
                     }"#,
@@ -481,6 +484,7 @@ async fn account_user_create_persists_user_role_and_login() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["user"]["roles"][0], "CONTRIBUTOR");
     assert_eq!(payload["user"]["groups"][0], "Contributors");
+    assert_eq!(payload["user"]["permissions"][0], "change_user");
     assert_eq!(payload["user"]["last_name"], "Reviewer");
     assert_eq!(payload["user"]["email"], "");
     assert_eq!(payload["user"]["job_title"], "Audit Owner");
@@ -608,6 +612,7 @@ async fn web_admin_users_renders_and_updates_user_edit_forms() {
     assert!(html.contains(r#"action="/admin/users/1""#));
     assert!(html.contains("Aenderungen speichern"));
     assert!(html.contains("Gruppen"));
+    assert!(html.contains("Direktrechte"));
     assert!(html.contains("Administrators"));
 
     let response = app
@@ -621,7 +626,7 @@ async fn web_admin_users_renders_and_updates_user_edit_forms() {
                 .header("x-iscy-user-id", "1")
                 .header("x-iscy-roles", "ADMIN")
                 .body(Body::from(
-                    "username=admin&first_name=Demo&last_name=Lead&email=lead%40example.com&job_title=Lead&role=ADMIN&groups_present=1&groups=Auditors&is_active=1&is_staff=1",
+                    "username=admin&first_name=Demo&last_name=Lead&email=lead%40example.com&job_title=Lead&role=ADMIN&groups_present=1&groups=Auditors&permissions_present=1&permissions=change_user&is_active=1&is_staff=1",
                 ))
                 .unwrap(),
         )
@@ -650,6 +655,7 @@ async fn web_admin_users_renders_and_updates_user_edit_forms() {
     assert_eq!(payload["users"][0]["email"], "lead@example.com");
     assert_eq!(payload["users"][0]["job_title"], "Lead");
     assert_eq!(payload["users"][0]["groups"][0], "Auditors");
+    assert_eq!(payload["users"][0]["permissions"][0], "change_user");
 }
 
 #[tokio::test]

@@ -329,6 +329,8 @@ struct WebAccountUserCreateForm {
     role: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_form_list")]
     groups: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_optional_form_list")]
+    permissions: Option<Vec<String>>,
     job_title: Option<String>,
     is_staff: Option<String>,
     is_superuser: Option<String>,
@@ -345,6 +347,9 @@ struct WebAccountUserUpdateForm {
     #[serde(default, deserialize_with = "deserialize_optional_form_list")]
     groups: Option<Vec<String>>,
     groups_present: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_form_list")]
+    permissions: Option<Vec<String>>,
+    permissions_present: Option<String>,
     job_title: Option<String>,
     is_active: Option<String>,
     is_staff: Option<String>,
@@ -3814,18 +3819,24 @@ async fn web_admin_users(
         Ok(groups) => groups,
         Err(err) => return web_error_page("Users", "/admin/users/", &context, &err.to_string()),
     };
+    let permissions = match store.list_permissions().await {
+        Ok(permissions) => permissions,
+        Err(err) => return web_error_page("Users", "/admin/users/", &context, &err.to_string()),
+    };
     let create_role_options = role_options_for(&roles, "CONTRIBUTOR");
     let create_group_options = group_options_for(&groups, &[]);
+    let create_permission_options = permission_options_for(&permissions, &[]);
     let rows = users
         .iter()
         .map(|user| {
             format!(
-                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                 html_escape(&user.username),
                 html_escape(&user.display_name),
                 html_escape(&user.email),
                 html_escape(&user.roles.join(", ")),
                 html_escape(&user.groups.join(", ")),
+                html_escape(&user.permissions.join(", ")),
                 yes_no(user.is_active),
                 yes_no(user.is_staff),
                 yes_no(user.is_superuser),
@@ -3846,6 +3857,7 @@ async fn web_admin_users(
                 <form class="user-editor" method="post" action="/admin/users/{}">
                   <h3>{}</h3>
                   <input name="groups_present" type="hidden" value="1">
+                  <input name="permissions_present" type="hidden" value="1">
                   <div class="form-grid">
                     <label>Benutzername<input name="username" type="text" autocomplete="username" required value="{}"></label>
                     <label>Neues Passwort<input name="password" type="password" autocomplete="new-password"></label>
@@ -3855,6 +3867,7 @@ async fn web_admin_users(
                     <label>Jobtitel<input name="job_title" type="text" value="{}"></label>
                     <label>Rolle<select name="role">{}</select></label>
                     <label>Gruppen<select name="groups" multiple size="3">{}</select></label>
+                    <label>Direktrechte<select name="permissions" multiple size="5">{}</select></label>
                   </div>
                   <div class="toggle-row">
                     <label class="checkbox-row"><input name="is_active" type="checkbox" value="1"{}> Aktiv</label>
@@ -3873,6 +3886,7 @@ async fn web_admin_users(
                 html_escape(&user.job_title),
                 role_options_for(&roles, selected_role),
                 group_options_for(&groups, &user.groups),
+                permission_options_for(&permissions, &user.permissions),
                 checked_attr(user.is_active),
                 checked_attr(user.is_staff),
                 checked_attr(user.is_superuser),
@@ -3887,7 +3901,7 @@ async fn web_admin_users(
           <article class="panel wide">
             <h2>Accounts</h2>
             <table>
-              <thead><tr><th>User</th><th>Name</th><th>E-Mail</th><th>Rollen</th><th>Gruppen</th><th>Aktiv</th><th>Staff</th><th>Superuser</th></tr></thead>
+              <thead><tr><th>User</th><th>Name</th><th>E-Mail</th><th>Rollen</th><th>Gruppen</th><th>Direktrechte</th><th>Aktiv</th><th>Staff</th><th>Superuser</th></tr></thead>
               <tbody>{}</tbody>
             </table>
           </article>
@@ -3902,6 +3916,7 @@ async fn web_admin_users(
               <label>Jobtitel<input name="job_title" type="text"></label>
               <label>Rolle<select name="role">{}</select></label>
               <label>Gruppen<select name="groups" multiple size="3">{}</select></label>
+              <label>Direktrechte<select name="permissions" multiple size="5">{}</select></label>
               <label class="checkbox-row"><input name="is_staff" type="checkbox" value="1"> Staff</label>
               <label class="checkbox-row"><input name="is_superuser" type="checkbox" value="1"> Superuser</label>
               <button type="submit">User anlegen</button>
@@ -3916,12 +3931,13 @@ async fn web_admin_users(
         users.len(),
         context.tenant_id,
         if rows.is_empty() {
-            web_empty_row(8, "Keine Accounts vorhanden.")
+            web_empty_row(9, "Keine Accounts vorhanden.")
         } else {
             rows
         },
         create_role_options,
         create_group_options,
+        create_permission_options,
         if edit_forms.is_empty() {
             "<p>Keine Accounts vorhanden.</p>".to_string()
         } else {
@@ -3972,6 +3988,7 @@ async fn web_admin_users_submit(
         role,
         roles,
         groups: form.groups,
+        permissions: form.permissions,
         job_title: form.job_title,
         is_staff: Some(form.is_staff.is_some()),
         is_superuser: Some(form.is_superuser.is_some()),
@@ -4026,6 +4043,11 @@ async fn web_admin_user_update(
     } else {
         form.groups
     };
+    let permissions = if form.permissions_present.is_some() {
+        Some(form.permissions.unwrap_or_default())
+    } else {
+        form.permissions
+    };
     let payload = account_store::AccountUserWriteRequest {
         username: Some(form.username),
         password: form.password,
@@ -4035,6 +4057,7 @@ async fn web_admin_user_update(
         role,
         roles,
         groups,
+        permissions,
         job_title: form.job_title,
         is_staff: Some(form.is_staff.is_some()),
         is_superuser: Some(form.is_superuser.is_some()),
@@ -4353,6 +4376,36 @@ fn group_options_for(groups: &[account_store::AccountGroup], selected_names: &[S
                 html_escape(&group.name),
                 selected,
                 html_escape(&group.name),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn permission_options_for(
+    permissions: &[account_store::AccountPermission],
+    selected_codes: &[String],
+) -> String {
+    permissions
+        .iter()
+        .map(|permission| {
+            let selected = if selected_codes
+                .iter()
+                .any(|code| code == &permission.codename)
+            {
+                " selected"
+            } else {
+                ""
+            };
+            let label = format!(
+                "{}.{}: {}",
+                permission.app_label, permission.model, permission.codename
+            );
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                html_escape(&permission.codename),
+                selected,
+                html_escape(&label),
             )
         })
         .collect::<Vec<_>>()

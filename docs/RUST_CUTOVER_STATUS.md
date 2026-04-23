@@ -40,7 +40,7 @@ Der lokale Wrapper initialisiert die Rust-Datenbank und startet den Rust-Axum-Se
 ./start.sh
 ```
 
-Rust-Demo-Login im Browser: `http://127.0.0.1:9000/login/` mit `admin / Admin123!`. Die Rust-Userverwaltung liegt danach unter `http://127.0.0.1:9000/admin/users/` und erlaubt User-Anlage, User-Bearbeitung, Rollen-/Gruppenwechsel und Passwortreset.
+Rust-Demo-Login im Browser: `http://127.0.0.1:9000/login/` mit `admin / Admin123!`. Die Rust-Userverwaltung liegt danach unter `http://127.0.0.1:9000/admin/users/` und erlaubt User-Anlage, User-Bearbeitung, Rollen-/Gruppen-/Direktrechtewechsel und Passwortreset.
 
 Der alte Django-Runserver ist damit nicht mehr der lokale Standardpfad.
 
@@ -55,7 +55,7 @@ Der alte Django-Runserver ist damit nicht mehr der lokale Standardpfad.
 - Rust-DB-Admin-CLI mit `migrate`, `seed-demo` und `init-demo` fuer Rust-eigenen SQLite/PostgreSQL-Bootstrap der operativen Kern-Tabellen inklusive Product-Security sowie vollstaendigem Katalog-/Requirement-Seed.
 - Rust-Session-Schicht mit `iscy_auth_session`, `/api/v1/auth/sessions`, `/api/v1/auth/session`, Logout, Cookie/Bearer-Aufloesung, Django-kompatibler `pbkdf2_sha256`-Passwortpruefung und Web-Kontext ohne Query-Parameter.
 - Rust-RBAC-Grundlage mit `accounts_role`, `accounts_userrole`, Session-Rollencodes, Header-Rollen-Fallback und Schreibschutz fuer migrierte Write-Endpunkte.
-- Rust-Account-Administration mit `/api/v1/accounts/users`, `/api/v1/accounts/users/{user_id}`, `/api/v1/accounts/roles`, `/api/v1/accounts/groups`, `/api/v1/accounts/permissions` sowie Webroute `/admin/users/` fuer User-Liste, User-Anlage, User-Bearbeitung, Passwort-Hashing/-Reset, tenant-scoped Rollenzuweisung und Django-kompatible Gruppenzuweisung.
+- Rust-Account-Administration mit `/api/v1/accounts/users`, `/api/v1/accounts/users/{user_id}`, `/api/v1/accounts/roles`, `/api/v1/accounts/groups`, `/api/v1/accounts/permissions` sowie Webroute `/admin/users/` fuer User-Liste, User-Anlage, User-Bearbeitung, Passwort-Hashing/-Reset, tenant-scoped Rollenzuweisung, Django-kompatible Gruppenzuweisung und direkte User-Permissions.
 - Rust-first CI mit Rust-Tests, Rust-DB-/HTTP-Smoke und Nix-Rust-App-Smoke.
 - `start.sh` startet lokal Rust-only statt Django-runserver.
 - Roadmap Liste, Detail, Kanban, Task-Updates und Exportdaten.
@@ -67,7 +67,7 @@ Der alte Django-Runserver ist damit nicht mehr der lokale Standardpfad.
 ## Blocker vor Python-Loeschung
 
 1. **Weboberflaeche:** Rust liefert fuer `/dashboard/`, `/risks/`, `/evidence/`, `/reports/`, `/roadmap/`, `/assets/` und `/processes/` bereits echte serverseitige Seiten. Die restlichen Views, Detail-/Form-Flows und Exporte liegen noch in Django-Templates und Django-Views.
-2. **Auth, Sessions und Admin:** Rust-Sessions, Passwort-Login, Rollen-/Schreibrechte sowie Account-Administration fuer User/Rollen-/Gruppenwechsel sind vorhanden. Die Django-kompatiblen Tabellen fuer Gruppen, Permissions und User-Zuordnung sind gebootstrapped; vollstaendige Django-Admin-Paritaet ist noch nicht komplett ersetzt.
+2. **Auth, Sessions und Admin:** Rust-Sessions, Passwort-Login, Rollen-/Schreibrechte sowie Account-Administration fuer User/Rollen-/Gruppen-/Direktrechtewechsel sind vorhanden. Die Django-kompatiblen Tabellen fuer Gruppen, Permissions und User-Zuordnung sind gebootstrapped; vollstaendige Django-Admin-Paritaet ist noch nicht komplett ersetzt.
 3. **Migrations und Seeds:** Ein Rust-eigener Bootstrap fuer operative Kern-Tabellen inklusive Product-Security, Catalog und Requirements ist vorhanden. Einzelne historische Django-Schema-Details ausserhalb dieser Cutover-Slices sind noch nicht vollstaendig abgeloest.
 4. **Formulare und Uploads:** Validierung, Form-Flows, Evidence-Dateiuploads sowie CSV/XLSX-Import-Mapping sind noch teilweise Django-orchestriert.
 5. **Python-Dateien im Repo:** CI und lokaler Start sind Rust-first. Python/Django-Dateien bleiben noch als Legacy-Kompatibilitaet und muessen nach Abschluss von Auth/Web/Form-Flows gezielt entfernt werden.

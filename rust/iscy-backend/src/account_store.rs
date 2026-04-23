@@ -55,6 +55,7 @@ pub struct AccountUser {
     pub role: String,
     pub roles: Vec<String>,
     pub groups: Vec<String>,
+    pub permissions: Vec<String>,
     pub job_title: String,
     pub is_staff: bool,
     pub is_superuser: bool,
@@ -71,6 +72,7 @@ pub struct AccountUserWriteRequest {
     pub role: Option<String>,
     pub roles: Option<Vec<String>>,
     pub groups: Option<Vec<String>>,
+    pub permissions: Option<Vec<String>>,
     pub job_title: Option<String>,
     pub is_staff: Option<bool>,
     pub is_superuser: Option<bool>,
@@ -220,6 +222,11 @@ impl AccountStore {
             .as_deref()
             .map(group_names_from_list)
             .unwrap_or_default();
+        let permissions = payload
+            .permissions
+            .as_deref()
+            .map(permission_codes_from_list)
+            .unwrap_or_default();
         let legacy_role = roles
             .first()
             .cloned()
@@ -237,6 +244,7 @@ impl AccountStore {
             Self::Postgres(pool) => {
                 ensure_roles_exist_postgres(pool, &roles).await?;
                 ensure_groups_exist_postgres(pool, &groups).await?;
+                ensure_permissions_exist_postgres(pool, &permissions).await?;
                 let row = sqlx::query(
                     r#"
                     INSERT INTO accounts_user (
@@ -267,6 +275,7 @@ impl AccountStore {
                 replace_user_roles_postgres(pool, tenant_id, user_id, granted_by_id, &roles)
                     .await?;
                 replace_user_groups_postgres(pool, user_id, &groups).await?;
+                replace_user_permissions_postgres(pool, user_id, &permissions).await?;
                 self.user_detail(tenant_id, user_id)
                     .await?
                     .context("Erstellter Account-User wurde nicht gefunden")
@@ -274,6 +283,7 @@ impl AccountStore {
             Self::Sqlite(pool) => {
                 ensure_roles_exist_sqlite(pool, &roles).await?;
                 ensure_groups_exist_sqlite(pool, &groups).await?;
+                ensure_permissions_exist_sqlite(pool, &permissions).await?;
                 let row = sqlx::query(
                     r#"
                     INSERT INTO accounts_user (
@@ -303,6 +313,7 @@ impl AccountStore {
                 let user_id: i64 = row.try_get("id")?;
                 replace_user_roles_sqlite(pool, tenant_id, user_id, granted_by_id, &roles).await?;
                 replace_user_groups_sqlite(pool, user_id, &groups).await?;
+                replace_user_permissions_sqlite(pool, user_id, &permissions).await?;
                 self.user_detail(tenant_id, user_id)
                     .await?
                     .context("Erstellter Account-User wurde nicht gefunden")
@@ -331,6 +342,10 @@ impl AccountStore {
                     .map(|role| vec![normalize_role(role)])
             });
         let groups = payload.groups.as_deref().map(group_names_from_list);
+        let permissions = payload
+            .permissions
+            .as_deref()
+            .map(permission_codes_from_list);
         let legacy_role = roles
             .as_ref()
             .and_then(|roles| roles.first().cloned())
@@ -363,6 +378,9 @@ impl AccountStore {
                 }
                 if let Some(groups) = groups.as_ref() {
                     ensure_groups_exist_postgres(pool, groups).await?;
+                }
+                if let Some(permissions) = permissions.as_ref() {
+                    ensure_permissions_exist_postgres(pool, permissions).await?;
                 }
                 sqlx::query(
                     r#"
@@ -402,6 +420,9 @@ impl AccountStore {
                 if let Some(groups) = groups {
                     replace_user_groups_postgres(pool, user_id, &groups).await?;
                 }
+                if let Some(permissions) = permissions {
+                    replace_user_permissions_postgres(pool, user_id, &permissions).await?;
+                }
             }
             Self::Sqlite(pool) => {
                 if let Some(roles) = roles.as_ref() {
@@ -409,6 +430,9 @@ impl AccountStore {
                 }
                 if let Some(groups) = groups.as_ref() {
                     ensure_groups_exist_sqlite(pool, groups).await?;
+                }
+                if let Some(permissions) = permissions.as_ref() {
+                    ensure_permissions_exist_sqlite(pool, permissions).await?;
                 }
                 sqlx::query(
                     r#"
@@ -447,6 +471,9 @@ impl AccountStore {
                 }
                 if let Some(groups) = groups {
                     replace_user_groups_sqlite(pool, user_id, &groups).await?;
+                }
+                if let Some(permissions) = permissions {
+                    replace_user_permissions_sqlite(pool, user_id, &permissions).await?;
                 }
             }
         }
@@ -553,6 +580,15 @@ fn account_users_postgres_sql() -> &'static str {
                 WHERE ug.user_id = u.id
             ) user_groups
         ), '') AS group_names,
+        COALESCE((
+            SELECT string_agg(permission_code, ',' ORDER BY permission_code)
+            FROM (
+                SELECT DISTINCT p.codename AS permission_code
+                FROM accounts_user_user_permissions up
+                JOIN auth_permission p ON p.id = up.permission_id
+                WHERE up.user_id = u.id
+            ) user_permissions
+        ), '') AS permission_codes,
         u.job_title, u.is_staff, u.is_superuser, u.is_active
     FROM accounts_user u
     WHERE u.tenant_id = $1 OR (u.tenant_id IS NULL AND u.is_superuser = TRUE)
@@ -585,6 +621,16 @@ fn account_users_sqlite_sql() -> &'static str {
                 ORDER BY g.name
             )
         ), '') AS group_names,
+        COALESCE((
+            SELECT group_concat(permission_code, ',')
+            FROM (
+                SELECT DISTINCT p.codename AS permission_code
+                FROM accounts_user_user_permissions up
+                JOIN auth_permission p ON p.id = up.permission_id
+                WHERE up.user_id = u.id
+                ORDER BY p.codename
+            )
+        ), '') AS permission_codes,
         u.job_title, u.is_staff, u.is_superuser, u.is_active
     FROM accounts_user u
     WHERE u.tenant_id = ?1 OR (u.tenant_id IS NULL AND u.is_superuser = 1)
@@ -617,6 +663,15 @@ fn account_user_detail_postgres_sql() -> &'static str {
                     WHERE ug.user_id = u.id
                 ) user_groups
             ), '') AS group_names,
+            COALESCE((
+                SELECT string_agg(permission_code, ',' ORDER BY permission_code)
+                FROM (
+                    SELECT DISTINCT p.codename AS permission_code
+                    FROM accounts_user_user_permissions up
+                    JOIN auth_permission p ON p.id = up.permission_id
+                    WHERE up.user_id = u.id
+                ) user_permissions
+            ), '') AS permission_codes,
             u.job_title, u.is_staff, u.is_superuser, u.is_active
         FROM accounts_user u
         WHERE u.id = $2
@@ -652,6 +707,16 @@ fn account_user_detail_sqlite_sql() -> &'static str {
                     ORDER BY g.name
                 )
             ), '') AS group_names,
+            COALESCE((
+                SELECT group_concat(permission_code, ',')
+                FROM (
+                    SELECT DISTINCT p.codename AS permission_code
+                    FROM accounts_user_user_permissions up
+                    JOIN auth_permission p ON p.id = up.permission_id
+                    WHERE up.user_id = u.id
+                    ORDER BY p.codename
+                )
+            ), '') AS permission_codes,
             u.job_title, u.is_staff, u.is_superuser, u.is_active
         FROM accounts_user u
         WHERE u.id = ?2
@@ -713,6 +778,48 @@ async fn ensure_groups_exist_sqlite(pool: &SqlitePool, groups: &[String]) -> any
             .context("SQLite-Account-Gruppe konnte nicht validiert werden")?;
         if group_id.is_none() {
             bail!("Account-Feld groups enthaelt unbekannte Gruppe {group}");
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_permissions_exist_postgres(
+    pool: &PgPool,
+    permissions: &[String],
+) -> anyhow::Result<()> {
+    for permission in permissions
+        .iter()
+        .filter(|permission| !permission.is_empty())
+    {
+        let permission_id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM auth_permission WHERE codename = $1")
+                .bind(permission)
+                .fetch_optional(pool)
+                .await
+                .context("PostgreSQL-Account-Permission konnte nicht validiert werden")?;
+        if permission_id.is_none() {
+            bail!("Account-Feld permissions enthaelt unbekannte Permission {permission}");
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_permissions_exist_sqlite(
+    pool: &SqlitePool,
+    permissions: &[String],
+) -> anyhow::Result<()> {
+    for permission in permissions
+        .iter()
+        .filter(|permission| !permission.is_empty())
+    {
+        let permission_id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM auth_permission WHERE codename = ?1")
+                .bind(permission)
+                .fetch_optional(pool)
+                .await
+                .context("SQLite-Account-Permission konnte nicht validiert werden")?;
+        if permission_id.is_none() {
+            bail!("Account-Feld permissions enthaelt unbekannte Permission {permission}");
         }
     }
     Ok(())
@@ -834,6 +941,59 @@ async fn replace_user_groups_sqlite(
     Ok(())
 }
 
+async fn replace_user_permissions_postgres(
+    pool: &PgPool,
+    user_id: i64,
+    permissions: &[String],
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM accounts_user_user_permissions WHERE user_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .context("PostgreSQL-Account-Permissions konnten nicht entfernt werden")?;
+    for permission in permissions {
+        sqlx::query(
+            r#"
+            INSERT INTO accounts_user_user_permissions (user_id, permission_id)
+            SELECT $1, id FROM auth_permission WHERE codename = $2
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(user_id)
+        .bind(permission)
+        .execute(pool)
+        .await
+        .context("PostgreSQL-Account-Permission konnte nicht zugeordnet werden")?;
+    }
+    Ok(())
+}
+
+async fn replace_user_permissions_sqlite(
+    pool: &SqlitePool,
+    user_id: i64,
+    permissions: &[String],
+) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM accounts_user_user_permissions WHERE user_id = ?1")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .context("SQLite-Account-Permissions konnten nicht entfernt werden")?;
+    for permission in permissions {
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO accounts_user_user_permissions (user_id, permission_id)
+            SELECT ?1, id FROM auth_permission WHERE codename = ?2
+            "#,
+        )
+        .bind(user_id)
+        .bind(permission)
+        .execute(pool)
+        .await
+        .context("SQLite-Account-Permission konnte nicht zugeordnet werden")?;
+    }
+    Ok(())
+}
+
 fn user_from_pg_row(row: PgRow) -> Result<AccountUser, sqlx::Error> {
     let first_name: String = row.try_get("first_name")?;
     let last_name: String = row.try_get("last_name")?;
@@ -841,6 +1001,7 @@ fn user_from_pg_row(row: PgRow) -> Result<AccountUser, sqlx::Error> {
     let role: String = row.try_get("role")?;
     let role_codes: String = row.try_get("role_codes")?;
     let group_names: String = row.try_get("group_names")?;
+    let permission_codes: String = row.try_get("permission_codes")?;
     let is_superuser: bool = row.try_get("is_superuser")?;
     Ok(AccountUser {
         id: row.try_get("id")?,
@@ -852,6 +1013,7 @@ fn user_from_pg_row(row: PgRow) -> Result<AccountUser, sqlx::Error> {
         email: row.try_get("email")?,
         roles: roles_from_codes(&role, &role_codes, is_superuser),
         groups: names_from_csv(&group_names),
+        permissions: names_from_csv(&permission_codes),
         role,
         job_title: row.try_get("job_title")?,
         is_staff: row.try_get("is_staff")?,
@@ -867,6 +1029,7 @@ fn user_from_sqlite_row(row: SqliteRow) -> Result<AccountUser, sqlx::Error> {
     let role: String = row.try_get("role")?;
     let role_codes: String = row.try_get("role_codes")?;
     let group_names: String = row.try_get("group_names")?;
+    let permission_codes: String = row.try_get("permission_codes")?;
     let is_superuser: bool = row.try_get("is_superuser")?;
     Ok(AccountUser {
         id: row.try_get("id")?,
@@ -878,6 +1041,7 @@ fn user_from_sqlite_row(row: SqliteRow) -> Result<AccountUser, sqlx::Error> {
         email: row.try_get("email")?,
         roles: roles_from_codes(&role, &role_codes, is_superuser),
         groups: names_from_csv(&group_names),
+        permissions: names_from_csv(&permission_codes),
         role,
         job_title: row.try_get("job_title")?,
         is_staff: row.try_get("is_staff")?,
@@ -990,6 +1154,19 @@ fn group_names_from_list(groups: &[String]) -> Vec<String> {
     })
 }
 
+fn permission_codes_from_list(permissions: &[String]) -> Vec<String> {
+    permissions
+        .iter()
+        .fold(Vec::new(), |mut normalized, permission| {
+            let permission = permission.trim().to_string();
+            if !permission.is_empty() && !normalized.iter().any(|existing| existing == &permission)
+            {
+                normalized.push(permission);
+            }
+            normalized
+        })
+}
+
 fn names_from_csv(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
@@ -1034,7 +1211,10 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_name, group_names_from_list, role_codes_for_create, role_codes_from_list};
+    use super::{
+        display_name, group_names_from_list, permission_codes_from_list, role_codes_for_create,
+        role_codes_from_list,
+    };
 
     #[test]
     fn account_roles_normalize_and_deduplicate() {
@@ -1068,6 +1248,18 @@ mod tests {
                 "Auditors".to_string()
             ]),
             vec!["Administrators", "Auditors"]
+        );
+    }
+
+    #[test]
+    fn account_permissions_trim_and_deduplicate() {
+        assert_eq!(
+            permission_codes_from_list(&[
+                " view_user ".to_string(),
+                "view_user".to_string(),
+                "change_user".to_string()
+            ]),
+            vec!["view_user", "change_user"]
         );
     }
 }
