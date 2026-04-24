@@ -4366,6 +4366,362 @@ async fn rust_web_cve_llm_test_renders_stub_output() {
 }
 
 #[tokio::test]
+async fn cve_assessment_create_api_persists_rust_links_and_defaults() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cve-assessments")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "cve_id":"cve-2026-1001",
+                        "product_id":100,
+                        "release_id":200,
+                        "component_id":250,
+                        "exposure":"INTERNET",
+                        "asset_criticality":"CRITICAL",
+                        "repository_name":"sensor-gateway",
+                        "source_package":"gateway-firmware",
+                        "source_package_version":"1.0.3",
+                        "regulatory_tags":["CRA"],
+                        "business_context":"Gateway is reachable from partner network",
+                        "existing_controls":"Emergency WAF rule",
+                        "auto_create_risk":true,
+                        "run_llm":true
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let expected_risk_title = format!("CVE-2026-1001 {} Sensor Gateway", '\u{2013}');
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["created"], true);
+    assert_eq!(payload["assessment"]["cve_id"], "CVE-2026-1001");
+    assert_eq!(payload["assessment"]["product_name"], "Sensor Gateway");
+    assert_eq!(payload["assessment"]["in_kev_catalog"], true);
+    assert_eq!(payload["assessment"]["nis2_relevant"], true);
+    assert_eq!(payload["assessment"]["exploit_maturity"], "ACTIVE");
+    assert_eq!(payload["assessment"]["deterministic_priority"], "CRITICAL");
+    assert_eq!(payload["assessment"]["llm_status"], "GENERATED");
+    assert_eq!(
+        payload["assessment"]["related_risk_title"]
+            .as_str()
+            .unwrap(),
+        expected_risk_title
+    );
+    assert_eq!(
+        payload["assessment"]["linked_vulnerability_title"],
+        "CVE-2026-1001"
+    );
+    assert!(payload["assessment"]["technical_summary"]
+        .as_str()
+        .unwrap()
+        .contains("CVE-2026-1001"));
+
+    let assessment_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM vulnerability_intelligence_cveassessment WHERE tenant_id = 42",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let risk_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM risks_risk WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let vulnerability_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_vulnerability WHERE tenant_id = 42 AND cve = 'CVE-2026-1001' AND product_id = 100",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(assessment_count, 1);
+    assert_eq!(risk_count, 1);
+    assert_eq!(vulnerability_count, 1);
+}
+
+#[tokio::test]
+async fn cve_assessment_create_api_updates_existing_natural_key() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cve-assessments")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "cve_id":"CVE-2026-1002",
+                        "product_id":100,
+                        "release_id":200,
+                        "component_id":250,
+                        "exposure":"CUSTOMER",
+                        "asset_criticality":"HIGH",
+                        "business_context":"Initial rollout context",
+                        "auto_create_risk":true,
+                        "run_llm":true
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let first_body = to_bytes(first.into_body(), usize::MAX).await.unwrap();
+    let first_payload: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    let first_id = first_payload["assessment"]["id"].as_i64().unwrap();
+    let first_risk_id = first_payload["assessment"]["related_risk_id"]
+        .as_i64()
+        .unwrap();
+    let first_summary = first_payload["assessment"]["technical_summary"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cve-assessments")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "cve_id":"CVE-2026-1002",
+                        "product_id":100,
+                        "release_id":200,
+                        "component_id":250,
+                        "exposure":"INTERNAL",
+                        "asset_criticality":"MEDIUM",
+                        "business_context":"Updated rollout context",
+                        "auto_create_risk":false,
+                        "run_llm":false
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    let second_payload: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    assert_eq!(second_payload["created"], false);
+    assert_eq!(second_payload["assessment"]["id"], first_id);
+    assert_eq!(second_payload["assessment"]["llm_status"], "DISABLED");
+    assert_eq!(
+        second_payload["assessment"]["business_context"],
+        "Updated rollout context"
+    );
+    assert_eq!(
+        second_payload["assessment"]["related_risk_id"],
+        first_risk_id
+    );
+    assert_eq!(
+        second_payload["assessment"]["technical_summary"]
+            .as_str()
+            .unwrap(),
+        first_summary
+    );
+
+    let assessment_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM vulnerability_intelligence_cveassessment WHERE tenant_id = 42",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(assessment_count, 1);
+}
+
+#[tokio::test]
+async fn cve_assessment_create_api_rejects_read_only_role() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cve-assessments")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"cve_id":"CVE-2026-1001"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "insufficient_role");
+}
+
+#[tokio::test]
+async fn cve_assessment_create_api_returns_not_found_for_missing_cve() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cve-assessments")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"cve_id":"CVE-2026-9999","product_id":100}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "cve_not_found");
+}
+
+#[tokio::test]
+async fn rust_web_cve_submit_creates_assessment_and_redirects_to_detail() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/cves/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "cve_id=CVE-2026-1002&product_id=100&release_id=200&component_id=250&exposure=CUSTOMER&asset_criticality=HIGH&auto_create_risk=on&run_llm=on",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(location.contains("/cves/assessments/"));
+    assert!(location.contains("tenant_id=42"));
+
+    let detail = app
+        .oneshot(
+            Request::builder()
+                .uri(location)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("CVE-2026-1002"));
+    assert!(html.contains("Technische Zusammenfassung"));
+    assert!(html.contains("Sensor Gateway"));
+}
+
+#[tokio::test]
 async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -5797,6 +6153,7 @@ async fn create_product_security_tables(pool: &SqlitePool) {
         CREATE TABLE organizations_tenant (
             id INTEGER PRIMARY KEY,
             sector varchar(64) NOT NULL,
+            nis2_relevant bool NOT NULL,
             develops_digital_products bool NOT NULL,
             uses_ai_systems bool NOT NULL,
             ot_iacs_scope bool NOT NULL,
@@ -6110,11 +6467,11 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
     sqlx::query(
         r#"
         INSERT INTO organizations_tenant (
-            id, sector, develops_digital_products, uses_ai_systems, ot_iacs_scope, automotive_scope
+            id, sector, nis2_relevant, develops_digital_products, uses_ai_systems, ot_iacs_scope, automotive_scope
         )
         VALUES
-            (42, 'MANUFACTURING', 1, 1, 0, 0),
-            (99, 'OTHER', 1, 0, 0, 0)
+            (42, 'MANUFACTURING', 1, 1, 1, 0, 0),
+            (99, 'OTHER', 0, 1, 0, 0, 0)
         "#,
     )
     .execute(pool)

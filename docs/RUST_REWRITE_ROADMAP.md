@@ -119,11 +119,12 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/cves` liefert Kennzahlen und die aktuelle CVE-Liste aus `vulnerability_intelligence_cverecord`
   - `GET /api/v1/cves/{cve_id}` liefert Schwachstellen-Detaildaten inklusive Weaknesses, Referenzen, KEV-Flags und Raw-JSON
   - `GET /api/v1/cve-assessments` liefert tenantgebundene CVE-Assessments inklusive Summary, Prioritaet, Produkt- und Risiko-Bezug
+  - `POST /api/v1/cve-assessments` legt tenantgebundene CVE-Assessments in Rust an oder aktualisiert sie per Natural-Key-Upsert, zieht Defaultwerte aus CVE/Tenant, berechnet Prioritaet/Faelligkeit, haengt den lokalen LLM-Stub an und verknuepft bei Bedarf automatisch Produkt-Security-Vulnerability und Risiko
   - `GET /api/v1/cve-assessments/{assessment_id}` liefert den tenantgebundenen Assessment-Detailbaum inklusive LLM-Ergebnis, empfohlenen Massnahmen und benoetigten Evidenzen
-  - `/cves/` rendert CVE-Feed plus letzte tenantgebundene Assessments direkt aus dem Rust-Store
+  - `/cves/` rendert CVE-Feed plus letzte tenantgebundene Assessments direkt aus dem Rust-Store und bietet den neuen Rust-Webflow fuer Assessment-Anlage/-Update
   - `/cves/assessments/{assessment_id}` rendert die Assessment-Detailansicht direkt aus dem Rust-Store
   - `/cves/llm-test/` prueft die lokale Rust-LLM-Runtime direkt ueber die Web-Shell
-  - die tenantgebundenen CVE-Assessment-Create-/Risk-Enrichment-Flows bleiben vorerst noch in Django
+  - offen bleiben im CVE-Bereich vor allem Restparitaet fuer NVD-Sync-/Edge-Flows und das anschliessende Django-Abraumen
 
 ## App-Migrationsreihenfolge
 

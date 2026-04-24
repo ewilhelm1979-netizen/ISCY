@@ -386,6 +386,32 @@ struct WebCveLlmTestForm {
     prompt: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebCveAssessmentForm {
+    cve_id: String,
+    product_id: Option<String>,
+    release_id: Option<String>,
+    component_id: Option<String>,
+    exposure: Option<String>,
+    asset_criticality: Option<String>,
+    epss_score: Option<String>,
+    in_kev_catalog: Option<String>,
+    exploit_maturity: Option<String>,
+    affects_critical_service: Option<String>,
+    nis2_relevant: Option<String>,
+    nis2_impact_summary: Option<String>,
+    repository_name: Option<String>,
+    repository_url: Option<String>,
+    git_ref: Option<String>,
+    source_package: Option<String>,
+    source_package_version: Option<String>,
+    regulatory_tags: Option<String>,
+    business_context: Option<String>,
+    existing_controls: Option<String>,
+    auto_create_risk: Option<String>,
+    run_llm: Option<String>,
+}
+
 fn deserialize_optional_form_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -505,6 +531,14 @@ pub struct CveAssessmentRegisterResponse {
 #[derive(Debug, Serialize)]
 pub struct CveAssessmentDetailResponse {
     pub api_version: &'static str,
+    pub assessment: cve_store::CveAssessmentDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CveAssessmentWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub created: bool,
     pub assessment: cve_store::CveAssessmentDetail,
 }
 
@@ -5472,14 +5506,217 @@ async fn web_product_security(
         ),
     }
 }
+fn selected_attr(selected: bool) -> &'static str {
+    if selected {
+        " selected"
+    } else {
+        ""
+    }
+}
+
+fn web_cve_assessment_form_request(
+    form: WebCveAssessmentForm,
+) -> Result<cve_store::CveAssessmentWriteRequest, String> {
+    Ok(cve_store::CveAssessmentWriteRequest {
+        cve_id: form.cve_id,
+        product_id: optional_form_i64(form.product_id, "Produkt")?,
+        release_id: optional_form_i64(form.release_id, "Release")?,
+        component_id: optional_form_i64(form.component_id, "Komponente")?,
+        exposure: form.exposure,
+        asset_criticality: form.asset_criticality,
+        epss_score: optional_form_f64(form.epss_score, "EPSS-Score")?,
+        in_kev_catalog: Some(form.in_kev_catalog.is_some()),
+        exploit_maturity: form.exploit_maturity,
+        affects_critical_service: form.affects_critical_service.is_some(),
+        nis2_relevant: Some(form.nis2_relevant.is_some()),
+        nis2_impact_summary: form.nis2_impact_summary,
+        repository_name: form.repository_name,
+        repository_url: form.repository_url,
+        git_ref: form.git_ref,
+        source_package: form.source_package,
+        source_package_version: form.source_package_version,
+        regulatory_tags: comma_separated_form_list(form.regulatory_tags),
+        business_context: form.business_context,
+        existing_controls: form.existing_controls,
+        auto_create_risk: form.auto_create_risk.is_some(),
+        run_llm: form.run_llm.is_some(),
+    })
+}
+
+fn web_cve_assessment_form_panel(
+    context: &WebContext,
+    options: Option<&cve_store::CveAssessmentFormOptions>,
+    can_write: bool,
+) -> String {
+    if !can_write {
+        return r#"
+        <article class="panel wide">
+          <h2>Neue Analyse</h2>
+          <p>Fuer neue CVE-Assessments ist eine schreibende ISCY-Rolle notwendig.</p>
+        </article>
+        "#
+        .to_string();
+    }
+    let Some(options) = options else {
+        return r#"
+        <article class="panel wide">
+          <h2>Neue Analyse</h2>
+          <p>Produkt- und Releaseoptionen konnten noch nicht geladen werden.</p>
+        </article>
+        "#
+        .to_string();
+    };
+
+    let product_options = options
+        .products
+        .iter()
+        .map(|product| {
+            format!(
+                r#"<option value="{}">{}</option>"#,
+                product.id,
+                html_escape(&product.name),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let release_options = options
+        .releases
+        .iter()
+        .map(|release| {
+            format!(
+                r#"<option value="{}">{}</option>"#,
+                release.id,
+                html_escape(&release.label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let component_options = options
+        .components
+        .iter()
+        .map(|component| {
+            format!(
+                r#"<option value="{}">{}</option>"#,
+                component.id,
+                html_escape(&component.label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    format!(
+        r#"
+        <article class="panel wide">
+          <h2>Neue Analyse</h2>
+          <form method="post" action="{}">
+            <div class="grid two">
+              <label>CVE-ID<input type="text" name="cve_id" placeholder="CVE-2026-1234" required></label>
+              <label>Produkt
+                <select name="product_id">
+                  <option value="">Kein Produkt</option>
+                  {}
+                </select>
+              </label>
+              <label>Release
+                <select name="release_id">
+                  <option value="">Kein Release</option>
+                  {}
+                </select>
+              </label>
+              <label>Komponente
+                <select name="component_id">
+                  <option value="">Keine Komponente</option>
+                  {}
+                </select>
+              </label>
+              <label>Exponierung
+                <select name="exposure">
+                  <option value="UNKNOWN"{}>Unklar</option>
+                  <option value="INTERNAL"{}>Nur intern</option>
+                  <option value="CUSTOMER"{}>Beim Kunden</option>
+                  <option value="INTERNET"{}>Internet-exponiert</option>
+                </select>
+              </label>
+              <label>Kritikalitaet
+                <select name="asset_criticality">
+                  <option value="LOW"{}>Niedrig</option>
+                  <option value="MEDIUM"{}>Mittel</option>
+                  <option value="HIGH"{}>Hoch</option>
+                  <option value="CRITICAL"{}>Kritisch</option>
+                </select>
+              </label>
+              <label>EPSS-Score<input type="text" name="epss_score" placeholder="0.9130"></label>
+              <label>Exploit-Reife
+                <select name="exploit_maturity">
+                  <option value="UNKNOWN"{}>Unbekannt</option>
+                  <option value="UNPROVEN"{}>Kein Exploit bekannt</option>
+                  <option value="POC"{}>Proof of Concept</option>
+                  <option value="ACTIVE"{}>Aktive Ausnutzung</option>
+                  <option value="AUTOMATED"{}>Automatisiert</option>
+                </select>
+              </label>
+              <label>Repository<input type="text" name="repository_name" placeholder="sensor-gateway"></label>
+              <label>Repository-URL<input type="text" name="repository_url" placeholder="https://git.example/iscy"></label>
+              <label>Git-Ref<input type="text" name="git_ref" placeholder="main"></label>
+              <label>Source Package<input type="text" name="source_package" placeholder="gateway-firmware"></label>
+              <label>Package-Version<input type="text" name="source_package_version" placeholder="1.0.3"></label>
+              <label>Regulatorische Tags<input type="text" name="regulatory_tags" placeholder="NIS2, CRA"></label>
+            </div>
+            <label>NIS2-Impact<textarea name="nis2_impact_summary" rows="3"></textarea></label>
+            <label>Business Context<textarea name="business_context" rows="4"></textarea></label>
+            <label>Bestehende Kontrollen<textarea name="existing_controls" rows="4"></textarea></label>
+            <div class="toolbar">
+              <label><input type="checkbox" name="in_kev_catalog"> KEV</label>
+              <label><input type="checkbox" name="affects_critical_service"> Kritischer Service betroffen</label>
+              <label><input type="checkbox" name="nis2_relevant"> NIS2-relevant</label>
+              <label><input type="checkbox" name="auto_create_risk"{}> Risiko automatisch anlegen</label>
+              <label><input type="checkbox" name="run_llm"{}> LLM-Stub anwenden</label>
+              <button type="submit">Analyse speichern</button>
+            </div>
+          </form>
+        </article>
+        "#,
+        web_path_with_context("/cves/", Some(context)),
+        product_options,
+        release_options,
+        component_options,
+        selected_attr(true),
+        selected_attr(false),
+        selected_attr(false),
+        selected_attr(false),
+        selected_attr(false),
+        selected_attr(true),
+        selected_attr(false),
+        selected_attr(false),
+        selected_attr(true),
+        selected_attr(false),
+        selected_attr(false),
+        selected_attr(false),
+        selected_attr(false),
+        checked_attr(true),
+        checked_attr(true),
+    )
+}
+
 async fn web_cves(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+    let display_context = web_context_from_request(&query, &headers, &state).await;
+    let auth_context = authenticated_tenant_context(&state, &headers).await.ok();
+    let Some(context) = display_context.or_else(|| {
+        auth_context.as_ref().map(|context| WebContext {
+            tenant_id: context.tenant_id,
+            user_id: context.user_id,
+            user_email: context.user_email.clone(),
+        })
+    }) else {
         return web_missing_context("Vulnerability Intelligence", "/cves/");
     };
+    let can_write = auth_context
+        .as_ref()
+        .is_some_and(|context| context.can_write());
     let Some(store) = state.cve_store else {
         return web_store_missing("Vulnerability Intelligence", "/cves/", &context, "CVE");
     };
@@ -5526,6 +5763,21 @@ async fn web_cves(
                 &err.to_string(),
             )
         }
+    };
+    let form_options = if can_write {
+        match store.assessment_form_options(context.tenant_id).await {
+            Ok(options) => Some(options),
+            Err(err) => {
+                return web_error_page(
+                    "Vulnerability Intelligence",
+                    "/cves/",
+                    &context,
+                    &err.to_string(),
+                )
+            }
+        }
+    } else {
+        None
     };
     let rows = cves
         .iter()
@@ -5593,6 +5845,7 @@ async fn web_cves(
           {}
           {}
           {}
+          {}
           <article class="panel wide">
             <h2>Letzte Assessments</h2>
             <table>
@@ -5641,6 +5894,7 @@ async fn web_cves(
             &web_path_with_context("/product-security/", Some(&context)),
             "Verknuepfte Produkt- und Vulnerability-Perspektive",
         ),
+        web_cve_assessment_form_panel(&context, form_options.as_ref(), can_write),
         if assessment_rows.is_empty() {
             web_empty_row(7, "Noch keine tenantgebundenen CVE-Assessments vorhanden.")
         } else {
@@ -5658,6 +5912,61 @@ async fn web_cves(
         Some(&context),
         &body,
     )
+}
+
+async fn web_cves_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebCveAssessmentForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Vulnerability Intelligence", "/cves/").into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Vulnerability Intelligence",
+            "/cves/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.cve_store else {
+        return web_store_missing("Vulnerability Intelligence", "/cves/", &context, "CVE")
+            .into_response();
+    };
+    let request = match web_cve_assessment_form_request(form) {
+        Ok(request) => request,
+        Err(message) => {
+            return web_error_page("Vulnerability Intelligence", "/cves/", &context, &message)
+                .into_response()
+        }
+    };
+    match store
+        .upsert_assessment(auth_context.tenant_id, request)
+        .await
+    {
+        Ok(result) => Redirect::to(&web_path_with_context(
+            &format!("/cves/assessments/{}", result.assessment.summary.id),
+            Some(&context),
+        ))
+        .into_response(),
+        Err(err) => web_error_page(
+            "Vulnerability Intelligence",
+            "/cves/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
 }
 
 fn web_cve_llm_test_page(
@@ -7025,6 +7334,45 @@ fn form_bool_field(fields: &HashMap<String, String>, name: &str) -> bool {
         })
 }
 
+fn optional_form_i64(value: Option<String>, field_label: &str) -> Result<Option<i64>, String> {
+    let Some(value) = value.map(|item| item.trim().to_string()) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let parsed = value
+        .parse::<i64>()
+        .map_err(|_| format!("{field_label} muss eine ganze Zahl sein."))?;
+    if parsed <= 0 {
+        return Err(format!("{field_label} muss groesser als 0 sein."));
+    }
+    Ok(Some(parsed))
+}
+
+fn optional_form_f64(value: Option<String>, field_label: &str) -> Result<Option<f64>, String> {
+    let Some(value) = value.map(|item| item.trim().to_string()) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value
+        .parse::<f64>()
+        .map(Some)
+        .map_err(|_| format!("{field_label} muss eine Zahl sein."))
+}
+
+fn comma_separated_form_list(value: Option<String>) -> Vec<String> {
+    value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
 fn evidence_media_root(state: &AppState) -> PathBuf {
     state
         .evidence_media_root
@@ -7604,6 +7952,121 @@ async fn cve_assessment_register(State(state): State<AppState>, headers: HeaderM
         .into_response()
 }
 
+fn cve_assessment_write_error_response(err: anyhow::Error) -> Response {
+    let raw_message = err.to_string();
+    let (status, error_code, message) =
+        if let Some(message) = raw_message.strip_prefix("validation:") {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_assessment_input",
+                message.trim().to_string(),
+            )
+        } else if let Some(message) = raw_message.strip_prefix("not_found:cve:") {
+            (
+                StatusCode::NOT_FOUND,
+                "cve_not_found",
+                message.trim().to_string(),
+            )
+        } else if let Some(message) = raw_message.strip_prefix("not_found:product:") {
+            (
+                StatusCode::NOT_FOUND,
+                "product_not_found",
+                message.trim().to_string(),
+            )
+        } else if let Some(message) = raw_message.strip_prefix("not_found:release:") {
+            (
+                StatusCode::NOT_FOUND,
+                "release_not_found",
+                message.trim().to_string(),
+            )
+        } else if let Some(message) = raw_message.strip_prefix("not_found:component:") {
+            (
+                StatusCode::NOT_FOUND,
+                "component_not_found",
+                message.trim().to_string(),
+            )
+        } else if let Some(message) = raw_message.strip_prefix("database_error:") {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                message.trim().to_string(),
+            )
+        } else {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                format!("CVE-Assessment konnte nicht gespeichert werden: {raw_message}"),
+            )
+        };
+
+    (
+        status,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message,
+        }),
+    )
+        .into_response()
+}
+
+async fn cve_assessment_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<cve_store::CveAssessmentWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.cve_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-CVE-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.upsert_assessment(context.tenant_id, payload).await {
+        Ok(result) => (
+            if result.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(CveAssessmentWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                created: result.created,
+                assessment: result.assessment,
+            }),
+        )
+            .into_response(),
+        Err(err) => cve_assessment_write_error_response(err),
+    }
+}
+
 async fn cve_assessment_detail(
     Path(assessment_id): Path<i64>,
     State(state): State<AppState>,
@@ -8100,7 +8563,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/cves", get(cve_feed))
         .route("/api/v1/cves/{cve_id}", get(cve_detail))
-        .route("/api/v1/cve-assessments", get(cve_assessment_register))
+        .route(
+            "/api/v1/cve-assessments",
+            get(cve_assessment_register).post(cve_assessment_create),
+        )
         .route(
             "/api/v1/cve-assessments/{assessment_id}",
             get(cve_assessment_detail),
@@ -8128,7 +8594,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/admin/users/{user_id}", post(web_admin_user_update))
         .route("/product-security/", get(web_product_security))
-        .route("/cves/", get(web_cves))
+        .route("/cves/", get(web_cves).post(web_cves_submit))
         .route(
             "/cves/llm-test/",
             get(web_cve_llm_test).post(web_cve_llm_test_submit),
