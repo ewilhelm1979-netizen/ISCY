@@ -4271,7 +4271,13 @@ async fn rust_web_cves_renders_feed_from_database() {
         .await
         .unwrap();
     create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
     insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    insert_risk_fixture(&pool).await;
+    insert_cveassessment_fixture(&pool).await;
     let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
         pool.clone(),
     ))));
@@ -4290,10 +4296,73 @@ async fn rust_web_cves_renders_feed_from_database() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Vulnerability Intelligence"));
+    assert!(html.contains("Letzte Assessments"));
     assert!(html.contains("CVE-2026-1001"));
     assert!(html.contains("Kritisch"));
+    assert!(html.contains("Sensor Gateway"));
     assert!(html.contains("Rust auth bypass vulnerability"));
     assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_cve_assessment_detail_renders_database_row() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    insert_risk_fixture(&pool).await;
+    insert_cveassessment_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/cves/assessments/1?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("CVE-2026-1001"));
+    assert!(html.contains("Technische Zusammenfassung"));
+    assert!(html.contains("Patch immediately"));
+    assert!(html.contains("Apply vendor patch"));
+    assert!(html.contains("Benoetigte Evidenzen"));
+}
+
+#[tokio::test]
+async fn rust_web_cve_llm_test_renders_stub_output() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/cves/llm-test/?tenant_id=42&user_id=7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("prompt=hello%20rust"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("LLM-Runtime-Test"));
+    assert!(html.contains("Testausgabe"));
+    assert!(html.contains("Rust-LLM Stub analysed prompt excerpt: hello rust"));
 }
 
 #[tokio::test]
@@ -4638,6 +4707,98 @@ async fn cve_detail_returns_record_from_database() {
         payload["cve"]["references"][0],
         "https://example.test/CVE-2026-1001"
     );
+}
+
+#[tokio::test]
+async fn cve_assessment_register_returns_tenant_rows_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    insert_risk_fixture(&pool).await;
+    insert_cveassessment_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cve-assessments")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["summary"]["total"], 2);
+    assert_eq!(payload["summary"]["critical"], 1);
+    assert_eq!(payload["summary"]["with_risk"], 1);
+    assert_eq!(payload["summary"]["llm_generated"], 1);
+    assert_eq!(payload["assessments"][0]["cve_id"], "CVE-2026-1001");
+    assert_eq!(payload["assessments"][0]["product_name"], "Sensor Gateway");
+    assert_eq!(payload["assessments"][0]["llm_status_label"], "Generiert");
+}
+
+#[tokio::test]
+async fn cve_assessment_detail_returns_tenant_row_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    insert_risk_fixture(&pool).await;
+    insert_cveassessment_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cve-assessments/1")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["assessment"]["cve_id"], "CVE-2026-1001");
+    assert_eq!(payload["assessment"]["deterministic_priority"], "CRITICAL");
+    assert_eq!(
+        payload["assessment"]["technical_summary"],
+        "Patch immediately"
+    );
+    assert_eq!(
+        payload["assessment"]["recommended_actions"][0],
+        "Apply vendor patch"
+    );
+    assert_eq!(payload["assessment"]["reviewed_by_display"], "Ada Lovelace");
 }
 
 #[tokio::test]
@@ -9129,6 +9290,314 @@ async fn insert_cverecord_fixture(pool: &SqlitePool) {
                 '{"source":"fixture"}',
                 '2025-12-12T08:00:00Z',
                 '2025-12-12T09:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_cveassessment_table(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE vulnerability_intelligence_cveassessment (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL,
+            cve_id INTEGER NOT NULL,
+            product_id INTEGER NULL,
+            release_id INTEGER NULL,
+            component_id INTEGER NULL,
+            linked_vulnerability_id INTEGER NULL,
+            related_risk_id INTEGER NULL,
+            exposure varchar(16) NOT NULL,
+            asset_criticality varchar(16) NOT NULL,
+            epss_score decimal NULL,
+            in_kev_catalog bool NOT NULL,
+            exploit_maturity varchar(16) NOT NULL,
+            affects_critical_service bool NOT NULL,
+            nis2_relevant bool NOT NULL,
+            nis2_impact_summary TEXT NOT NULL,
+            repository_name varchar(255) NOT NULL,
+            repository_url varchar(200) NOT NULL,
+            git_ref varchar(128) NOT NULL,
+            source_package varchar(255) NOT NULL,
+            source_package_version varchar(128) NOT NULL,
+            regulatory_tags_json TEXT NOT NULL,
+            deterministic_factors_json TEXT NOT NULL,
+            business_context TEXT NOT NULL,
+            existing_controls TEXT NOT NULL,
+            deterministic_priority varchar(16) NOT NULL,
+            deterministic_due_days INTEGER NOT NULL,
+            llm_backend varchar(32) NOT NULL,
+            llm_model_name varchar(128) NOT NULL,
+            llm_status varchar(16) NOT NULL,
+            technical_summary TEXT NOT NULL,
+            business_impact TEXT NOT NULL,
+            attack_path TEXT NOT NULL,
+            management_summary TEXT NOT NULL,
+            recommended_actions_json TEXT NOT NULL,
+            evidence_needed_json TEXT NOT NULL,
+            raw_llm_json TEXT NOT NULL,
+            confidence varchar(16) NOT NULL,
+            prompt_hash varchar(64) NOT NULL,
+            reviewed_by_id INTEGER NULL,
+            reviewed_at TEXT NULL,
+            review_notes TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_cveassessment_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO risks_risk (
+            id,
+            tenant_id,
+            category_id,
+            process_id,
+            asset_id,
+            owner_id,
+            title,
+            description,
+            threat,
+            vulnerability,
+            impact,
+            likelihood,
+            residual_impact,
+            residual_likelihood,
+            status,
+            treatment_strategy,
+            treatment_plan,
+            treatment_due_date,
+            accepted_by_id,
+            accepted_at,
+            review_date,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            20,
+            42,
+            1,
+            1,
+            1,
+            7,
+            'CVE-2026-1001 - Sensor Gateway',
+            'Gateway firmware exposure risk',
+            'Remote exploit against firmware update path',
+            'CVE-2026-1001',
+            5,
+            5,
+            NULL,
+            NULL,
+            'ANALYZING',
+            'MITIGATE',
+            'Patch firmware and verify compensating controls',
+            '2026-04-30',
+            NULL,
+            NULL,
+            NULL,
+            '2026-04-22T10:00:00Z',
+            '2026-04-22T10:00:00Z'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO vulnerability_intelligence_cveassessment (
+            id,
+            tenant_id,
+            cve_id,
+            product_id,
+            release_id,
+            component_id,
+            linked_vulnerability_id,
+            related_risk_id,
+            exposure,
+            asset_criticality,
+            epss_score,
+            in_kev_catalog,
+            exploit_maturity,
+            affects_critical_service,
+            nis2_relevant,
+            nis2_impact_summary,
+            repository_name,
+            repository_url,
+            git_ref,
+            source_package,
+            source_package_version,
+            regulatory_tags_json,
+            deterministic_factors_json,
+            business_context,
+            existing_controls,
+            deterministic_priority,
+            deterministic_due_days,
+            llm_backend,
+            llm_model_name,
+            llm_status,
+            technical_summary,
+            business_impact,
+            attack_path,
+            management_summary,
+            recommended_actions_json,
+            evidence_needed_json,
+            raw_llm_json,
+            confidence,
+            prompt_hash,
+            reviewed_by_id,
+            reviewed_at,
+            review_notes,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                1,
+                42,
+                1,
+                100,
+                200,
+                250,
+                500,
+                20,
+                'INTERNET',
+                'CRITICAL',
+                '0.9130',
+                1,
+                'ACTIVE',
+                1,
+                1,
+                'Gateway supports essential customer telemetry.',
+                'iscy-gateway',
+                'https://example.test/iscy-gateway',
+                'refs/tags/v1.0.3',
+                'gateway-firmware',
+                '1.0.3',
+                '["NIS2","CRA"]',
+                '{"effective_score":12.3,"source":"fixture"}',
+                'Tenant-critical authentication and telemetry gateway',
+                'WAF, MFA, monitoring',
+                'CRITICAL',
+                7,
+                'rust_service',
+                'iscy-rust-llm-stub-v1',
+                'GENERATED',
+                'Patch immediately',
+                'Material outage and compliance exposure possible.',
+                'Remote exploit through unsigned or unpatched firmware update.',
+                'Escalate patching, evidence collection and stakeholder communication.',
+                '["Apply vendor patch","Verify exposure on deployed gateways"]',
+                '["Patch deployment report","SBOM and asset inventory snapshot"]',
+                '{"source":"fixture"}',
+                'high',
+                'abc123',
+                7,
+                '2026-04-22T10:30:00Z',
+                'Escalated for immediate remediation.',
+                '2026-04-22T10:00:00Z',
+                '2026-04-22T10:30:00Z'
+            ),
+            (
+                2,
+                42,
+                2,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                'INTERNAL',
+                'MEDIUM',
+                '0.4200',
+                0,
+                'POC',
+                0,
+                0,
+                '',
+                '',
+                '',
+                '',
+                'rust-dependency',
+                '4.2.0',
+                '[]',
+                '{"effective_score":7.0,"source":"fixture"}',
+                'Backoffice dependency scope',
+                'Segmentation and monitoring',
+                'MEDIUM',
+                30,
+                'rust_service',
+                'iscy-rust-llm-stub-v1',
+                'FAILED',
+                '',
+                '',
+                '',
+                '',
+                '[]',
+                '[]',
+                '{"error":"stub timeout"}',
+                'medium',
+                'def456',
+                NULL,
+                NULL,
+                '',
+                '2026-04-21T09:00:00Z',
+                '2026-04-21T09:05:00Z'
+            ),
+            (
+                3,
+                99,
+                3,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                'CUSTOMER',
+                'LOW',
+                NULL,
+                0,
+                'UNKNOWN',
+                0,
+                0,
+                '',
+                '',
+                '',
+                '',
+                '',
+                '',
+                '[]',
+                '{}',
+                'Foreign tenant',
+                '',
+                'LOW',
+                60,
+                'rust_service',
+                'iscy-rust-llm-stub-v1',
+                'DISABLED',
+                '',
+                '',
+                '',
+                '',
+                '[]',
+                '[]',
+                '{}',
+                'low',
+                '',
+                NULL,
+                NULL,
+                '',
+                '2026-04-20T09:00:00Z',
+                '2026-04-20T09:05:00Z'
             )
         "#,
     )

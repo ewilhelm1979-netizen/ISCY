@@ -52,7 +52,7 @@ Der alte Django-Runserver ist damit nicht mehr der lokale Standardpfad.
 - Risk-Register Read-, Detail-, Create- und Update-Flows.
 - Evidence Read-/Detail-Flows, Evidence-Need-Sync und Evidence-Dateiuploads ueber Rust-Web/API.
 - Rust-Web-Shell mit Kontext-Formular sowie datengetriebenem Dashboard, Guidance Navigator, Catalog, Requirements, Assessments, Organizations, Risk-Register, Evidence-Ueberblick, Reports, Roadmap, Assets, Imports, Processes und Product Security.
-- Rust-CVE-Feed mit `GET /api/v1/cves`, `GET /api/v1/cves/{cve_id}` und Webroute `/cves/` fuer Summary, Feed und Detaildaten aus `vulnerability_intelligence_cverecord`.
+- Rust-CVE-Read-Slice mit `GET /api/v1/cves`, `GET /api/v1/cves/{cve_id}`, `GET /api/v1/cve-assessments`, `GET /api/v1/cve-assessments/{assessment_id}` sowie Webrouten `/cves/`, `/cves/assessments/{assessment_id}` und `/cves/llm-test/` fuer Feed, tenantgebundene Assessment-Reads und LLM-Runtime-Checks.
 - Rust-DB-Admin-CLI mit `migrate`, `seed-demo` und `init-demo` fuer Rust-eigenen SQLite/PostgreSQL-Bootstrap der operativen Kern-Tabellen inklusive Product-Security sowie vollstaendigem Katalog-/Requirement-Seed.
 - Rust-Session-Schicht mit `iscy_auth_session`, `/api/v1/auth/sessions`, `/api/v1/auth/session`, Logout, Cookie/Bearer-Aufloesung, Django-kompatibler `pbkdf2_sha256`-Passwortpruefung und Web-Kontext ohne Query-Parameter.
 - Rust-RBAC-Grundlage mit `accounts_role`, `accounts_userrole`, Session-Rollencodes, Header-Rollen-Fallback und Schreibschutz fuer migrierte Write-Endpunkte.
@@ -68,10 +68,10 @@ Der alte Django-Runserver ist damit nicht mehr der lokale Standardpfad.
 
 ## Blocker vor Python-Loeschung
 
-1. **Weboberflaeche:** Rust liefert fuer `/dashboard/`, `/navigator/`, `/catalog/`, `/requirements/`, `/assessments/`, `/organizations/`, `/risks/`, `/evidence/`, `/reports/`, `/roadmap/`, `/assets/`, `/imports/`, `/processes/`, `/product-security/` und `/cves/` bereits echte serverseitige Seiten. Die restlichen Detail-/Form-Flows, Zwischenwizard-Schritte, CVE-Assessment-/LLM-/Risk-Enrichment-Ansichten und spezialisierten Exporte liegen noch in Django-Templates und Django-Views.
+1. **Weboberflaeche:** Rust liefert fuer `/dashboard/`, `/navigator/`, `/catalog/`, `/requirements/`, `/assessments/`, `/organizations/`, `/risks/`, `/evidence/`, `/reports/`, `/roadmap/`, `/assets/`, `/imports/`, `/processes/`, `/product-security/` und `/cves/` bereits echte serverseitige Seiten. Die restlichen Detail-/Form-Flows, Zwischenwizard-Schritte, CVE-Assessment-Create-/Risk-Enrichment-Flows und spezialisierten Exporte liegen noch in Django-Templates und Django-Views.
 2. **Auth, Sessions und Admin:** Rust-Sessions, Passwort-Login, Rollen-/Schreibrechte sowie Account-Administration fuer User/Rollen-/Gruppen-/Direktrechtewechsel sind vorhanden. Die Django-kompatiblen Tabellen fuer Gruppen, Permissions und User-Zuordnung sind gebootstrapped; vollstaendige Django-Admin-Paritaet ist noch nicht komplett ersetzt.
 3. **Migrations und Seeds:** Ein Rust-eigener Bootstrap fuer operative Kern-Tabellen inklusive Product-Security, Catalog und Requirements ist vorhanden. Einzelne historische Django-Schema-Details ausserhalb dieser Cutover-Slices sind noch nicht vollstaendig abgeloest.
-4. **Formulare und Uploads:** Evidence-Dateiuploads sowie Import-Center Datei-Upload, CSV/XLSX/XLSM-Parsing und Mapping-Vorschau laufen direkt ueber Rust-Web/API. Weitere Django-Formreste ausserhalb dieser Cutover-Slices muessen noch ersetzt werden.
+4. **Formulare und Uploads:** Evidence-Dateiuploads sowie Import-Center Datei-Upload, CSV/XLSX/XLSM-Parsing und Mapping-Vorschau laufen direkt ueber Rust-Web/API. Weitere Django-Formreste ausserhalb dieser Cutover-Slices muessen noch ersetzt werden; im CVE-Bereich betrifft das vor allem das tenantgebundene Anlegen/Aktualisieren neuer Assessments inklusive automatischer Risikoanreicherung.
 5. **Python-Dateien im Repo:** CI und lokaler Start sind Rust-first. Python/Django-Dateien bleiben noch als Legacy-Kompatibilitaet und muessen nach Abschluss von Auth/Web/Form-Flows gezielt entfernt werden.
 
 ## Naechster fachlich sinnvoller Cutover-Schritt
@@ -80,7 +80,7 @@ Der naechste Abschlussblock ist nicht mehr ein weiterer einzelner API-Endpunkt, 
 
 1. Letzte Admin-Paritaet in Rust finalisieren.
 2. Django-Templates durch Rust-Web oder ein separates Frontend auf Rust-API ersetzen.
-3. Verbleibende Django-Template-/Form-Reste inklusive CVE-Webansichten systematisch durch Rust-Web oder ein separates Frontend auf Rust-API ersetzen.
+3. Verbleibende Django-Template-/Form-Reste inklusive CVE-Assessment-Create-/Risk-Enrichment-Workflows systematisch durch Rust-Web oder ein separates Frontend auf Rust-API ersetzen.
 4. Python-Dateien, Requirements, Django-Settings und Django-Startpfade entfernen.
 
 ## Cutover-Entscheidung

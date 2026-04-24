@@ -89,6 +89,91 @@ pub struct CveRecordDetail {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CveAssessmentDashboardSummary {
+    pub total: i64,
+    pub critical: i64,
+    pub with_risk: i64,
+    pub llm_generated: i64,
+    pub nis2: i64,
+    pub kev: i64,
+    pub risk_hotspot_score: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CveAssessmentSummary {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub cve_id: String,
+    pub cve_description: String,
+    pub cve_severity: String,
+    pub cve_severity_label: String,
+    pub cve_cvss_score: Option<String>,
+    pub product_id: Option<i64>,
+    pub product_name: Option<String>,
+    pub release_id: Option<i64>,
+    pub release_version: Option<String>,
+    pub component_id: Option<i64>,
+    pub component_name: Option<String>,
+    pub linked_vulnerability_id: Option<i64>,
+    pub linked_vulnerability_title: Option<String>,
+    pub related_risk_id: Option<i64>,
+    pub related_risk_title: Option<String>,
+    pub exposure: String,
+    pub exposure_label: String,
+    pub asset_criticality: String,
+    pub asset_criticality_label: String,
+    pub epss_score: Option<String>,
+    pub in_kev_catalog: bool,
+    pub exploit_maturity: String,
+    pub exploit_maturity_label: String,
+    pub affects_critical_service: bool,
+    pub nis2_relevant: bool,
+    pub deterministic_priority: String,
+    pub llm_status: String,
+    pub llm_status_label: String,
+    pub deterministic_due_days: i64,
+    pub confidence: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CveAssessmentDetail {
+    #[serde(flatten)]
+    pub summary: CveAssessmentSummary,
+    pub cvss_vector: String,
+    pub weakness_ids: Vec<String>,
+    pub references: Vec<String>,
+    pub kev_date_added: Option<String>,
+    pub kev_vendor_project: String,
+    pub kev_product: String,
+    pub kev_required_action: String,
+    pub kev_known_ransomware: bool,
+    pub repository_name: String,
+    pub repository_url: String,
+    pub git_ref: String,
+    pub source_package: String,
+    pub source_package_version: String,
+    pub regulatory_tags: Vec<String>,
+    pub deterministic_factors_json: Value,
+    pub nis2_impact_summary: String,
+    pub business_context: String,
+    pub existing_controls: String,
+    pub llm_backend: String,
+    pub llm_model_name: String,
+    pub technical_summary: String,
+    pub business_impact: String,
+    pub attack_path: String,
+    pub management_summary: String,
+    pub recommended_actions: Vec<String>,
+    pub evidence_needed: Vec<String>,
+    pub raw_llm_json: Value,
+    pub reviewed_by_display: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub review_notes: String,
+}
+
 impl CveStore {
     pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
         let normalized_url = normalize_database_url(database_url);
@@ -134,6 +219,40 @@ impl CveStore {
         match self {
             Self::Postgres(pool) => detail_postgres(pool, cve_id).await,
             Self::Sqlite(pool) => detail_sqlite(pool, cve_id).await,
+        }
+    }
+
+    pub async fn assessment_dashboard_summary(
+        &self,
+        tenant_id: i64,
+    ) -> anyhow::Result<CveAssessmentDashboardSummary> {
+        match self {
+            Self::Postgres(pool) => assessment_dashboard_summary_postgres(pool, tenant_id).await,
+            Self::Sqlite(pool) => assessment_dashboard_summary_sqlite(pool, tenant_id).await,
+        }
+    }
+
+    pub async fn list_assessments(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<CveAssessmentSummary>> {
+        match self {
+            Self::Postgres(pool) => list_assessments_postgres(pool, tenant_id, limit).await,
+            Self::Sqlite(pool) => list_assessments_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
+    pub async fn assessment_detail(
+        &self,
+        tenant_id: i64,
+        assessment_id: i64,
+    ) -> anyhow::Result<Option<CveAssessmentDetail>> {
+        match self {
+            Self::Postgres(pool) => {
+                assessment_detail_postgres(pool, tenant_id, assessment_id).await
+            }
+            Self::Sqlite(pool) => assessment_detail_sqlite(pool, tenant_id, assessment_id).await,
         }
     }
 
@@ -395,6 +514,422 @@ async fn detail_sqlite(pool: &SqlitePool, cve_id: &str) -> anyhow::Result<Option
     row.map(detail_from_sqlite_row)
         .transpose()
         .map_err(Into::into)
+}
+
+async fn assessment_dashboard_summary_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<CveAssessmentDashboardSummary> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COUNT(*)::bigint AS total,
+            COALESCE(SUM(CASE WHEN assessment.deterministic_priority = 'CRITICAL' THEN 1 ELSE 0 END), 0)::bigint AS critical,
+            COALESCE(SUM(CASE WHEN assessment.related_risk_id IS NOT NULL THEN 1 ELSE 0 END), 0)::bigint AS with_risk,
+            COALESCE(SUM(CASE WHEN assessment.llm_status = 'GENERATED' THEN 1 ELSE 0 END), 0)::bigint AS llm_generated,
+            COALESCE(SUM(CASE WHEN assessment.nis2_relevant THEN 1 ELSE 0 END), 0)::bigint AS nis2,
+            COALESCE(SUM(CASE WHEN assessment.in_kev_catalog THEN 1 ELSE 0 END), 0)::bigint AS kev
+        FROM vulnerability_intelligence_cveassessment assessment
+        WHERE assessment.tenant_id = $1
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-CVE-Assessment-Summary konnte nicht gelesen werden")?;
+
+    let total: i64 = row.try_get("total")?;
+    let critical: i64 = row.try_get("critical")?;
+    let with_risk: i64 = row.try_get("with_risk")?;
+    let llm_generated: i64 = row.try_get("llm_generated")?;
+    let nis2: i64 = row.try_get("nis2")?;
+    let kev: i64 = row.try_get("kev")?;
+    Ok(CveAssessmentDashboardSummary {
+        total,
+        critical,
+        with_risk,
+        llm_generated,
+        nis2,
+        kev,
+        risk_hotspot_score: assessment_hotspot_score(total, critical, kev, nis2),
+    })
+}
+
+async fn assessment_dashboard_summary_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<CveAssessmentDashboardSummary> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN assessment.deterministic_priority = 'CRITICAL' THEN 1 ELSE 0 END), 0) AS critical,
+            COALESCE(SUM(CASE WHEN assessment.related_risk_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS with_risk,
+            COALESCE(SUM(CASE WHEN assessment.llm_status = 'GENERATED' THEN 1 ELSE 0 END), 0) AS llm_generated,
+            COALESCE(SUM(CASE WHEN assessment.nis2_relevant THEN 1 ELSE 0 END), 0) AS nis2,
+            COALESCE(SUM(CASE WHEN assessment.in_kev_catalog THEN 1 ELSE 0 END), 0) AS kev
+        FROM vulnerability_intelligence_cveassessment assessment
+        WHERE assessment.tenant_id = ?
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await
+    .context("SQLite-CVE-Assessment-Summary konnte nicht gelesen werden")?;
+
+    let total: i64 = row.try_get("total")?;
+    let critical: i64 = row.try_get("critical")?;
+    let with_risk: i64 = row.try_get("with_risk")?;
+    let llm_generated: i64 = row.try_get("llm_generated")?;
+    let nis2: i64 = row.try_get("nis2")?;
+    let kev: i64 = row.try_get("kev")?;
+    Ok(CveAssessmentDashboardSummary {
+        total,
+        critical,
+        with_risk,
+        llm_generated,
+        nis2,
+        kev,
+        risk_hotspot_score: assessment_hotspot_score(total, critical, kev, nis2),
+    })
+}
+
+async fn list_assessments_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<CveAssessmentSummary>> {
+    let rows = sqlx::query(assessment_list_postgres_sql())
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-CVE-Assessment-Liste konnte nicht gelesen werden")?;
+
+    rows.into_iter()
+        .map(assessment_summary_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn list_assessments_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<CveAssessmentSummary>> {
+    let rows = sqlx::query(assessment_list_sqlite_sql())
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("SQLite-CVE-Assessment-Liste konnte nicht gelesen werden")?;
+
+    rows.into_iter()
+        .map(assessment_summary_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn assessment_detail_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    assessment_id: i64,
+) -> anyhow::Result<Option<CveAssessmentDetail>> {
+    let row = sqlx::query(assessment_detail_postgres_sql())
+        .bind(tenant_id)
+        .bind(assessment_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-CVE-Assessment-Detail konnte nicht gelesen werden")?;
+
+    row.map(assessment_detail_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn assessment_detail_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    assessment_id: i64,
+) -> anyhow::Result<Option<CveAssessmentDetail>> {
+    let row = sqlx::query(assessment_detail_sqlite_sql())
+        .bind(tenant_id)
+        .bind(assessment_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-CVE-Assessment-Detail konnte nicht gelesen werden")?;
+
+    row.map(assessment_detail_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+fn assessment_list_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        assessment.id,
+        assessment.tenant_id,
+        cve.cve_id,
+        cve.description AS cve_description,
+        cve.severity AS cve_severity,
+        CAST(cve.cvss_score AS TEXT) AS cve_cvss_score_text,
+        assessment.product_id,
+        product.name AS product_name,
+        assessment.release_id,
+        release.version AS release_version,
+        assessment.component_id,
+        component.name AS component_name,
+        assessment.linked_vulnerability_id,
+        vulnerability.title AS linked_vulnerability_title,
+        assessment.related_risk_id,
+        risk.title AS related_risk_title,
+        assessment.exposure,
+        assessment.asset_criticality,
+        CAST(assessment.epss_score AS TEXT) AS epss_score_text,
+        assessment.in_kev_catalog,
+        assessment.exploit_maturity,
+        assessment.affects_critical_service,
+        assessment.nis2_relevant,
+        assessment.deterministic_priority,
+        assessment.llm_status,
+        assessment.deterministic_due_days::bigint AS deterministic_due_days,
+        assessment.confidence,
+        assessment.created_at::text AS created_at,
+        assessment.updated_at::text AS updated_at
+    FROM vulnerability_intelligence_cveassessment assessment
+    JOIN vulnerability_intelligence_cverecord cve
+        ON cve.id = assessment.cve_id
+    LEFT JOIN product_security_product product
+        ON product.id = assessment.product_id AND product.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_productrelease release
+        ON release.id = assessment.release_id AND release.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = assessment.component_id AND component.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_vulnerability vulnerability
+        ON vulnerability.id = assessment.linked_vulnerability_id AND vulnerability.tenant_id = assessment.tenant_id
+    LEFT JOIN risks_risk risk
+        ON risk.id = assessment.related_risk_id AND risk.tenant_id = assessment.tenant_id
+    WHERE assessment.tenant_id = $1
+    ORDER BY COALESCE(assessment.updated_at, assessment.created_at) DESC, assessment.id DESC
+    LIMIT $2
+    "#
+}
+
+fn assessment_list_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        assessment.id,
+        assessment.tenant_id,
+        cve.cve_id,
+        cve.description AS cve_description,
+        cve.severity AS cve_severity,
+        CAST(cve.cvss_score AS TEXT) AS cve_cvss_score_text,
+        assessment.product_id,
+        product.name AS product_name,
+        assessment.release_id,
+        release.version AS release_version,
+        assessment.component_id,
+        component.name AS component_name,
+        assessment.linked_vulnerability_id,
+        vulnerability.title AS linked_vulnerability_title,
+        assessment.related_risk_id,
+        risk.title AS related_risk_title,
+        assessment.exposure,
+        assessment.asset_criticality,
+        CAST(assessment.epss_score AS TEXT) AS epss_score_text,
+        assessment.in_kev_catalog,
+        assessment.exploit_maturity,
+        assessment.affects_critical_service,
+        assessment.nis2_relevant,
+        assessment.deterministic_priority,
+        assessment.llm_status,
+        assessment.deterministic_due_days,
+        assessment.confidence,
+        CAST(assessment.created_at AS TEXT) AS created_at,
+        CAST(assessment.updated_at AS TEXT) AS updated_at
+    FROM vulnerability_intelligence_cveassessment assessment
+    JOIN vulnerability_intelligence_cverecord cve
+        ON cve.id = assessment.cve_id
+    LEFT JOIN product_security_product product
+        ON product.id = assessment.product_id AND product.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_productrelease release
+        ON release.id = assessment.release_id AND release.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = assessment.component_id AND component.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_vulnerability vulnerability
+        ON vulnerability.id = assessment.linked_vulnerability_id AND vulnerability.tenant_id = assessment.tenant_id
+    LEFT JOIN risks_risk risk
+        ON risk.id = assessment.related_risk_id AND risk.tenant_id = assessment.tenant_id
+    WHERE assessment.tenant_id = ?
+    ORDER BY COALESCE(assessment.updated_at, assessment.created_at) DESC, assessment.id DESC
+    LIMIT ?
+    "#
+}
+
+fn assessment_detail_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        assessment.id,
+        assessment.tenant_id,
+        cve.cve_id,
+        cve.description AS cve_description,
+        cve.severity AS cve_severity,
+        CAST(cve.cvss_score AS TEXT) AS cve_cvss_score_text,
+        cve.cvss_vector,
+        COALESCE(cve.weakness_ids_json::text, '[]') AS weakness_ids_json_text,
+        COALESCE(cve.references_json::text, '[]') AS references_json_text,
+        cve.kev_date_added::text AS kev_date_added,
+        cve.kev_vendor_project,
+        cve.kev_product,
+        cve.kev_required_action,
+        cve.kev_known_ransomware,
+        assessment.product_id,
+        product.name AS product_name,
+        assessment.release_id,
+        release.version AS release_version,
+        assessment.component_id,
+        component.name AS component_name,
+        assessment.linked_vulnerability_id,
+        vulnerability.title AS linked_vulnerability_title,
+        assessment.related_risk_id,
+        risk.title AS related_risk_title,
+        assessment.exposure,
+        assessment.asset_criticality,
+        CAST(assessment.epss_score AS TEXT) AS epss_score_text,
+        assessment.in_kev_catalog,
+        assessment.exploit_maturity,
+        assessment.affects_critical_service,
+        assessment.nis2_relevant,
+        assessment.deterministic_priority,
+        assessment.llm_status,
+        assessment.deterministic_due_days::bigint AS deterministic_due_days,
+        assessment.confidence,
+        assessment.repository_name,
+        assessment.repository_url,
+        assessment.git_ref,
+        assessment.source_package,
+        assessment.source_package_version,
+        COALESCE(assessment.regulatory_tags_json::text, '[]') AS regulatory_tags_json_text,
+        COALESCE(assessment.deterministic_factors_json::text, '{}') AS deterministic_factors_json_text,
+        assessment.nis2_impact_summary,
+        assessment.business_context,
+        assessment.existing_controls,
+        assessment.llm_backend,
+        assessment.llm_model_name,
+        assessment.technical_summary,
+        assessment.business_impact,
+        assessment.attack_path,
+        assessment.management_summary,
+        COALESCE(assessment.recommended_actions_json::text, '[]') AS recommended_actions_json_text,
+        COALESCE(assessment.evidence_needed_json::text, '[]') AS evidence_needed_json_text,
+        COALESCE(assessment.raw_llm_json::text, '{}') AS raw_llm_json_text,
+        reviewer.username AS reviewed_by_username,
+        reviewer.first_name AS reviewed_by_first_name,
+        reviewer.last_name AS reviewed_by_last_name,
+        assessment.reviewed_at::text AS reviewed_at,
+        assessment.review_notes,
+        assessment.created_at::text AS created_at,
+        assessment.updated_at::text AS updated_at
+    FROM vulnerability_intelligence_cveassessment assessment
+    JOIN vulnerability_intelligence_cverecord cve
+        ON cve.id = assessment.cve_id
+    LEFT JOIN product_security_product product
+        ON product.id = assessment.product_id AND product.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_productrelease release
+        ON release.id = assessment.release_id AND release.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = assessment.component_id AND component.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_vulnerability vulnerability
+        ON vulnerability.id = assessment.linked_vulnerability_id AND vulnerability.tenant_id = assessment.tenant_id
+    LEFT JOIN risks_risk risk
+        ON risk.id = assessment.related_risk_id AND risk.tenant_id = assessment.tenant_id
+    LEFT JOIN accounts_user reviewer
+        ON reviewer.id = assessment.reviewed_by_id
+    WHERE assessment.tenant_id = $1 AND assessment.id = $2
+    "#
+}
+
+fn assessment_detail_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        assessment.id,
+        assessment.tenant_id,
+        cve.cve_id,
+        cve.description AS cve_description,
+        cve.severity AS cve_severity,
+        CAST(cve.cvss_score AS TEXT) AS cve_cvss_score_text,
+        cve.cvss_vector,
+        COALESCE(CAST(cve.weakness_ids_json AS TEXT), '[]') AS weakness_ids_json_text,
+        COALESCE(CAST(cve.references_json AS TEXT), '[]') AS references_json_text,
+        CAST(cve.kev_date_added AS TEXT) AS kev_date_added,
+        cve.kev_vendor_project,
+        cve.kev_product,
+        cve.kev_required_action,
+        cve.kev_known_ransomware,
+        assessment.product_id,
+        product.name AS product_name,
+        assessment.release_id,
+        release.version AS release_version,
+        assessment.component_id,
+        component.name AS component_name,
+        assessment.linked_vulnerability_id,
+        vulnerability.title AS linked_vulnerability_title,
+        assessment.related_risk_id,
+        risk.title AS related_risk_title,
+        assessment.exposure,
+        assessment.asset_criticality,
+        CAST(assessment.epss_score AS TEXT) AS epss_score_text,
+        assessment.in_kev_catalog,
+        assessment.exploit_maturity,
+        assessment.affects_critical_service,
+        assessment.nis2_relevant,
+        assessment.deterministic_priority,
+        assessment.llm_status,
+        assessment.deterministic_due_days,
+        assessment.confidence,
+        assessment.repository_name,
+        assessment.repository_url,
+        assessment.git_ref,
+        assessment.source_package,
+        assessment.source_package_version,
+        COALESCE(CAST(assessment.regulatory_tags_json AS TEXT), '[]') AS regulatory_tags_json_text,
+        COALESCE(CAST(assessment.deterministic_factors_json AS TEXT), '{}') AS deterministic_factors_json_text,
+        assessment.nis2_impact_summary,
+        assessment.business_context,
+        assessment.existing_controls,
+        assessment.llm_backend,
+        assessment.llm_model_name,
+        assessment.technical_summary,
+        assessment.business_impact,
+        assessment.attack_path,
+        assessment.management_summary,
+        COALESCE(CAST(assessment.recommended_actions_json AS TEXT), '[]') AS recommended_actions_json_text,
+        COALESCE(CAST(assessment.evidence_needed_json AS TEXT), '[]') AS evidence_needed_json_text,
+        COALESCE(CAST(assessment.raw_llm_json AS TEXT), '{}') AS raw_llm_json_text,
+        reviewer.username AS reviewed_by_username,
+        reviewer.first_name AS reviewed_by_first_name,
+        reviewer.last_name AS reviewed_by_last_name,
+        CAST(assessment.reviewed_at AS TEXT) AS reviewed_at,
+        assessment.review_notes,
+        CAST(assessment.created_at AS TEXT) AS created_at,
+        CAST(assessment.updated_at AS TEXT) AS updated_at
+    FROM vulnerability_intelligence_cveassessment assessment
+    JOIN vulnerability_intelligence_cverecord cve
+        ON cve.id = assessment.cve_id
+    LEFT JOIN product_security_product product
+        ON product.id = assessment.product_id AND product.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_productrelease release
+        ON release.id = assessment.release_id AND release.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = assessment.component_id AND component.tenant_id = assessment.tenant_id
+    LEFT JOIN product_security_vulnerability vulnerability
+        ON vulnerability.id = assessment.linked_vulnerability_id AND vulnerability.tenant_id = assessment.tenant_id
+    LEFT JOIN risks_risk risk
+        ON risk.id = assessment.related_risk_id AND risk.tenant_id = assessment.tenant_id
+    LEFT JOIN accounts_user reviewer
+        ON reviewer.id = assessment.reviewed_by_id
+    WHERE assessment.tenant_id = ? AND assessment.id = ?
+    "#
 }
 
 async fn upsert_postgres(pool: &PgPool, record: &NvdCveRecord) -> anyhow::Result<()> {
@@ -765,6 +1300,268 @@ fn detail_from_sqlite_row(row: sqlx::sqlite::SqliteRow) -> Result<CveRecordDetai
     })
 }
 
+fn assessment_summary_from_pg_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<CveAssessmentSummary, sqlx::Error> {
+    let cve_severity: String = row.try_get("cve_severity")?;
+    let exposure: String = row.try_get("exposure")?;
+    let asset_criticality: String = row.try_get("asset_criticality")?;
+    let exploit_maturity: String = row.try_get("exploit_maturity")?;
+    let llm_status: String = row.try_get("llm_status")?;
+    Ok(CveAssessmentSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        cve_id: row.try_get("cve_id")?,
+        cve_description: row.try_get("cve_description")?,
+        cve_severity_label: severity_label(&cve_severity).to_string(),
+        cve_severity,
+        cve_cvss_score: row.try_get("cve_cvss_score_text")?,
+        product_id: row.try_get("product_id")?,
+        product_name: row.try_get("product_name")?,
+        release_id: row.try_get("release_id")?,
+        release_version: row.try_get("release_version")?,
+        component_id: row.try_get("component_id")?,
+        component_name: row.try_get("component_name")?,
+        linked_vulnerability_id: row.try_get("linked_vulnerability_id")?,
+        linked_vulnerability_title: row.try_get("linked_vulnerability_title")?,
+        related_risk_id: row.try_get("related_risk_id")?,
+        related_risk_title: row.try_get("related_risk_title")?,
+        exposure_label: exposure_label(&exposure).to_string(),
+        exposure,
+        asset_criticality_label: asset_criticality_label(&asset_criticality).to_string(),
+        asset_criticality,
+        epss_score: row.try_get("epss_score_text")?,
+        in_kev_catalog: row.try_get("in_kev_catalog")?,
+        exploit_maturity_label: exploit_maturity_label(&exploit_maturity).to_string(),
+        exploit_maturity,
+        affects_critical_service: row.try_get("affects_critical_service")?,
+        nis2_relevant: row.try_get("nis2_relevant")?,
+        deterministic_priority: row.try_get("deterministic_priority")?,
+        llm_status_label: llm_status_label(&llm_status).to_string(),
+        llm_status,
+        deterministic_due_days: row.try_get("deterministic_due_days")?,
+        confidence: row.try_get("confidence")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn assessment_summary_from_sqlite_row(
+    row: sqlx::sqlite::SqliteRow,
+) -> Result<CveAssessmentSummary, sqlx::Error> {
+    let cve_severity: String = row.try_get("cve_severity")?;
+    let exposure: String = row.try_get("exposure")?;
+    let asset_criticality: String = row.try_get("asset_criticality")?;
+    let exploit_maturity: String = row.try_get("exploit_maturity")?;
+    let llm_status: String = row.try_get("llm_status")?;
+    Ok(CveAssessmentSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        cve_id: row.try_get("cve_id")?,
+        cve_description: row.try_get("cve_description")?,
+        cve_severity_label: severity_label(&cve_severity).to_string(),
+        cve_severity,
+        cve_cvss_score: row.try_get("cve_cvss_score_text")?,
+        product_id: row.try_get("product_id")?,
+        product_name: row.try_get("product_name")?,
+        release_id: row.try_get("release_id")?,
+        release_version: row.try_get("release_version")?,
+        component_id: row.try_get("component_id")?,
+        component_name: row.try_get("component_name")?,
+        linked_vulnerability_id: row.try_get("linked_vulnerability_id")?,
+        linked_vulnerability_title: row.try_get("linked_vulnerability_title")?,
+        related_risk_id: row.try_get("related_risk_id")?,
+        related_risk_title: row.try_get("related_risk_title")?,
+        exposure_label: exposure_label(&exposure).to_string(),
+        exposure,
+        asset_criticality_label: asset_criticality_label(&asset_criticality).to_string(),
+        asset_criticality,
+        epss_score: row.try_get("epss_score_text")?,
+        in_kev_catalog: row.try_get("in_kev_catalog")?,
+        exploit_maturity_label: exploit_maturity_label(&exploit_maturity).to_string(),
+        exploit_maturity,
+        affects_critical_service: row.try_get("affects_critical_service")?,
+        nis2_relevant: row.try_get("nis2_relevant")?,
+        deterministic_priority: row.try_get("deterministic_priority")?,
+        llm_status_label: llm_status_label(&llm_status).to_string(),
+        llm_status,
+        deterministic_due_days: row.try_get("deterministic_due_days")?,
+        confidence: row.try_get("confidence")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn assessment_detail_from_pg_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<CveAssessmentDetail, sqlx::Error> {
+    let cve_severity: String = row.try_get("cve_severity")?;
+    let exposure: String = row.try_get("exposure")?;
+    let asset_criticality: String = row.try_get("asset_criticality")?;
+    let exploit_maturity: String = row.try_get("exploit_maturity")?;
+    let llm_status: String = row.try_get("llm_status")?;
+    Ok(CveAssessmentDetail {
+        summary: CveAssessmentSummary {
+            id: row.try_get("id")?,
+            tenant_id: row.try_get("tenant_id")?,
+            cve_id: row.try_get("cve_id")?,
+            cve_description: row.try_get("cve_description")?,
+            cve_severity_label: severity_label(&cve_severity).to_string(),
+            cve_severity,
+            cve_cvss_score: row.try_get("cve_cvss_score_text")?,
+            product_id: row.try_get("product_id")?,
+            product_name: row.try_get("product_name")?,
+            release_id: row.try_get("release_id")?,
+            release_version: row.try_get("release_version")?,
+            component_id: row.try_get("component_id")?,
+            component_name: row.try_get("component_name")?,
+            linked_vulnerability_id: row.try_get("linked_vulnerability_id")?,
+            linked_vulnerability_title: row.try_get("linked_vulnerability_title")?,
+            related_risk_id: row.try_get("related_risk_id")?,
+            related_risk_title: row.try_get("related_risk_title")?,
+            exposure_label: exposure_label(&exposure).to_string(),
+            exposure,
+            asset_criticality_label: asset_criticality_label(&asset_criticality).to_string(),
+            asset_criticality,
+            epss_score: row.try_get("epss_score_text")?,
+            in_kev_catalog: row.try_get("in_kev_catalog")?,
+            exploit_maturity_label: exploit_maturity_label(&exploit_maturity).to_string(),
+            exploit_maturity,
+            affects_critical_service: row.try_get("affects_critical_service")?,
+            nis2_relevant: row.try_get("nis2_relevant")?,
+            deterministic_priority: row.try_get("deterministic_priority")?,
+            llm_status_label: llm_status_label(&llm_status).to_string(),
+            llm_status,
+            deterministic_due_days: row.try_get("deterministic_due_days")?,
+            confidence: row.try_get("confidence")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        },
+        cvss_vector: row.try_get("cvss_vector")?,
+        weakness_ids: parse_json_string_array(row.try_get("weakness_ids_json_text")?),
+        references: parse_json_string_array(row.try_get("references_json_text")?),
+        kev_date_added: row.try_get("kev_date_added")?,
+        kev_vendor_project: row.try_get("kev_vendor_project")?,
+        kev_product: row.try_get("kev_product")?,
+        kev_required_action: row.try_get("kev_required_action")?,
+        kev_known_ransomware: row.try_get("kev_known_ransomware")?,
+        repository_name: row.try_get("repository_name")?,
+        repository_url: row.try_get("repository_url")?,
+        git_ref: row.try_get("git_ref")?,
+        source_package: row.try_get("source_package")?,
+        source_package_version: row.try_get("source_package_version")?,
+        regulatory_tags: parse_json_string_array(row.try_get("regulatory_tags_json_text")?),
+        deterministic_factors_json: parse_json_value(
+            row.try_get("deterministic_factors_json_text")?,
+            json!({}),
+        ),
+        nis2_impact_summary: row.try_get("nis2_impact_summary")?,
+        business_context: row.try_get("business_context")?,
+        existing_controls: row.try_get("existing_controls")?,
+        llm_backend: row.try_get("llm_backend")?,
+        llm_model_name: row.try_get("llm_model_name")?,
+        technical_summary: row.try_get("technical_summary")?,
+        business_impact: row.try_get("business_impact")?,
+        attack_path: row.try_get("attack_path")?,
+        management_summary: row.try_get("management_summary")?,
+        recommended_actions: parse_json_string_array(row.try_get("recommended_actions_json_text")?),
+        evidence_needed: parse_json_string_array(row.try_get("evidence_needed_json_text")?),
+        raw_llm_json: parse_json_value(row.try_get("raw_llm_json_text")?, json!({})),
+        reviewed_by_display: user_display(
+            row.try_get("reviewed_by_username")?,
+            row.try_get("reviewed_by_first_name")?,
+            row.try_get("reviewed_by_last_name")?,
+        ),
+        reviewed_at: row.try_get("reviewed_at")?,
+        review_notes: row.try_get("review_notes")?,
+    })
+}
+
+fn assessment_detail_from_sqlite_row(
+    row: sqlx::sqlite::SqliteRow,
+) -> Result<CveAssessmentDetail, sqlx::Error> {
+    let cve_severity: String = row.try_get("cve_severity")?;
+    let exposure: String = row.try_get("exposure")?;
+    let asset_criticality: String = row.try_get("asset_criticality")?;
+    let exploit_maturity: String = row.try_get("exploit_maturity")?;
+    let llm_status: String = row.try_get("llm_status")?;
+    Ok(CveAssessmentDetail {
+        summary: CveAssessmentSummary {
+            id: row.try_get("id")?,
+            tenant_id: row.try_get("tenant_id")?,
+            cve_id: row.try_get("cve_id")?,
+            cve_description: row.try_get("cve_description")?,
+            cve_severity_label: severity_label(&cve_severity).to_string(),
+            cve_severity,
+            cve_cvss_score: row.try_get("cve_cvss_score_text")?,
+            product_id: row.try_get("product_id")?,
+            product_name: row.try_get("product_name")?,
+            release_id: row.try_get("release_id")?,
+            release_version: row.try_get("release_version")?,
+            component_id: row.try_get("component_id")?,
+            component_name: row.try_get("component_name")?,
+            linked_vulnerability_id: row.try_get("linked_vulnerability_id")?,
+            linked_vulnerability_title: row.try_get("linked_vulnerability_title")?,
+            related_risk_id: row.try_get("related_risk_id")?,
+            related_risk_title: row.try_get("related_risk_title")?,
+            exposure_label: exposure_label(&exposure).to_string(),
+            exposure,
+            asset_criticality_label: asset_criticality_label(&asset_criticality).to_string(),
+            asset_criticality,
+            epss_score: row.try_get("epss_score_text")?,
+            in_kev_catalog: row.try_get("in_kev_catalog")?,
+            exploit_maturity_label: exploit_maturity_label(&exploit_maturity).to_string(),
+            exploit_maturity,
+            affects_critical_service: row.try_get("affects_critical_service")?,
+            nis2_relevant: row.try_get("nis2_relevant")?,
+            deterministic_priority: row.try_get("deterministic_priority")?,
+            llm_status_label: llm_status_label(&llm_status).to_string(),
+            llm_status,
+            deterministic_due_days: row.try_get("deterministic_due_days")?,
+            confidence: row.try_get("confidence")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+        },
+        cvss_vector: row.try_get("cvss_vector")?,
+        weakness_ids: parse_json_string_array(row.try_get("weakness_ids_json_text")?),
+        references: parse_json_string_array(row.try_get("references_json_text")?),
+        kev_date_added: row.try_get("kev_date_added")?,
+        kev_vendor_project: row.try_get("kev_vendor_project")?,
+        kev_product: row.try_get("kev_product")?,
+        kev_required_action: row.try_get("kev_required_action")?,
+        kev_known_ransomware: row.try_get("kev_known_ransomware")?,
+        repository_name: row.try_get("repository_name")?,
+        repository_url: row.try_get("repository_url")?,
+        git_ref: row.try_get("git_ref")?,
+        source_package: row.try_get("source_package")?,
+        source_package_version: row.try_get("source_package_version")?,
+        regulatory_tags: parse_json_string_array(row.try_get("regulatory_tags_json_text")?),
+        deterministic_factors_json: parse_json_value(
+            row.try_get("deterministic_factors_json_text")?,
+            json!({}),
+        ),
+        nis2_impact_summary: row.try_get("nis2_impact_summary")?,
+        business_context: row.try_get("business_context")?,
+        existing_controls: row.try_get("existing_controls")?,
+        llm_backend: row.try_get("llm_backend")?,
+        llm_model_name: row.try_get("llm_model_name")?,
+        technical_summary: row.try_get("technical_summary")?,
+        business_impact: row.try_get("business_impact")?,
+        attack_path: row.try_get("attack_path")?,
+        management_summary: row.try_get("management_summary")?,
+        recommended_actions: parse_json_string_array(row.try_get("recommended_actions_json_text")?),
+        evidence_needed: parse_json_string_array(row.try_get("evidence_needed_json_text")?),
+        raw_llm_json: parse_json_value(row.try_get("raw_llm_json_text")?, json!({})),
+        reviewed_by_display: user_display(
+            row.try_get("reviewed_by_username")?,
+            row.try_get("reviewed_by_first_name")?,
+            row.try_get("reviewed_by_last_name")?,
+        ),
+        reviewed_at: row.try_get("reviewed_at")?,
+        review_notes: row.try_get("review_notes")?,
+    })
+}
+
 fn parse_json_string_array(raw: String) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(&raw).unwrap_or_default()
 }
@@ -781,6 +1578,71 @@ fn severity_label(severity: &str) -> &'static str {
         "LOW" => "Niedrig",
         _ => "Unbekannt",
     }
+}
+
+fn exposure_label(value: &str) -> &'static str {
+    match value {
+        "INTERNET" => "Internet-exponiert",
+        "INTERNAL" => "Nur intern",
+        "CUSTOMER" => "Beim Kunden / ausgeliefert",
+        _ => "Unklar",
+    }
+}
+
+fn asset_criticality_label(value: &str) -> &'static str {
+    severity_label(value)
+}
+
+fn exploit_maturity_label(value: &str) -> &'static str {
+    match value {
+        "UNPROVEN" => "Kein bekannter Exploit",
+        "POC" => "Proof of Concept",
+        "ACTIVE" => "Aktive Ausnutzung",
+        "AUTOMATED" => "Automatisierbar / Massenangriff",
+        _ => "Unbekannt",
+    }
+}
+
+fn llm_status_label(value: &str) -> &'static str {
+    match value {
+        "DISABLED" => "Nicht aktiviert",
+        "PENDING" => "Ausstehend",
+        "GENERATED" => "Generiert",
+        "REVIEWED" => "Reviewed",
+        "FAILED" => "Fehlgeschlagen",
+        _ => "Unbekannt",
+    }
+}
+
+fn user_display(
+    username: Option<String>,
+    first_name: Option<String>,
+    last_name: Option<String>,
+) -> Option<String> {
+    let full_name = format!(
+        "{} {}",
+        first_name.unwrap_or_default().trim(),
+        last_name.unwrap_or_default().trim()
+    )
+    .trim()
+    .to_string();
+    if !full_name.is_empty() {
+        Some(full_name)
+    } else {
+        username.filter(|value| !value.trim().is_empty())
+    }
+}
+
+fn assessment_hotspot_score(total: i64, critical: i64, kev: i64, nis2: i64) -> f64 {
+    if total <= 0 {
+        return 0.0;
+    }
+    let total = total as f64;
+    let critical_ratio = critical as f64 / total;
+    let kev_ratio = kev as f64 / total;
+    let nis2_ratio = nis2 as f64 / total;
+    let score = ((critical_ratio * 0.5) + (kev_ratio * 0.3) + (nis2_ratio * 0.2)) * 100.0;
+    (score * 100.0).round() / 100.0
 }
 
 #[cfg(test)]

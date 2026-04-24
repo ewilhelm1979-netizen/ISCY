@@ -381,6 +381,11 @@ struct WebImportCsvForm {
     csv_data: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebCveLlmTestForm {
+    prompt: Option<String>,
+}
+
 fn deserialize_optional_form_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -487,6 +492,34 @@ pub struct CveFeedResponse {
 pub struct CveDetailResponse {
     pub api_version: &'static str,
     pub cve: cve_store::CveRecordDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CveAssessmentRegisterResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub summary: cve_store::CveAssessmentDashboardSummary,
+    pub assessments: Vec<cve_store::CveAssessmentSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CveAssessmentDetailResponse {
+    pub api_version: &'static str,
+    pub assessment: cve_store::CveAssessmentDetail,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LlmRuntimeInfo {
+    backend: &'static str,
+    model_name: String,
+    model_path: Option<String>,
+    import_ok: bool,
+    runtime_ok: bool,
+    n_ctx: u32,
+    n_threads: u32,
+    n_gpu_layers: i32,
+    note: String,
+    error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -5472,6 +5505,28 @@ async fn web_cves(
             )
         }
     };
+    let assessment_summary = match store.assessment_dashboard_summary(context.tenant_id).await {
+        Ok(summary) => summary,
+        Err(err) => {
+            return web_error_page(
+                "Vulnerability Intelligence",
+                "/cves/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let assessments = match store.list_assessments(context.tenant_id, 20).await {
+        Ok(items) => items,
+        Err(err) => {
+            return web_error_page(
+                "Vulnerability Intelligence",
+                "/cves/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
     let rows = cves
         .iter()
         .map(|cve| {
@@ -5488,10 +5543,46 @@ async fn web_cves(
         })
         .collect::<Vec<_>>()
         .join("");
+    let assessment_rows = assessments
+        .iter()
+        .map(|assessment| {
+            let mut flags = Vec::new();
+            if assessment.in_kev_catalog {
+                flags.push("KEV");
+            }
+            if assessment.nis2_relevant {
+                flags.push("NIS2");
+            }
+            let flags_display = if flags.is_empty() {
+                "-".to_string()
+            } else {
+                flags.join(", ")
+            };
+            format!(
+                r#"<tr><td><strong>{}</strong><div class="muted">{}</div></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Oeffnen</a></td></tr>"#,
+                html_escape(&assessment.cve_id),
+                html_escape(&assessment.cve_description),
+                html_escape(assessment.product_name.as_deref().unwrap_or("-")),
+                html_escape(&assessment.deterministic_priority),
+                html_escape(&assessment.llm_status_label),
+                html_escape(&flags_display),
+                html_escape(assessment.related_risk_title.as_deref().unwrap_or("-")),
+                web_path_with_context(
+                    &format!("/cves/assessments/{}", assessment.id),
+                    Some(&context),
+                ),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
     let body = format!(
         r#"
-        <section class="hero compact"><h1>Vulnerability Intelligence</h1><p>Globaler CVE-Feed im Rust-Backend. Tenant {} dient hier der Autorisierung fuer die Web-Shell.</p></section>
+        <section class="hero compact"><h1>Vulnerability Intelligence</h1><p>Globaler CVE-Feed plus tenantgebundene Assessments direkt aus Rust. Tenant {} ist aktuell aktiv.</p></section>
         <section class="metrics">
+          {}
+          {}
+          {}
+          {}
           {}
           {}
           {}
@@ -5500,6 +5591,15 @@ async fn web_cves(
         <section class="grid">
           {}
           {}
+          {}
+          {}
+          <article class="panel wide">
+            <h2>Letzte Assessments</h2>
+            <table>
+              <thead><tr><th>CVE</th><th>Produkt</th><th>Prioritaet</th><th>LLM</th><th>Flags</th><th>Risiko</th><th>Detail</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
           <article class="panel wide">
             <h2>Letzte CVEs</h2>
             <table>
@@ -5514,16 +5614,38 @@ async fn web_cves(
         metric_card("Kritisch", summary.critical),
         metric_card("KEV", summary.kev),
         metric_card("Mit EPSS", summary.with_epss),
+        metric_card("Assessments", assessment_summary.total),
+        metric_card("Mit Risiko", assessment_summary.with_risk),
+        metric_card("LLM", assessment_summary.llm_generated),
+        metric_card(
+            "Hotspot",
+            assessment_summary.risk_hotspot_score.round() as i64
+        ),
         web_link_card(
             "JSON Feed",
             &web_path_with_context("/api/v1/cves", Some(&context)),
             "API fuer Summary und aktuelle CVEs",
         ),
         web_link_card(
+            "Assessments API",
+            &web_path_with_context("/api/v1/cve-assessments", Some(&context)),
+            "Tenantgebundene CVE-Assessments als JSON",
+        ),
+        web_link_card(
+            "LLM Runtime testen",
+            &web_path_with_context("/cves/llm-test/", Some(&context)),
+            "Lokalen Rust-LLM-Test direkt aus der Web-Shell starten",
+        ),
+        web_link_card(
             "Product Security",
             &web_path_with_context("/product-security/", Some(&context)),
             "Verknuepfte Produkt- und Vulnerability-Perspektive",
         ),
+        if assessment_rows.is_empty() {
+            web_empty_row(7, "Noch keine tenantgebundenen CVE-Assessments vorhanden.")
+        } else {
+            assessment_rows
+        },
         if rows.is_empty() {
             web_empty_row(7, "Keine CVE-Records vorhanden.")
         } else {
@@ -5536,6 +5658,270 @@ async fn web_cves(
         Some(&context),
         &body,
     )
+}
+
+fn web_cve_llm_test_page(
+    context: &WebContext,
+    runtime: &LlmRuntimeInfo,
+    prompt: &str,
+    output: Option<&str>,
+) -> Html<String> {
+    let output_panel = output
+        .map(|output| {
+            format!(
+                r#"<article class="panel wide"><h2>Testausgabe</h2><pre>{}</pre></article>"#,
+                html_escape(output),
+            )
+        })
+        .unwrap_or_default();
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>LLM-Runtime-Test</h1><p>Rust-only Runtimecheck fuer Tenant {}</p></section>
+        <section class="grid">
+          <article class="panel wide">
+            <h2>Runtime</h2>
+            <table>
+              <tbody>
+                <tr><th>Status</th><td>{}</td></tr>
+                <tr><th>Backend</th><td>{}</td></tr>
+                <tr><th>Modell</th><td>{}</td></tr>
+                <tr><th>Pfad</th><td>{}</td></tr>
+                <tr><th>Import</th><td>{}</td></tr>
+                <tr><th>Kontext</th><td>{} · Threads {} · GPU-Layers {}</td></tr>
+                <tr><th>Hinweis</th><td>{}</td></tr>
+              </tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <h2>Kleinen Prompt testen</h2>
+            <form method="post" action="{}">
+              <label>Test-Prompt<textarea name="prompt" rows="6" spellcheck="false">{}</textarea></label>
+              <button type="submit">Runtime testen</button>
+            </form>
+          </article>
+          {}
+        </section>
+        "#,
+        context.tenant_id,
+        if runtime.runtime_ok {
+            "bereit"
+        } else {
+            "nicht bereit"
+        },
+        html_escape(runtime.backend),
+        html_escape(&runtime.model_name),
+        html_escape(runtime.model_path.as_deref().unwrap_or("nicht gesetzt")),
+        yes_no(runtime.import_ok),
+        runtime.n_ctx,
+        runtime.n_threads,
+        runtime.n_gpu_layers,
+        html_escape(&runtime.note),
+        web_path_with_context("/cves/llm-test/", Some(context)),
+        html_escape(prompt),
+        output_panel,
+    );
+    web_page("LLM-Runtime-Test", "/cves/llm-test/", Some(context), &body)
+}
+
+async fn web_cve_llm_test(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("LLM-Runtime-Test", "/cves/llm-test/");
+    };
+    let runtime = llm_runtime_info();
+    web_cve_llm_test_page(&context, &runtime, llm_test_default_prompt(), None)
+}
+
+async fn web_cve_llm_test_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebCveLlmTestForm>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("LLM-Runtime-Test", "/cves/llm-test/");
+    };
+    let runtime = llm_runtime_info();
+    let prompt = form
+        .prompt
+        .unwrap_or_else(|| llm_test_default_prompt().to_string());
+    let output = serde_json::to_string_pretty(&llm_generate_result(&prompt, 256).result)
+        .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string());
+    web_cve_llm_test_page(&context, &runtime, &prompt, Some(&output))
+}
+
+async fn web_cve_assessment_detail(
+    Path(assessment_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("CVE Assessment", "/cves/");
+    };
+    let Some(store) = state.cve_store else {
+        return web_store_missing("CVE Assessment", "/cves/", &context, "CVE");
+    };
+    match store
+        .assessment_detail(context.tenant_id, assessment_id)
+        .await
+    {
+        Ok(Some(assessment)) => {
+            let actions = if assessment.recommended_actions.is_empty() {
+                "<li>Keine LLM-Massnahmen vorhanden.</li>".to_string()
+            } else {
+                assessment
+                    .recommended_actions
+                    .iter()
+                    .map(|item| format!(r#"<li>{}</li>"#, html_escape(item)))
+                    .collect::<Vec<_>>()
+                    .join("")
+            };
+            let evidence = if assessment.evidence_needed.is_empty() {
+                "<li>Keine spezifischen Evidenzen vorgeschlagen.</li>".to_string()
+            } else {
+                assessment
+                    .evidence_needed
+                    .iter()
+                    .map(|item| format!(r#"<li>{}</li>"#, html_escape(item)))
+                    .collect::<Vec<_>>()
+                    .join("")
+            };
+            let repository_display = if assessment.repository_name.trim().is_empty() {
+                "-".to_string()
+            } else {
+                assessment.repository_name.clone()
+            };
+            let git_ref_display = if assessment.git_ref.trim().is_empty() {
+                "-".to_string()
+            } else {
+                assessment.git_ref.clone()
+            };
+            let package_display = if assessment.source_package.trim().is_empty() {
+                "-".to_string()
+            } else if assessment.source_package_version.trim().is_empty() {
+                assessment.source_package.clone()
+            } else {
+                format!(
+                    "{} {}",
+                    assessment.source_package, assessment.source_package_version
+                )
+            };
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>{}</h1><p>{}</p></section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <h2>Kontext & Deterministik</h2>
+                    <table>
+                      <tbody>
+                        <tr><th>Produkt</th><td>{}</td></tr>
+                        <tr><th>Release</th><td>{}</td></tr>
+                        <tr><th>Komponente</th><td>{}</td></tr>
+                        <tr><th>Exponierung</th><td>{}</td></tr>
+                        <tr><th>Kritikalitaet</th><td>{}</td></tr>
+                        <tr><th>EPSS</th><td>{}</td></tr>
+                        <tr><th>KEV</th><td>{}</td></tr>
+                        <tr><th>Exploit-Reife</th><td>{}</td></tr>
+                        <tr><th>NIS2</th><td>{}</td></tr>
+                        <tr><th>Prioritaet</th><td>{}</td></tr>
+                        <tr><th>Frist</th><td>{} Tage</td></tr>
+                        <tr><th>Risiko</th><td>{}</td></tr>
+                        <tr><th>Schwachstelle</th><td>{}</td></tr>
+                        <tr><th>Repository</th><td>{}</td></tr>
+                        <tr><th>Git-Ref</th><td>{}</td></tr>
+                        <tr><th>Paket</th><td>{}</td></tr>
+                        <tr><th>Confidence</th><td>{}</td></tr>
+                      </tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Technische Zusammenfassung</h2>
+                    <p>{}</p>
+                    <h3>Business Impact</h3>
+                    <p>{}</p>
+                    <h3>Angriffsweg</h3>
+                    <p>{}</p>
+                    <h3>Management Summary</h3>
+                    <p>{}</p>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Empfohlene Massnahmen</h2>
+                    <ul>{}</ul>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Benoetigte Evidenzen</h2>
+                    <ul>{}</ul>
+                  </article>
+                </section>
+                "#,
+                html_escape(&assessment.summary.cve_id),
+                html_escape(&assessment.summary.cve_description),
+                html_escape(assessment.summary.product_name.as_deref().unwrap_or("-")),
+                html_escape(assessment.summary.release_version.as_deref().unwrap_or("-")),
+                html_escape(assessment.summary.component_name.as_deref().unwrap_or("-")),
+                html_escape(&assessment.summary.exposure_label),
+                html_escape(&assessment.summary.asset_criticality_label),
+                html_escape(assessment.summary.epss_score.as_deref().unwrap_or("-")),
+                yes_no(assessment.summary.in_kev_catalog),
+                html_escape(&assessment.summary.exploit_maturity_label),
+                yes_no(assessment.summary.nis2_relevant),
+                html_escape(&assessment.summary.deterministic_priority),
+                assessment.summary.deterministic_due_days,
+                html_escape(
+                    assessment
+                        .summary
+                        .related_risk_title
+                        .as_deref()
+                        .unwrap_or("-")
+                ),
+                html_escape(
+                    assessment
+                        .summary
+                        .linked_vulnerability_title
+                        .as_deref()
+                        .unwrap_or("-"),
+                ),
+                html_escape(&repository_display),
+                html_escape(&git_ref_display),
+                html_escape(&package_display),
+                html_escape(&assessment.summary.confidence),
+                html_escape(if assessment.technical_summary.trim().is_empty() {
+                    "Noch keine LLM-Zusammenfassung vorhanden."
+                } else {
+                    assessment.technical_summary.as_str()
+                }),
+                html_escape(if assessment.business_impact.trim().is_empty() {
+                    "-"
+                } else {
+                    assessment.business_impact.as_str()
+                }),
+                html_escape(if assessment.attack_path.trim().is_empty() {
+                    "-"
+                } else {
+                    assessment.attack_path.as_str()
+                }),
+                html_escape(if assessment.management_summary.trim().is_empty() {
+                    "-"
+                } else {
+                    assessment.management_summary.as_str()
+                }),
+                actions,
+                evidence,
+            );
+            web_page("CVE Assessment", "/cves/", Some(&context), &body)
+        }
+        Ok(None) => web_error_page(
+            "CVE Assessment",
+            "/cves/",
+            &context,
+            "Assessment wurde nicht gefunden.",
+        ),
+        Err(err) => web_error_page("CVE Assessment", "/cves/", &context, &err.to_string()),
+    }
 }
 async fn web_navigator(
     State(state): State<AppState>,
@@ -7145,6 +7531,148 @@ async fn cve_detail(
     }
 }
 
+async fn cve_assessment_register(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.cve_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-CVE-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    let summary = match store.assessment_dashboard_summary(context.tenant_id).await {
+        Ok(summary) => summary,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "database_error",
+                    message: format!("CVE-Assessment-Summary konnte nicht gelesen werden: {err}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let assessments = match store.list_assessments(context.tenant_id, 100).await {
+        Ok(assessments) => assessments,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "database_error",
+                    message: format!("CVE-Assessments konnten nicht gelesen werden: {err}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(CveAssessmentRegisterResponse {
+            api_version: "v1",
+            tenant_id: context.tenant_id,
+            summary,
+            assessments,
+        }),
+    )
+        .into_response()
+}
+
+async fn cve_assessment_detail(
+    Path(assessment_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.cve_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-CVE-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .assessment_detail(context.tenant_id, assessment_id)
+        .await
+    {
+        Ok(Some(assessment)) => (
+            StatusCode::OK,
+            Json(CveAssessmentDetailResponse {
+                api_version: "v1",
+                assessment,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "cve_assessment_not_found",
+                message: format!("CVE-Assessment '{}' wurde nicht gefunden.", assessment_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("CVE-Assessment konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn nvd_normalize(Json(payload): Json<NvdImportRequest>) -> Response {
     nvd_normalize_response(payload)
 }
@@ -7230,10 +7758,47 @@ async fn nvd_upsert(
         .into_response()
 }
 
-async fn llm_generate(Json(payload): Json<LlmGenerateRequest>) -> Json<LlmGenerateResponse> {
-    let excerpt: String = payload.prompt.chars().take(240).collect();
-    let max_tokens = payload.max_tokens.unwrap_or(900);
-    Json(LlmGenerateResponse {
+fn llm_runtime_info() -> LlmRuntimeInfo {
+    let model_name = std::env::var("LOCAL_LLM_MODEL_NAME")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "iscy-rust-llm-stub-v1".to_string());
+    let model_path = std::env::var("LOCAL_LLM_MODEL_PATH")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let n_ctx = std::env::var("LOCAL_LLM_N_CTX")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(8192);
+    let n_threads = std::env::var("LOCAL_LLM_N_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(4);
+    let n_gpu_layers = std::env::var("LOCAL_LLM_N_GPU_LAYERS")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(0);
+    LlmRuntimeInfo {
+        backend: "rust_service",
+        model_name,
+        model_path,
+        import_ok: true,
+        runtime_ok: true,
+        n_ctx,
+        n_threads,
+        n_gpu_layers,
+        note: "Rust-only Session nutzt aktuell den integrierten lokalen Stub fuer CVE-Enrichment und Runtime-Tests.".to_string(),
+        error: None,
+    }
+}
+
+fn llm_test_default_prompt() -> &'static str {
+    "Return exactly this JSON: {\"status\":\"ok\",\"message\":\"local-llm-ready\"}"
+}
+
+fn llm_generate_result(prompt: &str, max_tokens: u32) -> LlmGenerateResponse {
+    let excerpt: String = prompt.chars().take(240).collect();
+    LlmGenerateResponse {
         backend: "rust_service",
         model: "iscy-rust-llm-stub-v1",
         result: serde_json::json!({
@@ -7254,7 +7819,14 @@ async fn llm_generate(Json(payload): Json<LlmGenerateRequest>) -> Json<LlmGenera
             "confidence": "medium",
             "max_tokens_requested": max_tokens
         }),
-    })
+    }
+}
+
+async fn llm_generate(Json(payload): Json<LlmGenerateRequest>) -> Json<LlmGenerateResponse> {
+    Json(llm_generate_result(
+        &payload.prompt,
+        payload.max_tokens.unwrap_or(900),
+    ))
 }
 
 async fn risk_priority(Json(payload): Json<RiskPriorityRequest>) -> Json<RiskPriorityResponse> {
@@ -7528,6 +8100,11 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/cves", get(cve_feed))
         .route("/api/v1/cves/{cve_id}", get(cve_detail))
+        .route("/api/v1/cve-assessments", get(cve_assessment_register))
+        .route(
+            "/api/v1/cve-assessments/{assessment_id}",
+            get(cve_assessment_detail),
+        )
         .route("/api/v1/requirements", get(requirement_library))
         .route("/", get(web_index))
         .route("/login/", get(web_login).post(web_login_submit))
@@ -7552,6 +8129,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/admin/users/{user_id}", post(web_admin_user_update))
         .route("/product-security/", get(web_product_security))
         .route("/cves/", get(web_cves))
+        .route(
+            "/cves/llm-test/",
+            get(web_cve_llm_test).post(web_cve_llm_test_submit),
+        )
+        .route(
+            "/cves/assessments/{assessment_id}",
+            get(web_cve_assessment_detail),
+        )
         .route("/api/v1/nvd/normalize", post(nvd_normalize))
         .route("/api/v1/nvd/import", post(nvd_import))
         .route("/api/v1/nvd/upsert", post(nvd_upsert))
