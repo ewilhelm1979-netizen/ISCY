@@ -4056,6 +4056,139 @@ async fn rust_web_processes_renders_register_from_database() {
 }
 
 #[tokio::test]
+async fn rust_web_catalog_renders_domain_library_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_catalog_tables(&pool).await;
+    insert_catalog_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_catalog_store(Some(CatalogStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/catalog/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Governance"));
+    assert!(html.contains("GOV-APP-1"));
+    assert!(html.contains("Ist der NIS2-Scope geklaert?"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_requirements_renders_library_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_requirement_tables(&pool).await;
+    insert_requirement_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_requirement_store(Some(RequirementStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/requirements/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("ISO 27001 Mapping"));
+    assert!(html.contains("Authentication Information"));
+    assert!(html.contains("A.5.17"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_assessments_renders_registers_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_assessment_tables(&pool).await;
+    insert_assessment_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_assessment_store(Some(AssessmentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/assessments/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Incident Intake"));
+    assert!(html.contains("Authentication Information"));
+    assert!(html.contains("Policy aktualisieren"));
+    assert!(html.contains("Voraussichtlich relevant"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_organizations_renders_tenant_profile_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_tenant_table(&pool).await;
+    insert_tenant(&pool).await;
+    let app = app_router_with_state(AppState::with_stores(
+        None,
+        Some(TenantStore::from_sqlite_pool(pool.clone())),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/organizations/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Tenant SOC"));
+    assert!(html.contains("Managed Security Provider"));
+    assert!(html.contains("SOC und Incident Response"));
+    assert!(html.contains("tenant-soc"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
 async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)

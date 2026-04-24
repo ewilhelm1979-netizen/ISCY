@@ -52,6 +52,7 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
 - `organizations` hat den ersten echten App-Read-Slice in Rust:
   - `GET /api/v1/organizations/tenant-profile` liest das Tenant-Profil ueber den Rust-Tenant-Store
   - die Route ist durch `X-ISCY-User-ID` und `X-ISCY-Tenant-ID` geschuetzt
+  - `/organizations/` rendert das tenantgebundene Organisationsprofil direkt aus dem Rust-Store
 - `dashboard` bekommt den naechsten Read-Slice in Rust:
   - `GET /api/v1/dashboard/summary` liefert tenantgebundene Zaehler fuer Prozesse, Assets, offene Risiken, Evidenzen, offene Roadmap-Tasks und den neuesten Report
   - die Route nutzt denselben geschuetzten Tenant-Kontext wie die Organizations-API
@@ -81,10 +82,12 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/assessments/applicability` liefert Betroffenheitsanalysen fuer den aktuellen Tenant
   - `GET /api/v1/assessments` liefert Prozess-/Requirement-Assessments inklusive Prozess-, Requirement- und Owner-Anzeige
   - `GET /api/v1/assessments/measures` liefert Massnahmen inklusive Assessment- und Owner-Anzeige
+  - `/assessments/` rendert Applicability, Assessments und Measures als kombinierte Rust-Webseite
   - Django kann die drei Listen ueber `ASSESSMENT_REGISTER_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
 - `catalog` und `requirements_app` haben tenantkontext-geschuetzte Read-APIs in Rust:
   - `GET /api/v1/catalog/domains` liefert Domaenen inklusive eingebetteter Fragen und Gesamtzaehler
   - `GET /api/v1/requirements` liefert Requirements inklusive Mapping-Versionen und Primaerquellen
+  - `/catalog/` und `/requirements/` rendern die Bibliotheken direkt aus den Rust-Stores
   - Django kann Fragenkatalog und Requirement Library ueber `CATALOG_BACKEND=rust_service` und `REQUIREMENTS_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
 - `roadmap` hat tenantgeschuetzte Read-/Update-APIs in Rust:
   - `GET /api/v1/roadmap/plans` liefert Roadmap-Planlisten inklusive Phasen-/Task-Zaehlern fuer den aktuellen Tenant

@@ -4115,8 +4115,82 @@ async fn web_catalog(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let context = web_context_from_request(&query, &headers, &state).await;
-    web_static_section("Catalog", "/catalog/", context.as_ref())
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Catalog", "/catalog/");
+    };
+    let Some(store) = state.catalog_store else {
+        return web_store_missing("Catalog", "/catalog/", &context, "Catalog");
+    };
+    match store.domain_library().await {
+        Ok(library) => {
+            let domain_cards = library
+                .domains
+                .iter()
+                .map(|domain| {
+                    let question_rows = domain
+                        .questions
+                        .iter()
+                        .take(4)
+                        .map(|question| {
+                            format!(
+                                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                                html_escape(&question.code),
+                                html_escape(&question.text),
+                                html_escape(&question.question_kind_label),
+                                html_escape(&question.wizard_step_label),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    format!(
+                        r#"
+                        <article class="panel wide">
+                          <h2>{}</h2>
+                          <p>{}</p>
+                          <p class="muted">Code {} · {} Fragen</p>
+                          <table>
+                            <thead><tr><th>Frage</th><th>Text</th><th>Typ</th><th>Wizard</th></tr></thead>
+                            <tbody>{}</tbody>
+                          </table>
+                        </article>
+                        "#,
+                        html_escape(&domain.name),
+                        html_escape(&domain.description),
+                        html_escape(&domain.code),
+                        domain.question_count,
+                        if question_rows.is_empty() {
+                            web_empty_row(4, "Keine Fragen vorhanden.")
+                        } else {
+                            question_rows
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Catalog</h1><p>{} Domaenen · {} Fragen</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                </section>
+                <section class="grid">{}</section>
+                "#,
+                library.domains.len(),
+                library.question_count,
+                metric_card("Domaenen", library.domains.len() as i64),
+                metric_card("Fragen", library.question_count),
+                if domain_cards.is_empty() {
+                    r#"<article class="panel wide"><p>Keine Domaenen vorhanden.</p></article>"#
+                        .to_string()
+                } else {
+                    domain_cards
+                },
+            );
+            web_page("Catalog", "/catalog/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Catalog", "/catalog/", &context, &err.to_string()),
+    }
 }
 async fn web_reports(
     State(state): State<AppState>,
@@ -4500,24 +4574,320 @@ async fn web_requirements(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let context = web_context_from_request(&query, &headers, &state).await;
-    web_static_section("Requirements", "/requirements/", context.as_ref())
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Requirements", "/requirements/");
+    };
+    let Some(store) = state.requirement_store else {
+        return web_store_missing("Requirements", "/requirements/", &context, "Requirement");
+    };
+    match store.library(200).await {
+        Ok(library) => {
+            let active_count = library
+                .requirements
+                .iter()
+                .filter(|requirement| requirement.is_active)
+                .count() as i64;
+            let version_rows = library
+                .mapping_versions
+                .iter()
+                .map(|version| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&version.framework),
+                        html_escape(&version.title),
+                        html_escape(&version.version),
+                        html_escape(&version.status_label),
+                        version.requirement_count,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let requirement_rows = library
+                .requirements
+                .iter()
+                .map(|requirement| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&requirement.framework_label),
+                        html_escape(&requirement.code),
+                        html_escape(&requirement.title),
+                        html_escape(&requirement.domain),
+                        html_escape(&requirement.coverage_level_label),
+                        html_escape(
+                            requirement
+                                .primary_source
+                                .as_ref()
+                                .map(|source| source.citation.as_str())
+                                .unwrap_or("-"),
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Requirements</h1><p>{} Anforderungen · {} aktive</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <h2>Mapping-Versionen</h2>
+                    <table>
+                      <thead><tr><th>Framework</th><th>Titel</th><th>Version</th><th>Status</th><th>Requirements</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Requirement Library</h2>
+                    <table>
+                      <thead><tr><th>Framework</th><th>Code</th><th>Titel</th><th>Domain</th><th>Coverage</th><th>Quelle</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                </section>
+                "#,
+                library.requirements.len(),
+                active_count,
+                metric_card("Requirements", library.requirements.len() as i64),
+                metric_card("Aktiv", active_count),
+                metric_card("Mappings", library.mapping_versions.len() as i64),
+                if version_rows.is_empty() {
+                    web_empty_row(5, "Keine Mapping-Versionen vorhanden.")
+                } else {
+                    version_rows
+                },
+                if requirement_rows.is_empty() {
+                    web_empty_row(6, "Keine Requirements vorhanden.")
+                } else {
+                    requirement_rows
+                },
+            );
+            web_page("Requirements", "/requirements/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Requirements", "/requirements/", &context, &err.to_string()),
+    }
 }
 async fn web_assessments(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let context = web_context_from_request(&query, &headers, &state).await;
-    web_static_section("Assessments", "/assessments/", context.as_ref())
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Assessments", "/assessments/");
+    };
+    let Some(store) = state.assessment_store else {
+        return web_store_missing("Assessments", "/assessments/", &context, "Assessment");
+    };
+    let applicability = match store.list_applicability(context.tenant_id, 50).await {
+        Ok(items) => items,
+        Err(err) => {
+            return web_error_page("Assessments", "/assessments/", &context, &err.to_string())
+        }
+    };
+    let assessments = match store.list_assessments(context.tenant_id, 100).await {
+        Ok(items) => items,
+        Err(err) => {
+            return web_error_page("Assessments", "/assessments/", &context, &err.to_string())
+        }
+    };
+    let measures = match store.list_measures(context.tenant_id, 100).await {
+        Ok(items) => items,
+        Err(err) => {
+            return web_error_page("Assessments", "/assessments/", &context, &err.to_string())
+        }
+    };
+
+    let applicability_rows = applicability
+        .iter()
+        .map(|item| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&item.sector),
+                html_escape(&item.company_size),
+                html_escape(&item.status_label),
+                html_escape(&item.reasoning),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let assessment_rows = assessments
+        .iter()
+        .map(|item| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&item.process_name),
+                html_escape(&item.requirement_code),
+                html_escape(&item.requirement_title),
+                html_escape(&item.status_label),
+                html_escape(item.owner_display.as_deref().unwrap_or("-")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let measure_rows = measures
+        .iter()
+        .map(|item| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&item.title),
+                html_escape(&item.priority_label),
+                html_escape(&item.status_label),
+                html_escape(item.owner_display.as_deref().unwrap_or("-")),
+                html_escape(item.due_date.as_deref().unwrap_or("-")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p></section>
+        <section class="metrics">
+          {}
+          {}
+          {}
+        </section>
+        <section class="grid">
+          <article class="panel wide">
+            <h2>Applicability</h2>
+            <table>
+              <thead><tr><th>Sektor</th><th>Groesse</th><th>Status</th><th>Begruendung</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <h2>Assessments</h2>
+            <table>
+              <thead><tr><th>Prozess</th><th>Requirement</th><th>Titel</th><th>Status</th><th>Owner</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <h2>Measures</h2>
+            <table>
+              <thead><tr><th>Titel</th><th>Prioritaet</th><th>Status</th><th>Owner</th><th>Faellig</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+        </section>
+        "#,
+        context.tenant_id,
+        assessments.len(),
+        measures.len(),
+        metric_card("Applicability", applicability.len() as i64),
+        metric_card("Assessments", assessments.len() as i64),
+        metric_card("Measures", measures.len() as i64),
+        if applicability_rows.is_empty() {
+            web_empty_row(4, "Keine Betroffenheitsanalyse vorhanden.")
+        } else {
+            applicability_rows
+        },
+        if assessment_rows.is_empty() {
+            web_empty_row(5, "Keine Assessments vorhanden.")
+        } else {
+            assessment_rows
+        },
+        if measure_rows.is_empty() {
+            web_empty_row(5, "Keine Measures vorhanden.")
+        } else {
+            measure_rows
+        },
+    );
+    web_page("Assessments", "/assessments/", Some(&context), &body)
 }
 async fn web_organizations(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let context = web_context_from_request(&query, &headers, &state).await;
-    web_static_section("Organizations", "/organizations/", context.as_ref())
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Organizations", "/organizations/");
+    };
+    let Some(store) = state.tenant_store else {
+        return web_store_missing("Organizations", "/organizations/", &context, "Tenant");
+    };
+    match store.tenant_profile(context.tenant_id).await {
+        Ok(Some(tenant)) => {
+            let operation_countries = if tenant.operation_countries.is_empty() {
+                "-".to_string()
+            } else {
+                html_escape(&tenant.operation_countries.join(", "))
+            };
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Organizations</h1><p>{}</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="panel wide">
+                  <table>
+                    <tbody>
+                      <tr><th>Slug</th><td>{}</td></tr>
+                      <tr><th>Land</th><td>{}</td></tr>
+                      <tr><th>Operationslaender</th><td>{}</td></tr>
+                      <tr><th>Sektor</th><td>{}</td></tr>
+                      <tr><th>Mitarbeitende</th><td>{}</td></tr>
+                      <tr><th>Umsatz Mio.</th><td>{}</td></tr>
+                      <tr><th>Bilanzsumme Mio.</th><td>{}</td></tr>
+                      <tr><th>Kritische Services</th><td>{}</td></tr>
+                      <tr><th>Supply Chain Rolle</th><td>{}</td></tr>
+                      <tr><th>NIS2 relevant</th><td>{}</td></tr>
+                      <tr><th>KRITIS relevant</th><td>{}</td></tr>
+                      <tr><th>Digitale Produkte</th><td>{}</td></tr>
+                      <tr><th>AI Systeme</th><td>{}</td></tr>
+                      <tr><th>OT / IACS</th><td>{}</td></tr>
+                      <tr><th>Automotive</th><td>{}</td></tr>
+                      <tr><th>PSIRT definiert</th><td>{}</td></tr>
+                      <tr><th>SBOM erforderlich</th><td>{}</td></tr>
+                      <tr><th>Product Security Scope</th><td>{}</td></tr>
+                      <tr><th>Beschreibung</th><td>{}</td></tr>
+                    </tbody>
+                  </table>
+                </section>
+                "#,
+                html_escape(&tenant.name),
+                metric_card("Mitarbeitende", tenant.employee_count),
+                metric_card("Laender", tenant.operation_countries.len() as i64),
+                metric_card("Tenant-ID", tenant.id),
+                html_escape(&tenant.slug),
+                html_escape(&tenant.country),
+                operation_countries,
+                html_escape(&tenant.sector),
+                tenant.employee_count,
+                html_escape(&tenant.annual_revenue_million),
+                html_escape(&tenant.balance_sheet_million),
+                html_escape(&tenant.critical_services),
+                html_escape(&tenant.supply_chain_role),
+                yes_no(tenant.nis2_relevant),
+                yes_no(tenant.kritis_relevant),
+                yes_no(tenant.develops_digital_products),
+                yes_no(tenant.uses_ai_systems),
+                yes_no(tenant.ot_iacs_scope),
+                yes_no(tenant.automotive_scope),
+                yes_no(tenant.psirt_defined),
+                yes_no(tenant.sbom_required),
+                html_escape(&tenant.product_security_scope),
+                html_escape(&tenant.description),
+            );
+            web_page("Organizations", "/organizations/", Some(&context), &body)
+        }
+        Ok(None) => web_error_page(
+            "Organizations",
+            "/organizations/",
+            &context,
+            "Tenant wurde fuer diesen Kontext nicht gefunden.",
+        ),
+        Err(err) => web_error_page(
+            "Organizations",
+            "/organizations/",
+            &context,
+            &err.to_string(),
+        ),
+    }
 }
 async fn web_admin_users(
     State(state): State<AppState>,
