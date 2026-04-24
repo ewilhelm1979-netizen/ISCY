@@ -476,6 +476,20 @@ pub struct ProductSecurityVulnerabilityUpdateResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct CveFeedResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub summary: cve_store::CveDashboardSummary,
+    pub cves: Vec<cve_store::CveRecordSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CveDetailResponse {
+    pub api_version: &'static str,
+    pub cve: cve_store::CveRecordDetail,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RiskRegisterResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
@@ -5430,8 +5444,98 @@ async fn web_cves(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let context = web_context_from_request(&query, &headers, &state).await;
-    web_static_section("Vulnerability Intelligence", "/cves/", context.as_ref())
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Vulnerability Intelligence", "/cves/");
+    };
+    let Some(store) = state.cve_store else {
+        return web_store_missing("Vulnerability Intelligence", "/cves/", &context, "CVE");
+    };
+    let summary = match store.dashboard_summary().await {
+        Ok(summary) => summary,
+        Err(err) => {
+            return web_error_page(
+                "Vulnerability Intelligence",
+                "/cves/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let cves = match store.list_recent(50).await {
+        Ok(cves) => cves,
+        Err(err) => {
+            return web_error_page(
+                "Vulnerability Intelligence",
+                "/cves/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let rows = cves
+        .iter()
+        .map(|cve| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&cve.cve_id),
+                html_escape(&cve.severity_label),
+                html_escape(cve.cvss_score.as_deref().unwrap_or("-")),
+                html_escape(cve.epss_score.as_deref().unwrap_or("-")),
+                yes_no(cve.in_kev_catalog),
+                html_escape(cve.published_at.as_deref().unwrap_or("-")),
+                html_escape(&cve.description),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>Vulnerability Intelligence</h1><p>Globaler CVE-Feed im Rust-Backend. Tenant {} dient hier der Autorisierung fuer die Web-Shell.</p></section>
+        <section class="metrics">
+          {}
+          {}
+          {}
+          {}
+        </section>
+        <section class="grid">
+          {}
+          {}
+          <article class="panel wide">
+            <h2>Letzte CVEs</h2>
+            <table>
+              <thead><tr><th>CVE</th><th>Severity</th><th>CVSS</th><th>EPSS</th><th>KEV</th><th>Publiziert</th><th>Beschreibung</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+        </section>
+        "#,
+        context.tenant_id,
+        metric_card("Records", summary.total),
+        metric_card("Kritisch", summary.critical),
+        metric_card("KEV", summary.kev),
+        metric_card("Mit EPSS", summary.with_epss),
+        web_link_card(
+            "JSON Feed",
+            &web_path_with_context("/api/v1/cves", Some(&context)),
+            "API fuer Summary und aktuelle CVEs",
+        ),
+        web_link_card(
+            "Product Security",
+            &web_path_with_context("/product-security/", Some(&context)),
+            "Verknuepfte Produkt- und Vulnerability-Perspektive",
+        ),
+        if rows.is_empty() {
+            web_empty_row(7, "Keine CVE-Records vorhanden.")
+        } else {
+            rows
+        },
+    );
+    web_page(
+        "Vulnerability Intelligence",
+        "/cves/",
+        Some(&context),
+        &body,
+    )
 }
 async fn web_navigator(
     State(state): State<AppState>,
@@ -5714,32 +5818,6 @@ impl WebContextQuery {
                 .filter(|value| !value.trim().is_empty()),
         })
     }
-}
-
-fn web_static_section(
-    title: &'static str,
-    path: &'static str,
-    context: Option<&WebContext>,
-) -> Html<String> {
-    let body = format!(
-        r#"<section class="hero compact"><h1>{}</h1><p>Rust-Webroute aktiv.</p></section>
-        <section class="grid">
-          {}
-          {}
-        </section>"#,
-        html_escape(title),
-        web_link_card(
-            "JSON API",
-            &web_path_with_context(&format!("/api/v1{}", path.trim_end_matches('/')), context),
-            "Datenvertrag"
-        ),
-        web_link_card(
-            "Dashboard",
-            &web_path_with_context("/dashboard/", context),
-            "Zurueck zur Uebersicht"
-        ),
-    );
-    web_page(title, path, context, &body)
 }
 
 fn web_missing_context(title: &'static str, active_path: &'static str) -> Html<String> {
@@ -6046,6 +6124,7 @@ fn web_page(
     let nav_items = [
         ("/dashboard/", "Dashboard"),
         ("/navigator/", "Navigator"),
+        ("/cves/", "CVEs"),
         ("/risks/", "Risks"),
         ("/evidence/", "Evidence"),
         ("/roadmap/", "Roadmap"),
@@ -6911,6 +6990,161 @@ fn html_escape(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+async fn cve_feed(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.cve_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-CVE-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    let summary = match store.dashboard_summary().await {
+        Ok(summary) => summary,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "database_error",
+                    message: format!("CVE-Summary konnte nicht gelesen werden: {err}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let cves = match store.list_recent(100).await {
+        Ok(cves) => cves,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "database_error",
+                    message: format!("CVE-Liste konnte nicht gelesen werden: {err}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(CveFeedResponse {
+            api_version: "v1",
+            tenant_id: context.tenant_id,
+            summary,
+            cves,
+        }),
+    )
+        .into_response()
+}
+
+async fn cve_detail(
+    Path(cve_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let _context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let normalized = normalize_cve_id(&cve_id);
+    if normalized.is_empty() || !is_valid_cve_id(&normalized) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_cve_id",
+                message: format!(
+                    "CVE-ID '{}' entspricht nicht dem erwarteten Format CVE-YYYY-NNNN.",
+                    normalized
+                ),
+            }),
+        )
+            .into_response();
+    }
+
+    let Some(store) = state.cve_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-CVE-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.detail(&normalized).await {
+        Ok(Some(cve)) => (
+            StatusCode::OK,
+            Json(CveDetailResponse {
+                api_version: "v1",
+                cve,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "cve_not_found",
+                message: format!("CVE '{}' wurde nicht gefunden.", normalized),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("CVE-Detail konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn nvd_normalize(Json(payload): Json<NvdImportRequest>) -> Response {
     nvd_normalize_response(payload)
 }
@@ -7292,6 +7526,8 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/reports/snapshots/{report_id}",
             get(report_snapshot_detail),
         )
+        .route("/api/v1/cves", get(cve_feed))
+        .route("/api/v1/cves/{cve_id}", get(cve_detail))
         .route("/api/v1/requirements", get(requirement_library))
         .route("/", get(web_index))
         .route("/login/", get(web_login).post(web_login_submit))

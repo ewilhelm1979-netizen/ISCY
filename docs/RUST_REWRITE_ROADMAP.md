@@ -115,6 +115,11 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `PATCH /api/v1/product-security/vulnerabilities/{vulnerability_id}` aktualisiert Schweregrad, Status, Remediation-Datum und Zusammenfassung tenantgeschuetzt
   - `/product-security/` rendert Matrix, Kennzahlen, Produktliste und Snapshots direkt aus dem Rust-Store
   - Django kann Product-Security-Liste, Produktdetail, Roadmap, Roadmap-Task-Updates und Schwachstellen-Updates ueber `PRODUCT_SECURITY_BACKEND=rust_service` aus Rust bedienen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
+- `vulnerability_intelligence` hat nun den ersten echten Rust-Read-Slice ueber den globalen CVE-Feed:
+  - `GET /api/v1/cves` liefert Kennzahlen und die aktuelle CVE-Liste aus `vulnerability_intelligence_cverecord`
+  - `GET /api/v1/cves/{cve_id}` liefert Schwachstellen-Detaildaten inklusive Weaknesses, Referenzen, KEV-Flags und Raw-JSON
+  - `/cves/` rendert den CVE-Feed direkt aus dem Rust-Store
+  - die tenantgebundenen CVE-Assessment-/LLM-/Risk-Enrichment-Flows bleiben vorerst noch in Django
 
 ## App-Migrationsreihenfolge
 

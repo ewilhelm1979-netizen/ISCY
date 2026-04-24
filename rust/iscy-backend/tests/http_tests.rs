@@ -4264,6 +4264,39 @@ async fn rust_web_product_security_renders_overview_from_database() {
 }
 
 #[tokio::test]
+async fn rust_web_cves_renders_feed_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/cves/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Vulnerability Intelligence"));
+    assert!(html.contains("CVE-2026-1001"));
+    assert!(html.contains("Kritisch"));
+    assert!(html.contains("Rust auth bypass vulnerability"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
 async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -4490,6 +4523,121 @@ async fn nvd_import_endpoint_normalizes_cve_id() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn cve_feed_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cves")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn cve_feed_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cves")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn cve_feed_returns_recent_records_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cves")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["summary"]["total"], 3);
+    assert_eq!(payload["summary"]["critical"], 1);
+    assert_eq!(payload["summary"]["kev"], 1);
+    assert_eq!(payload["summary"]["with_epss"], 2);
+    assert_eq!(payload["cves"][0]["cve_id"], "CVE-2026-1001");
+    assert_eq!(payload["cves"][0]["severity_label"], "Kritisch");
+}
+
+#[tokio::test]
+async fn cve_detail_returns_record_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/cves/CVE-2026-1001")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["cve"]["cve_id"], "CVE-2026-1001");
+    assert_eq!(payload["cve"]["severity"], "CRITICAL");
+    assert_eq!(payload["cve"]["weakness_ids"][0], "CWE-287");
+    assert_eq!(
+        payload["cve"]["references"][0],
+        "https://example.test/CVE-2026-1001"
+    );
 }
 
 #[tokio::test]
@@ -8875,6 +9023,113 @@ async fn create_cverecord_table(pool: &SqlitePool) {
             published_at TEXT NULL,
             modified_at TEXT NULL
         )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_cverecord_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO vulnerability_intelligence_cverecord (
+            id,
+            created_at,
+            updated_at,
+            cve_id,
+            source,
+            description,
+            cvss_score,
+            cvss_vector,
+            severity,
+            weakness_ids_json,
+            references_json,
+            configurations_json,
+            epss_score,
+            in_kev_catalog,
+            kev_date_added,
+            kev_vendor_project,
+            kev_product,
+            kev_required_action,
+            kev_known_ransomware,
+            raw_json,
+            published_at,
+            modified_at
+        )
+        VALUES
+            (
+                1,
+                '2026-04-20T10:00:00Z',
+                '2026-04-21T10:00:00Z',
+                'CVE-2026-1001',
+                'NVD',
+                'Rust auth bypass vulnerability',
+                '9.8',
+                'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H',
+                'CRITICAL',
+                '["CWE-287"]',
+                '["https://example.test/CVE-2026-1001"]',
+                '[]',
+                '0.9130',
+                1,
+                '2026-04-21',
+                'ISCY',
+                'Auth Gateway',
+                'Apply emergency patch',
+                1,
+                '{"source":"fixture"}',
+                '2026-04-21T08:00:00Z',
+                '2026-04-21T09:00:00Z'
+            ),
+            (
+                2,
+                '2026-04-18T10:00:00Z',
+                '2026-04-19T10:00:00Z',
+                'CVE-2026-1002',
+                'NVD',
+                'Rust dependency denial of service',
+                '7.5',
+                'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H',
+                'HIGH',
+                '["CWE-400"]',
+                '["https://example.test/CVE-2026-1002"]',
+                '[]',
+                '0.4200',
+                0,
+                NULL,
+                '',
+                '',
+                '',
+                0,
+                '{"source":"fixture"}',
+                '2026-04-19T08:00:00Z',
+                '2026-04-19T09:00:00Z'
+            ),
+            (
+                3,
+                '2026-03-10T10:00:00Z',
+                '2026-03-11T10:00:00Z',
+                'CVE-2025-9999',
+                'NVD',
+                'Rust low severity information leak',
+                '3.1',
+                'CVSS:3.1/AV:L/AC:H/PR:L/UI:R/S:U/C:L/I:N/A:N',
+                'LOW',
+                '[]',
+                '["https://example.test/CVE-2025-9999"]',
+                '[]',
+                NULL,
+                0,
+                NULL,
+                '',
+                '',
+                '',
+                0,
+                '{"source":"fixture"}',
+                '2025-12-12T08:00:00Z',
+                '2025-12-12T09:00:00Z'
+            )
         "#,
     )
     .execute(pool)
