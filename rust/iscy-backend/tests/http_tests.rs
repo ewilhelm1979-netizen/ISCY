@@ -1,5 +1,6 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{header::SET_COOKIE, Request, StatusCode};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use iscy_backend::{
     account_store::AccountStore, app_router, app_router_with_state,
     assessment_store::AssessmentStore, asset_store::AssetStore, auth_store::AuthStore,
@@ -2779,6 +2780,233 @@ async fn rust_web_imports_applies_csv_import_from_form() {
 }
 
 #[tokio::test]
+async fn import_center_preview_reads_csv_upload_and_builds_mapping() {
+    let app = app_router();
+    let boundary = "iscy-import-preview-csv-boundary";
+    let body = multipart_body(
+        boundary,
+        &[("import_type", "processes"), ("replace_existing", "1")],
+        Some((
+            "file",
+            "processes.csv",
+            "text/csv",
+            b"Name,Beschreibung,BusinessUnit,Status\nIncident Intake,Updated intake,Security Operations,SUFFICIENT\n",
+        )),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/preview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["preview"]["import_type"], "processes");
+    assert_eq!(payload["preview"]["headers"][0], "Name");
+    assert_eq!(payload["preview"]["selected_mapping"]["name"], "Name");
+    assert_eq!(
+        payload["preview"]["selected_mapping"]["description"],
+        "Beschreibung"
+    );
+    assert_eq!(
+        payload["preview"]["selected_mapping"]["business_unit"],
+        "BusinessUnit"
+    );
+    assert_eq!(payload["preview"]["matched"], 4);
+    assert_eq!(payload["preview"]["total_row_count"], 1);
+    assert_eq!(
+        payload["preview"]["preview_rows"][0]["Name"],
+        "Incident Intake"
+    );
+}
+
+#[tokio::test]
+async fn import_center_preview_reads_xlsx_upload_and_builds_mapping() {
+    let app = app_router();
+    let boundary = "iscy-import-preview-xlsx-boundary";
+    let xlsx_bytes = import_preview_xlsx_fixture();
+    let body = multipart_body(
+        boundary,
+        &[("import_type", "processes"), ("replace_existing", "0")],
+        Some((
+            "file",
+            "processes.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            xlsx_bytes.as_slice(),
+        )),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/preview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["preview"]["file_kind"], "xlsx");
+    assert_eq!(payload["preview"]["headers"][0], "Name");
+    assert_eq!(payload["preview"]["selected_mapping"]["name"], "Name");
+    assert_eq!(payload["preview"]["matched"], 4);
+    assert_eq!(payload["preview"]["total_row_count"], 2);
+    assert_eq!(
+        payload["preview"]["preview_rows"][1]["BusinessUnit"],
+        "Governance"
+    );
+}
+
+#[tokio::test]
+async fn rust_web_imports_preview_renders_mapping_for_uploaded_file() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+    let boundary = "iscy-web-import-preview-boundary";
+    let xlsx_bytes = import_preview_xlsx_fixture();
+    let body = multipart_body(
+        boundary,
+        &[("action", "preview"), ("import_type", "processes")],
+        Some((
+            "file",
+            "processes.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            xlsx_bytes.as_slice(),
+        )),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/imports/preview/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Import-Vorschau"));
+    assert!(html.contains("Vulnerability Triage"));
+    assert!(html.contains("name=\"map_name\""));
+    assert!(html.contains("Import bestaetigen"));
+}
+
+#[tokio::test]
+async fn rust_web_imports_confirms_uploaded_xlsx_from_preview_form() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+    let boundary = "iscy-web-import-confirm-boundary";
+    let xlsx_bytes = import_preview_xlsx_fixture();
+    let xlsx_base64 = BASE64_STANDARD.encode(&xlsx_bytes);
+    let body = multipart_body(
+        boundary,
+        &[
+            ("action", "confirm"),
+            ("import_type", "processes"),
+            ("replace_existing", "0"),
+            ("file_name", "processes.xlsx"),
+            ("file_data_base64", xlsx_base64.as_str()),
+            ("map_name", "Name"),
+            ("map_description", "Beschreibung"),
+            ("map_business_unit", "BusinessUnit"),
+            ("map_status", "Status"),
+        ],
+        None,
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/imports/preview/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Import uebernommen"));
+    assert!(html.contains("processes"));
+
+    let process_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM processes_process WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(process_count, 3);
+    let governance_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 42 AND name = 'Governance'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(governance_count, 1);
+}
+
+#[tokio::test]
 async fn assessment_applicability_requires_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(
@@ -4280,6 +4508,12 @@ fn test_media_root(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("iscy-{name}-{}-{nonce}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     root
+}
+
+fn import_preview_xlsx_fixture() -> Vec<u8> {
+    BASE64_STANDARD
+        .decode("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")
+        .unwrap()
 }
 
 fn multipart_body(

@@ -59,12 +59,14 @@ rust-smoke:
 	db_url="sqlite:////$${db_path#/}"; \
 	cookie_file="$$tmpdir/iscy-smoke.cookies"; \
 	evidence_file="$$tmpdir/evidence.txt"; \
+	import_file="$$tmpdir/import-preview.csv"; \
 	bind="$${RUST_BACKEND_BIND:-127.0.0.1:19000}"; \
 	host="$${bind%:*}"; \
 	port="$${bind##*:}"; \
 	if [ "$$host" = "0.0.0.0" ]; then host="127.0.0.1"; fi; \
 	url="$${RUST_BACKEND_URL:-http://$$host:$$port}"; \
 	printf 'rust smoke evidence\n' > "$$evidence_file"; \
+	printf 'Name,Beschreibung,BusinessUnit,Status\nRust Smoke Process,Previewed import,Security Operations,PARTIAL\n' > "$$import_file"; \
 	echo "Rust smoke DB: $$db_url"; \
 	DATABASE_URL="$$db_url" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- init-demo; \
 	DATABASE_URL="$$db_url" ISCY_MEDIA_ROOT="$$tmpdir/media" RUST_BACKEND_BIND="$$bind" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend >"$$tmpdir/iscy-backend.log" 2>&1 & \
@@ -90,6 +92,7 @@ rust-smoke:
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/roles" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/groups" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/permissions" >/dev/null; \
+	curl -fsS -b "$$cookie_file" -F import_type='processes' -F "file=@$$import_file;filename=preview.csv;type=text/csv" "$$url/api/v1/import-center/preview" >/dev/null; \
 	curl -fsS -b "$$cookie_file" -H "content-type: application/json" -d '{"import_type":"business_units","replace_existing":false,"csv_data":"name\nRust Smoke Import"}' "$$url/api/v1/import-center/csv" >/dev/null; \
 	curl -fsS -b "$$cookie_file" -F title='Rust Smoke Evidence' -F status='SUBMITTED' -F session_id='1' -F requirement_id='1' -F "file=@$$evidence_file;filename=evidence.txt;type=text/plain" "$$url/api/v1/evidence/uploads" >/dev/null; \
 	curl -fsS "$$url/dashboard/?tenant_id=1&user_id=1" >/dev/null; \

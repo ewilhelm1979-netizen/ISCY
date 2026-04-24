@@ -98,8 +98,9 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
 - `import_center` hat tenantgeschuetzte Importjob-Writes in Rust:
   - `POST /api/v1/import-center/jobs` legt gemappte Business-Units, Prozesse, Lieferanten und Assets an oder aktualisiert sie; optional ersetzt es vorhandene Eintraege dieses Typs
   - `POST /api/v1/import-center/csv` parst CSV direkt in Rust und wendet Business-Unit-, Prozess-, Lieferanten- und Asset-Importe tenantgeschuetzt an
-  - `/imports/` stellt den CSV-Import als Rust-Webformular bereit
-  - Django behaelt nur noch Datei-/XLSX-Upload und Mapping-Vorschau fuer nicht migrierte Importvarianten
+  - `POST /api/v1/import-center/preview` parst CSV/XLSX/XLSM-Dateien direkt in Rust, leitet Default-Mappings aus Headern ab und liefert die Mapping-Vorschau als Rust-API
+  - `/imports/` und `/imports/preview/` stellen Datei-Upload, Mapping-Vorschau und Import-Bestaetigung als Rust-Webflow bereit
+  - Django behaelt fuer den Import-Center-Cutover keinen fachlich notwendigen Datei-/Mapping-Pfad mehr
 - `product_security` hat tenantgeschuetzte Read-APIs in Rust:
   - `GET /api/v1/product-security/overview` liefert Product-Security-Matrix, Posture-Kennzahlen, Produktliste und letzte Snapshots fuer den aktuellen Tenant
   - `GET /api/v1/product-security/products/{product_id}` liefert den Detailbaum mit Releases, Komponenten, Threat Models, TARAs, Schwachstellen, AI-Systemen, PSIRT, Advisories, Snapshot und Roadmap-Aufgaben

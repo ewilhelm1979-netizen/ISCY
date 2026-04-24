@@ -273,7 +273,7 @@ make rust-smoke
 
 `make local-test` deckt aktuell die Basis-Gesundheitschecks, mandantenbezogene Report-Views und die Product-Security-Routen ab.
 `make team-test` ist der Legacy-Django-Kompatibilitaetscheck.
-`make rust-smoke` ist der Rust-only Betriebs-Smoke mit DB-Bootstrap, Healthcheck, Rust-Session-Cookie, Dashboard ohne Query-Kontext, Evidence-Upload, Import-Center-CSV-Probe und zentralen API-Probes.
+`make rust-smoke` ist der Rust-only Betriebs-Smoke mit DB-Bootstrap, Healthcheck, Rust-Session-Cookie, Dashboard ohne Query-Kontext, Evidence-Upload, Import-Center-Preview/CSV-Probe und zentralen API-Probes.
 
 ## Support-Matrix
 

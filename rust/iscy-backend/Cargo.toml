@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1"
 axum = "0.8"
 base64 = "0.22"
+calamine = "0.26"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

@@ -10,6 +10,7 @@ use axum::{
     routing::{get, patch, post},
     Router,
 };
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,6 +29,7 @@ pub mod cve_store;
 pub mod dashboard_store;
 pub mod db_admin;
 pub mod evidence_store;
+pub mod import_preview;
 pub mod import_store;
 pub mod process_store;
 pub mod product_security_store;
@@ -47,6 +49,7 @@ use catalog_store::CatalogStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
 use evidence_store::EvidenceStore;
+use import_preview::{ImportPreview, ImportUploadFile};
 use import_store::ImportStore;
 use process_store::ProcessStore;
 use product_security_store::ProductSecurityStore;
@@ -515,7 +518,7 @@ struct WebContext {
 type ImportCsvRows = Vec<HashMap<String, Value>>;
 type ParsedImportCsv = (Vec<String>, ImportCsvRows);
 const EVIDENCE_MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
-const EVIDENCE_UPLOAD_BODY_LIMIT_BYTES: usize = EVIDENCE_MAX_UPLOAD_BYTES + 1024 * 1024;
+const MULTIPART_FORM_BODY_LIMIT_BYTES: usize = EVIDENCE_MAX_UPLOAD_BYTES + 1024 * 1024;
 const EVIDENCE_ALLOWED_EXTENSIONS: &[&str] =
     &["pdf", "docx", "xlsx", "png", "jpg", "jpeg", "csv", "txt"];
 const EVIDENCE_BLOCKED_CONTENT_TYPES: &[&str] = &[
@@ -536,6 +539,12 @@ struct MultipartPart {
 struct EvidenceUploadFormData {
     fields: HashMap<String, String>,
     file: Option<EvidenceUploadFile>,
+}
+
+#[derive(Debug, Clone)]
+struct ImportUploadFormData {
+    fields: HashMap<String, String>,
+    file: Option<ImportUploadFile>,
 }
 
 #[derive(Debug, Clone)]
@@ -582,6 +591,13 @@ pub struct ImportJobResponse {
     pub accepted: bool,
     pub api_version: &'static str,
     pub result: import_store::ImportJobResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportPreviewResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub preview: ImportPreview,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2941,6 +2957,123 @@ async fn import_center_csv_job(
     }
 }
 
+async fn import_center_preview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+
+    let form = match parse_import_upload_form(&headers, &body) {
+        Ok(form) => form,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_import_upload",
+                    message,
+                }),
+            )
+                .into_response();
+        }
+    };
+    let file = match import_upload_file_from_form(&form) {
+        Ok(file) => file,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_import_upload",
+                    message,
+                }),
+            )
+                .into_response();
+        }
+    };
+    let import_type = match required_import_type_field(&form.fields) {
+        Ok(import_type) => import_type,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_import_type",
+                    message,
+                }),
+            )
+                .into_response();
+        }
+    };
+    let selected_mapping =
+        match import_preview::selected_mapping_from_fields(&import_type, &form.fields) {
+            Ok(mapping) => mapping,
+            Err(message) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: "invalid_import_type",
+                        message,
+                    }),
+                )
+                    .into_response();
+            }
+        };
+    match import_preview::build_import_preview(
+        &file,
+        &import_type,
+        form_bool_field(&form.fields, "replace_existing"),
+        selected_mapping,
+    ) {
+        Ok(preview) => (
+            StatusCode::OK,
+            Json(ImportPreviewResponse {
+                accepted: true,
+                api_version: "v1",
+                preview: preview.preview,
+            }),
+        )
+            .into_response(),
+        Err(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: if message.contains("Importtyp") {
+                    "invalid_import_type"
+                } else {
+                    "invalid_import_upload"
+                },
+                message,
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn applicability_assessments(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
@@ -4202,6 +4335,116 @@ async fn web_imports_submit(
     }
 }
 
+async fn web_imports_preview_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Imports", "/imports/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Imports",
+            "/imports/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.import_store else {
+        return web_store_missing("Imports", "/imports/", &context, "Import").into_response();
+    };
+    let form = match parse_import_upload_form(&headers, &body) {
+        Ok(form) => form,
+        Err(message) => {
+            return web_error_page("Imports", "/imports/", &context, &message).into_response();
+        }
+    };
+    let file = match import_upload_file_from_form(&form) {
+        Ok(file) => file,
+        Err(message) => {
+            return web_error_page("Imports", "/imports/", &context, &message).into_response();
+        }
+    };
+    let import_type = match required_import_type_field(&form.fields) {
+        Ok(import_type) => import_type,
+        Err(message) => {
+            return web_error_page("Imports", "/imports/", &context, &message).into_response();
+        }
+    };
+    let replace_existing = form_bool_field(&form.fields, "replace_existing");
+    let selected_mapping =
+        match import_preview::selected_mapping_from_fields(&import_type, &form.fields) {
+            Ok(mapping) => mapping,
+            Err(message) => {
+                return web_error_page("Imports", "/imports/", &context, &message).into_response();
+            }
+        };
+    let preview = match import_preview::build_import_preview(
+        &file,
+        &import_type,
+        replace_existing,
+        selected_mapping,
+    ) {
+        Ok(preview) => preview,
+        Err(message) => {
+            return web_error_page("Imports", "/imports/", &context, &message).into_response();
+        }
+    };
+    let action = form
+        .fields
+        .get("action")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("preview");
+
+    if action.eq_ignore_ascii_case("confirm") {
+        if !import_preview::supports_required_name_mapping(&preview.preview.selected_mapping) {
+            return web_imports_preview_page(
+                &context,
+                &preview.preview,
+                &file,
+                Some(
+                    "Die Pflichtzuordnung fuer das Feld \"name\" fehlt. Bitte mindestens das Namensfeld zuordnen.",
+                ),
+            )
+            .into_response();
+        }
+        let rows = match import_preview::apply_mapping(
+            &preview.rows,
+            &preview.preview.import_type,
+            &preview.preview.selected_mapping,
+        ) {
+            Ok(rows) => rows,
+            Err(message) => {
+                return web_error_page("Imports", "/imports/", &context, &message).into_response();
+            }
+        };
+        let job = import_store::ImportJobRequest {
+            import_type: preview.preview.import_type.clone(),
+            replace_existing: preview.preview.replace_existing,
+            rows,
+        };
+        return match store.apply_job(auth_context.tenant_id, job).await {
+            Ok(result) => web_imports_page(&context, Some((&preview.preview.headers, &result)))
+                .into_response(),
+            Err(err) => {
+                web_error_page("Imports", "/imports/", &context, &err.to_string()).into_response()
+            }
+        };
+    }
+
+    web_imports_preview_page(&context, &preview.preview, &file, None).into_response()
+}
+
 async fn web_processes(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4718,11 +4961,22 @@ fn web_imports_page(
         .unwrap_or_default();
     let body = format!(
         r#"
-        <section class="hero compact"><h1>Imports</h1><p>CSV-Import fuer Tenant {}</p></section>
+        <section class="hero compact"><h1>Imports</h1><p>Datei- und Direktimport fuer Tenant {}</p></section>
         <section class="grid">
           {}
           <article class="panel wide">
-            <h2>CSV einspielen</h2>
+            <h2>Datei hochladen</h2>
+            <form method="post" action="/imports/preview/" enctype="multipart/form-data">
+              <div class="form-grid">
+                <label>Importtyp<select name="import_type">{}</select></label>
+                <label class="checkbox-row"><input name="replace_existing" type="checkbox" value="1"> Bestehende Tenant-Daten ersetzen</label>
+              </div>
+              <label>Datei<input name="file" type="file" accept=".csv,.xlsx,.xlsm" required></label>
+              <button type="submit" name="action" value="preview">Vorschau erstellen</button>
+            </form>
+          </article>
+          <article class="panel wide">
+            <h2>CSV direkt einspielen</h2>
             <form method="post" action="/imports/">
               <div class="form-grid">
                 <label>Importtyp<select name="import_type">{}</select></label>
@@ -4735,12 +4989,12 @@ fn web_imports_page(
           <article class="panel wide">
             <h2>Unterstuetzte Typen</h2>
             <table>
-              <thead><tr><th>Typ</th><th>Schluesselspalten</th></tr></thead>
+              <thead><tr><th>Typ</th><th>Schluesselspalten</th><th>Formate</th></tr></thead>
               <tbody>
-                <tr><td>business_units</td><td>name</td></tr>
-                <tr><td>processes</td><td>name, business_unit, status, scope, description</td></tr>
-                <tr><td>suppliers</td><td>name, service_description, criticality</td></tr>
-                <tr><td>assets</td><td>name, business_unit, asset_type, criticality, description</td></tr>
+                <tr><td>business_units</td><td>name</td><td>CSV, XLSX, XLSM</td></tr>
+                <tr><td>processes</td><td>name, business_unit, status, scope, description</td><td>CSV, XLSX, XLSM</td></tr>
+                <tr><td>suppliers</td><td>name, service_description, criticality</td><td>CSV, XLSX, XLSM</td></tr>
+                <tr><td>assets</td><td>name, business_unit, asset_type, criticality, description</td><td>CSV, XLSX, XLSM</td></tr>
               </tbody>
             </table>
           </article>
@@ -4749,6 +5003,177 @@ fn web_imports_page(
         context.tenant_id,
         result_panel,
         import_type_options_for("business_units"),
+        import_type_options_for("business_units"),
+    );
+    web_page("Imports", "/imports/", Some(context), &body)
+}
+
+fn web_imports_preview_page(
+    context: &WebContext,
+    preview: &ImportPreview,
+    upload_file: &ImportUploadFile,
+    error_message: Option<&str>,
+) -> Html<String> {
+    let file_data_base64 = BASE64_STANDARD.encode(&upload_file.data);
+    let mapping_rows = preview
+        .mapping_rows
+        .iter()
+        .map(|row| {
+            format!(
+                r#"<tr><td>{}{}</td><td><select name="map_{}">{}</select></td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&row.expected),
+                if row.required { " *" } else { "" },
+                html_escape(&row.expected),
+                import_mapping_options_for(&preview.headers, &row.matched),
+                if row.status.eq_ignore_ascii_case("ok") {
+                    "Erkannt"
+                } else {
+                    "Fehlt"
+                },
+                if row.synonyms.is_empty() {
+                    "-".to_string()
+                } else {
+                    html_escape(&row.synonyms.join(", "))
+                },
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let preview_table_headers = preview
+        .headers
+        .iter()
+        .map(|header| format!(r#"<th>{}</th>"#, html_escape(header)))
+        .collect::<Vec<_>>()
+        .join("");
+    let preview_rows = preview
+        .preview_rows
+        .iter()
+        .take(10)
+        .map(|row| {
+            let values = preview
+                .headers
+                .iter()
+                .map(|header| {
+                    format!(
+                        r#"<td>{}</td>"#,
+                        html_escape(row.get(header).map(String::as_str).unwrap_or(""))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            format!(r#"<tr>{values}</tr>"#)
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let summary = format!(
+        "{} von {} Zielspalten erkannt · {} Zeilen in Datei{}",
+        preview.matched,
+        preview.mapping_rows.len(),
+        preview.total_row_count,
+        if preview.truncated {
+            format!(
+                " · Vorschau zeigt erste {} Zeilen",
+                preview.preview_row_count
+            )
+        } else {
+            String::new()
+        }
+    );
+    let error_panel = error_message
+        .map(|message| {
+            format!(
+                r#"<article class="panel wide error"><h2>Zuordnung unvollstaendig</h2><p>{}</p></article>"#,
+                html_escape(message)
+            )
+        })
+        .unwrap_or_default();
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>Import-Vorschau</h1><p>{}</p></section>
+        <section class="grid">
+          {}
+          <article class="panel wide">
+            <h2>Datei</h2>
+            <table>
+              <tbody>
+                <tr><th>Datei</th><td>{}</td></tr>
+                <tr><th>Format</th><td>{}</td></tr>
+                <tr><th>Importtyp</th><td>{}</td></tr>
+                <tr><th>Ersetzen</th><td>{}</td></tr>
+              </tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <h2>Zuordnung pruefen</h2>
+            <form method="post" action="/imports/preview/" enctype="multipart/form-data">
+              <input name="import_type" type="hidden" value="{}">
+              <input name="replace_existing" type="hidden" value="{}">
+              <input name="file_name" type="hidden" value="{}">
+              <input name="file_data_base64" type="hidden" value="{}">
+              <table>
+                <thead><tr><th>Zielspalte</th><th>Quellspalte</th><th>Status</th><th>Hinweise</th></tr></thead>
+                <tbody>{}</tbody>
+              </table>
+              <div class="actions">
+                <button type="submit" name="action" value="update">Zuordnung aktualisieren</button>
+                <button type="submit" name="action" value="confirm">Import bestaetigen</button>
+              </div>
+            </form>
+          </article>
+          <article class="panel wide">
+            <h2>Tabellenvorschau</h2>
+            <p>Anzeige der ersten {} Zeilen.</p>
+            <table>
+              <thead><tr>{}</tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <h2>Nicht zugeordnete Spalten</h2>
+            <p>{}</p>
+            <p><a href="{}">Zurueck zum Upload</a></p>
+          </article>
+        </section>
+        "#,
+        html_escape(&summary),
+        error_panel,
+        html_escape(&preview.file_name),
+        html_escape(&preview.file_kind.to_ascii_uppercase()),
+        html_escape(&preview.import_type),
+        if preview.replace_existing {
+            "Ja"
+        } else {
+            "Nein"
+        },
+        html_escape(&preview.import_type),
+        if preview.replace_existing { "1" } else { "0" },
+        html_escape(&preview.file_name),
+        html_escape(&file_data_base64),
+        if mapping_rows.is_empty() {
+            web_empty_row(4, "Keine erwarteten Spalten konfiguriert.")
+        } else {
+            mapping_rows
+        },
+        preview.preview_row_count.min(10),
+        if preview_table_headers.is_empty() {
+            "<th>Keine Spalten</th>".to_string()
+        } else {
+            preview_table_headers
+        },
+        if preview_rows.is_empty() {
+            web_empty_row(
+                preview.headers.len().max(1),
+                "Keine Zeilen in der Datei gefunden.",
+            )
+        } else {
+            preview_rows
+        },
+        if preview.extra_headers.is_empty() {
+            "Alle erkannten Spalten sind aktuell zugeordnet.".to_string()
+        } else {
+            html_escape(&preview.extra_headers.join(", "))
+        },
+        web_path_with_context("/imports/", Some(context)),
     );
     web_page("Imports", "/imports/", Some(context), &body)
 }
@@ -4897,7 +5322,7 @@ fn web_empty_row(colspan: usize, message: &str) -> String {
     )
 }
 
-fn parse_import_csv(raw: &str) -> Result<ParsedImportCsv, String> {
+pub(crate) fn parse_import_csv(raw: &str) -> Result<ParsedImportCsv, String> {
     let records = parse_csv_records(raw)?;
     if records.is_empty() {
         return Err("CSV braucht eine Kopfzeile.".to_string());
@@ -5063,6 +5488,45 @@ fn parse_evidence_upload_form(
     Ok(EvidenceUploadFormData { fields, file })
 }
 
+fn parse_import_upload_form(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<ImportUploadFormData, String> {
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "Content-Type fuer Import fehlt.".to_string())?;
+    let boundary = multipart_boundary(content_type)
+        .ok_or_else(|| "Multipart-Boundary fuer Import fehlt.".to_string())?;
+    let parts = parse_multipart_parts(body, &boundary)?;
+    let mut fields = HashMap::new();
+    let mut file = None;
+
+    for part in parts {
+        if part.name == "file" {
+            if let Some(filename) = part
+                .filename
+                .map(|filename| filename.trim().to_string())
+                .filter(|filename| !filename.is_empty())
+            {
+                file = Some(ImportUploadFile {
+                    filename,
+                    data: part.data,
+                });
+            }
+        } else {
+            fields.insert(
+                part.name,
+                String::from_utf8_lossy(&part.data)
+                    .trim_end_matches(['\r', '\n'])
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(ImportUploadFormData { fields, file })
+}
+
 fn multipart_boundary(content_type: &str) -> Option<String> {
     content_type.split(';').find_map(|part| {
         let part = part.trim();
@@ -5201,6 +5665,56 @@ fn optional_i64_form_field(fields: &HashMap<String, String>, name: &str) -> Opti
         .filter(|value| *value > 0)
 }
 
+fn import_upload_file_from_form(form: &ImportUploadFormData) -> Result<ImportUploadFile, String> {
+    if let Some(file) = form.file.as_ref() {
+        return Ok(file.clone());
+    }
+    let file_name = form
+        .fields
+        .get("file_name")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Bitte CSV- oder XLSX-Datei fuer den Import auswaehlen.".to_string())?;
+    let file_data = form
+        .fields
+        .get("file_data_base64")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Import-Datei fehlt fuer die Vorschau oder Bestaetigung.".to_string())?;
+    let data = BASE64_STANDARD.decode(file_data).map_err(|_| {
+        "Import-Datei konnte aus dem Formular nicht wiederhergestellt werden.".to_string()
+    })?;
+    Ok(ImportUploadFile {
+        filename: file_name.to_string(),
+        data,
+    })
+}
+
+fn required_import_type_field(fields: &HashMap<String, String>) -> Result<String, String> {
+    fields
+        .get("import_type")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .ok_or_else(|| "Importtyp fehlt.".to_string())
+}
+
+fn form_bool_field(fields: &HashMap<String, String>, name: &str) -> bool {
+    fields
+        .get(name)
+        .map(String::as_str)
+        .map(str::trim)
+        .is_some_and(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "ja" | "on"
+            )
+        })
+}
+
 fn evidence_media_root(state: &AppState) -> PathBuf {
     state
         .evidence_media_root
@@ -5322,7 +5836,7 @@ fn sanitize_filename(original_name: &str) -> String {
     }
 }
 
-fn file_extension(filename: &str) -> Option<String> {
+pub(crate) fn file_extension(filename: &str) -> Option<String> {
     FsPath::new(filename)
         .extension()
         .and_then(|value| value.to_str())
@@ -5376,6 +5890,31 @@ fn import_type_options_for(selected_type: &str) -> String {
             html_escape(code),
             selected,
             html_escape(label),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn import_mapping_options_for(headers: &[String], selected_header: &str) -> String {
+    std::iter::once((
+        "".to_string(),
+        "-- nicht zuordnen --".to_string(),
+        selected_header.trim().is_empty(),
+    ))
+    .chain(headers.iter().map(|header| {
+        (
+            header.clone(),
+            header.clone(),
+            header.eq_ignore_ascii_case(selected_header),
+        )
+    }))
+    .map(|(value, label, selected)| {
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            html_escape(&value),
+            if selected { " selected" } else { "" },
+            html_escape(&label),
         )
     })
     .collect::<Vec<_>>()
@@ -5874,6 +6413,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/import-center/jobs", post(import_center_job))
         .route("/api/v1/import-center/csv", post(import_center_csv_job))
+        .route("/api/v1/import-center/preview", post(import_center_preview))
         .route(
             "/api/v1/assessments/applicability",
             get(applicability_assessments),
@@ -5907,6 +6447,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/evidence/", get(web_evidence).post(web_evidence_upload))
         .route("/assets/", get(web_assets))
         .route("/imports/", get(web_imports).post(web_imports_submit))
+        .route("/imports/preview/", post(web_imports_preview_submit))
         .route("/processes/", get(web_processes))
         .route("/requirements/", get(web_requirements))
         .route("/risks/", get(web_risks))
@@ -5926,7 +6467,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/risk/priority", post(risk_priority))
         .route("/api/v1/guidance/evaluate", post(guidance_evaluate))
         .route("/api/v1/reports/cve-summary", post(report_cve_summary))
-        .layer(DefaultBodyLimit::max(EVIDENCE_UPLOAD_BODY_LIMIT_BYTES))
+        .layer(DefaultBodyLimit::max(MULTIPART_FORM_BODY_LIMIT_BYTES))
         .with_state(state)
 }
 
