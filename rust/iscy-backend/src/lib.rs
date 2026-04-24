@@ -745,6 +745,67 @@ pub struct GuidanceEvaluateResponse {
     pub todo_items: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+struct GuidanceStepDefinition {
+    code: &'static str,
+    title: &'static str,
+    description: &'static str,
+    path: &'static str,
+    cta_label: &'static str,
+}
+
+const GUIDANCE_STEPS: [GuidanceStepDefinition; 7] = [
+    GuidanceStepDefinition {
+        code: "applicability_checked",
+        title: "Betroffenheitsanalyse",
+        description: "Sektor, Groesse und kritische Services bewerten.",
+        path: "/assessments/",
+        cta_label: "Zur Betroffenheitsanalyse",
+    },
+    GuidanceStepDefinition {
+        code: "company_scope_defined",
+        title: "Scope definieren",
+        description: "Unternehmensprofil, Scope und Services schaerfen.",
+        path: "/organizations/",
+        cta_label: "Zum Organisationsprofil",
+    },
+    GuidanceStepDefinition {
+        code: "requirements_available",
+        title: "Requirements absichern",
+        description: "Requirement Library und Mapping-Versionen verankern.",
+        path: "/requirements/",
+        cta_label: "Zur Requirement Library",
+    },
+    GuidanceStepDefinition {
+        code: "initial_processes_captured",
+        title: "Kritische Prozesse",
+        description: "Kernprozesse mit Ownern und Scope erfassen.",
+        path: "/processes/",
+        cta_label: "Zu den Prozessen",
+    },
+    GuidanceStepDefinition {
+        code: "initial_risks_captured",
+        title: "Erste Risiken",
+        description: "Initiale Risiken fuer Prozesse oder Assets dokumentieren.",
+        path: "/risks/",
+        cta_label: "Zum Risikoregister",
+    },
+    GuidanceStepDefinition {
+        code: "initial_assessment_done",
+        title: "Assessments starten",
+        description: "Prozess- und Requirement-Bewertungen anlegen.",
+        path: "/assessments/",
+        cta_label: "Zu den Assessments",
+    },
+    GuidanceStepDefinition {
+        code: "soc_phishing_playbook_applied",
+        title: "Massnahmen verankern",
+        description: "Mindestens eine Incident-nahe Massnahme nachverfolgbar machen.",
+        path: "/assessments/",
+        cta_label: "Zu Measures und Assessments",
+    },
+];
+
 #[derive(Debug, Deserialize)]
 pub struct CveSummaryRequest {
     pub total: u32,
@@ -5204,8 +5265,165 @@ async fn web_product_security(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let context = web_context_from_request(&query, &headers, &state).await;
-    web_static_section("Product Security", "/product-security/", context.as_ref())
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Product Security", "/product-security/");
+    };
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Product Security",
+        );
+    };
+    match store.overview(context.tenant_id, 50, 20).await {
+        Ok(Some(overview)) => {
+            let matrix_rows = [
+                ("CRA", &overview.matrix.cra),
+                ("AI Act", &overview.matrix.ai_act),
+                ("IEC 62443", &overview.matrix.iec62443),
+                ("ISO/SAE 21434", &overview.matrix.iso_sae_21434),
+            ]
+            .iter()
+            .map(|(framework, item)| {
+                format!(
+                    r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                    html_escape(framework),
+                    yes_no(item.applicable),
+                    html_escape(&item.label),
+                    html_escape(&item.reason),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("");
+            let product_rows = overview
+                .products
+                .iter()
+                .map(|product| {
+                    let scope_flags = [
+                        (product.has_digital_elements, "Digital"),
+                        (product.includes_ai, "AI"),
+                        (product.ot_iacs_context, "OT/IACS"),
+                        (product.automotive_context, "Automotive"),
+                    ]
+                    .iter()
+                    .filter_map(|(enabled, label)| enabled.then_some(*label))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&product.name),
+                        html_escape(product.family_name.as_deref().unwrap_or("-")),
+                        html_escape(&product.code),
+                        html_escape(&product.description),
+                        html_escape(if scope_flags.is_empty() {
+                            "-"
+                        } else {
+                            scope_flags.as_str()
+                        }),
+                        product.release_count,
+                        product.vulnerability_count,
+                        product.psirt_case_count,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let snapshot_rows = overview
+                .snapshots
+                .iter()
+                .map(|snapshot| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}%</td><td>{}%</td><td>{}%</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&snapshot.product_name),
+                        snapshot.cra_readiness_percent,
+                        snapshot.ai_act_readiness_percent,
+                        snapshot.threat_model_coverage_percent,
+                        snapshot.open_vulnerability_count,
+                        html_escape(&snapshot.summary),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Product Security</h1><p>Tenant {} · {}</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <h2>Regulatorische Matrix</h2>
+                    <p>{}</p>
+                    <table>
+                      <thead><tr><th>Framework</th><th>Applicable</th><th>Status</th><th>Begruendung</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Produkte</h2>
+                    <table>
+                      <thead><tr><th>Produkt</th><th>Familie</th><th>Code</th><th>Beschreibung</th><th>Scope</th><th>Releases</th><th>Schwachstellen</th><th>PSIRT</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Letzte Snapshots</h2>
+                    <table>
+                      <thead><tr><th>Produkt</th><th>CRA</th><th>AI Act</th><th>Threat Coverage</th><th>Offen</th><th>Summary</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                </section>
+                "#,
+                overview.tenant_id,
+                html_escape(&overview.matrix.summary),
+                metric_card("Produkte", overview.posture.products),
+                metric_card("Offene Vulns", overview.posture.open_vulnerabilities),
+                metric_card(
+                    "Kritisch offen",
+                    overview.posture.critical_open_vulnerabilities
+                ),
+                metric_card("PSIRT offen", overview.posture.psirt_cases_open),
+                html_escape(&overview.matrix.summary),
+                if matrix_rows.is_empty() {
+                    web_empty_row(4, "Keine Matrixdaten vorhanden.")
+                } else {
+                    matrix_rows
+                },
+                if product_rows.is_empty() {
+                    web_empty_row(8, "Keine Produkte vorhanden.")
+                } else {
+                    product_rows
+                },
+                if snapshot_rows.is_empty() {
+                    web_empty_row(6, "Keine Snapshots vorhanden.")
+                } else {
+                    snapshot_rows
+                },
+            );
+            web_page(
+                "Product Security",
+                "/product-security/",
+                Some(&context),
+                &body,
+            )
+        }
+        Ok(None) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Tenant wurde fuer diesen Kontext nicht gefunden.",
+        ),
+        Err(err) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        ),
+    }
 }
 async fn web_cves(
     State(state): State<AppState>,
@@ -5220,8 +5438,264 @@ async fn web_navigator(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let context = web_context_from_request(&query, &headers, &state).await;
-    web_static_section("Guidance Navigator", "/navigator/", context.as_ref())
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Guidance Navigator", "/navigator/");
+    };
+    let Some(tenant_store) = state.tenant_store else {
+        return web_store_missing("Guidance Navigator", "/navigator/", &context, "Tenant");
+    };
+    let Some(assessment_store) = state.assessment_store else {
+        return web_store_missing("Guidance Navigator", "/navigator/", &context, "Assessment");
+    };
+    let Some(process_store) = state.process_store else {
+        return web_store_missing("Guidance Navigator", "/navigator/", &context, "Process");
+    };
+    let Some(risk_store) = state.risk_store else {
+        return web_store_missing("Guidance Navigator", "/navigator/", &context, "Risk");
+    };
+    let Some(requirement_store) = state.requirement_store else {
+        return web_store_missing("Guidance Navigator", "/navigator/", &context, "Requirement");
+    };
+
+    let tenant = match tenant_store.tenant_profile(context.tenant_id).await {
+        Ok(Some(tenant)) => tenant,
+        Ok(None) => {
+            return web_error_page(
+                "Guidance Navigator",
+                "/navigator/",
+                &context,
+                "Tenant wurde fuer diesen Kontext nicht gefunden.",
+            )
+        }
+        Err(err) => {
+            return web_error_page(
+                "Guidance Navigator",
+                "/navigator/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let applicability = match assessment_store
+        .list_applicability(context.tenant_id, 50)
+        .await
+    {
+        Ok(items) => items,
+        Err(err) => {
+            return web_error_page(
+                "Guidance Navigator",
+                "/navigator/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let assessments = match assessment_store
+        .list_assessments(context.tenant_id, 100)
+        .await
+    {
+        Ok(items) => items,
+        Err(err) => {
+            return web_error_page(
+                "Guidance Navigator",
+                "/navigator/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let measures = match assessment_store.list_measures(context.tenant_id, 100).await {
+        Ok(items) => items,
+        Err(err) => {
+            return web_error_page(
+                "Guidance Navigator",
+                "/navigator/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let processes = match process_store.list_processes(context.tenant_id, 100).await {
+        Ok(items) => items,
+        Err(err) => {
+            return web_error_page(
+                "Guidance Navigator",
+                "/navigator/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let risks = match risk_store.list_risks(context.tenant_id, 100).await {
+        Ok(items) => items,
+        Err(err) => {
+            return web_error_page(
+                "Guidance Navigator",
+                "/navigator/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let requirement_library = match requirement_store.library(10_000).await {
+        Ok(library) => library,
+        Err(err) => {
+            return web_error_page(
+                "Guidance Navigator",
+                "/navigator/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+
+    let active_requirement_count = requirement_library
+        .requirements
+        .iter()
+        .filter(|requirement| requirement.is_active)
+        .count() as u32;
+    let measure_open_count = measures
+        .iter()
+        .filter(|measure| !measure.status.eq_ignore_ascii_case("DONE"))
+        .count() as u32;
+    let payload = GuidanceEvaluateRequest {
+        description_present: !tenant.description.trim().is_empty(),
+        sector_present: !tenant.sector.trim().is_empty(),
+        applicability_count: applicability.len() as u32,
+        process_count: processes.len() as u32,
+        risk_count: risks.len() as u32,
+        assessment_count: assessments.len() as u32,
+        measure_count: measures.len() as u32,
+        measure_open_count,
+        requirement_count: active_requirement_count,
+    };
+    let evaluation = evaluate_guidance_response(&payload);
+    let completed_steps = GUIDANCE_STEPS
+        .iter()
+        .filter(|step| guidance_step_done(step.code, &payload))
+        .count();
+    let progress_percent =
+        ((completed_steps as f64 / GUIDANCE_STEPS.len() as f64) * 100.0).round() as i64;
+    let next_step = evaluation
+        .current_step_code
+        .as_deref()
+        .and_then(guidance_step_definition);
+    let next_action_link = next_step
+        .map(|step| {
+            format!(
+                r#"<p><a href="{}">{}</a></p>"#,
+                web_path_with_context(step.path, Some(&context)),
+                html_escape(step.cta_label),
+            )
+        })
+        .unwrap_or_else(|| {
+            format!(
+                r#"<p><a href="{}">Zur Evidence-Uebersicht</a></p>"#,
+                web_path_with_context("/evidence/", Some(&context)),
+            )
+        });
+    let todo_items = if evaluation.todo_items.is_empty() {
+        "<li>Aktuell keine offenen Guidance-Todos.</li>".to_string()
+    } else {
+        evaluation
+            .todo_items
+            .iter()
+            .map(|item| format!(r#"<li>{}</li>"#, html_escape(item)))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let step_rows = GUIDANCE_STEPS
+        .iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let done = guidance_step_done(step.code, &payload);
+            let status = if done {
+                "Abgeschlossen"
+            } else if evaluation.current_step_code.as_deref() == Some(step.code) {
+                "Aktiv"
+            } else {
+                "Ausstehend"
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">{}</a></td></tr>"#,
+                index + 1,
+                html_escape(step.title),
+                html_escape(step.description),
+                status,
+                web_path_with_context(step.path, Some(&context)),
+                html_escape(step.cta_label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>Guidance Navigator</h1><p>{} · {} von {} Guided Steps abgeschlossen</p></section>
+        <section class="metrics">
+          {}
+          {}
+          {}
+          {}
+        </section>
+        <section class="grid">
+          <article class="panel wide">
+            <h2>Naechster Schritt</h2>
+            <p>{}</p>
+            <p>{}</p>
+            {}
+          </article>
+          <article class="panel wide">
+            <h2>Journey Status</h2>
+            <table>
+              <tbody>
+                <tr><th>Tenant</th><td>{}</td></tr>
+                <tr><th>Scope vorhanden</th><td>{}</td></tr>
+                <tr><th>Aktive Requirements</th><td>{}</td></tr>
+                <tr><th>Applicability</th><td>{}</td></tr>
+                <tr><th>Prozesse</th><td>{}</td></tr>
+                <tr><th>Risiken</th><td>{}</td></tr>
+                <tr><th>Assessments</th><td>{}</td></tr>
+                <tr><th>Measures</th><td>{}</td></tr>
+                <tr><th>Offene Measures</th><td>{}</td></tr>
+              </tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <h2>Guided Steps</h2>
+            <table>
+              <thead><tr><th>#</th><th>Schritt</th><th>Beschreibung</th><th>Status</th><th>Aktion</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <h2>Offene To-dos</h2>
+            <ul>{}</ul>
+          </article>
+        </section>
+        "#,
+        html_escape(&tenant.name),
+        completed_steps,
+        GUIDANCE_STEPS.len(),
+        metric_card("Fortschritt %", progress_percent),
+        metric_card("Todos", evaluation.todo_items.len() as i64),
+        metric_card("Offene Measures", measure_open_count as i64),
+        metric_card("Risiken", risks.len() as i64),
+        html_escape(&evaluation.summary),
+        html_escape(&evaluation.next_action_text),
+        next_action_link,
+        html_escape(&tenant.name),
+        yes_no(payload.description_present && payload.sector_present),
+        active_requirement_count,
+        applicability.len(),
+        processes.len(),
+        risks.len(),
+        assessments.len(),
+        measures.len(),
+        measure_open_count,
+        step_rows,
+        todo_items,
+    );
+    web_page("Guidance Navigator", "/navigator/", Some(&context), &body)
 }
 
 impl WebContextQuery {
@@ -5571,6 +6045,7 @@ fn web_page(
 ) -> Html<String> {
     let nav_items = [
         ("/dashboard/", "Dashboard"),
+        ("/navigator/", "Navigator"),
         ("/risks/", "Risks"),
         ("/evidence/", "Evidence"),
         ("/roadmap/", "Roadmap"),
@@ -6605,6 +7080,30 @@ async fn risk_priority(Json(payload): Json<RiskPriorityRequest>) -> Json<RiskPri
 async fn guidance_evaluate(
     Json(payload): Json<GuidanceEvaluateRequest>,
 ) -> Json<GuidanceEvaluateResponse> {
+    Json(evaluate_guidance_response(&payload))
+}
+
+fn guidance_step_definition(code: &str) -> Option<GuidanceStepDefinition> {
+    GUIDANCE_STEPS
+        .iter()
+        .find(|step| step.code == code)
+        .copied()
+}
+
+fn guidance_step_done(code: &str, payload: &GuidanceEvaluateRequest) -> bool {
+    match code {
+        "applicability_checked" => payload.applicability_count >= 1,
+        "company_scope_defined" => payload.description_present && payload.sector_present,
+        "requirements_available" => payload.requirement_count >= 4,
+        "initial_processes_captured" => payload.process_count >= 3,
+        "initial_risks_captured" => payload.risk_count >= 1,
+        "initial_assessment_done" => payload.assessment_count >= 1,
+        "soc_phishing_playbook_applied" => payload.measure_count >= 1,
+        _ => false,
+    }
+}
+
+fn evaluate_guidance_response(payload: &GuidanceEvaluateRequest) -> GuidanceEvaluateResponse {
     let mut todo_items: Vec<String> = Vec::new();
     if payload.applicability_count == 0 {
         todo_items.push("Betroffenheitsanalyse anlegen".to_string());
@@ -6636,23 +7135,10 @@ async fn guidance_evaluate(
         ));
     }
 
-    let steps = [
-        ("applicability_checked", payload.applicability_count >= 1),
-        (
-            "company_scope_defined",
-            payload.description_present && payload.sector_present,
-        ),
-        ("requirements_available", payload.requirement_count >= 4),
-        ("initial_processes_captured", payload.process_count >= 3),
-        ("initial_risks_captured", payload.risk_count >= 1),
-        ("initial_assessment_done", payload.assessment_count >= 1),
-        ("soc_phishing_playbook_applied", payload.measure_count >= 1),
-    ];
-
-    let current_step_code = steps
+    let current_step_code = GUIDANCE_STEPS
         .iter()
-        .find(|(_, done)| !*done)
-        .map(|(code, _)| code.to_string());
+        .find(|step| !guidance_step_done(step.code, payload))
+        .map(|step| step.code.to_string());
     let (summary, next_action_text) = match current_step_code.as_deref() {
         Some("applicability_checked") => (
             "Starten Sie mit der Betroffenheitsanalyse. Erst damit wird klar, ob ISO-27001-Readiness ausreicht oder NIS2-/KRITIS-Nähe vertieft werden sollte.".to_string(),
@@ -6688,12 +7174,12 @@ async fn guidance_evaluate(
         ),
     };
 
-    Json(GuidanceEvaluateResponse {
+    GuidanceEvaluateResponse {
         current_step_code,
         summary,
         next_action_text,
         todo_items,
-    })
+    }
 }
 
 async fn report_cve_summary(Json(payload): Json<CveSummaryRequest>) -> Json<CveSummaryResponse> {

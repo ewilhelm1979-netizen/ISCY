@@ -89,6 +89,9 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/requirements` liefert Requirements inklusive Mapping-Versionen und Primaerquellen
   - `/catalog/` und `/requirements/` rendern die Bibliotheken direkt aus den Rust-Stores
   - Django kann Fragenkatalog und Requirement Library ueber `CATALOG_BACKEND=rust_service` und `REQUIREMENTS_BACKEND=rust_service` aus Rust lesen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
+- `guidance` hat einen ersten echten Rust-Webslice:
+  - `POST /api/v1/guidance/evaluate` bleibt der gemeinsame Rust-Scoring-Pfad fuer Guided Journey und Tenant-Todos
+  - `/navigator/` rendert Fortschritt, naechsten Schritt, Journey-Status und Todo-Liste direkt aus Tenant-, Assessment-, Process-, Risk- und Requirement-Stores
 - `roadmap` hat tenantgeschuetzte Read-/Update-APIs in Rust:
   - `GET /api/v1/roadmap/plans` liefert Roadmap-Planlisten inklusive Phasen-/Task-Zaehlern fuer den aktuellen Tenant
   - `GET /api/v1/roadmap/plans/{plan_id}` liefert den Plan-Detailbaum mit Phasen, Tasks und Abhaengigkeiten
@@ -110,6 +113,7 @@ ISCY schrittweise von Django/Python auf Rust ueberfuehren, ohne Fachfunktionalit
   - `GET /api/v1/product-security/products/{product_id}/roadmap` liefert Roadmap, Snapshot und Aufgaben fuer die Produkt-Roadmap
   - `PATCH /api/v1/product-security/roadmap-tasks/{task_id}` aktualisiert Status, Prioritaet, Owner-Rolle, Ziel-Tage und Abhaengigkeitstext tenantgeschuetzt
   - `PATCH /api/v1/product-security/vulnerabilities/{vulnerability_id}` aktualisiert Schweregrad, Status, Remediation-Datum und Zusammenfassung tenantgeschuetzt
+  - `/product-security/` rendert Matrix, Kennzahlen, Produktliste und Snapshots direkt aus dem Rust-Store
   - Django kann Product-Security-Liste, Produktdetail, Roadmap, Roadmap-Task-Updates und Schwachstellen-Updates ueber `PRODUCT_SECURITY_BACKEND=rust_service` aus Rust bedienen und im Nicht-Strict-Modus auf lokale ORM-Daten zurueckfallen
 
 ## App-Migrationsreihenfolge

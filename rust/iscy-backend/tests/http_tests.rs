@@ -4189,6 +4189,81 @@ async fn rust_web_organizations_renders_tenant_profile_from_database() {
 }
 
 #[tokio::test]
+async fn rust_web_navigator_renders_guidance_status_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_guidance_tables(&pool).await;
+    insert_guidance_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::with_stores(None, Some(TenantStore::from_sqlite_pool(pool.clone())))
+            .with_assessment_store(Some(AssessmentStore::from_sqlite_pool(pool.clone())))
+            .with_process_store(Some(ProcessStore::from_sqlite_pool(pool.clone())))
+            .with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone())))
+            .with_requirement_store(Some(RequirementStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/navigator/?tenant_id=42&user_id=7&user_email=ada%40example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Guidance Navigator"));
+    assert!(html.contains("Guidance Tenant"));
+    assert!(html.contains("Guided Steps"));
+    assert!(html.contains("Offene To-dos"));
+    assert!(html.contains("Betroffenheitsanalyse"));
+    assert!(html.contains("Noch 1 kritische Prozesse erfassen"));
+    assert!(html.contains("1 offene Maßnahmen nachverfolgen"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_product_security_renders_overview_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/product-security/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Product Security"));
+    assert!(html.contains("Regulatorische Matrix"));
+    assert!(html.contains("Sensor Gateway"));
+    assert!(html.contains("Industrial edge device"));
+    assert!(html.contains("OT/IACS"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
 async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -8799,6 +8874,458 @@ async fn create_cverecord_table(pool: &SqlitePool) {
             raw_json TEXT NOT NULL,
             published_at TEXT NULL,
             modified_at TEXT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_guidance_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_tenant (
+            id INTEGER PRIMARY KEY,
+            name varchar(255) NOT NULL,
+            slug varchar(50) NOT NULL,
+            country varchar(100) NOT NULL,
+            operation_countries TEXT NOT NULL,
+            description TEXT NOT NULL,
+            sector varchar(64) NOT NULL,
+            employee_count integer NOT NULL,
+            annual_revenue_million decimal NOT NULL,
+            balance_sheet_million decimal NOT NULL,
+            critical_services TEXT NOT NULL,
+            supply_chain_role varchar(255) NOT NULL,
+            nis2_relevant bool NOT NULL,
+            kritis_relevant bool NOT NULL,
+            develops_digital_products bool NOT NULL,
+            uses_ai_systems bool NOT NULL,
+            ot_iacs_scope bool NOT NULL,
+            automotive_scope bool NOT NULL,
+            psirt_defined bool NOT NULL,
+            sbom_required bool NOT NULL,
+            product_security_scope TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE accounts_user (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            username varchar(150) NOT NULL,
+            first_name varchar(150) NOT NULL,
+            last_name varchar(150) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_businessunit (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE processes_process (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            business_unit_id INTEGER NULL,
+            owner_id INTEGER NULL,
+            name varchar(255) NOT NULL,
+            scope varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            status varchar(32) NOT NULL,
+            documented bool NOT NULL,
+            approved bool NOT NULL,
+            communicated bool NOT NULL,
+            implemented bool NOT NULL,
+            effective bool NOT NULL,
+            evidenced bool NOT NULL,
+            reviewed_at date NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assets_app_informationasset (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE risks_riskcategory (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(128) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE risks_risk (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            category_id INTEGER NULL,
+            process_id INTEGER NULL,
+            asset_id INTEGER NULL,
+            owner_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            threat TEXT NOT NULL,
+            vulnerability TEXT NOT NULL,
+            impact INTEGER NOT NULL,
+            likelihood INTEGER NOT NULL,
+            residual_impact INTEGER NULL,
+            residual_likelihood INTEGER NULL,
+            status varchar(16) NOT NULL,
+            treatment_strategy varchar(16) NOT NULL,
+            treatment_plan TEXT NOT NULL,
+            treatment_due_date date NULL,
+            accepted_by_id INTEGER NULL,
+            accepted_at TEXT NULL,
+            review_date date NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_mappingversion (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            slug varchar(50) NOT NULL,
+            title varchar(255) NOT NULL,
+            version varchar(32) NOT NULL,
+            program_name varchar(64) NOT NULL,
+            status varchar(16) NOT NULL,
+            effective_on date NULL,
+            notes TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_regulatorysource (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            mapping_version_id INTEGER NOT NULL,
+            code varchar(64) NOT NULL,
+            title varchar(255) NOT NULL,
+            authority varchar(128) NOT NULL,
+            citation varchar(255) NOT NULL,
+            url varchar(200) NOT NULL,
+            source_type varchar(32) NOT NULL,
+            published_on date NULL,
+            effective_on date NULL,
+            notes TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_requirement (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            code varchar(64) NOT NULL,
+            title varchar(255) NOT NULL,
+            domain varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            guidance TEXT NOT NULL,
+            is_active bool NOT NULL,
+            evidence_required bool NOT NULL,
+            evidence_guidance TEXT NOT NULL,
+            evidence_examples TEXT NOT NULL,
+            sector_package varchar(64) NOT NULL,
+            legal_reference varchar(128) NOT NULL,
+            mapped_controls TEXT NOT NULL,
+            mapping_rationale TEXT NOT NULL,
+            coverage_level varchar(16) NOT NULL,
+            mapping_version_id INTEGER NULL,
+            primary_source_id INTEGER NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assessments_applicabilityassessment (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            sector varchar(255) NOT NULL,
+            company_size varchar(255) NOT NULL,
+            critical_services TEXT NOT NULL,
+            supply_chain_role varchar(255) NOT NULL,
+            status varchar(32) NOT NULL,
+            reasoning TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assessments_assessment (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            process_id INTEGER NOT NULL,
+            requirement_id INTEGER NOT NULL,
+            owner_id INTEGER NULL,
+            status varchar(32) NOT NULL,
+            score INTEGER NOT NULL,
+            notes TEXT NOT NULL,
+            evidence_summary TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assessments_measure (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            assessment_id INTEGER NULL,
+            owner_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            priority varchar(16) NOT NULL,
+            status varchar(16) NOT NULL,
+            due_date date NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_guidance_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_tenant (
+            id, name, slug, country, operation_countries, description, sector, employee_count,
+            annual_revenue_million, balance_sheet_million, critical_services, supply_chain_role,
+            nis2_relevant, kritis_relevant, develops_digital_products, uses_ai_systems,
+            ot_iacs_scope, automotive_scope, psirt_defined, sbom_required, product_security_scope
+        )
+        VALUES (
+            42, 'Guidance Tenant', 'guidance-tenant', 'DE', '["DE","NL"]',
+            'Tenant fuer Guidance-Navigation', 'MSSP', 240, '18.50', '11.00',
+            'Managed SOC', 'Critical supplier', 1, 0, 1, 1, 0, 0, 1, 1,
+            'Rust guidance rollout'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO accounts_user (id, tenant_id, username, first_name, last_name)
+        VALUES (7, 42, 'ada', 'Ada', 'Lovelace')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_businessunit (id, tenant_id, name)
+        VALUES (1, 42, 'Security Operations')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO processes_process (
+            id, tenant_id, business_unit_id, owner_id, name, scope, description, status,
+            documented, approved, communicated, implemented, effective, evidenced, reviewed_at, created_at, updated_at
+        )
+        VALUES
+            (10, 42, 1, 7, 'Incident Intake', 'SOC', 'SOC intake process', 'PARTIAL', 1, 1, 1, 1, 0, 0, '2026-04-18', '2026-04-18T10:00:00Z', '2026-04-18T11:00:00Z'),
+            (11, 42, 1, 7, 'Triage', 'SOC', 'Alert triage process', 'INFORMAL', 1, 0, 1, 0, 0, 0, NULL, '2026-04-19T10:00:00Z', '2026-04-19T11:00:00Z')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assets_app_informationasset (id, tenant_id, name)
+        VALUES (1, 42, 'Customer Portal')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO risks_riskcategory (id, tenant_id, name)
+        VALUES (1, 42, 'Cyber Risk')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO risks_risk (
+            id, tenant_id, category_id, process_id, asset_id, owner_id, title, description, threat,
+            vulnerability, impact, likelihood, residual_impact, residual_likelihood, status,
+            treatment_strategy, treatment_plan, treatment_due_date, accepted_by_id, accepted_at,
+            review_date, created_at, updated_at
+        )
+        VALUES (
+            10, 42, 1, 10, 1, 7, 'Credential Phishing', 'Credential theft via phishing',
+            'Phishing campaign', 'Weak MFA coverage', 5, 4, 3, 2, 'TREATING', 'MITIGATE',
+            'Roll out phishing-resistant MFA', '2026-05-15', NULL, NULL, '2026-06-01',
+            '2026-04-20T10:00:00Z', '2026-04-20T11:00:00Z'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_mappingversion (
+            id, framework, slug, title, version, program_name, status, effective_on, notes, created_at, updated_at
+        )
+        VALUES (
+            1, 'NIS2', 'nis2-guidance', 'NIS2 Guidance Mapping', '2024', 'ISCY', 'ACTIVE',
+            '2026-01-01', 'Guidance fixture mapping', '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_regulatorysource (
+            id, framework, mapping_version_id, code, title, authority, citation, url, source_type,
+            published_on, effective_on, notes, created_at, updated_at
+        )
+        VALUES (
+            10, 'NIS2', 1, 'NIS2-21', 'Article 21', 'EU', 'NIS2 Article 21',
+            'https://example.test/nis2', 'LAW', '2024-10-18', '2024-10-18', '',
+            '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_requirement (
+            id, framework, code, title, domain, description, guidance, is_active, evidence_required,
+            evidence_guidance, evidence_examples, sector_package, legal_reference, mapped_controls,
+            mapping_rationale, coverage_level, mapping_version_id, primary_source_id, created_at, updated_at
+        )
+        VALUES
+            (100, 'NIS2', 'NIS2-21-MFA', 'MFA for privileged access', 'Identity', 'Protect privileged access', 'Implement MFA', 1, 1, 'Provide evidence', 'Policy', 'ALL', 'Art. 21', '[]', '', 'FULL', 1, 10, '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z'),
+            (101, 'NIS2', 'NIS2-21-IR', 'Incident handling', 'Incident Response', 'Handle incidents', 'Document playbooks', 1, 1, '', '', 'ALL', 'Art. 21', '[]', '', 'SUPPORTING', 1, NULL, '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z'),
+            (102, 'ISO27001', 'A.5.15', 'Access control', 'Identity', 'Restrict access', 'Review roles', 1, 1, '', '', 'ALL', 'ISO A.5.15', '[]', '', 'FULL', NULL, NULL, '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z'),
+            (103, 'ISO27001', 'A.5.17', 'Authentication information', 'Identity', 'Protect auth info', 'Use vaulting', 1, 1, '', '', 'ALL', 'ISO A.5.17', '[]', '', 'FULL', NULL, NULL, '2026-04-01T10:00:00Z', '2026-04-01T11:00:00Z')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assessments_applicabilityassessment (
+            id, tenant_id, sector, company_size, critical_services, supply_chain_role, status, reasoning, created_at, updated_at
+        )
+        VALUES (
+            10, 42, 'MSSP', 'medium', 'Managed SOC', 'critical supplier', 'RELEVANT',
+            'Digital provider with critical customer services', '2026-04-18T10:00:00Z', '2026-04-18T11:00:00Z'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assessments_assessment (
+            id, tenant_id, process_id, requirement_id, owner_id, status, score, notes, evidence_summary, created_at, updated_at
+        )
+        VALUES (
+            20, 42, 10, 100, 7, 'PARTIAL', 3, 'MFA rollout started', 'Screenshots available',
+            '2026-04-18T10:00:00Z', '2026-04-18T11:00:00Z'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assessments_measure (
+            id, tenant_id, assessment_id, owner_id, title, description, priority, status, due_date, created_at, updated_at
+        )
+        VALUES (
+            30, 42, 20, 7, 'MFA ausrollen', 'Roll out phishing-resistant MFA', 'HIGH', 'OPEN',
+            '2026-05-01', '2026-04-18T10:00:00Z', '2026-04-18T11:00:00Z'
         )
         "#,
     )
