@@ -18,6 +18,8 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path as FsPath, PathBuf},
+    thread,
+    time::Duration,
 };
 
 pub mod account_store;
@@ -81,6 +83,7 @@ pub struct AppState {
     pub tenant_store: Option<TenantStore>,
     pub wizard_store: Option<WizardStore>,
     pub evidence_media_root: Option<PathBuf>,
+    pub nvd_api_base_url: Option<String>,
 }
 
 impl AppState {
@@ -104,6 +107,7 @@ impl AppState {
             tenant_store: None,
             wizard_store: None,
             evidence_media_root: None,
+            nvd_api_base_url: None,
         }
     }
 
@@ -127,6 +131,7 @@ impl AppState {
             tenant_store,
             wizard_store: None,
             evidence_media_root: None,
+            nvd_api_base_url: None,
         }
     }
 
@@ -152,6 +157,11 @@ impl AppState {
 
     pub fn with_evidence_media_root(mut self, evidence_media_root: Option<PathBuf>) -> Self {
         self.evidence_media_root = evidence_media_root;
+        self
+    }
+
+    pub fn with_nvd_api_base_url(mut self, nvd_api_base_url: Option<String>) -> Self {
+        self.nvd_api_base_url = nvd_api_base_url;
         self
     }
 
@@ -908,6 +918,11 @@ pub struct CveSummaryResponse {
     pub risk_hotspot_score: f64,
 }
 
+const DEFAULT_NVD_API_BASE_URL: &str = "https://services.nvd.nist.gov";
+const NVD_API_REQUEST_TIMEOUT_SECS: u64 = 30;
+const NVD_API_MAX_RETRIES: usize = 2;
+const NVD_API_RETRY_DELAY_MILLIS: u64 = 500;
+
 pub fn normalize_cve_id(input: &str) -> String {
     input.trim().to_uppercase()
 }
@@ -920,35 +935,180 @@ pub fn is_valid_cve_id(input: &str) -> bool {
     parts[1].chars().all(|c| c.is_ascii_digit()) && parts[2].chars().all(|c| c.is_ascii_digit())
 }
 
-fn nvd_normalize_response(payload: NvdImportRequest) -> Response {
-    let normalized = normalize_cve_id(&payload.cve_id);
+fn api_error_response(
+    status: StatusCode,
+    error_code: &'static str,
+    message: impl Into<String>,
+) -> Response {
+    (
+        status,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: message.into(),
+        }),
+    )
+        .into_response()
+}
+
+fn validated_cve_id(raw_cve_id: &str) -> Result<String, Response> {
+    let normalized = normalize_cve_id(raw_cve_id);
     if normalized.is_empty() {
-        return (
+        return Err(api_error_response(
             StatusCode::BAD_REQUEST,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "empty_cve_id",
-                message: "CVE-ID darf nicht leer sein.".to_string(),
-            }),
-        )
-            .into_response();
+            "empty_cve_id",
+            "CVE-ID darf nicht leer sein.",
+        ));
     }
     if !is_valid_cve_id(&normalized) {
-        return (
+        return Err(api_error_response(
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "invalid_cve_id",
-                message: format!(
-                    "CVE-ID '{}' entspricht nicht dem erwarteten Format CVE-YYYY-NNNN.",
-                    normalized
-                ),
-            }),
-        )
-            .into_response();
+            "invalid_cve_id",
+            format!(
+                "CVE-ID '{}' entspricht nicht dem erwarteten Format CVE-YYYY-NNNN.",
+                normalized
+            ),
+        ));
     }
+    Ok(normalized)
+}
+
+fn nvd_import_base_url(state: &AppState) -> String {
+    state
+        .nvd_api_base_url
+        .clone()
+        .or_else(|| std::env::var("NVD_API_BASE_URL").ok())
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_NVD_API_BASE_URL.to_string())
+}
+
+fn nvd_api_key() -> Option<String> {
+    std::env::var("NVD_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn nvd_retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
+}
+
+async fn fetch_nvd_payload(state: &AppState, cve_id: &str) -> Result<Value, Response> {
+    let base_url = nvd_import_base_url(state);
+    let api_key = nvd_api_key();
+    let requested_cve_id = cve_id.to_string();
+    let task = tokio::task::spawn_blocking(
+        move || -> Result<Value, (StatusCode, &'static str, String)> {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(NVD_API_REQUEST_TIMEOUT_SECS))
+                .build()
+                .map_err(|err| {
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        "nvd_upstream_error",
+                        format!("Rust-NVD-Client konnte nicht aufgebaut werden: {err}"),
+                    )
+                })?;
+            let url = format!("{base_url}/rest/json/cves/2.0");
+
+            for attempt in 0..=NVD_API_MAX_RETRIES {
+                let mut request = client
+                    .get(&url)
+                    .query(&[("cveId", requested_cve_id.as_str())])
+                    .header(reqwest::header::ACCEPT, "application/json");
+                if let Some(api_key) = api_key.as_deref() {
+                    request = request.header("apiKey", api_key);
+                }
+
+                match request.send() {
+                    Ok(response) => {
+                        let status = response.status();
+                        if status.is_success() {
+                            return response.json::<Value>().map_err(|err| {
+                                (
+                                    StatusCode::BAD_GATEWAY,
+                                    "nvd_invalid_payload",
+                                    format!(
+                                        "NVD-Antwort konnte nicht als JSON gelesen werden: {err}"
+                                    ),
+                                )
+                            });
+                        }
+
+                        let detail = response
+                            .text()
+                            .ok()
+                            .map(|body| body.trim().to_string())
+                            .filter(|body| !body.is_empty())
+                            .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
+                        if nvd_retryable_status(status) && attempt < NVD_API_MAX_RETRIES {
+                            thread::sleep(Duration::from_millis(
+                                NVD_API_RETRY_DELAY_MILLIS * (attempt as u64 + 1),
+                            ));
+                            continue;
+                        }
+                        return Err((
+                            StatusCode::BAD_GATEWAY,
+                            "nvd_upstream_error",
+                            format!("NVD lieferte fuer {requested_cve_id} einen Fehler: {detail}"),
+                        ));
+                    }
+                    Err(err) => {
+                        let retryable = err.is_timeout() || err.is_connect() || err.is_request();
+                        if retryable && attempt < NVD_API_MAX_RETRIES {
+                            thread::sleep(Duration::from_millis(
+                                NVD_API_RETRY_DELAY_MILLIS * (attempt as u64 + 1),
+                            ));
+                            continue;
+                        }
+                        return Err((
+                            StatusCode::BAD_GATEWAY,
+                            "nvd_upstream_error",
+                            format!(
+                                "NVD konnte fuer {requested_cve_id} nicht erreicht werden: {err}"
+                            ),
+                        ));
+                    }
+                }
+            }
+
+            Err((
+                StatusCode::BAD_GATEWAY,
+                "nvd_upstream_error",
+                format!("NVD konnte fuer {requested_cve_id} nicht erreicht werden."),
+            ))
+        },
+    );
+
+    match task.await {
+        Ok(Ok(payload)) => Ok(payload),
+        Ok(Err((status, error_code, message))) => {
+            Err(api_error_response(status, error_code, message))
+        }
+        Err(err) => Err(api_error_response(
+            StatusCode::BAD_GATEWAY,
+            "nvd_upstream_error",
+            format!("NVD-Importtask wurde unerwartet beendet: {err}"),
+        )),
+    }
+}
+
+fn first_nvd_cve(payload: &Value) -> Option<Value> {
+    payload
+        .get("vulnerabilities")
+        .and_then(Value::as_array)
+        .and_then(|vulnerabilities| vulnerabilities.first())
+        .and_then(|entry| entry.get("cve"))
+        .cloned()
+}
+
+fn nvd_normalize_response(payload: NvdImportRequest) -> Response {
+    let normalized = match validated_cve_id(&payload.cve_id) {
+        Ok(normalized) => normalized,
+        Err(response) => return response,
+    };
     (
         StatusCode::OK,
         Json(NvdImportResponse {
@@ -5955,7 +6115,7 @@ async fn web_cves_submit(
         .await
     {
         Ok(result) => Redirect::to(&web_path_with_context(
-            &format!("/cves/assessments/{}", result.assessment.summary.id),
+            &format!("/cves/{}/", result.assessment.summary.id),
             Some(&context),
         ))
         .into_response(),
@@ -8140,8 +8300,52 @@ async fn nvd_normalize(Json(payload): Json<NvdImportRequest>) -> Response {
     nvd_normalize_response(payload)
 }
 
-async fn nvd_import(Json(payload): Json<NvdImportRequest>) -> Response {
-    nvd_normalize_response(payload)
+async fn nvd_import(
+    State(state): State<AppState>,
+    Json(payload): Json<NvdImportRequest>,
+) -> Response {
+    let normalized = match validated_cve_id(&payload.cve_id) {
+        Ok(normalized) => normalized,
+        Err(response) => return response,
+    };
+    let Some(store) = state.cve_store.as_ref() else {
+        return api_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-CVE-Store ist nicht konfiguriert.",
+        );
+    };
+    let raw_payload = match fetch_nvd_payload(&state, &normalized).await {
+        Ok(payload) => payload,
+        Err(response) => return response,
+    };
+    let Some(cve) = first_nvd_cve(&raw_payload) else {
+        return api_error_response(
+            StatusCode::NOT_FOUND,
+            "cve_not_found",
+            format!("Keine CVE-Daten fuer {normalized} gefunden."),
+        );
+    };
+    let record = NvdCveRecord::from_nvd_value(&cve, &raw_payload, &normalized)
+        .with_cve_id(normalized.clone());
+    if let Err(err) = store.upsert_nvd_cve(&record).await {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            format!("CVE konnte nicht persistiert werden: {err}"),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(NvdPersistResponse {
+            accepted: true,
+            api_version: "v1",
+            cve_id: normalized,
+            source: "NVD",
+            persisted: true,
+        }),
+    )
+        .into_response()
 }
 
 async fn nvd_upsert(
@@ -8151,61 +8355,26 @@ async fn nvd_upsert(
     let raw_payload = payload.raw_payload.unwrap_or_else(|| payload.cve.clone());
     let fallback_cve_id = payload.cve_id.as_deref().unwrap_or("");
     let record = NvdCveRecord::from_nvd_value(&payload.cve, &raw_payload, fallback_cve_id);
-    let normalized = normalize_cve_id(&record.cve_id);
+    let normalized = match validated_cve_id(&record.cve_id) {
+        Ok(normalized) => normalized,
+        Err(response) => return response,
+    };
 
-    if normalized.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "empty_cve_id",
-                message: "CVE-ID darf nicht leer sein.".to_string(),
-            }),
-        )
-            .into_response();
-    }
-    if !is_valid_cve_id(&normalized) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "invalid_cve_id",
-                message: format!(
-                    "CVE-ID '{}' entspricht nicht dem erwarteten Format CVE-YYYY-NNNN.",
-                    normalized
-                ),
-            }),
-        )
-            .into_response();
-    }
-
-    let Some(store) = state.cve_store else {
-        return (
+    let Some(store) = state.cve_store.as_ref() else {
+        return api_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "database_not_configured",
-                message: "Rust-CVE-Store ist nicht konfiguriert.".to_string(),
-            }),
-        )
-            .into_response();
+            "database_not_configured",
+            "Rust-CVE-Store ist nicht konfiguriert.",
+        );
     };
 
     let record = record.with_cve_id(normalized.clone());
     if let Err(err) = store.upsert_nvd_cve(&record).await {
-        return (
+        return api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "database_error",
-                message: format!("CVE konnte nicht persistiert werden: {err}"),
-            }),
-        )
-            .into_response();
+            "database_error",
+            format!("CVE konnte nicht persistiert werden: {err}"),
+        );
     }
 
     (
@@ -8603,6 +8772,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/cves/assessments/{assessment_id}",
             get(web_cve_assessment_detail),
         )
+        .route("/cves/{assessment_id}/", get(web_cve_assessment_detail))
         .route("/api/v1/nvd/normalize", post(nvd_normalize))
         .route("/api/v1/nvd/import", post(nvd_import))
         .route("/api/v1/nvd/upsert", post(nvd_upsert))

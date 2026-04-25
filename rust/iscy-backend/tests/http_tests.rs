@@ -1,5 +1,6 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{header::SET_COOKIE, Request, StatusCode};
+use axum::{routing::get, Json, Router};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use iscy_backend::{
     account_store::AccountStore, app_router, app_router_with_state,
@@ -4700,7 +4701,7 @@ async fn rust_web_cve_submit_creates_assessment_and_redirects_to_detail() {
         .unwrap()
         .to_str()
         .unwrap();
-    assert!(location.contains("/cves/assessments/"));
+    assert!(location.contains("/cves/1/"));
     assert!(location.contains("tenant_id=42"));
 
     let detail = app
@@ -4717,6 +4718,42 @@ async fn rust_web_cve_submit_creates_assessment_and_redirects_to_detail() {
     let body = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("CVE-2026-1002"));
+    assert!(html.contains("Technische Zusammenfassung"));
+    assert!(html.contains("Sensor Gateway"));
+}
+
+#[tokio::test]
+async fn rust_web_cve_detail_alias_matches_django_route_shape() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    insert_cveassessment_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/cves/1/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("CVE-2026-1001"));
     assert!(html.contains("Technische Zusammenfassung"));
     assert!(html.contains("Sensor Gateway"));
 }
@@ -4934,8 +4971,60 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
 }
 
 #[tokio::test]
-async fn nvd_import_endpoint_normalizes_cve_id() {
-    let response = app_router()
+async fn nvd_import_endpoint_fetches_and_persists_cve_record() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    let (nvd_base_url, nvd_stub) = spawn_nvd_stub(serde_json::json!({
+        "resultsPerPage": 1,
+        "startIndex": 0,
+        "totalResults": 1,
+        "format": "NVD_CVE",
+        "version": "2.0",
+        "timestamp": "2026-04-25T12:00:00.000",
+        "vulnerabilities": [{
+            "cve": {
+                "id": "CVE-2026-9999",
+                "published": "2026-04-20T10:00:00.000",
+                "lastModified": "2026-04-22T10:00:00.000",
+                "descriptions": [{
+                    "lang": "en",
+                    "value": "Rust imported CVE"
+                }],
+                "metrics": {
+                    "cvssMetricV31": [{
+                        "cvssData": {
+                            "baseScore": 8.8,
+                            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+                        },
+                        "baseSeverity": "HIGH"
+                    }]
+                },
+                "weaknesses": [{
+                    "description": [{
+                        "lang": "en",
+                        "value": "CWE-79"
+                    }]
+                }],
+                "references": [{
+                    "url": "https://example.test/CVE-2026-9999"
+                }],
+                "configurations": [{
+                    "nodes": []
+                }]
+            }
+        }]
+    }))
+    .await;
+    let app = app_router_with_state(
+        AppState::new(Some(CveStore::from_sqlite_pool(pool.clone())))
+            .with_nvd_api_base_url(Some(nvd_base_url)),
+    );
+
+    let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -4948,6 +5037,75 @@ async fn nvd_import_endpoint_normalizes_cve_id() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["cve_id"], "CVE-2026-9999");
+    assert_eq!(payload["persisted"], true);
+
+    let row = sqlx::query(
+        r#"
+        SELECT cve_id, description, severity, weakness_ids_json, references_json
+        FROM vulnerability_intelligence_cverecord
+        WHERE cve_id = ?
+        "#,
+    )
+    .bind("CVE-2026-9999")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("cve_id"), "CVE-2026-9999");
+    assert_eq!(row.get::<String, _>("description"), "Rust imported CVE");
+    assert_eq!(row.get::<String, _>("severity"), "HIGH");
+    assert_eq!(row.get::<String, _>("weakness_ids_json"), r#"["CWE-79"]"#);
+    assert_eq!(
+        row.get::<String, _>("references_json"),
+        r#"["https://example.test/CVE-2026-9999"]"#
+    );
+
+    nvd_stub.abort();
+}
+
+#[tokio::test]
+async fn nvd_import_endpoint_returns_not_found_for_missing_cve() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    let (nvd_base_url, nvd_stub) = spawn_nvd_stub(serde_json::json!({
+        "resultsPerPage": 0,
+        "startIndex": 0,
+        "totalResults": 0,
+        "format": "NVD_CVE",
+        "version": "2.0",
+        "timestamp": "2026-04-25T12:00:00.000",
+        "vulnerabilities": []
+    }))
+    .await;
+    let app = app_router_with_state(
+        AppState::new(Some(CveStore::from_sqlite_pool(pool.clone())))
+            .with_nvd_api_base_url(Some(nvd_base_url)),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/nvd/import")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"cve_id":"CVE-2026-9999"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "cve_not_found");
+
+    nvd_stub.abort();
 }
 
 #[tokio::test]
@@ -9546,6 +9704,22 @@ async fn create_cverecord_table(pool: &SqlitePool) {
     .execute(pool)
     .await
     .unwrap();
+}
+
+async fn spawn_nvd_stub(payload: serde_json::Value) -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new().route(
+        "/rest/json/cves/2.0",
+        get(move || {
+            let payload = payload.clone();
+            async move { Json(payload) }
+        }),
+    );
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{address}"), handle)
 }
 
 async fn insert_cverecord_fixture(pool: &SqlitePool) {
