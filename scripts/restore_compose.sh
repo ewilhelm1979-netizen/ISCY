@@ -41,8 +41,8 @@ docker compose "${COMPOSE_ARGS[@]}" exec -T db \
 gunzip -c "$RESTORE_DIR/postgres.sql.gz" | docker compose "${COMPOSE_ARGS[@]}" exec -T db \
   psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 
-echo "[restore] restoring media/static/models"
+echo "[restore] restoring media"
 cat "$RESTORE_DIR/storage.tar.gz" | docker compose "${COMPOSE_ARGS[@]}" run --rm --entrypoint sh app \
-  -lc 'mkdir -p /app/media /app/staticfiles /app/models && tar -C /app -xzf -'
+  -lc 'mkdir -p /app/media && tar -C /app -xzf -'
 
 echo "[restore] done"

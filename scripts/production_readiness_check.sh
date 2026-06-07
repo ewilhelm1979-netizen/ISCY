@@ -14,18 +14,12 @@ if [ ! -f ".env" ]; then
 fi
 
 info "Pruefe kritische .env-Parameter ..."
-if grep -Eq '^SECRET_KEY=change-me-in-production$' .env; then
-  err "SECRET_KEY ist noch auf Platzhalterwert."
+if grep -Eq '^POSTGRES_PASSWORD=(change-me|isms)?$' .env; then
+  err "POSTGRES_PASSWORD ist noch auf einem Platzhalterwert."
   exit 1
 fi
-if grep -Eq '^DEBUG=True$' .env; then
-  err "DEBUG=True ist fuer Produktion nicht zulaessig."
-  exit 1
-fi
-if ! grep -Eq '^ALLOWED_HOSTS=.+$' .env; then
-  err "ALLOWED_HOSTS fehlt oder ist leer."
-  exit 1
-fi
+grep -Eq '^DATABASE_URL=.+$' .env || { err "DATABASE_URL fehlt."; exit 1; }
+grep -Eq '^RUST_BACKEND_URL=.+$' .env || { err "RUST_BACKEND_URL fehlt."; exit 1; }
 
 if command -v docker >/dev/null 2>&1; then
   info "Validiere Compose-Konfiguration (prod/prod+llm) ..."
@@ -35,7 +29,7 @@ else
   warn "Docker nicht vorhanden, Compose-Validierung wird uebersprungen."
 fi
 
-info "Django-Basispruefung ..."
-python manage.py check
+info "Rust-Backend-Basispruefung ..."
+cargo test --manifest-path rust/iscy-backend/Cargo.toml
 
 info "Readiness-Check abgeschlossen."

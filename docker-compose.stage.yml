@@ -1,15 +1,9 @@
 services:
   app:
     environment:
-      DEBUG: "False"
-      RUN_SEEDS: "0"
-      RUN_COLLECTSTATIC: "1"
-      APP_SERVER: gunicorn
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      RUST_BACKEND_BIND: "0.0.0.0:9000"
     volumes:
       - media_data:/app/media
-      - static_data:/app/staticfiles
-      - model_data:/app/models
 
   reverse-proxy:
     image: nginx:1.27-alpine
@@ -26,13 +20,9 @@ services:
     volumes:
       - ./docker/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
       - media_data:/var/www/media:ro
-      - static_data:/var/www/static:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health/live/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health/live || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 5
       start_period: 10s
-
-volumes:
-  model_data:

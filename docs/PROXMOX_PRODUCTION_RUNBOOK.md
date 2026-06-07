@@ -49,8 +49,8 @@ make prod-up-llm
 ## 5. Nach dem Start pruefen
 
 - `docker compose -f docker-compose.yml -f docker-compose.prod.yml ps`
-- `curl -f http://127.0.0.1/health/live/`
-- `curl -f http://127.0.0.1/health/ready/`
+- `curl -f http://127.0.0.1/health/live`
+- `curl -f http://127.0.0.1/health/ready`
 
 ## 6. Backup / Restore
 

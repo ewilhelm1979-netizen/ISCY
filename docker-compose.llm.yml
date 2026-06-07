@@ -1,14 +1,9 @@
 services:
   app:
     environment:
-      LOCAL_LLM_ENABLED: "True"
-      LOCAL_LLM_BACKEND: rust_service
       LOCAL_LLM_MODEL_NAME: ${LOCAL_LLM_MODEL_NAME:-iscy-rust-llm}
-      LOCAL_LLM_RUST_URL: ${LOCAL_LLM_RUST_URL:-http://rust-backend:9000}
       LOCAL_LLM_N_CTX: ${LOCAL_LLM_N_CTX:-8192}
       LOCAL_LLM_N_THREADS: ${LOCAL_LLM_N_THREADS:-8}
       LOCAL_LLM_GPU_LAYERS: ${LOCAL_LLM_GPU_LAYERS:-0}
-      LOCAL_LLM_VERBOSE_NATIVE: ${LOCAL_LLM_VERBOSE_NATIVE:-False}
     volumes:
       - media_data:/app/media
-      - static_data:/app/staticfiles

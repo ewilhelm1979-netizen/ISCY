@@ -1,29 +1,25 @@
-# Rust-Webstack Umbauplan (Python-Ablösung)
+# ISCY Rust-Webstack
 
-Stand: 2026-04-18
+## Status
 
-## Zielbild
-Vollständige Ablösung der Django-Anwendungslogik durch Rust-Services (API + Background Jobs + LLM + NVD), Python nur noch bis zum finalen Cutover als temporäre Kompatibilitätsschicht.
+Der Rust-Webstack ist der produktive Webstack.
 
-## Jetzt umgesetzt (dieser Schritt)
-- Lokaler LLM-Pfad in der App ist auf **Rust-Service only** gestellt.
-- Legacy `llama_cpp`-Codepfad wurde aus der CVE-Service-Logik entfernt.
-- Runtime-Checks/Views verwenden nur noch den Rust-Provider.
+## Architektur
 
-## Nächste Umbaupakete
-1. **Auth & Tenant API in Rust**
-   - Login/Session/JWT
-   - Tenant-Scoping und Rollenmodell
-2. **Wizard/Guidance/Reporting in Rust**
-   - bestehende Django-Views durch Rust-API + Frontend adapter ersetzen
-3. **Datenzugriff konsolidieren**
-   - Rust ORM/SQL Layer, Migrationen/Seeds in Rust-Pipeline
-4. **Finaler Cutover**
-   - Django-Server deaktivieren
-   - Python-Dependencies + `manage.py` entfernen
-   - CI auf Rust-only umstellen
+- Axum liefert Weboberflaechen und JSON-APIs.
+- Stores in `rust/iscy-backend/src/*_store.rs` kapseln Datenzugriffe.
+- `db_admin` initialisiert operative Tabellen und Demo-/Katalogdaten.
+- `iscy-canary` uebernimmt NVD-/CVE-Canary- und Importjobs.
+- Nginx ist nur Reverse Proxy fuer Stage/Production.
 
-## Abnahmekriterien
-- Kein produktiver Request-Pfad mehr über Django
-- Keine Python-Runtime in Build/Runtime-Images
-- Rust-only CI (Tests, Lints, Migrations, Smoke)
+## Abgeloeste Komponenten
+
+- Django-Views und Templates
+- Django-Admin als Runtime-Abhaengigkeit
+- Django-Settings, URL-Konfiguration, ASGI/WSGI
+- Python-Management-Commands
+- Python-Docker-Runtime
+
+## Entwicklungsregel
+
+Neue UI-, API-, Job- und Datenzugriffsarbeit wird im Rust-Backend umgesetzt und mit Rust-Tests oder Rust-Smoke-Probes abgesichert.

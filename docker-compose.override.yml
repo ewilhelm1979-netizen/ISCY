@@ -5,12 +5,8 @@ services:
 
   app:
     environment:
-      DEBUG: "True"
-      RUN_SEEDS: "1"
-      APP_SERVER: runserver
+      RUST_BACKEND_BIND: "0.0.0.0:9000"
     ports:
-      - "8000:8000"
+      - "${ISCY_HTTP_PORT:-9000}:9000"
     volumes:
-      - .:/app
       - media_data:/app/media
-      - static_data:/app/staticfiles
