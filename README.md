@@ -1,4 +1,4 @@
-# ISCY V23.7 / Rust 0.3.0
+# ISCY V23.7.1 / Rust 0.3.0
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 

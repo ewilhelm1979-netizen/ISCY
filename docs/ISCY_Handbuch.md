@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7 / Rust 0.3.0)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.1 / Rust 0.3.0)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -293,6 +293,19 @@ Fachlicher Nutzen:
 Fuer Nicht-Sicherheitsleute:
 Der Bereich zeigt, welche Geraete welche Sicherheitsluecken oder Nachweise melden.
 
+Was die Agenten aktuell testen koennen:
+
+- Inventar: Hostname, OS-Familie, OS-Version, CPU-Architektur, Agent-Version und Deployment-Channel
+- Heartbeat: ob ein registriertes Geraet noch regelmaessig mit ISCY spricht
+- OS-Baseline: Betriebssystem- und Patch-/Versionshinweise als Grundlage fuer MDM- oder Patch-Nachweise
+- Datentraeger-Verschluesselung: BitLocker unter Windows, FileVault unter macOS, LUKS/root encryption unter Linux
+- Plattformintegritaet: Secure Boot unter Windows/Linux sowie SIP/authenticated root unter macOS
+- Host-Firewall: Windows-Firewall-Profile, macOS Application Firewall, Linux firewalld/ufw/nftables/iptables-Signale
+- MDM oder Endpoint Management: Windows Enrollment Registry, macOS `profiles`-Enrollment, Linux-Management-Agenten wie osquery, Puppet, Chef, Salt, SSM oder vergleichbare Agenten
+- Endpoint Protection/EDR: Windows Defender Status, macOS EDR-/Security-Agent-Pfade, Linux-Dienste und Pfade fuer Wazuh, auditd, Microsoft Defender, CrowdStrike, SentinelOne, osquery und vergleichbare Agenten
+
+Die Agenten arbeiten read-only. Wenn ein Signal nicht sicher bestaetigt werden kann, meldet ISCY eine offene Evidenzluecke statt einen erfundenen Nachweis.
+
 ### 5.9 Risks
 
 Zweck:
@@ -551,7 +564,66 @@ Empfohlene Kette fuer die operative Bearbeitung:
 
 Merksatz: Erst verstehen, dann bewerten, dann eindaemmen, dann eskalieren - wenn Risiko oder Komplexitaet es verlangen.
 
-### 6.6 Docker-Betrieb in einfacher Sprache
+### 6.6 ISCY lokal starten
+
+Einfachster lokaler Start:
+
+```bash
+cd /home/enricow79/Projekte/ISCY
+./start.sh
+```
+
+Danach ist ISCY unter `http://127.0.0.1:9000/login/` erreichbar.
+
+Demo-Login:
+
+```text
+admin / Admin123!
+```
+
+Ohne Wrapper kann der Rust-Service so initialisiert und gestartet werden:
+
+```bash
+nix run .#iscy-backend -- init-demo
+DATABASE_URL=sqlite:///db.sqlite3 RUST_BACKEND_BIND=127.0.0.1:9000 nix run .#iscy-backend
+```
+
+Wichtige lokale Pruefbefehle:
+
+```bash
+make rust-test
+make rust-smoke
+make team-test
+nix flake check
+```
+
+Agent-Payload lokal testen:
+
+```bash
+nix run .#iscy-agent -- --self-test
+```
+
+Agent an eine lokale ISCY-Instanz melden lassen:
+
+```bash
+ISCY_BACKEND_URL=http://127.0.0.1:9000 \
+ISCY_TENANT_ID=1 \
+ISCY_USER_ID=1 \
+nix run .#iscy-agent
+```
+
+Produktive Agenten sollten mit Enrollment-Token aufgenommen werden:
+
+```bash
+ISCY_BACKEND_URL=http://127.0.0.1:9000 \
+ISCY_TENANT_ID=1 \
+ISCY_AGENT_ENROLLMENT_TOKEN=<token> \
+nix run .#iscy-agent
+```
+
+Merksatz: Erst ISCY starten, dann den Agent per `--self-test` pruefen, danach mit Token oder Agent-Secret an die Plattform melden.
+
+### 6.7 Docker-Betrieb in einfacher Sprache
 
 Wenn du ISCY schnell und reproduzierbar starten willst, nutze Docker.
 
@@ -566,7 +638,7 @@ Wenn du ISCY schnell und reproduzierbar starten willst, nutze Docker.
 
 Merksatz: Erst validieren, dann kurz testen, dann dauerhaft starten.
 
-### 6.7 CRA, IoT/Cloud, Windows, OT und Produktionsarchitektur (einfach erklaert)
+### 6.8 CRA, IoT/Cloud, Windows, OT und Produktionsarchitektur (einfach erklaert)
 
 Stand dieser Anleitung: 18. April 2026.
 
@@ -606,7 +678,7 @@ Fuer ISCY bedeutet das praktisch:
 
 Merksatz: Technik, Organisation und Nachweis muessen zusammenpassen.
 
-### 6.8 Einfache Abnahme-Checkliste fuer die neuen Themen
+### 6.9 Einfache Abnahme-Checkliste fuer die neuen Themen
 
 Nutze diese Liste als schnelle Team-Abnahme in ISCY:
 
@@ -630,6 +702,61 @@ Nutze diese Liste als schnelle Team-Abnahme in ISCY:
    - Zu jedem Punkt gibt es in ISCY mindestens Prozess, Risiko oder Massnahme plus Evidenz.
 
 Merksatz: Nicht nur planen - auch nachweisbar umsetzen.
+
+### 6.10 Grundschutz++-Abdeckung
+
+Gepruefte Quelle:
+`/home/enricow79/Dokumente/Techniche Dokumente/Grundschutzpp_OSCAL_Katalogbericht.pdf`
+
+Der Bericht beschreibt den Anwenderkatalog Grundschutz++ als OSCAL-Katalog, Version 1.1.3, Stand 02.04.2026 05:14 UTC. Der Umfang im Bericht ist:
+
+- 20 Praktiken
+- 998 Controls
+- 152 Controls mit `MUSS`
+- 620 Controls mit `SOLLTE`
+- 226 Controls mit `KANN`
+
+Die 20 Praktiken sind:
+
+- GC: Governance und Compliance
+- STM: Strukturmodellierung
+- UMS: Umsetzung
+- VRB: Verbesserung
+- PERF: Monitoring-Evaluation
+- RISK: Risikomanagement
+- ASST: Informationen und Assets
+- PERS: Personal
+- BES: Beschaffungsmanagement
+- DLS: Dienstleistersteuerung
+- TEST: Aenderungen und Tests
+- GEB: Gebaeudemanagement
+- SENS: Sensibilisierung
+- ARCH: Architektur
+- BER: Berechtigung
+- NOT: Notfallplanung
+- DET: Detektion
+- REA: Sicherheitsvorfallsbehandlung
+- KONF: Konfiguration
+- DEV: Entwicklung
+
+Fachliche Bewertung des aktuellen ISCY-Stands:
+
+- ISCY deckt die Grundschutz++-Arbeitslogik teilweise ab: Scope, Prozesse, Assets, Risiken, Anforderungen, Evidenzen, Assessments, Audits, Findings, Management Reviews, Roadmap und kontinuierliche Verbesserung sind als Plattformfunktionen vorhanden.
+- Die vorhandenen Katalogdaten enthalten 19 Assessment-Domaenen, 74 Bewertungsfragen, versionierte Mappings fuer ISO 27001, NIS2, KRITIS und CRA sowie regulatorische Anforderungen und Frage-Mappings.
+- Die Zero-Trust-Agenten liefern technische Nachweise fuer Teile von ASST, DET, KONF und BER, zum Beispiel Inventar, Verschluesselung, Secure Boot, Firewall, MDM/Endpoint-Management und Endpoint Protection.
+- KRITIS- und BSI-nahe Themen sind fachlich vorhanden, aber nicht als vollstaendiger Grundschutz++-OSCAL-Katalog importiert.
+
+Was noch fehlt fuer eine vollstaendige Grundschutz++-Abdeckung:
+
+- ein eigenes Framework `GRUNDSCHUTZ++` oder `IT_GRUNDSCHUTZ` im Requirement-Katalog
+- Import oder Seed der 20 Praktiken und 998 Controls aus dem OSCAL-Katalog
+- Uebernahme der `MUSS`/`SOLLTE`/`KANN`-Einstufungen
+- eindeutige Control-IDs, Titel, Beschreibungen, Zielobjekte und Evidenzanforderungen aus dem OSCAL-Katalog
+- Mapping der vorhandenen ISCY-Fragen, Agent-Findings, Risiken und Evidenzen auf konkrete Grundschutz++-Controls
+- ein auswertbarer Grundschutz++-Abdeckungsgrad je Tenant, Scope, Asset und Zielobjekt
+
+Kurzurteil:
+ISCY ist als Arbeitsplattform fuer Grundschutz++ gut vorbereitet und deckt viele Management-, Risiko-, Nachweis- und technische Posture-Themen ab. Eine belastbare Aussage "Grundschutz++ vollstaendig abgedeckt" waere aber erst korrekt, wenn der konkrete OSCAL-Katalog mit seinen 998 Controls importiert, versioniert und gegen die vorhandenen Fragen, Evidenzen und Agent-Findings gemappt ist.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
