@@ -1,4 +1,4 @@
-# ISCY V23.6.1 / Rust 0.2.1
+# ISCY V23.6.2 / Rust 0.2.2
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -96,7 +96,7 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 
 ## Zero-Trust Agent
 
-ISCY `0.2.1` enthaelt einen read-only Agent-MVP fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.2.2` enthaelt einen read-only Agent-MVP fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 

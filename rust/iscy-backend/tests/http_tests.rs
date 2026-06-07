@@ -774,7 +774,7 @@ async fn zero_trust_agent_token_enrollment_allows_secret_based_intake() {
                         "os_family":"windows",
                         "os_version":"Windows 11",
                         "architecture":"x86_64",
-                        "agent_version":"0.2.1",
+                        "agent_version":"0.2.2",
                         "deployment_channel":"intune"
                     }"#,
                 ))
@@ -801,7 +801,7 @@ async fn zero_trust_agent_token_enrollment_allows_secret_based_intake() {
                 .header("x-iscy-agent-secret", agent_secret.as_str())
                 .header("x-iscy-agent-mtls-fingerprint", "sha256:lab-client")
                 .body(Body::from(
-                    r#"{"agent_version":"0.2.1","status":"OK","summary":{"collector_mode":"read_only"}}"#,
+                    r#"{"agent_version":"0.2.2","status":"OK","summary":{"collector_mode":"read_only"}}"#,
                 ))
                 .unwrap(),
         )
@@ -837,7 +837,7 @@ async fn zero_trust_agent_token_enrollment_allows_secret_based_intake() {
                 .header("x-iscy-tenant-id", "1")
                 .header("x-iscy-agent-secret", agent_secret.as_str())
                 .header("x-iscy-agent-mtls-fingerprint", "sha256:wrong-client")
-                .body(Body::from(r#"{"agent_version":"0.2.1","status":"OK"}"#))
+                .body(Body::from(r#"{"agent_version":"0.2.2","status":"OK"}"#))
                 .unwrap(),
         )
         .await

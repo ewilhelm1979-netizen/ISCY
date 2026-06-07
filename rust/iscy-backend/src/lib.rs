@@ -1339,22 +1339,35 @@ fn agent_mtls_fingerprint_from_headers(headers: &HeaderMap) -> Option<String> {
         .or_else(|| header_string(headers, "ssl-client-fingerprint"))
 }
 
-fn agent_tenant_id_from_headers(headers: &HeaderMap) -> Result<i64, Response> {
+#[derive(Debug, Clone, Copy)]
+enum AgentTenantHeaderError {
+    Missing,
+    Invalid,
+}
+
+impl AgentTenantHeaderError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Missing => agent_auth_error_response(
+                StatusCode::UNAUTHORIZED,
+                "missing_agent_tenant",
+                "Agent-Requests benoetigen den Header x-iscy-tenant-id.",
+            ),
+            Self::Invalid => agent_auth_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_agent_tenant",
+                "Header x-iscy-tenant-id muss eine positive Tenant-ID enthalten.",
+            ),
+        }
+    }
+}
+
+fn agent_tenant_id_from_headers(headers: &HeaderMap) -> Result<i64, AgentTenantHeaderError> {
     let Some(raw_tenant_id) = header_string(headers, "x-iscy-tenant-id") else {
-        return Err(agent_auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            "missing_agent_tenant",
-            "Agent-Requests benoetigen den Header x-iscy-tenant-id.",
-        ));
+        return Err(AgentTenantHeaderError::Missing);
     };
     let tenant_id = raw_tenant_id.parse::<i64>().ok().filter(|value| *value > 0);
-    tenant_id.ok_or_else(|| {
-        agent_auth_error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid_agent_tenant",
-            "Header x-iscy-tenant-id muss eine positive Tenant-ID enthalten.",
-        )
-    })
+    tenant_id.ok_or(AgentTenantHeaderError::Invalid)
 }
 
 fn agent_auth_error_response(
@@ -2252,7 +2265,7 @@ async fn agent_enroll(
     if let Some(enrollment_token) = agent_enrollment_token_from_headers(&headers) {
         let tenant_id = match agent_tenant_id_from_headers(&headers) {
             Ok(tenant_id) => tenant_id,
-            Err(response) => return response,
+            Err(err) => return err.into_response(),
         };
         let mtls_fingerprint = agent_mtls_fingerprint_from_headers(&headers);
         return match store
@@ -2343,7 +2356,7 @@ async fn agent_heartbeat(
     let tenant_id = if let Some(agent_secret) = agent_secret_from_headers(&headers) {
         let tenant_id = match agent_tenant_id_from_headers(&headers) {
             Ok(tenant_id) => tenant_id,
-            Err(response) => return response,
+            Err(err) => return err.into_response(),
         };
         let mtls_fingerprint = agent_mtls_fingerprint_from_headers(&headers);
         match store
@@ -2438,7 +2451,7 @@ async fn agent_findings(
     let tenant_id = if let Some(agent_secret) = agent_secret_from_headers(&headers) {
         let tenant_id = match agent_tenant_id_from_headers(&headers) {
             Ok(tenant_id) => tenant_id,
-            Err(response) => return response,
+            Err(err) => return err.into_response(),
         };
         let mtls_fingerprint = agent_mtls_fingerprint_from_headers(&headers);
         match store

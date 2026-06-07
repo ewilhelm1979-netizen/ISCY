@@ -1,6 +1,6 @@
 # Zero-Trust Agent
 
-Version: ISCY Rust Backend `0.2.1`
+Version: ISCY Rust Backend `0.2.2`
 
 ## Zielbild
 
@@ -139,7 +139,7 @@ Der Plattform-Katalog kennt zusaetzlich diese Zero-Trust-Pruefpunkte, die ueber 
 - Softwareinventar fuer CVE-Korrelation
 - Removable-Media-Policy
 
-Wichtig: In `0.2.1` liest der Basisagent diese tiefen OS-/MDM-/EDR-Signale noch nicht selbst aus. Er liefert den sicheren Intake, die Plattformdatenstruktur und die Baseline. Konkrete Windows/macOS/Linux-Pruefmodule koennen danach gezielt erweitert werden.
+Wichtig: In `0.2.2` liest der Basisagent diese tiefen OS-/MDM-/EDR-Signale noch nicht selbst aus. Er liefert den sicheren Intake, die Plattformdatenstruktur und die Baseline. Konkrete Windows/macOS/Linux-Pruefmodule koennen danach gezielt erweitert werden.
 
 ## Deployment-Zielpfade
 
