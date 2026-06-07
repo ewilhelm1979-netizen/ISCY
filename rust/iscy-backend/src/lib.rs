@@ -354,7 +354,17 @@ pub struct AccountUserWriteResponse {
 pub struct AgentEnrollResponse {
     pub accepted: bool,
     pub api_version: &'static str,
+    pub auth_model: &'static str,
+    pub agent_secret: Option<String>,
     pub device: agent_store::AgentDeviceSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentEnrollmentTokenCreateResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub token: String,
+    pub enrollment: agent_store::AgentEnrollmentTokenSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -1306,6 +1316,64 @@ fn agent_store_error_response(err: anyhow::Error, action: &'static str) -> Respo
         .into_response()
 }
 
+fn header_string(headers: &HeaderMap, name: &'static str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|raw| raw.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn agent_enrollment_token_from_headers(headers: &HeaderMap) -> Option<String> {
+    header_string(headers, "x-iscy-agent-enrollment-token")
+}
+
+fn agent_secret_from_headers(headers: &HeaderMap) -> Option<String> {
+    header_string(headers, "x-iscy-agent-secret")
+}
+
+fn agent_mtls_fingerprint_from_headers(headers: &HeaderMap) -> Option<String> {
+    header_string(headers, "x-iscy-agent-mtls-fingerprint")
+        .or_else(|| header_string(headers, "x-ssl-client-fingerprint"))
+        .or_else(|| header_string(headers, "ssl-client-fingerprint"))
+}
+
+fn agent_tenant_id_from_headers(headers: &HeaderMap) -> Result<i64, Response> {
+    let Some(raw_tenant_id) = header_string(headers, "x-iscy-tenant-id") else {
+        return Err(agent_auth_error_response(
+            StatusCode::UNAUTHORIZED,
+            "missing_agent_tenant",
+            "Agent-Requests benoetigen den Header x-iscy-tenant-id.",
+        ));
+    };
+    let tenant_id = raw_tenant_id.parse::<i64>().ok().filter(|value| *value > 0);
+    tenant_id.ok_or_else(|| {
+        agent_auth_error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_agent_tenant",
+            "Header x-iscy-tenant-id muss eine positive Tenant-ID enthalten.",
+        )
+    })
+}
+
+fn agent_auth_error_response(
+    status: StatusCode,
+    error_code: &'static str,
+    message: &'static str,
+) -> Response {
+    (
+        status,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: message.to_string(),
+        }),
+    )
+        .into_response()
+}
+
 async fn web_context_from_request(
     query: &WebContextQuery,
     headers: &HeaderMap,
@@ -1988,7 +2056,7 @@ async fn agent_posture(State(state): State<AppState>, headers: HeaderMap) -> Res
                 .into_response();
         }
     };
-    let Some(store) = state.agent_store else {
+    let Some(store) = state.agent_store.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiErrorResponse {
@@ -2031,7 +2099,7 @@ async fn agent_devices(State(state): State<AppState>, headers: HeaderMap) -> Res
                 .into_response();
         }
     };
-    let Some(store) = state.agent_store else {
+    let Some(store) = state.agent_store.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiErrorResponse {
@@ -2077,7 +2145,7 @@ async fn agent_device_findings(
                 .into_response();
         }
     };
-    let Some(store) = state.agent_store else {
+    let Some(store) = state.agent_store.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiErrorResponse {
@@ -2107,11 +2175,117 @@ async fn agent_device_findings(
     }
 }
 
+async fn agent_enrollment_token_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_store::AgentEnrollmentTokenCreateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Agent-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .create_enrollment_token(context.tenant_id, Some(context.user_id), payload)
+        .await
+    {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(AgentEnrollmentTokenCreateResponse {
+                accepted: true,
+                api_version: "v1",
+                token: result.token,
+                enrollment: result.enrollment,
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            agent_store_error_response(err, "Agent-Enrollment-Token konnte nicht erstellt werden")
+        }
+    }
+}
+
 async fn agent_enroll(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<agent_store::AgentEnrollRequest>,
 ) -> Response {
+    let Some(store) = state.agent_store.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Agent-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    if let Some(enrollment_token) = agent_enrollment_token_from_headers(&headers) {
+        let tenant_id = match agent_tenant_id_from_headers(&headers) {
+            Ok(tenant_id) => tenant_id,
+            Err(response) => return response,
+        };
+        let mtls_fingerprint = agent_mtls_fingerprint_from_headers(&headers);
+        return match store
+            .enroll_device_with_token(
+                tenant_id,
+                payload,
+                &enrollment_token,
+                mtls_fingerprint.as_deref(),
+            )
+            .await
+        {
+            Ok(Some(result)) => (
+                StatusCode::CREATED,
+                Json(AgentEnrollResponse {
+                    accepted: true,
+                    api_version: "v1",
+                    auth_model: "enrollment_token",
+                    agent_secret: Some(result.agent_secret),
+                    device: result.device,
+                }),
+            )
+                .into_response(),
+            Ok(None) => agent_auth_error_response(
+                StatusCode::UNAUTHORIZED,
+                "invalid_agent_enrollment_token",
+                "Agent-Enrollment-Token ist ungueltig, abgelaufen, verbraucht oder nicht fuer dieses Geraet zugelassen.",
+            ),
+            Err(err) => {
+                agent_store_error_response(err, "Agent-Enrollment konnte nicht gespeichert werden")
+            }
+        };
+    }
+
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
@@ -2130,24 +2304,14 @@ async fn agent_enroll(
     if let Some(response) = write_permission_error(&context) {
         return response;
     }
-    let Some(store) = state.agent_store else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "database_not_configured",
-                message: "Rust-Agent-Store ist nicht konfiguriert.".to_string(),
-            }),
-        )
-            .into_response();
-    };
     match store.enroll_device(context.tenant_id, payload).await {
         Ok(device) => (
             StatusCode::CREATED,
             Json(AgentEnrollResponse {
                 accepted: true,
                 api_version: "v1",
+                auth_model: "tenant_context",
+                agent_secret: None,
                 device,
             }),
         )
@@ -2164,25 +2328,7 @@ async fn agent_heartbeat(
     headers: HeaderMap,
     Json(payload): Json<agent_store::AgentHeartbeatRequest>,
 ) -> Response {
-    let context = match authenticated_tenant_context(&state, &headers).await {
-        Ok(context) => context,
-        Err(err) => {
-            return (
-                err.status_code(),
-                Json(ApiErrorResponse {
-                    accepted: false,
-                    api_version: "v1",
-                    error_code: err.error_code(),
-                    message: err.message().to_string(),
-                }),
-            )
-                .into_response();
-        }
-    };
-    if let Some(response) = write_permission_error(&context) {
-        return response;
-    }
-    let Some(store) = state.agent_store else {
+    let Some(store) = state.agent_store.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiErrorResponse {
@@ -2194,10 +2340,58 @@ async fn agent_heartbeat(
         )
             .into_response();
     };
-    match store
-        .record_heartbeat(context.tenant_id, device_id, payload)
-        .await
-    {
+    let tenant_id = if let Some(agent_secret) = agent_secret_from_headers(&headers) {
+        let tenant_id = match agent_tenant_id_from_headers(&headers) {
+            Ok(tenant_id) => tenant_id,
+            Err(response) => return response,
+        };
+        let mtls_fingerprint = agent_mtls_fingerprint_from_headers(&headers);
+        match store
+            .verify_agent_secret(
+                tenant_id,
+                device_id,
+                &agent_secret,
+                mtls_fingerprint.as_deref(),
+            )
+            .await
+        {
+            Ok(true) => tenant_id,
+            Ok(false) => {
+                return agent_auth_error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_agent_secret",
+                    "Agent-Secret oder mTLS-Fingerprint ist ungueltig.",
+                );
+            }
+            Err(err) => {
+                return agent_store_error_response(
+                    err,
+                    "Agent-Secret konnte nicht geprueft werden",
+                );
+            }
+        }
+    } else {
+        let context = match authenticated_tenant_context(&state, &headers).await {
+            Ok(context) => context,
+            Err(err) => {
+                return (
+                    err.status_code(),
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: err.error_code(),
+                        message: err.message().to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+        if let Some(response) = write_permission_error(&context) {
+            return response;
+        }
+        context.tenant_id
+    };
+    match store.record_heartbeat(tenant_id, device_id, payload).await {
         Ok(Some(heartbeat)) => (
             StatusCode::CREATED,
             Json(AgentHeartbeatResponse {
@@ -2229,25 +2423,7 @@ async fn agent_findings(
     headers: HeaderMap,
     Json(payload): Json<agent_store::AgentFindingsRequest>,
 ) -> Response {
-    let context = match authenticated_tenant_context(&state, &headers).await {
-        Ok(context) => context,
-        Err(err) => {
-            return (
-                err.status_code(),
-                Json(ApiErrorResponse {
-                    accepted: false,
-                    api_version: "v1",
-                    error_code: err.error_code(),
-                    message: err.message().to_string(),
-                }),
-            )
-                .into_response();
-        }
-    };
-    if let Some(response) = write_permission_error(&context) {
-        return response;
-    }
-    let Some(store) = state.agent_store else {
+    let Some(store) = state.agent_store.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiErrorResponse {
@@ -2259,10 +2435,58 @@ async fn agent_findings(
         )
             .into_response();
     };
-    match store
-        .record_findings(context.tenant_id, device_id, payload)
-        .await
-    {
+    let tenant_id = if let Some(agent_secret) = agent_secret_from_headers(&headers) {
+        let tenant_id = match agent_tenant_id_from_headers(&headers) {
+            Ok(tenant_id) => tenant_id,
+            Err(response) => return response,
+        };
+        let mtls_fingerprint = agent_mtls_fingerprint_from_headers(&headers);
+        match store
+            .verify_agent_secret(
+                tenant_id,
+                device_id,
+                &agent_secret,
+                mtls_fingerprint.as_deref(),
+            )
+            .await
+        {
+            Ok(true) => tenant_id,
+            Ok(false) => {
+                return agent_auth_error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "invalid_agent_secret",
+                    "Agent-Secret oder mTLS-Fingerprint ist ungueltig.",
+                );
+            }
+            Err(err) => {
+                return agent_store_error_response(
+                    err,
+                    "Agent-Secret konnte nicht geprueft werden",
+                );
+            }
+        }
+    } else {
+        let context = match authenticated_tenant_context(&state, &headers).await {
+            Ok(context) => context,
+            Err(err) => {
+                return (
+                    err.status_code(),
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: err.error_code(),
+                        message: err.message().to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+        };
+        if let Some(response) = write_permission_error(&context) {
+            return response;
+        }
+        context.tenant_id
+    };
+    match store.record_findings(tenant_id, device_id, payload).await {
         Ok(Some((device, findings))) => (
             StatusCode::CREATED,
             Json(AgentFindingsResponse {
@@ -9236,6 +9460,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
         .route("/api/v1/agents/posture", get(agent_posture))
         .route("/api/v1/agents/devices", get(agent_devices))
+        .route(
+            "/api/v1/agents/enrollment-tokens",
+            post(agent_enrollment_token_create),
+        )
         .route("/api/v1/agents/enroll", post(agent_enroll))
         .route(
             "/api/v1/agents/devices/{device_id}/heartbeat",

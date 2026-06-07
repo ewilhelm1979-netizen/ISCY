@@ -8,6 +8,9 @@ struct AgentConfig {
     backend_url: String,
     tenant_id: i64,
     user_id: i64,
+    enrollment_token: Option<String>,
+    agent_secret: Option<String>,
+    mtls_fingerprint: Option<String>,
     dry_run: bool,
     self_test: bool,
 }
@@ -36,7 +39,12 @@ fn main() -> anyhow::Result<()> {
             serde_json::to_string_pretty(&json!({
                 "inventory": inventory,
                 "heartbeat": heartbeat,
-                "findings": findings
+                "findings": findings,
+                "auth": {
+                    "uses_enrollment_token": config.enrollment_token.is_some(),
+                    "uses_agent_secret": config.agent_secret.is_some(),
+                    "mtls_fingerprint_set": config.mtls_fingerprint.is_some()
+                }
             }))?
         );
         return Ok(());
@@ -44,10 +52,16 @@ fn main() -> anyhow::Result<()> {
 
     let client = reqwest::blocking::Client::builder().build()?;
     let base_url = config.backend_url.trim_end_matches('/');
-    let enroll_response: Value = client
+    let mut enroll_request = client
         .post(format!("{base_url}/api/v1/agents/enroll"))
-        .header("x-iscy-tenant-id", config.tenant_id.to_string())
-        .header("x-iscy-user-id", config.user_id.to_string())
+        .header("x-iscy-tenant-id", config.tenant_id.to_string());
+    if let Some(enrollment_token) = config.enrollment_token.as_deref() {
+        enroll_request = enroll_request.header("x-iscy-agent-enrollment-token", enrollment_token);
+    } else {
+        enroll_request = enroll_request.header("x-iscy-user-id", config.user_id.to_string());
+    }
+    enroll_request = with_optional_mtls(enroll_request, config.mtls_fingerprint.as_deref());
+    let enroll_response: Value = enroll_request
         .json(&inventory)
         .send()?
         .error_for_status()?
@@ -57,23 +71,32 @@ fn main() -> anyhow::Result<()> {
         .and_then(|device| device.get("id"))
         .and_then(Value::as_i64)
         .ok_or_else(|| anyhow::anyhow!("Agent enrollment response did not include device.id"))?;
+    let agent_secret = enroll_response
+        .get("agent_secret")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| config.agent_secret.clone());
 
-    client
-        .post(format!(
+    let heartbeat_request = authenticated_agent_request(
+        client.post(format!(
             "{base_url}/api/v1/agents/devices/{device_id}/heartbeat"
-        ))
-        .header("x-iscy-tenant-id", config.tenant_id.to_string())
-        .header("x-iscy-user-id", config.user_id.to_string())
+        )),
+        &config,
+        agent_secret.as_deref(),
+    );
+    heartbeat_request
         .json(&heartbeat)
         .send()?
         .error_for_status()?;
 
-    client
-        .post(format!(
+    let findings_request = authenticated_agent_request(
+        client.post(format!(
             "{base_url}/api/v1/agents/devices/{device_id}/findings"
-        ))
-        .header("x-iscy-tenant-id", config.tenant_id.to_string())
-        .header("x-iscy-user-id", config.user_id.to_string())
+        )),
+        &config,
+        agent_secret.as_deref(),
+    );
+    findings_request
         .json(&findings)
         .send()?
         .error_for_status()?;
@@ -107,9 +130,42 @@ fn parse_config() -> anyhow::Result<AgentConfig> {
         backend_url,
         tenant_id,
         user_id,
+        enrollment_token: arg_value(&args, "--enrollment-token")
+            .or_else(|| env::var("ISCY_AGENT_ENROLLMENT_TOKEN").ok())
+            .filter(|value| !value.trim().is_empty()),
+        agent_secret: arg_value(&args, "--agent-secret")
+            .or_else(|| env::var("ISCY_AGENT_SECRET").ok())
+            .filter(|value| !value.trim().is_empty()),
+        mtls_fingerprint: arg_value(&args, "--mtls-fingerprint")
+            .or_else(|| env::var("ISCY_AGENT_MTLS_FINGERPRINT").ok())
+            .filter(|value| !value.trim().is_empty()),
         dry_run,
         self_test,
     })
+}
+
+fn authenticated_agent_request(
+    request: reqwest::blocking::RequestBuilder,
+    config: &AgentConfig,
+    agent_secret: Option<&str>,
+) -> reqwest::blocking::RequestBuilder {
+    let request = request.header("x-iscy-tenant-id", config.tenant_id.to_string());
+    let request = if let Some(agent_secret) = agent_secret {
+        request.header("x-iscy-agent-secret", agent_secret)
+    } else {
+        request.header("x-iscy-user-id", config.user_id.to_string())
+    };
+    with_optional_mtls(request, config.mtls_fingerprint.as_deref())
+}
+
+fn with_optional_mtls(
+    request: reqwest::blocking::RequestBuilder,
+    mtls_fingerprint: Option<&str>,
+) -> reqwest::blocking::RequestBuilder {
+    if let Some(mtls_fingerprint) = mtls_fingerprint {
+        return request.header("x-iscy-agent-mtls-fingerprint", mtls_fingerprint);
+    }
+    request
 }
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
@@ -219,6 +275,6 @@ fn command_output(command: &str, args: &[&str]) -> Option<String> {
 
 fn print_usage() {
     println!(
-        "ISCY Agent\n\nOptions:\n  --backend-url URL   ISCY backend URL\n  --tenant-id ID      Tenant ID\n  --user-id ID        User ID for MVP intake context\n  --dry-run           Print payloads without sending\n  --self-test         Print local inventory and exit\n\nEnvironment:\n  ISCY_BACKEND_URL, ISCY_TENANT_ID, ISCY_USER_ID, ISCY_AGENT_DEVICE_ID, ISCY_ASSET_ID"
+        "ISCY Agent\n\nOptions:\n  --backend-url URL          ISCY backend URL\n  --tenant-id ID             Tenant ID\n  --user-id ID               User ID for local/admin intake fallback\n  --enrollment-token TOKEN   One-time or scoped enrollment token\n  --agent-secret SECRET      Existing agent secret for secret-based intake\n  --mtls-fingerprint FP      Client certificate fingerprint forwarded by mTLS proxy\n  --dry-run                  Print payloads without sending\n  --self-test                Print local inventory and exit\n\nEnvironment:\n  ISCY_BACKEND_URL, ISCY_TENANT_ID, ISCY_USER_ID, ISCY_AGENT_ENROLLMENT_TOKEN, ISCY_AGENT_SECRET, ISCY_AGENT_MTLS_FINGERPRINT, ISCY_AGENT_DEVICE_ID, ISCY_ASSET_ID"
     );
 }

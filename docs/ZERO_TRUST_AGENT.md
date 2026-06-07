@@ -1,6 +1,6 @@
-# Zero-Trust Agent MVP
+# Zero-Trust Agent
 
-Version: ISCY Rust Backend `0.2.0`
+Version: ISCY Rust Backend `0.2.1`
 
 ## Zielbild
 
@@ -35,9 +35,10 @@ Konkrete Gaps wie fehlende Verschluesselung, fehlendes EDR oder offene Remote-Ad
 
 ## API
 
-Alle MVP-Endpunkte nutzen den bestehenden ISCY Tenant/User-Kontext.
+Die Admin- und Lesepfade nutzen den bestehenden ISCY Tenant/User-Kontext. Produktive Agenten nutzen Enrollment-Token und danach Agent-Secrets.
 
 ```text
+POST /api/v1/agents/enrollment-tokens
 POST /api/v1/agents/enroll
 GET  /api/v1/agents/posture
 GET  /api/v1/agents/devices
@@ -46,14 +47,35 @@ GET  /api/v1/agents/devices/{device_id}/findings
 POST /api/v1/agents/devices/{device_id}/findings
 ```
 
-Headers fuer den MVP:
+Admin-/Demo-Headers:
 
 ```text
 x-iscy-tenant-id: 1
 x-iscy-user-id: 1
+x-iscy-roles: ADMIN
 ```
 
-Spaetere Produktionshaertung sollte Enrollment-Tokens, mTLS oder signierte Agent-Zertifikate nutzen. Die Payloads bleiben kompatibel.
+Produktive Agent-Headers:
+
+```text
+x-iscy-tenant-id: 1
+x-iscy-agent-enrollment-token: <token>
+x-iscy-agent-secret: <secret>
+x-iscy-agent-mtls-fingerprint: sha256:<fingerprint>
+```
+
+`x-iscy-agent-mtls-fingerprint` ist optional, aber sobald ein Token oder Device daran gebunden wurde, muss der Fingerprint bei Heartbeat und Findings passen. Der Header darf nur von einem TLS terminierenden Proxy gesetzt werden, der Client-Zertifikate wirklich validiert und eingehende gleichnamige Client-Header verwirft.
+
+Token erstellen:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:9000/api/v1/agents/enrollment-tokens \
+  -H 'content-type: application/json' \
+  -H 'x-iscy-tenant-id: 1' \
+  -H 'x-iscy-user-id: 1' \
+  -H 'x-iscy-roles: ADMIN' \
+  -d '{"label":"lab rollout","allowed_os_families":["WINDOWS","MACOS","LINUX"],"uses_remaining":10}'
+```
 
 ## Lokaler Agent-Test
 
@@ -69,6 +91,55 @@ ISCY_TENANT_ID=1 \
 ISCY_USER_ID=1 \
 nix run .#iscy-agent
 ```
+
+Meldung mit Enrollment-Token:
+
+```bash
+ISCY_BACKEND_URL=http://127.0.0.1:9000 \
+ISCY_TENANT_ID=1 \
+ISCY_AGENT_ENROLLMENT_TOKEN=<token> \
+nix run .#iscy-agent
+```
+
+Wenn beim Enrollment ein `agent_secret` zurueckkommt, nutzt der Agent es sofort fuer Heartbeat und Findings. Fuer spaetere Starts kann es als `ISCY_AGENT_SECRET` oder `--agent-secret` uebergeben werden.
+
+## Windows-Agent
+
+Der Windows-Agent ist kein eigener Python-Zweig, sondern dasselbe Rust-Binary `iscy-agent`. Der Quellcode ist bereits im Repository enthalten. Ein `.exe` wird auf Windows so gebaut:
+
+```powershell
+cargo build --release --manifest-path rust/iscy-backend/Cargo.toml --bin iscy-agent
+.\rust\iscy-backend\target\release\iscy-agent.exe --self-test
+```
+
+Fuer Intune oder andere MDM-Systeme kann dieses Binary als Win32-App verteilt und mit `ISCY_BACKEND_URL`, `ISCY_TENANT_ID` und `ISCY_AGENT_ENROLLMENT_TOKEN` gestartet werden.
+
+## Was der Agent aktuell prueft
+
+Der aktuelle Collector arbeitet read-only und meldet belastbare Baseline-Telemetrie:
+
+- Hostname
+- OS-Familie und OS-Version
+- CPU-Architektur
+- Agent-Version
+- Deployment-Channel
+- Heartbeat-Status
+- ein `OBSERVED`-Finding fuer `device.os_patch_level`
+
+Der Plattform-Katalog kennt zusaetzlich diese Zero-Trust-Pruefpunkte, die ueber dieselben Findings-Endpunkte aufgenommen werden koennen:
+
+- Datentraeger-Verschluesselung: BitLocker, FileVault oder LUKS
+- Secure-Boot- beziehungsweise Plattformintegritaetsstatus
+- OS-Patch-Stand
+- Endpoint-Protection- oder EDR-Sichtbarkeit
+- lokale Administratoren
+- MDM-/Device-Management-Enrolment
+- Host-Firewall
+- exponierte Remote-Administration wie RDP, SSH oder Remote Login
+- Softwareinventar fuer CVE-Korrelation
+- Removable-Media-Policy
+
+Wichtig: In `0.2.1` liest der Basisagent diese tiefen OS-/MDM-/EDR-Signale noch nicht selbst aus. Er liefert den sicheren Intake, die Plattformdatenstruktur und die Baseline. Konkrete Windows/macOS/Linux-Pruefmodule koennen danach gezielt erweitert werden.
 
 ## Deployment-Zielpfade
 
@@ -92,11 +163,12 @@ Remediation sollte erst als eigener, policy-signierter und auditierbarer Schritt
 
 ## Plattform-Integration
 
-Die Migration `0007_rust_zero_trust_agent_core` fuegt hinzu:
+Die Migrationen `0007_rust_zero_trust_agent_core` und `0008_rust_agent_enrollment_hardening` fuegen hinzu:
 
 - `zero_trust_agent_device`
 - `zero_trust_agent_heartbeat`
 - `zero_trust_agent_finding`
 - `zero_trust_agent_check_catalog`
+- `zero_trust_agent_enrollment_token`
 
 Die Webansicht ist unter `/zero-trust/` verfuegbar.

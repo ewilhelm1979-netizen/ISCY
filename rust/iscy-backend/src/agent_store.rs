@@ -1,6 +1,8 @@
 use anyhow::{bail, Context};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -25,6 +27,54 @@ pub struct AgentEnrollRequest {
     pub architecture: String,
     pub agent_version: String,
     pub deployment_channel: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentEnrollmentTokenCreateRequest {
+    pub label: Option<String>,
+    pub allowed_os_families: Option<Vec<String>>,
+    pub mtls_fingerprint: Option<String>,
+    pub expires_at: Option<String>,
+    pub uses_remaining: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentEnrollmentTokenCreateResult {
+    pub token: String,
+    pub enrollment: AgentEnrollmentTokenSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentEnrollmentTokenSummary {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub label: String,
+    pub token_hint: String,
+    pub status: String,
+    pub allowed_os_families: Vec<String>,
+    pub mtls_fingerprint: String,
+    pub expires_at: Option<String>,
+    pub uses_remaining: Option<i64>,
+    pub created_by_id: Option<i64>,
+    pub last_used_at: Option<String>,
+    pub revoked_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentEnrollWithSecret {
+    pub device: AgentDeviceSummary,
+    pub agent_secret: String,
+}
+
+#[derive(Debug, Clone)]
+struct EnrollmentTokenGrant {
+    id: i64,
+    allowed_os_families: Vec<String>,
+    mtls_fingerprint: String,
+    expires_at: Option<String>,
+    uses_remaining: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -176,6 +226,60 @@ impl AgentStore {
         Self::Sqlite(pool)
     }
 
+    pub async fn create_enrollment_token(
+        &self,
+        tenant_id: i64,
+        created_by_id: Option<i64>,
+        payload: AgentEnrollmentTokenCreateRequest,
+    ) -> anyhow::Result<AgentEnrollmentTokenCreateResult> {
+        validate_enrollment_token_payload(&payload)?;
+        let token = random_secret("iscy_enroll")?;
+        let token_hash = sha256_hex(&token);
+        let token_hint = secret_hint(&token);
+        let label = normalized_or_default(payload.label.as_deref(), "Agent enrollment");
+        let allowed_os_families =
+            normalized_allowed_os_families(payload.allowed_os_families.unwrap_or_default());
+        let allowed_os_families_json = serde_json::to_string(&allowed_os_families)
+            .context("Agent-Enrollment-Token OS-Familien konnten nicht serialisiert werden")?;
+        let mtls_fingerprint =
+            normalize_optional_fingerprint(payload.mtls_fingerprint.as_deref()).unwrap_or_default();
+        let expires_at = normalize_optional_rfc3339(payload.expires_at.as_deref())?;
+
+        match self {
+            Self::Postgres(pool) => {
+                create_enrollment_token_postgres(
+                    pool,
+                    tenant_id,
+                    created_by_id,
+                    &label,
+                    &token_hash,
+                    &token_hint,
+                    &allowed_os_families_json,
+                    &mtls_fingerprint,
+                    expires_at.as_deref(),
+                    payload.uses_remaining,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                create_enrollment_token_sqlite(
+                    pool,
+                    tenant_id,
+                    created_by_id,
+                    &label,
+                    &token_hash,
+                    &token_hint,
+                    &allowed_os_families_json,
+                    &mtls_fingerprint,
+                    expires_at.as_deref(),
+                    payload.uses_remaining,
+                )
+                .await
+            }
+        }
+        .map(|enrollment| AgentEnrollmentTokenCreateResult { token, enrollment })
+    }
+
     pub async fn enroll_device(
         &self,
         tenant_id: i64,
@@ -185,6 +289,118 @@ impl AgentStore {
         match self {
             Self::Postgres(pool) => enroll_device_postgres(pool, tenant_id, payload).await,
             Self::Sqlite(pool) => enroll_device_sqlite(pool, tenant_id, payload).await,
+        }
+    }
+
+    pub async fn enroll_device_with_token(
+        &self,
+        tenant_id: i64,
+        payload: AgentEnrollRequest,
+        enrollment_token: &str,
+        mtls_fingerprint: Option<&str>,
+    ) -> anyhow::Result<Option<AgentEnrollWithSecret>> {
+        validate_enroll_payload(&payload)?;
+        let normalized_token = enrollment_token.trim();
+        if normalized_token.is_empty() {
+            return Ok(None);
+        }
+        let token_hash = sha256_hex(normalized_token);
+        let supplied_mtls = normalize_optional_fingerprint(mtls_fingerprint);
+        let os_family = normalized_upper(&payload.os_family);
+        let grant = match self {
+            Self::Postgres(pool) => {
+                enrollment_token_grant_postgres(pool, tenant_id, &token_hash).await?
+            }
+            Self::Sqlite(pool) => {
+                enrollment_token_grant_sqlite(pool, tenant_id, &token_hash).await?
+            }
+        };
+        let Some(grant) =
+            grant.and_then(|grant| grant_if_valid(grant, &os_family, supplied_mtls.as_deref()))
+        else {
+            return Ok(None);
+        };
+        let agent_secret = random_secret("iscy_agent")?;
+        let agent_secret_hash = sha256_hex(&agent_secret);
+        let bound_mtls = supplied_mtls
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(grant.mtls_fingerprint.as_str())
+            .to_string();
+
+        let device = match self {
+            Self::Postgres(pool) => {
+                let device = enroll_device_postgres(pool, tenant_id, payload).await?;
+                update_device_agent_auth_postgres(
+                    pool,
+                    tenant_id,
+                    device.id,
+                    &agent_secret_hash,
+                    &bound_mtls,
+                )
+                .await?;
+                consume_enrollment_token_postgres(pool, tenant_id, grant.id).await?;
+                device_detail_postgres(pool, tenant_id, device.id)
+                    .await?
+                    .context("PostgreSQL-Agent-Device nach Token-Enrollment nicht gefunden")?
+            }
+            Self::Sqlite(pool) => {
+                let device = enroll_device_sqlite(pool, tenant_id, payload).await?;
+                update_device_agent_auth_sqlite(
+                    pool,
+                    tenant_id,
+                    device.id,
+                    &agent_secret_hash,
+                    &bound_mtls,
+                )
+                .await?;
+                consume_enrollment_token_sqlite(pool, tenant_id, grant.id).await?;
+                device_detail_sqlite(pool, tenant_id, device.id)
+                    .await?
+                    .context("SQLite-Agent-Device nach Token-Enrollment nicht gefunden")?
+            }
+        };
+
+        Ok(Some(AgentEnrollWithSecret {
+            device,
+            agent_secret,
+        }))
+    }
+
+    pub async fn verify_agent_secret(
+        &self,
+        tenant_id: i64,
+        device_id: i64,
+        agent_secret: &str,
+        mtls_fingerprint: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let normalized_secret = agent_secret.trim();
+        if normalized_secret.is_empty() {
+            return Ok(false);
+        }
+        let supplied_secret_hash = sha256_hex(normalized_secret);
+        let supplied_mtls = normalize_optional_fingerprint(mtls_fingerprint);
+        match self {
+            Self::Postgres(pool) => {
+                verify_agent_secret_postgres(
+                    pool,
+                    tenant_id,
+                    device_id,
+                    &supplied_secret_hash,
+                    supplied_mtls.as_deref(),
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                verify_agent_secret_sqlite(
+                    pool,
+                    tenant_id,
+                    device_id,
+                    &supplied_secret_hash,
+                    supplied_mtls.as_deref(),
+                )
+                .await
+            }
         }
     }
 
@@ -257,6 +473,331 @@ impl AgentStore {
             }
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_enrollment_token_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    created_by_id: Option<i64>,
+    label: &str,
+    token_hash: &str,
+    token_hint: &str,
+    allowed_os_families_json: &str,
+    mtls_fingerprint: &str,
+    expires_at: Option<&str>,
+    uses_remaining: Option<i64>,
+) -> anyhow::Result<AgentEnrollmentTokenSummary> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_enrollment_token (
+            tenant_id, label, token_hash, token_hint, status, allowed_os_families,
+            mtls_fingerprint, expires_at, uses_remaining, created_by_id,
+            created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, $7, $8, $9, CURRENT_TIMESTAMP::text, CURRENT_TIMESTAMP::text)
+        RETURNING id, tenant_id, label, token_hint, status, allowed_os_families,
+            mtls_fingerprint, expires_at, uses_remaining, created_by_id,
+            last_used_at, revoked_at, created_at, updated_at
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(label)
+    .bind(token_hash)
+    .bind(token_hint)
+    .bind(allowed_os_families_json)
+    .bind(mtls_fingerprint)
+    .bind(expires_at)
+    .bind(uses_remaining)
+    .bind(created_by_id)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Agent-Enrollment-Token konnte nicht erstellt werden")?;
+    enrollment_token_from_pg_row(row).map_err(Into::into)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create_enrollment_token_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    created_by_id: Option<i64>,
+    label: &str,
+    token_hash: &str,
+    token_hint: &str,
+    allowed_os_families_json: &str,
+    mtls_fingerprint: &str,
+    expires_at: Option<&str>,
+    uses_remaining: Option<i64>,
+) -> anyhow::Result<AgentEnrollmentTokenSummary> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_enrollment_token (
+            tenant_id, label, token_hash, token_hint, status, allowed_os_families,
+            mtls_fingerprint, expires_at, uses_remaining, created_by_id,
+            created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, 'ACTIVE', ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        RETURNING id, tenant_id, label, token_hint, status, allowed_os_families,
+            mtls_fingerprint, expires_at, uses_remaining, created_by_id,
+            last_used_at, revoked_at, created_at, updated_at
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(label)
+    .bind(token_hash)
+    .bind(token_hint)
+    .bind(allowed_os_families_json)
+    .bind(mtls_fingerprint)
+    .bind(expires_at)
+    .bind(uses_remaining)
+    .bind(created_by_id)
+    .fetch_one(pool)
+    .await
+    .context("SQLite-Agent-Enrollment-Token konnte nicht erstellt werden")?;
+    enrollment_token_from_sqlite_row(row).map_err(Into::into)
+}
+
+async fn enrollment_token_grant_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    token_hash: &str,
+) -> anyhow::Result<Option<EnrollmentTokenGrant>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, allowed_os_families, mtls_fingerprint, expires_at, uses_remaining
+        FROM zero_trust_agent_enrollment_token
+        WHERE tenant_id = $1
+          AND token_hash = $2
+          AND status = 'ACTIVE'
+          AND revoked_at IS NULL
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(token_hash)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Agent-Enrollment-Token konnte nicht geprueft werden")?;
+    row.map(enrollment_token_grant_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn enrollment_token_grant_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    token_hash: &str,
+) -> anyhow::Result<Option<EnrollmentTokenGrant>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, allowed_os_families, mtls_fingerprint, expires_at, uses_remaining
+        FROM zero_trust_agent_enrollment_token
+        WHERE tenant_id = ?1
+          AND token_hash = ?2
+          AND status = 'ACTIVE'
+          AND revoked_at IS NULL
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(token_hash)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Agent-Enrollment-Token konnte nicht geprueft werden")?;
+    row.map(enrollment_token_grant_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn update_device_agent_auth_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    device_id: i64,
+    agent_secret_hash: &str,
+    mtls_fingerprint: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE zero_trust_agent_device
+        SET agent_secret_hash = $1,
+            mtls_fingerprint = $2,
+            auth_model = 'enrollment_token',
+            last_auth_at = CURRENT_TIMESTAMP::text,
+            updated_at = CURRENT_TIMESTAMP::text
+        WHERE tenant_id = $3 AND id = $4
+        "#,
+    )
+    .bind(agent_secret_hash)
+    .bind(mtls_fingerprint)
+    .bind(tenant_id)
+    .bind(device_id)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Agent-Device-Auth konnte nicht aktualisiert werden")?;
+    Ok(())
+}
+
+async fn update_device_agent_auth_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    device_id: i64,
+    agent_secret_hash: &str,
+    mtls_fingerprint: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE zero_trust_agent_device
+        SET agent_secret_hash = ?1,
+            mtls_fingerprint = ?2,
+            auth_model = 'enrollment_token',
+            last_auth_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = ?3 AND id = ?4
+        "#,
+    )
+    .bind(agent_secret_hash)
+    .bind(mtls_fingerprint)
+    .bind(tenant_id)
+    .bind(device_id)
+    .execute(pool)
+    .await
+    .context("SQLite-Agent-Device-Auth konnte nicht aktualisiert werden")?;
+    Ok(())
+}
+
+async fn consume_enrollment_token_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    token_id: i64,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE zero_trust_agent_enrollment_token
+        SET uses_remaining = CASE
+                WHEN uses_remaining IS NULL THEN NULL
+                ELSE GREATEST(uses_remaining - 1, 0)
+            END,
+            last_used_at = CURRENT_TIMESTAMP::text,
+            updated_at = CURRENT_TIMESTAMP::text
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(token_id)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Agent-Enrollment-Token konnte nicht verbraucht werden")?;
+    Ok(())
+}
+
+async fn consume_enrollment_token_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    token_id: i64,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE zero_trust_agent_enrollment_token
+        SET uses_remaining = CASE
+                WHEN uses_remaining IS NULL THEN NULL
+                WHEN uses_remaining > 0 THEN uses_remaining - 1
+                ELSE 0
+            END,
+            last_used_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(token_id)
+    .execute(pool)
+    .await
+    .context("SQLite-Agent-Enrollment-Token konnte nicht verbraucht werden")?;
+    Ok(())
+}
+
+async fn verify_agent_secret_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    device_id: i64,
+    supplied_secret_hash: &str,
+    supplied_mtls: Option<&str>,
+) -> anyhow::Result<bool> {
+    let row = sqlx::query(
+        r#"
+        SELECT agent_secret_hash, mtls_fingerprint
+        FROM zero_trust_agent_device
+        WHERE tenant_id = $1 AND id = $2 AND enrollment_status = 'ACTIVE'
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(device_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Agent-Secret konnte nicht geprueft werden")?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    let stored_hash: String = row.try_get("agent_secret_hash")?;
+    let stored_mtls: String = row.try_get("mtls_fingerprint")?;
+    if !agent_credentials_match(
+        &stored_hash,
+        supplied_secret_hash,
+        &stored_mtls,
+        supplied_mtls,
+    ) {
+        return Ok(false);
+    }
+    sqlx::query(
+        "UPDATE zero_trust_agent_device SET last_auth_at = CURRENT_TIMESTAMP::text, updated_at = CURRENT_TIMESTAMP::text WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(device_id)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Agent-Auth-Zeitpunkt konnte nicht gespeichert werden")?;
+    Ok(true)
+}
+
+async fn verify_agent_secret_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    device_id: i64,
+    supplied_secret_hash: &str,
+    supplied_mtls: Option<&str>,
+) -> anyhow::Result<bool> {
+    let row = sqlx::query(
+        r#"
+        SELECT agent_secret_hash, mtls_fingerprint
+        FROM zero_trust_agent_device
+        WHERE tenant_id = ?1 AND id = ?2 AND enrollment_status = 'ACTIVE'
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(device_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Agent-Secret konnte nicht geprueft werden")?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    let stored_hash: String = row.try_get("agent_secret_hash")?;
+    let stored_mtls: String = row.try_get("mtls_fingerprint")?;
+    if !agent_credentials_match(
+        &stored_hash,
+        supplied_secret_hash,
+        &stored_mtls,
+        supplied_mtls,
+    ) {
+        return Ok(false);
+    }
+    sqlx::query(
+        "UPDATE zero_trust_agent_device SET last_auth_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?1 AND id = ?2",
+    )
+    .bind(tenant_id)
+    .bind(device_id)
+    .execute(pool)
+    .await
+    .context("SQLite-Agent-Auth-Zeitpunkt konnte nicht gespeichert werden")?;
+    Ok(true)
 }
 
 async fn enroll_device_postgres(
@@ -1303,6 +1844,104 @@ fn check_catalog_from_sqlite_row(row: SqliteRow) -> Result<AgentCheckCatalogItem
     })
 }
 
+fn enrollment_token_from_pg_row(row: PgRow) -> Result<AgentEnrollmentTokenSummary, sqlx::Error> {
+    let allowed_raw: String = row.try_get("allowed_os_families")?;
+    Ok(AgentEnrollmentTokenSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        label: row.try_get("label")?,
+        token_hint: row.try_get("token_hint")?,
+        status: row.try_get("status")?,
+        allowed_os_families: parse_allowed_os_families(&allowed_raw),
+        mtls_fingerprint: row.try_get("mtls_fingerprint")?,
+        expires_at: row.try_get("expires_at")?,
+        uses_remaining: row.try_get("uses_remaining")?,
+        created_by_id: row.try_get("created_by_id")?,
+        last_used_at: row.try_get("last_used_at")?,
+        revoked_at: row.try_get("revoked_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn enrollment_token_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<AgentEnrollmentTokenSummary, sqlx::Error> {
+    let allowed_raw: String = row.try_get("allowed_os_families")?;
+    Ok(AgentEnrollmentTokenSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        label: row.try_get("label")?,
+        token_hint: row.try_get("token_hint")?,
+        status: row.try_get("status")?,
+        allowed_os_families: parse_allowed_os_families(&allowed_raw),
+        mtls_fingerprint: row.try_get("mtls_fingerprint")?,
+        expires_at: row.try_get("expires_at")?,
+        uses_remaining: row.try_get("uses_remaining")?,
+        created_by_id: row.try_get("created_by_id")?,
+        last_used_at: row.try_get("last_used_at")?,
+        revoked_at: row.try_get("revoked_at")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn enrollment_token_grant_from_pg_row(row: PgRow) -> Result<EnrollmentTokenGrant, sqlx::Error> {
+    let allowed_raw: String = row.try_get("allowed_os_families")?;
+    Ok(EnrollmentTokenGrant {
+        id: row.try_get("id")?,
+        allowed_os_families: parse_allowed_os_families(&allowed_raw),
+        mtls_fingerprint: row.try_get("mtls_fingerprint")?,
+        expires_at: row.try_get("expires_at")?,
+        uses_remaining: row.try_get("uses_remaining")?,
+    })
+}
+
+fn enrollment_token_grant_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<EnrollmentTokenGrant, sqlx::Error> {
+    let allowed_raw: String = row.try_get("allowed_os_families")?;
+    Ok(EnrollmentTokenGrant {
+        id: row.try_get("id")?,
+        allowed_os_families: parse_allowed_os_families(&allowed_raw),
+        mtls_fingerprint: row.try_get("mtls_fingerprint")?,
+        expires_at: row.try_get("expires_at")?,
+        uses_remaining: row.try_get("uses_remaining")?,
+    })
+}
+
+fn grant_if_valid(
+    grant: EnrollmentTokenGrant,
+    os_family: &str,
+    supplied_mtls: Option<&str>,
+) -> Option<EnrollmentTokenGrant> {
+    if let Some(uses_remaining) = grant.uses_remaining {
+        if uses_remaining <= 0 {
+            return None;
+        }
+    }
+    if let Some(expires_at) = grant.expires_at.as_deref() {
+        let expires_at = DateTime::parse_from_rfc3339(expires_at).ok()?;
+        if expires_at.with_timezone(&Utc) <= Utc::now() {
+            return None;
+        }
+    }
+    if !grant.allowed_os_families.is_empty()
+        && !grant
+            .allowed_os_families
+            .iter()
+            .any(|allowed| allowed == os_family)
+    {
+        return None;
+    }
+    if !grant.mtls_fingerprint.trim().is_empty()
+        && Some(grant.mtls_fingerprint.as_str()) != supplied_mtls
+    {
+        return None;
+    }
+    Some(grant)
+}
+
 fn validate_enroll_payload(payload: &AgentEnrollRequest) -> anyhow::Result<()> {
     for (field_name, value) in [
         ("stable_device_id", payload.stable_device_id.as_str()),
@@ -1317,6 +1956,25 @@ fn validate_enroll_payload(payload: &AgentEnrollRequest) -> anyhow::Result<()> {
     }
     if payload.stable_device_id.len() > 128 {
         bail!("Agent-Enrollment-Feld 'stable_device_id' darf maximal 128 Zeichen enthalten");
+    }
+    Ok(())
+}
+
+fn validate_enrollment_token_payload(
+    payload: &AgentEnrollmentTokenCreateRequest,
+) -> anyhow::Result<()> {
+    if let Some(uses_remaining) = payload.uses_remaining {
+        if uses_remaining < 1 {
+            bail!("Agent-Enrollment-Token uses_remaining muss groesser 0 sein");
+        }
+    }
+    if let Some(expires_at) = payload.expires_at.as_deref() {
+        normalize_optional_rfc3339(Some(expires_at))?;
+    }
+    if let Some(allowed_os_families) = payload.allowed_os_families.as_ref() {
+        if allowed_os_families.len() > 20 {
+            bail!("Agent-Enrollment-Token darf maximal 20 OS-Familien einschraenken");
+        }
     }
     Ok(())
 }
@@ -1343,6 +2001,17 @@ fn normalized_upper(value: &str) -> String {
     normalized(value).to_ascii_uppercase()
 }
 
+fn normalized_allowed_os_families(values: Vec<String>) -> Vec<String> {
+    let mut normalized_values = Vec::new();
+    for value in values {
+        let value = normalized_upper(&value);
+        if !value.is_empty() && !normalized_values.contains(&value) {
+            normalized_values.push(value);
+        }
+    }
+    normalized_values
+}
+
 fn normalized_or_default(value: Option<&str>, default_value: &str) -> String {
     value
         .map(str::trim)
@@ -1351,6 +2020,22 @@ fn normalized_or_default(value: Option<&str>, default_value: &str) -> String {
         .chars()
         .take(512)
         .collect()
+}
+
+fn normalize_optional_fingerprint(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase().chars().take(255).collect())
+}
+
+fn normalize_optional_rfc3339(value: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    DateTime::parse_from_rfc3339(value)
+        .with_context(|| "Agent-Enrollment-Token expires_at muss RFC3339 sein")?;
+    Ok(Some(value.to_string()))
 }
 
 fn normalized_pillar(value: &str) -> String {
@@ -1415,4 +2100,74 @@ fn status_label(value: &str) -> &'static str {
 
 fn json_from_row_text(raw: String) -> Value {
     serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({}))
+}
+
+fn parse_allowed_os_families(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw)
+        .map(normalized_allowed_os_families)
+        .unwrap_or_default()
+}
+
+fn random_secret(prefix: &str) -> anyhow::Result<String> {
+    let mut bytes = [0_u8; 32];
+    getrandom::fill(&mut bytes)
+        .map_err(|err| anyhow::anyhow!("Agent-Secret konnte nicht erzeugt werden: {err}"))?;
+    Ok(format!("{prefix}_{}", bytes_to_hex(&bytes)))
+}
+
+fn sha256_hex(value: &str) -> String {
+    bytes_to_hex(&Sha256::digest(value.as_bytes()))
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn secret_hint(secret: &str) -> String {
+    let suffix = secret
+        .chars()
+        .rev()
+        .take(8)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("...{suffix}")
+}
+
+fn agent_credentials_match(
+    stored_hash: &str,
+    supplied_hash: &str,
+    stored_mtls: &str,
+    supplied_mtls: Option<&str>,
+) -> bool {
+    let stored_hash = stored_hash.trim();
+    if stored_hash.is_empty() || !constant_time_eq(stored_hash.as_bytes(), supplied_hash.as_bytes())
+    {
+        return false;
+    }
+    let stored_mtls = stored_mtls.trim();
+    if stored_mtls.is_empty() {
+        return true;
+    }
+    supplied_mtls
+        .map(|value| constant_time_eq(stored_mtls.as_bytes(), value.as_bytes()))
+        .unwrap_or(false)
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0_u8;
+    for (left, right) in left.iter().zip(right.iter()) {
+        diff |= *left ^ *right;
+    }
+    diff == 0
 }

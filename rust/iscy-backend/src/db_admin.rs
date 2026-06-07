@@ -67,6 +67,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_ZERO_TRUST_AGENT_SCHEMA,
         postgres_sql: POSTGRES_ZERO_TRUST_AGENT_SCHEMA,
     },
+    Migration {
+        version: "0008_rust_agent_enrollment_hardening",
+        sqlite_sql: SQLITE_AGENT_ENROLLMENT_HARDENING_SCHEMA,
+        postgres_sql: POSTGRES_AGENT_ENROLLMENT_HARDENING_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -257,6 +262,62 @@ VALUES
     ('apps.vulnerable_software_inventory', 'APPLICATIONS_WORKLOADS', 'Software inventory available', 'Captures installed software inventory for vulnerability mapping.', 'windows,macos,linux', 'MEDIUM', 'Continuously collect software inventory and map versions to CVE intelligence.', TRUE),
     ('data.removable_media_policy', 'DATA', 'Removable media policy', 'Checks whether removable media use is governed or blocked.', 'windows,macos,linux', 'LOW', 'Define removable media policy and collect enforcement evidence.', TRUE)
 ON CONFLICT (check_id) DO NOTHING;
+"#;
+
+const SQLITE_AGENT_ENROLLMENT_HARDENING_SCHEMA: &str = r#"
+ALTER TABLE zero_trust_agent_device ADD COLUMN agent_secret_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE zero_trust_agent_device ADD COLUMN mtls_fingerprint TEXT NOT NULL DEFAULT '';
+ALTER TABLE zero_trust_agent_device ADD COLUMN auth_model varchar(32) NOT NULL DEFAULT 'tenant_context';
+ALTER TABLE zero_trust_agent_device ADD COLUMN last_auth_at TEXT NULL;
+CREATE TABLE IF NOT EXISTS zero_trust_agent_enrollment_token (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    label varchar(128) NOT NULL DEFAULT '',
+    token_hash varchar(128) NOT NULL,
+    token_hint varchar(16) NOT NULL DEFAULT '',
+    status varchar(32) NOT NULL DEFAULT 'ACTIVE',
+    allowed_os_families TEXT NOT NULL DEFAULT '[]',
+    mtls_fingerprint TEXT NOT NULL DEFAULT '',
+    expires_at TEXT NULL,
+    uses_remaining INTEGER NULL,
+    created_by_id INTEGER NULL,
+    last_used_at TEXT NULL,
+    revoked_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, token_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_token_tenant ON zero_trust_agent_enrollment_token(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_token_hash ON zero_trust_agent_enrollment_token(tenant_id, token_hash);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_device_auth ON zero_trust_agent_device(tenant_id, auth_model, enrollment_status);
+"#;
+
+const POSTGRES_AGENT_ENROLLMENT_HARDENING_SCHEMA: &str = r#"
+ALTER TABLE zero_trust_agent_device ADD COLUMN IF NOT EXISTS agent_secret_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE zero_trust_agent_device ADD COLUMN IF NOT EXISTS mtls_fingerprint TEXT NOT NULL DEFAULT '';
+ALTER TABLE zero_trust_agent_device ADD COLUMN IF NOT EXISTS auth_model varchar(32) NOT NULL DEFAULT 'tenant_context';
+ALTER TABLE zero_trust_agent_device ADD COLUMN IF NOT EXISTS last_auth_at TEXT NULL;
+CREATE TABLE IF NOT EXISTS zero_trust_agent_enrollment_token (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    label varchar(128) NOT NULL DEFAULT '',
+    token_hash varchar(128) NOT NULL,
+    token_hint varchar(16) NOT NULL DEFAULT '',
+    status varchar(32) NOT NULL DEFAULT 'ACTIVE',
+    allowed_os_families TEXT NOT NULL DEFAULT '[]',
+    mtls_fingerprint TEXT NOT NULL DEFAULT '',
+    expires_at TEXT NULL,
+    uses_remaining BIGINT NULL,
+    created_by_id BIGINT NULL,
+    last_used_at TEXT NULL,
+    revoked_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, token_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_token_tenant ON zero_trust_agent_enrollment_token(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_token_hash ON zero_trust_agent_enrollment_token(tenant_id, token_hash);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_device_auth ON zero_trust_agent_device(tenant_id, auth_model, enrollment_status);
 "#;
 
 const SQLITE_AUTH_RBAC_SCHEMA: &str = r#"

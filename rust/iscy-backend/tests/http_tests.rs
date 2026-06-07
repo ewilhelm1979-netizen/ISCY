@@ -714,6 +714,138 @@ async fn zero_trust_agent_flow_records_posture() {
 }
 
 #[tokio::test]
+async fn zero_trust_agent_token_enrollment_allows_secret_based_intake() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enrollment-tokens")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "label":"lab windows rollout",
+                        "allowed_os_families":["WINDOWS"],
+                        "mtls_fingerprint":"sha256:lab-client",
+                        "uses_remaining":1
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let enrollment_token = payload["token"].as_str().unwrap().to_string();
+    assert!(enrollment_token.starts_with("iscy_enroll_"));
+    assert_eq!(
+        payload["enrollment"]["token_hint"].as_str().unwrap().len(),
+        11
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enroll")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-agent-enrollment-token", enrollment_token)
+                .header("x-iscy-agent-mtls-fingerprint", "sha256:lab-client")
+                .body(Body::from(
+                    r#"{
+                        "stable_device_id":"win-lab-01",
+                        "hostname":"win-lab-01",
+                        "os_family":"windows",
+                        "os_version":"Windows 11",
+                        "architecture":"x86_64",
+                        "agent_version":"0.2.1",
+                        "deployment_channel":"intune"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["auth_model"], "enrollment_token");
+    let agent_secret = payload["agent_secret"].as_str().unwrap().to_string();
+    assert!(agent_secret.starts_with("iscy_agent_"));
+    let device_id = payload["device"]["id"].as_i64().unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/heartbeat"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-agent-secret", agent_secret.as_str())
+                .header("x-iscy-agent-mtls-fingerprint", "sha256:lab-client")
+                .body(Body::from(
+                    r#"{"agent_version":"0.2.1","status":"OK","summary":{"collector_mode":"read_only"}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/findings"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-agent-secret", agent_secret.as_str())
+                .header("x-iscy-agent-mtls-fingerprint", "sha256:lab-client")
+                .body(Body::from(
+                    r#"{"findings":[{"check_id":"device.os_patch_level","pillar":"devices","severity":"info","status":"observed","title":"Windows inventory captured","evidence":{"os":"Windows 11"}}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/heartbeat"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-agent-secret", agent_secret.as_str())
+                .header("x-iscy-agent-mtls-fingerprint", "sha256:wrong-client")
+                .body(Body::from(r#"{"agent_version":"0.2.1","status":"OK"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn web_admin_users_renders_and_updates_user_edit_forms() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -4905,7 +5037,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0004_rust_auth_session_core",
             "0005_rust_auth_rbac_core",
             "0006_rust_auth_group_permission_core",
-            "0007_rust_zero_trust_agent_core"
+            "0007_rust_zero_trust_agent_core",
+            "0008_rust_agent_enrollment_hardening"
         ]
     );
     assert!(

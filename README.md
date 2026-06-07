@@ -1,4 +1,4 @@
-# ISCY V23.6 / Rust 0.2.0
+# ISCY V23.6.1 / Rust 0.2.1
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -96,7 +96,14 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 
 ## Zero-Trust Agent
 
-ISCY `0.2.0` enthaelt einen read-only Agent-MVP fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.2.1` enthaelt einen read-only Agent-MVP fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+
+Die produktive Agent-Aufnahme ist gehaertet:
+
+- Admins erstellen Enrollment-Token ueber `POST /api/v1/agents/enrollment-tokens`.
+- Agenten enrollen mit `x-iscy-agent-enrollment-token` und erhalten einmalig ein Agent-Secret.
+- Heartbeats und Findings koennen danach mit `x-iscy-agent-secret` gemeldet werden.
+- Optional kann ein mTLS-Client-Zertifikat per Fingerprint an Token und Agent gebunden werden.
 
 Lokaler Payload-Test:
 
@@ -111,6 +118,22 @@ ISCY_BACKEND_URL=http://127.0.0.1:9000 \
 ISCY_TENANT_ID=1 \
 ISCY_USER_ID=1 \
 nix run .#iscy-agent
+```
+
+Token-basierter Agent-Lauf:
+
+```bash
+ISCY_BACKEND_URL=http://127.0.0.1:9000 \
+ISCY_TENANT_ID=1 \
+ISCY_AGENT_ENROLLMENT_TOKEN=<token> \
+nix run .#iscy-agent
+```
+
+Windows-Build aus dem Rust-Code:
+
+```powershell
+cargo build --release --manifest-path rust/iscy-backend/Cargo.toml --bin iscy-agent
+.\rust\iscy-backend\target\release\iscy-agent.exe --self-test
 ```
 
 ## Vulnerability Feeds
