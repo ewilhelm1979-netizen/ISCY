@@ -3,7 +3,7 @@ use axum::http::{header::SET_COOKIE, Request, StatusCode};
 use axum::{routing::get, Json, Router};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use iscy_backend::{
-    account_store::AccountStore, app_router, app_router_with_state,
+    account_store::AccountStore, agent_store::AgentStore, app_router, app_router_with_state,
     assessment_store::AssessmentStore, asset_store::AssetStore, auth_store::AuthStore,
     catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore, db_admin,
     evidence_store::EvidenceStore, import_store::ImportStore, process_store::ProcessStore,
@@ -583,6 +583,134 @@ async fn account_groups_and_permissions_return_seeded_django_auth_data() {
         .any(|permission| permission["codename"] == "view_user"
             && permission["app_label"] == "accounts"
             && permission["model"] == "user"));
+}
+
+#[tokio::test]
+async fn zero_trust_agent_flow_records_posture() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enroll")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(
+                    r#"{
+                        "stable_device_id":"lab-linux-01",
+                        "hostname":"lab-linux-01",
+                        "os_family":"linux",
+                        "os_version":"NixOS",
+                        "architecture":"x86_64",
+                        "agent_version":"0.2.0",
+                        "deployment_channel":"test"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let device_id = payload["device"]["id"].as_i64().unwrap();
+    assert_eq!(payload["device"]["zero_trust_score"], 100);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/heartbeat"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(
+                    r#"{"agent_version":"0.2.0","status":"OK","summary":{"collector_mode":"read_only"}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/findings"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(
+                    r#"{
+                        "findings":[
+                            {
+                                "check_id":"device.endpoint_protection",
+                                "pillar":"devices",
+                                "severity":"high",
+                                "status":"open",
+                                "title":"Endpoint protection evidence missing",
+                                "description":"No EDR health evidence was supplied by the collector.",
+                                "recommendation":"Connect EDR or MDM health evidence to ISCY.",
+                                "evidence":{"source":"test"}
+                            },
+                            {
+                                "check_id":"device.os_patch_level",
+                                "pillar":"devices",
+                                "severity":"info",
+                                "status":"observed",
+                                "title":"OS inventory captured",
+                                "evidence":{"os":"NixOS"}
+                            }
+                        ]
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["created"], 2);
+    assert_eq!(payload["device"]["zero_trust_score"], 80);
+    assert_eq!(payload["device"]["open_finding_count"], 1);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/posture")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["posture"]["device_count"], 1);
+    assert_eq!(payload["posture"]["open_finding_count"], 1);
+    assert_eq!(payload["posture"]["average_zero_trust_score"], 80);
+    assert!(payload["posture"]["check_catalog"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["check_id"] == "device.disk_encryption"));
 }
 
 #[tokio::test]
@@ -3811,6 +3939,7 @@ async fn rust_web_surface_routes_return_ok() {
         "/login/",
         "/navigator/",
         "/dashboard/",
+        "/zero-trust/",
         "/catalog/",
         "/reports/",
         "/roadmap/",
@@ -4775,7 +4904,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0003_rust_catalog_requirement_core",
             "0004_rust_auth_session_core",
             "0005_rust_auth_rbac_core",
-            "0006_rust_auth_group_permission_core"
+            "0006_rust_auth_group_permission_core",
+            "0007_rust_zero_trust_agent_core"
         ]
     );
     assert!(

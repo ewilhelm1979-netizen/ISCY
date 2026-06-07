@@ -23,6 +23,7 @@ use std::{
 };
 
 pub mod account_store;
+pub mod agent_store;
 pub mod assessment_store;
 pub mod asset_store;
 pub mod auth_store;
@@ -44,6 +45,7 @@ pub mod tenant_store;
 pub mod wizard_store;
 
 use account_store::AccountStore;
+use agent_store::AgentStore;
 use assessment_store::AssessmentStore;
 use asset_store::AssetStore;
 use auth_store::AuthStore;
@@ -66,6 +68,7 @@ use wizard_store::WizardStore;
 #[derive(Clone, Default)]
 pub struct AppState {
     pub account_store: Option<AccountStore>,
+    pub agent_store: Option<AgentStore>,
     pub asset_store: Option<AssetStore>,
     pub assessment_store: Option<AssessmentStore>,
     pub auth_store: Option<AuthStore>,
@@ -90,6 +93,7 @@ impl AppState {
     pub fn new(cve_store: Option<CveStore>) -> Self {
         Self {
             account_store: None,
+            agent_store: None,
             asset_store: None,
             assessment_store: None,
             auth_store: None,
@@ -114,6 +118,7 @@ impl AppState {
     pub fn with_stores(cve_store: Option<CveStore>, tenant_store: Option<TenantStore>) -> Self {
         Self {
             account_store: None,
+            agent_store: None,
             asset_store: None,
             assessment_store: None,
             auth_store: None,
@@ -142,6 +147,11 @@ impl AppState {
 
     pub fn with_account_store(mut self, account_store: Option<AccountStore>) -> Self {
         self.account_store = account_store;
+        self
+    }
+
+    pub fn with_agent_store(mut self, agent_store: Option<AgentStore>) -> Self {
+        self.agent_store = agent_store;
         self
     }
 
@@ -338,6 +348,50 @@ pub struct AccountUserWriteResponse {
     pub accepted: bool,
     pub api_version: &'static str,
     pub user: account_store::AccountUser,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentEnrollResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub device: agent_store::AgentDeviceSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentHeartbeatResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub heartbeat: agent_store::AgentHeartbeatSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentFindingsResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub created: usize,
+    pub device: agent_store::AgentDeviceSummary,
+    pub findings: Vec<agent_store::AgentFindingSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentDevicesResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub devices: Vec<agent_store::AgentDeviceSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentFindingsListResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub device_id: i64,
+    pub findings: Vec<agent_store::AgentFindingSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentPostureResponse {
+    pub api_version: &'static str,
+    pub posture: agent_store::AgentPostureOverview,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1225,6 +1279,33 @@ fn account_store_error_response(err: anyhow::Error, action: &'static str) -> Res
         .into_response()
 }
 
+fn agent_store_error_response(err: anyhow::Error, action: &'static str) -> Response {
+    let details = err
+        .chain()
+        .map(|cause| cause.to_string())
+        .collect::<Vec<_>>()
+        .join(": ");
+    let payload_error = details.contains("Agent-");
+    (
+        if payload_error {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        },
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: if payload_error {
+                "invalid_agent_payload"
+            } else {
+                "database_error"
+            },
+            message: format!("{action}: {details}"),
+        }),
+    )
+        .into_response()
+}
+
 async fn web_context_from_request(
     query: &WebContextQuery,
     headers: &HeaderMap,
@@ -1887,6 +1968,324 @@ async fn account_user_update(
             .into_response(),
         Err(err) => {
             account_store_error_response(err, "Account-User konnte nicht aktualisiert werden")
+        }
+    }
+}
+
+async fn agent_posture(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.agent_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Agent-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store.posture_overview(context.tenant_id).await {
+        Ok(posture) => (
+            StatusCode::OK,
+            Json(AgentPostureResponse {
+                api_version: "v1",
+                posture,
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            agent_store_error_response(err, "Zero-Trust-Posture konnte nicht gelesen werden")
+        }
+    }
+}
+
+async fn agent_devices(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.agent_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Agent-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store.list_devices(context.tenant_id, 200).await {
+        Ok(devices) => (
+            StatusCode::OK,
+            Json(AgentDevicesResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                devices,
+            }),
+        )
+            .into_response(),
+        Err(err) => agent_store_error_response(err, "Agent-Devices konnten nicht gelesen werden"),
+    }
+}
+
+async fn agent_device_findings(
+    Path(device_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.agent_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Agent-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .list_device_findings(context.tenant_id, device_id, 200)
+        .await
+    {
+        Ok(findings) => (
+            StatusCode::OK,
+            Json(AgentFindingsListResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                device_id,
+                findings,
+            }),
+        )
+            .into_response(),
+        Err(err) => agent_store_error_response(err, "Agent-Findings konnten nicht gelesen werden"),
+    }
+}
+
+async fn agent_enroll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_store::AgentEnrollRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Agent-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store.enroll_device(context.tenant_id, payload).await {
+        Ok(device) => (
+            StatusCode::CREATED,
+            Json(AgentEnrollResponse {
+                accepted: true,
+                api_version: "v1",
+                device,
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            agent_store_error_response(err, "Agent-Enrollment konnte nicht gespeichert werden")
+        }
+    }
+}
+
+async fn agent_heartbeat(
+    Path(device_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_store::AgentHeartbeatRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Agent-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .record_heartbeat(context.tenant_id, device_id, payload)
+        .await
+    {
+        Ok(Some(heartbeat)) => (
+            StatusCode::CREATED,
+            Json(AgentHeartbeatResponse {
+                accepted: true,
+                api_version: "v1",
+                heartbeat,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "agent_device_not_found",
+                message: format!("Agent-Device '{}' wurde nicht gefunden.", device_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            agent_store_error_response(err, "Agent-Heartbeat konnte nicht gespeichert werden")
+        }
+    }
+}
+
+async fn agent_findings(
+    Path(device_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_store::AgentFindingsRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Agent-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .record_findings(context.tenant_id, device_id, payload)
+        .await
+    {
+        Ok(Some((device, findings))) => (
+            StatusCode::CREATED,
+            Json(AgentFindingsResponse {
+                accepted: true,
+                api_version: "v1",
+                created: findings.len(),
+                device,
+                findings,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "agent_device_not_found",
+                message: format!("Agent-Device '{}' wurde nicht gefunden.", device_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            agent_store_error_response(err, "Agent-Findings konnten nicht gespeichert werden")
         }
     }
 }
@@ -4196,6 +4595,157 @@ async fn web_dashboard(
             web_page("Dashboard", "/dashboard/", Some(&context), &body)
         }
         Err(err) => web_error_page("Dashboard", "/dashboard/", &context, &err.to_string()),
+    }
+}
+
+async fn web_zero_trust(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Zero Trust", "/zero-trust/");
+    };
+    let Some(store) = state.agent_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent");
+    };
+    match store.posture_overview(context.tenant_id).await {
+        Ok(posture) => {
+            let pillar_rows = posture
+                .pillar_scores
+                .iter()
+                .map(|pillar| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&pillar.pillar),
+                        pillar.score,
+                        pillar.open_finding_count,
+                        pillar.critical_finding_count,
+                        pillar.high_finding_count,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let device_rows = posture
+                .recent_devices
+                .iter()
+                .map(|device| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&device.hostname),
+                        html_escape(&device.os_family),
+                        html_escape(&device.agent_version),
+                        device.zero_trust_score,
+                        device.open_finding_count,
+                        html_escape(device.last_seen_at.as_deref().unwrap_or("-")),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let finding_rows = posture
+                .open_findings
+                .iter()
+                .map(|finding| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(finding.hostname.as_deref().unwrap_or("-")),
+                        html_escape(&finding.pillar),
+                        html_escape(&finding.severity_label),
+                        html_escape(&finding.title),
+                        html_escape(&finding.recommendation),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let catalog_rows = posture
+                .check_catalog
+                .iter()
+                .map(|check| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&check.check_id),
+                        html_escape(&check.pillar),
+                        html_escape(&check.platform_scope),
+                        html_escape(&check.severity),
+                        yes_no(check.enabled),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Zero Trust</h1><p>Tenant {}</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <h2>Pillars</h2>
+                    <table>
+                      <thead><tr><th>Pillar</th><th>Score</th><th>Offen</th><th>Kritisch</th><th>Hoch</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Devices</h2>
+                    <table>
+                      <thead><tr><th>Hostname</th><th>OS</th><th>Agent</th><th>Score</th><th>Offen</th><th>Last seen</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Open Findings</h2>
+                    <table>
+                      <thead><tr><th>Device</th><th>Pillar</th><th>Severity</th><th>Titel</th><th>Empfehlung</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Check Catalog</h2>
+                    <table>
+                      <thead><tr><th>Check</th><th>Pillar</th><th>Plattformen</th><th>Severity</th><th>Aktiv</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                </section>
+                "#,
+                context.tenant_id,
+                metric_card("ZT Score", posture.average_zero_trust_score),
+                metric_card("Devices", posture.device_count),
+                metric_card("Aktiv", posture.active_device_count),
+                metric_card("Offene Findings", posture.open_finding_count),
+                metric_card(
+                    "Kritisch/Hoch",
+                    posture.critical_finding_count + posture.high_finding_count
+                ),
+                if pillar_rows.is_empty() {
+                    web_empty_row(5, "Keine offenen Pillar-Findings.")
+                } else {
+                    pillar_rows
+                },
+                if device_rows.is_empty() {
+                    web_empty_row(6, "Keine Agent-Devices vorhanden.")
+                } else {
+                    device_rows
+                },
+                if finding_rows.is_empty() {
+                    web_empty_row(5, "Keine offenen Findings.")
+                } else {
+                    finding_rows
+                },
+                if catalog_rows.is_empty() {
+                    web_empty_row(5, "Kein Check-Katalog vorhanden.")
+                } else {
+                    catalog_rows
+                },
+            );
+            web_page("Zero Trust", "/zero-trust/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Zero Trust", "/zero-trust/", &context, &err.to_string()),
     }
 }
 
@@ -6991,6 +7541,7 @@ fn web_page(
     let nav_items = [
         ("/dashboard/", "Dashboard"),
         ("/navigator/", "Navigator"),
+        ("/zero-trust/", "Zero Trust"),
         ("/cves/", "CVEs"),
         ("/risks/", "Risks"),
         ("/evidence/", "Evidence"),
@@ -8683,6 +9234,17 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/catalog/domains", get(catalog_domains))
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
+        .route("/api/v1/agents/posture", get(agent_posture))
+        .route("/api/v1/agents/devices", get(agent_devices))
+        .route("/api/v1/agents/enroll", post(agent_enroll))
+        .route(
+            "/api/v1/agents/devices/{device_id}/heartbeat",
+            post(agent_heartbeat),
+        )
+        .route(
+            "/api/v1/agents/devices/{device_id}/findings",
+            get(agent_device_findings).post(agent_findings),
+        )
         .route("/api/v1/assets/information-assets", get(asset_inventory))
         .route("/api/v1/processes", get(process_register))
         .route("/api/v1/processes/{process_id}", get(process_detail))
@@ -8757,6 +9319,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/login/", get(web_login).post(web_login_submit))
         .route("/navigator/", get(web_navigator))
         .route("/dashboard/", get(web_dashboard))
+        .route("/zero-trust/", get(web_zero_trust))
         .route("/catalog/", get(web_catalog))
         .route("/reports/", get(web_reports))
         .route("/roadmap/", get(web_roadmap))

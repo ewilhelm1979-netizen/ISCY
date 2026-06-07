@@ -62,6 +62,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AUTH_GROUP_PERMISSION_SCHEMA,
         postgres_sql: POSTGRES_AUTH_GROUP_PERMISSION_SCHEMA,
     },
+    Migration {
+        version: "0007_rust_zero_trust_agent_core",
+        sqlite_sql: SQLITE_ZERO_TRUST_AGENT_SCHEMA,
+        postgres_sql: POSTGRES_ZERO_TRUST_AGENT_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -95,6 +100,163 @@ CREATE TABLE IF NOT EXISTS iscy_auth_session (
 );
 CREATE INDEX IF NOT EXISTS idx_iscy_auth_session_user ON iscy_auth_session(tenant_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_iscy_auth_session_expires ON iscy_auth_session(expires_at);
+"#;
+
+const SQLITE_ZERO_TRUST_AGENT_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS zero_trust_agent_device (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    asset_id INTEGER NULL,
+    stable_device_id varchar(128) NOT NULL,
+    hostname varchar(255) NOT NULL,
+    os_family varchar(32) NOT NULL,
+    os_version varchar(255) NOT NULL DEFAULT '',
+    architecture varchar(64) NOT NULL DEFAULT '',
+    agent_version varchar(64) NOT NULL DEFAULT '',
+    deployment_channel varchar(64) NOT NULL DEFAULT 'manual',
+    enrollment_status varchar(32) NOT NULL DEFAULT 'ACTIVE',
+    zero_trust_score INTEGER NOT NULL DEFAULT 100,
+    last_seen_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, stable_device_id)
+);
+CREATE TABLE IF NOT EXISTS zero_trust_agent_heartbeat (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    device_id INTEGER NOT NULL,
+    observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    agent_version varchar(64) NOT NULL DEFAULT '',
+    status varchar(32) NOT NULL DEFAULT 'OK',
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS zero_trust_agent_finding (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    device_id INTEGER NOT NULL,
+    check_id varchar(128) NOT NULL,
+    pillar varchar(64) NOT NULL DEFAULT 'DEVICES',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    status varchar(16) NOT NULL DEFAULT 'OPEN',
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    recommendation TEXT NOT NULL DEFAULT '',
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    risk_id INTEGER NULL,
+    evidence_item_id INTEGER NULL,
+    observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS zero_trust_agent_check_catalog (
+    check_id varchar(128) PRIMARY KEY,
+    pillar varchar(64) NOT NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    platform_scope varchar(64) NOT NULL DEFAULT 'windows,macos,linux',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    recommendation TEXT NOT NULL DEFAULT '',
+    enabled bool NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_device_tenant ON zero_trust_agent_device(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_device_asset ON zero_trust_agent_device(tenant_id, asset_id);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_heartbeat_device ON zero_trust_agent_heartbeat(tenant_id, device_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_finding_tenant ON zero_trust_agent_finding(tenant_id, status, severity);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_finding_device ON zero_trust_agent_finding(tenant_id, device_id, status);
+INSERT OR IGNORE INTO zero_trust_agent_check_catalog
+    (check_id, pillar, title, description, platform_scope, severity, recommendation, enabled)
+VALUES
+    ('device.disk_encryption', 'DEVICES', 'Disk encryption enabled', 'Checks whether endpoint storage encryption is present and reportable.', 'windows,macos,linux', 'HIGH', 'Enable BitLocker, FileVault or LUKS and connect encryption evidence to ISCY.', 1),
+    ('device.secure_boot', 'DEVICES', 'Secure boot posture', 'Checks whether the endpoint can attest secure boot or comparable platform integrity.', 'windows,macos,linux', 'MEDIUM', 'Enable secure boot or document compensating controls for unsupported hosts.', 1),
+    ('device.os_patch_level', 'DEVICES', 'OS patch posture', 'Captures operating system version and patch posture signals.', 'windows,macos,linux', 'HIGH', 'Keep OS patching under managed update policy and link MDM or patch evidence.', 1),
+    ('device.endpoint_protection', 'DEVICES', 'Endpoint protection present', 'Checks whether endpoint protection or EDR posture is visible.', 'windows,macos,linux', 'HIGH', 'Deploy and monitor EDR or endpoint protection and ingest health evidence.', 1),
+    ('device.local_admins', 'DEVICES', 'Local administrator exposure', 'Checks whether privileged local access is constrained.', 'windows,macos,linux', 'HIGH', 'Reduce local admin membership, apply just-in-time access and review exceptions.', 1),
+    ('identity.mdm_enrollment', 'IDENTITY', 'Managed device enrollment', 'Checks whether the device is managed by MDM or endpoint management.', 'windows,macos,linux', 'HIGH', 'Enroll devices into Intune, Jamf or an equivalent MDM and map compliance state into ISCY.', 1),
+    ('network.host_firewall', 'NETWORKS', 'Host firewall enabled', 'Checks whether the endpoint firewall is enabled and managed.', 'windows,macos,linux', 'MEDIUM', 'Enable host firewall policy and store policy evidence.', 1),
+    ('network.exposed_remote_access', 'NETWORKS', 'Remote access exposure', 'Checks whether remote administration services are exposed.', 'windows,macos,linux', 'HIGH', 'Restrict RDP, SSH and remote login to managed admin paths with MFA and logging.', 1),
+    ('apps.vulnerable_software_inventory', 'APPLICATIONS_WORKLOADS', 'Software inventory available', 'Captures installed software inventory for vulnerability mapping.', 'windows,macos,linux', 'MEDIUM', 'Continuously collect software inventory and map versions to CVE intelligence.', 1),
+    ('data.removable_media_policy', 'DATA', 'Removable media policy', 'Checks whether removable media use is governed or blocked.', 'windows,macos,linux', 'LOW', 'Define removable media policy and collect enforcement evidence.', 1);
+"#;
+
+const POSTGRES_ZERO_TRUST_AGENT_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS zero_trust_agent_device (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    asset_id BIGINT NULL,
+    stable_device_id varchar(128) NOT NULL,
+    hostname varchar(255) NOT NULL,
+    os_family varchar(32) NOT NULL,
+    os_version varchar(255) NOT NULL DEFAULT '',
+    architecture varchar(64) NOT NULL DEFAULT '',
+    agent_version varchar(64) NOT NULL DEFAULT '',
+    deployment_channel varchar(64) NOT NULL DEFAULT 'manual',
+    enrollment_status varchar(32) NOT NULL DEFAULT 'ACTIVE',
+    zero_trust_score INTEGER NOT NULL DEFAULT 100,
+    last_seen_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, stable_device_id)
+);
+CREATE TABLE IF NOT EXISTS zero_trust_agent_heartbeat (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    device_id BIGINT NOT NULL,
+    observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    agent_version varchar(64) NOT NULL DEFAULT '',
+    status varchar(32) NOT NULL DEFAULT 'OK',
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS zero_trust_agent_finding (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    device_id BIGINT NOT NULL,
+    check_id varchar(128) NOT NULL,
+    pillar varchar(64) NOT NULL DEFAULT 'DEVICES',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    status varchar(16) NOT NULL DEFAULT 'OPEN',
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    recommendation TEXT NOT NULL DEFAULT '',
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    risk_id BIGINT NULL,
+    evidence_item_id BIGINT NULL,
+    observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS zero_trust_agent_check_catalog (
+    check_id varchar(128) PRIMARY KEY,
+    pillar varchar(64) NOT NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    platform_scope varchar(64) NOT NULL DEFAULT 'windows,macos,linux',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    recommendation TEXT NOT NULL DEFAULT '',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE
+);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_device_tenant ON zero_trust_agent_device(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_device_asset ON zero_trust_agent_device(tenant_id, asset_id);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_heartbeat_device ON zero_trust_agent_heartbeat(tenant_id, device_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_finding_tenant ON zero_trust_agent_finding(tenant_id, status, severity);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_finding_device ON zero_trust_agent_finding(tenant_id, device_id, status);
+INSERT INTO zero_trust_agent_check_catalog
+    (check_id, pillar, title, description, platform_scope, severity, recommendation, enabled)
+VALUES
+    ('device.disk_encryption', 'DEVICES', 'Disk encryption enabled', 'Checks whether endpoint storage encryption is present and reportable.', 'windows,macos,linux', 'HIGH', 'Enable BitLocker, FileVault or LUKS and connect encryption evidence to ISCY.', TRUE),
+    ('device.secure_boot', 'DEVICES', 'Secure boot posture', 'Checks whether the endpoint can attest secure boot or comparable platform integrity.', 'windows,macos,linux', 'MEDIUM', 'Enable secure boot or document compensating controls for unsupported hosts.', TRUE),
+    ('device.os_patch_level', 'DEVICES', 'OS patch posture', 'Captures operating system version and patch posture signals.', 'windows,macos,linux', 'HIGH', 'Keep OS patching under managed update policy and link MDM or patch evidence.', TRUE),
+    ('device.endpoint_protection', 'DEVICES', 'Endpoint protection present', 'Checks whether endpoint protection or EDR posture is visible.', 'windows,macos,linux', 'HIGH', 'Deploy and monitor EDR or endpoint protection and ingest health evidence.', TRUE),
+    ('device.local_admins', 'DEVICES', 'Local administrator exposure', 'Checks whether privileged local access is constrained.', 'windows,macos,linux', 'HIGH', 'Reduce local admin membership, apply just-in-time access and review exceptions.', TRUE),
+    ('identity.mdm_enrollment', 'IDENTITY', 'Managed device enrollment', 'Checks whether the device is managed by MDM or endpoint management.', 'windows,macos,linux', 'HIGH', 'Enroll devices into Intune, Jamf or an equivalent MDM and map compliance state into ISCY.', TRUE),
+    ('network.host_firewall', 'NETWORKS', 'Host firewall enabled', 'Checks whether the endpoint firewall is enabled and managed.', 'windows,macos,linux', 'MEDIUM', 'Enable host firewall policy and store policy evidence.', TRUE),
+    ('network.exposed_remote_access', 'NETWORKS', 'Remote access exposure', 'Checks whether remote administration services are exposed.', 'windows,macos,linux', 'HIGH', 'Restrict RDP, SSH and remote login to managed admin paths with MFA and logging.', TRUE),
+    ('apps.vulnerable_software_inventory', 'APPLICATIONS_WORKLOADS', 'Software inventory available', 'Captures installed software inventory for vulnerability mapping.', 'windows,macos,linux', 'MEDIUM', 'Continuously collect software inventory and map versions to CVE intelligence.', TRUE),
+    ('data.removable_media_policy', 'DATA', 'Removable media policy', 'Checks whether removable media use is governed or blocked.', 'windows,macos,linux', 'LOW', 'Define removable media policy and collect enforcement evidence.', TRUE)
+ON CONFLICT (check_id) DO NOTHING;
 "#;
 
 const SQLITE_AUTH_RBAC_SCHEMA: &str = r#"
