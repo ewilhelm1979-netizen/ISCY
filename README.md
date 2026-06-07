@@ -178,6 +178,7 @@ GitHub Actions prueft:
 ## Dokumentation
 
 - Handbuch: `docs/ISCY_Handbuch.md`
+- GUI-Screenshots: `docs/GUI_SCREENSHOTS.md`
 - Zero-Trust-Agent: `docs/ZERO_TRUST_AGENT.md`
 - Proxmox-Produktiv-Runbook: `docs/PROXMOX_PRODUCTION_RUNBOOK.md`
 - Rust-Cutover-Status: `docs/RUST_CUTOVER_STATUS.md`
