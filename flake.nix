@@ -61,6 +61,24 @@
             exec cargo run --manifest-path rust/iscy-backend/Cargo.toml --bin iscy-backend -- "$@"
           '';
         };
+        iscyAgentApp = pkgs.writeShellApplication {
+          name = "iscy-agent";
+          runtimeInputs = [
+            pkgs.cargo
+            pkgs.rustc
+            pkgs.pkg-config
+            pkgs.openssl
+          ];
+          text = ''
+            if [ ! -f rust/iscy-backend/Cargo.toml ]; then
+              echo "Bitte aus dem ISCY-Repository-Root starten." >&2
+              exit 1
+            fi
+
+            export LD_LIBRARY_PATH="${runtimeLibs}:''${LD_LIBRARY_PATH:-}"
+            exec cargo run --manifest-path rust/iscy-backend/Cargo.toml --bin iscy-agent -- "$@"
+          '';
+        };
       in
       {
         formatter = pkgs.nixfmt-rfc-style;
@@ -73,6 +91,11 @@
         apps.iscy-backend = {
           type = "app";
           program = "${iscyBackendApp}/bin/iscy-backend";
+        };
+
+        apps.iscy-agent = {
+          type = "app";
+          program = "${iscyAgentApp}/bin/iscy-agent";
         };
 
         devShells.default = pkgs.mkShell {

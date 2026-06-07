@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand April 2026 (ISCY V23.5)
+Version: Arbeitsstand Juni 2026 (ISCY V23.6 / Rust 0.2.0)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -14,6 +14,7 @@ ISCY ist eine Arbeitsplattform fuer:
 - die Dokumentation von Nachweisen, Audits und Management Reviews
 - die strukturierte Bearbeitung von Produkt- und Software-Sicherheitsfragen
 - die Bewertung von Schwachstellen und CVEs mit lokalem LLM-Enrichment
+- die Auswertung von Zero-Trust-Agent-Posture fuer Windows, macOS und Linux
 
 ISCY ist damit kein reines Ticketsystem und kein reines DMS. Es verbindet Governance, Nachweise, Risiken, Umsetzungsplanung und Produkt-Sicherheit in einem gemeinsamen Arbeitsmodell.
 
@@ -60,6 +61,10 @@ Die `Roadmap` uebersetzt Analyseergebnisse in konkrete Umsetzungsarbeit. Sie bea
 
 Eine `CVE` ist eine bekannte Schwachstelle mit standardisierter Kennung, zum Beispiel `CVE-2026-12345`.
 
+### 2.8 Zero-Trust Agent
+
+Der `Zero-Trust Agent` ist ein read-only Collector. Er meldet Inventar, Heartbeats und Posture-Findings an ISCY. Daraus entstehen keine automatischen Systemaenderungen, sondern nachvollziehbare Sichtbarkeit fuer Assets, Risiken, Evidenzen und Roadmap-Arbeit.
+
 ## 3. Wie man ISCY fachlich lesen sollte
 
 ISCY folgt fachlich einem roten Faden:
@@ -80,6 +85,7 @@ Die wichtigsten Bereiche sind:
 - Start-Wizard unter `/`
 - Guidance Navigator unter `/navigator/`
 - Dashboard unter `/dashboard/`
+- Zero Trust unter `/zero-trust/`
 - Catalog unter `/catalog/`
 - Reports unter `/reports/`
 - Roadmap unter `/roadmap/`
@@ -264,6 +270,28 @@ Fachlicher Nutzen:
 
 Fuer Nicht-Sicherheitsleute:
 Assets sind die Dinge, die fuer das Unternehmen wichtig sind und geschuetzt werden muessen.
+
+### 5.8.1 Zero Trust
+
+Zweck:
+Endpoint- und Infrastruktur-Posture aus Agenten sichtbar machen.
+
+Typische Inhalte:
+
+- registrierte Agent-Devices
+- letzter Heartbeat
+- Zero-Trust-Score
+- offene Findings nach Pillar und Severity
+- Check-Katalog fuer Windows, macOS und Linux
+
+Fachlicher Nutzen:
+
+- technische Posture mit ISMS-Arbeit verbinden
+- Findings in Risiken, Evidenzen und Roadmap-Arbeit ueberfuehren
+- Zero-Trust-Optimierung nachvollziehbar und auditierbar machen
+
+Fuer Nicht-Sicherheitsleute:
+Der Bereich zeigt, welche Geraete welche Sicherheitsluecken oder Nachweise melden.
 
 ### 5.9 Risks
 

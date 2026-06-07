@@ -17,6 +17,19 @@
 | Production | `docker-compose.yml` + `docker-compose.prod.yml` | nginx | db, media | controlled production |
 | Production + local LLM | `docker-compose.yml` + `docker-compose.prod.yml` + `docker-compose.llm.yml` | nginx | db, media | product security / CVE enrichment |
 
+## Zero-Trust Agent Support
+
+| Component | Supported baseline | Status |
+|---|---|---|
+| Backend intake | Rust API under `/api/v1/agents/...` | Supported in ISCY Rust `0.2.0` |
+| Web overview | `/zero-trust/` | Supported in ISCY Rust `0.2.0` |
+| Agent binary | `nix run .#iscy-agent` or Cargo binary `iscy-agent` | MVP |
+| Windows deployment | manual, script, Intune-style wrapper | MVP target |
+| macOS deployment | manual, script, Jamf/MDM-style wrapper | MVP target |
+| Linux deployment | manual, systemd service/timer wrapper | MVP target |
+| Automatic remediation | not enabled | Not supported |
+| Secret, browser or packet capture | intentionally excluded | Not supported |
+
 ## CPU / Architecture Assumptions
 
 | Item | Supported |

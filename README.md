@@ -1,6 +1,6 @@
-# ISCY V23.5
+# ISCY V23.6 / Rust 0.2.0
 
-ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
+ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
 Der Runtime-Cutover nach Rust ist abgeschlossen: Die produktive Anwendung laeuft ueber den Rust-Axum-Service in `rust/iscy-backend`. Die fruehere Django/Python-Anwendung, ihre Templates, Settings, Requirements und Startpfade wurden aus dem Repository entfernt.
 
@@ -78,6 +78,7 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 
 - `/dashboard/`
 - `/navigator/`
+- `/zero-trust/`
 - `/catalog/`
 - `/requirements/`
 - `/assessments/`
@@ -92,6 +93,25 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 - `/product-security/`
 - `/cves/`
 - `/admin/users/`
+
+## Zero-Trust Agent
+
+ISCY `0.2.0` enthaelt einen read-only Agent-MVP fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+
+Lokaler Payload-Test:
+
+```bash
+nix run .#iscy-agent -- --self-test
+```
+
+Meldung an eine lokale Instanz:
+
+```bash
+ISCY_BACKEND_URL=http://127.0.0.1:9000 \
+ISCY_TENANT_ID=1 \
+ISCY_USER_ID=1 \
+nix run .#iscy-agent
+```
 
 ## Vulnerability Feeds
 
@@ -124,6 +144,7 @@ GitHub Actions prueft:
 ## Dokumentation
 
 - Handbuch: `docs/ISCY_Handbuch.md`
+- Zero-Trust-Agent: `docs/ZERO_TRUST_AGENT.md`
 - Proxmox-Produktiv-Runbook: `docs/PROXMOX_PRODUCTION_RUNBOOK.md`
 - Rust-Cutover-Status: `docs/RUST_CUTOVER_STATUS.md`
 - Rust-Abloese-Checkliste: `docs/RUST_ABLOESE_CHECKLISTE.md`
