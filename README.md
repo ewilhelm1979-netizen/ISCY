@@ -1,4 +1,4 @@
-# ISCY V23.7.1 / Rust 0.3.0
+# ISCY V23.7.2 / Rust 0.3.0
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -113,6 +113,8 @@ Die lokalen Collector-Module pruefen read-only:
 - Host-Firewall
 - MDM-/Endpoint-Management-Signale
 - Endpoint Protection beziehungsweise EDR-Signale
+
+Die Webansicht `/zero-trust/` zeigt neben Score, Devices und Findings jetzt auch den naechsten fachlichen Fokus, Score-Badges und Severity-Badges fuer eine schnellere Priorisierung.
 
 Lokaler Payload-Test:
 

@@ -4855,7 +4855,7 @@ async fn web_zero_trust(
                     format!(
                         r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                         html_escape(&pillar.pillar),
-                        pillar.score,
+                        score_badge(pillar.score),
                         pillar.open_finding_count,
                         pillar.critical_finding_count,
                         pillar.high_finding_count,
@@ -4872,7 +4872,7 @@ async fn web_zero_trust(
                         html_escape(&device.hostname),
                         html_escape(&device.os_family),
                         html_escape(&device.agent_version),
-                        device.zero_trust_score,
+                        score_badge(device.zero_trust_score),
                         device.open_finding_count,
                         html_escape(device.last_seen_at.as_deref().unwrap_or("-")),
                     )
@@ -4887,7 +4887,7 @@ async fn web_zero_trust(
                         r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                         html_escape(finding.hostname.as_deref().unwrap_or("-")),
                         html_escape(&finding.pillar),
-                        html_escape(&finding.severity_label),
+                        severity_badge(&finding.severity, &finding.severity_label),
                         html_escape(&finding.title),
                         html_escape(&finding.recommendation),
                     )
@@ -4903,15 +4903,29 @@ async fn web_zero_trust(
                         html_escape(&check.check_id),
                         html_escape(&check.pillar),
                         html_escape(&check.platform_scope),
-                        html_escape(&check.severity),
-                        yes_no(check.enabled),
+                        severity_badge(&check.severity, &check.severity),
+                        yes_no_badge(check.enabled),
                     )
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            let priority_title = zero_trust_priority_title(&posture);
+            let priority_detail = zero_trust_priority_detail(&posture);
             let body = format!(
                 r#"
                 <section class="hero compact"><h1>Zero Trust</h1><p>Tenant {}</p></section>
+                <section class="zt-focus">
+                  <article class="panel zt-score">
+                    <span class="eyebrow">Zero-Trust-Reife</span>
+                    <strong class="{}">{}</strong>
+                    {}
+                  </article>
+                  <article class="panel zt-priority">
+                    <span class="eyebrow">Naechster Fokus</span>
+                    <h2>{}</h2>
+                    <p>{}</p>
+                  </article>
+                </section>
                 <section class="metrics">
                   {}
                   {}
@@ -4951,6 +4965,11 @@ async fn web_zero_trust(
                 </section>
                 "#,
                 context.tenant_id,
+                score_text_class(posture.average_zero_trust_score),
+                posture.average_zero_trust_score,
+                score_band_badge(posture.average_zero_trust_score),
+                html_escape(&priority_title),
+                html_escape(&priority_detail),
                 metric_card("ZT Score", posture.average_zero_trust_score),
                 metric_card("Devices", posture.device_count),
                 metric_card("Aktiv", posture.active_device_count),
@@ -7824,35 +7843,55 @@ fn web_page(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{}</title>
   <style>
-    :root {{ color-scheme: light; --ink:#17202a; --muted:#617080; --line:#d8dee6; --bg:#f6f8fb; --panel:#ffffff; --accent:#0f766e; --warn:#b45309; }}
+    :root {{ color-scheme: light; --ink:#17202a; --muted:#5b6776; --line:#d8dee6; --bg:#f6f8fb; --panel:#ffffff; --soft:#eef4f7; --accent:#0f766e; --accent-weak:#e6f4f1; --success:#047857; --warn:#b45309; --danger:#b42318; --info:#1d4ed8; }}
     * {{ box-sizing:border-box; }}
     body {{ margin:0; font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:var(--ink); background:var(--bg); }}
-    header {{ display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 24px; background:#ffffff; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:1; }}
+    header {{ display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:12px; padding:12px 20px; background:rgba(255,255,255,.96); border-bottom:1px solid var(--line); box-shadow:0 1px 2px rgba(20,30,40,.04); position:sticky; top:0; z-index:1; backdrop-filter:saturate(180%) blur(10px); }}
     .brand {{ font-weight:800; letter-spacing:0; color:var(--ink); text-decoration:none; }}
-    nav {{ display:flex; flex-wrap:wrap; gap:8px; }}
-    nav a, .context a {{ color:var(--ink); text-decoration:none; padding:8px 10px; border-radius:6px; border:1px solid transparent; }}
-    nav a.active, nav a:hover, .context a:hover {{ border-color:var(--line); background:#eef6f4; }}
-    .context {{ display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; font-size:14px; color:var(--muted); }}
-    .context span {{ padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:#fff; }}
+    nav {{ display:flex; flex-wrap:wrap; gap:4px; min-width:0; overflow:visible; font-size:14px; scrollbar-width:none; }}
+    nav::-webkit-scrollbar {{ display:none; }}
+    nav a, .context a {{ flex:0 0 auto; color:var(--ink); text-decoration:none; white-space:nowrap; padding:7px 8px; border-radius:6px; border:1px solid transparent; }}
+    nav a.active, nav a:hover, .context a:hover {{ border-color:#b8d8d0; background:var(--accent-weak); }}
+    .context {{ display:flex; flex-wrap:wrap; justify-content:flex-end; gap:6px; font-size:13px; color:var(--muted); }}
+    .context span {{ padding:7px 9px; border:1px solid var(--line); border-radius:6px; background:#fff; }}
     main {{ width:min(1180px, 100%); margin:0 auto; padding:28px 20px 44px; }}
-    .hero {{ padding:32px 0; }}
-    .hero.compact {{ padding:16px 0 24px; }}
+    .hero {{ padding:28px 0 20px; margin-bottom:18px; border-bottom:1px solid var(--line); }}
+    .hero.compact {{ padding:12px 0 18px; }}
     h1 {{ margin:0 0 8px; font-size:40px; line-height:1.1; }}
     h2 {{ margin:0 0 10px; font-size:20px; }}
     h3 {{ margin:0; font-size:17px; }}
-    p {{ margin:0 0 8px; color:var(--muted); }}
+    p {{ margin:0 0 8px; color:var(--muted); overflow-wrap:anywhere; }}
     .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:14px; }}
     .metrics {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:16px; }}
     .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px; box-shadow:0 1px 2px rgba(20, 30, 40, 0.04); }}
     .panel.wide {{ grid-column:1 / -1; overflow-x:auto; }}
     .panel.error {{ border-color:#fed7aa; background:#fff7ed; }}
+    .form-panel {{ max-width:520px; }}
     .card-link {{ display:block; min-height:120px; color:var(--ink); text-decoration:none; }}
-    .metric strong {{ display:block; font-size:30px; margin-top:6px; }}
+    .card-link:hover {{ border-color:#b8d8d0; box-shadow:0 8px 22px rgba(20,30,40,.08); }}
+    .metric {{ min-height:96px; }}
+    .metric span, .eyebrow {{ display:block; color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; }}
+    .metric strong {{ display:block; font-size:30px; line-height:1.05; margin-top:8px; }}
+    .zt-focus {{ display:grid; grid-template-columns:minmax(190px,260px) minmax(0,1fr); gap:14px; margin-bottom:16px; }}
+    .zt-score {{ display:grid; align-content:start; gap:10px; min-height:138px; }}
+    .zt-score strong {{ font-size:52px; line-height:1; }}
+    .zt-priority h2 {{ font-size:22px; margin-bottom:8px; }}
+    .score-ok {{ color:var(--success); }}
+    .score-warn {{ color:var(--warn); }}
+    .score-danger {{ color:var(--danger); }}
     .muted {{ color:var(--muted); }}
-    table {{ width:100%; border-collapse:collapse; }}
-    th, td {{ padding:10px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }}
-    th {{ color:var(--muted); font-size:13px; text-transform:uppercase; }}
+    table {{ width:100%; min-width:720px; border-collapse:collapse; }}
+    th, td {{ padding:10px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; overflow-wrap:anywhere; }}
+    th {{ color:var(--muted); font-size:12px; text-transform:uppercase; }}
     td a {{ color:var(--accent); text-decoration:none; }}
+    pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
+    .badge {{ display:inline-flex; align-items:center; min-height:24px; padding:3px 8px; border-radius:999px; border:1px solid transparent; background:var(--soft); color:var(--ink); font-size:12px; font-weight:800; line-height:1.2; white-space:nowrap; }}
+    .badge.ok {{ color:var(--success); background:#ecfdf3; border-color:#abefc6; }}
+    .badge.warn {{ color:var(--warn); background:#fffaeb; border-color:#fedf89; }}
+    .badge.high {{ color:#c2410c; background:#fff7ed; border-color:#fed7aa; }}
+    .badge.danger {{ color:var(--danger); background:#fef3f2; border-color:#fecdca; }}
+    .badge.info {{ color:var(--info); background:#eff6ff; border-color:#bfdbfe; }}
+    .badge.muted-badge {{ color:var(--muted); background:#f8fafc; border-color:var(--line); }}
     form {{ display:grid; gap:12px; }}
     label {{ display:grid; gap:6px; font-weight:600; }}
     input, select, textarea {{ width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:6px; font:inherit; background:#fff; }}
@@ -7865,7 +7904,9 @@ fn web_page(
     .user-editor:first-child {{ padding-top:0; border-top:0; }}
     .toggle-row {{ display:flex; flex-wrap:wrap; gap:12px; }}
     button {{ justify-self:start; border:0; border-radius:6px; background:var(--accent); color:#fff; padding:10px 14px; font-weight:700; cursor:pointer; }}
-    @media (max-width: 720px) {{ header {{ align-items:flex-start; flex-direction:column; }} h1 {{ font-size:32px; }} .context {{ justify-content:flex-start; }} }}
+    button:hover {{ background:#0b5f58; }}
+    a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {{ outline:3px solid #99f6e4; outline-offset:2px; }}
+    @media (max-width: 720px) {{ header {{ grid-template-columns:1fr; align-items:start; padding:12px 16px; }} nav {{ width:100%; flex-wrap:nowrap; overflow-x:auto; padding-bottom:2px; }} h1 {{ font-size:32px; }} .context {{ justify-content:flex-start; }} .zt-focus {{ grid-template-columns:1fr; }} main {{ padding:22px 14px 36px; }} }}
   </style>
 </head>
 <body>
@@ -8479,6 +8520,129 @@ fn yes_no(value: bool) -> &'static str {
     } else {
         "Nein"
     }
+}
+
+fn yes_no_badge(value: bool) -> String {
+    if value {
+        web_badge("Ja", "ok")
+    } else {
+        web_badge("Nein", "muted-badge")
+    }
+}
+
+fn score_badge(score: i64) -> String {
+    web_badge(&score.to_string(), score_badge_class(score))
+}
+
+fn score_band_badge(score: i64) -> String {
+    web_badge(score_band_label(score), score_badge_class(score))
+}
+
+fn web_badge(label: &str, class_name: &str) -> String {
+    format!(
+        r#"<span class="badge {}">{}</span>"#,
+        class_name,
+        html_escape(label),
+    )
+}
+
+fn score_band_label(score: i64) -> &'static str {
+    if score >= 80 {
+        "Stabil"
+    } else if score >= 60 {
+        "Beobachten"
+    } else {
+        "Handeln"
+    }
+}
+
+fn score_badge_class(score: i64) -> &'static str {
+    if score >= 80 {
+        "ok"
+    } else if score >= 60 {
+        "warn"
+    } else {
+        "danger"
+    }
+}
+
+fn score_text_class(score: i64) -> &'static str {
+    if score >= 80 {
+        "score-ok"
+    } else if score >= 60 {
+        "score-warn"
+    } else {
+        "score-danger"
+    }
+}
+
+fn severity_badge(severity: &str, label: &str) -> String {
+    web_badge(label, severity_badge_class(severity))
+}
+
+fn severity_badge_class(severity: &str) -> &'static str {
+    match severity.trim().to_ascii_uppercase().as_str() {
+        "CRITICAL" | "KRITISCH" => "danger",
+        "HIGH" | "HOCH" => "high",
+        "MEDIUM" | "MITTEL" => "warn",
+        "LOW" | "NIEDRIG" => "info",
+        "INFO" | "INFORMATIONAL" => "muted-badge",
+        _ => "muted-badge",
+    }
+}
+
+fn zero_trust_priority_title(posture: &agent_store::AgentPostureOverview) -> String {
+    if posture.device_count == 0 {
+        "Agent-Rollout starten".to_string()
+    } else if posture.critical_finding_count > 0 {
+        "Kritische Findings zuerst schliessen".to_string()
+    } else if posture.high_finding_count > 0 {
+        "Hohe Findings in die Roadmap ziehen".to_string()
+    } else if posture.stale_device_count > 0 {
+        "Agent-Freshness verbessern".to_string()
+    } else if posture.open_finding_count > 0 {
+        "Offene Findings nach Pillar abbauen".to_string()
+    } else {
+        "Posture stabil halten".to_string()
+    }
+}
+
+fn zero_trust_priority_detail(posture: &agent_store::AgentPostureOverview) -> String {
+    if posture.device_count == 0 {
+        return "Noch keine Agent-Devices registriert. Naechster Schritt ist ein kontrollierter Rollout mit Enrollment-Token und mTLS-Bindung.".to_string();
+    }
+    if let Some(pillar) = most_exposed_pillar(posture) {
+        return format!(
+            "Fokus-Pillar {}: {} offene Findings, davon {} kritisch und {} hoch.",
+            pillar.pillar,
+            pillar.open_finding_count,
+            pillar.critical_finding_count,
+            pillar.high_finding_count,
+        );
+    }
+    if posture.stale_device_count > 0 {
+        return format!(
+            "{} Agent-Devices sind nicht frisch gesehen worden. Heartbeat, Netzwerkweg und Agent-Service pruefen.",
+            posture.stale_device_count,
+        );
+    }
+    "Alle gemeldeten Agent-Findings sind aktuell geschlossen. Sinnvoll bleibt: Abdeckung je Plattform ausbauen und Ausnahmen befristet dokumentieren.".to_string()
+}
+
+fn most_exposed_pillar(
+    posture: &agent_store::AgentPostureOverview,
+) -> Option<&agent_store::AgentPillarScore> {
+    posture
+        .pillar_scores
+        .iter()
+        .filter(|pillar| pillar.open_finding_count > 0)
+        .max_by_key(|pillar| {
+            (
+                pillar.critical_finding_count,
+                pillar.high_finding_count,
+                pillar.open_finding_count,
+            )
+        })
 }
 
 fn checked_attr(value: bool) -> &'static str {

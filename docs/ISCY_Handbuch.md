@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.1 / Rust 0.3.0)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.2 / Rust 0.3.0)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -281,6 +281,7 @@ Typische Inhalte:
 - registrierte Agent-Devices
 - letzter Heartbeat
 - Zero-Trust-Score
+- naechster fachlicher Fokus aus Score, Severity und Agent-Freshness
 - offene Findings nach Pillar und Severity
 - Check-Katalog fuer Windows, macOS und Linux
 
@@ -289,6 +290,7 @@ Fachlicher Nutzen:
 - technische Posture mit ISMS-Arbeit verbinden
 - Findings in Risiken, Evidenzen und Roadmap-Arbeit ueberfuehren
 - Zero-Trust-Optimierung nachvollziehbar und auditierbar machen
+- Prioritaeten schneller erkennen, ohne Rohdaten manuell vergleichen zu muessen
 
 Fuer Nicht-Sicherheitsleute:
 Der Bereich zeigt, welche Geraete welche Sicherheitsluecken oder Nachweise melden.
@@ -305,6 +307,14 @@ Was die Agenten aktuell testen koennen:
 - Endpoint Protection/EDR: Windows Defender Status, macOS EDR-/Security-Agent-Pfade, Linux-Dienste und Pfade fuer Wazuh, auditd, Microsoft Defender, CrowdStrike, SentinelOne, osquery und vergleichbare Agenten
 
 Die Agenten arbeiten read-only. Wenn ein Signal nicht sicher bestaetigt werden kann, meldet ISCY eine offene Evidenzluecke statt einen erfundenen Nachweis.
+
+Die Weboberflaeche stellt Zero Trust bewusst als Arbeitsansicht dar:
+
+- Score-Karte fuer die aktuelle Zero-Trust-Reife
+- Fokuskarte fuer den naechsten sinnvollen Schritt
+- Severity-Badges fuer kritische, hohe, mittlere und niedrige Findings
+- mobile Navigation und horizontal scrollbare Tabellen fuer kleine Displays
+- konservative Darstellung ohne automatische Remediation
 
 ### 5.9 Risks
 
@@ -703,60 +713,39 @@ Nutze diese Liste als schnelle Team-Abnahme in ISCY:
 
 Merksatz: Nicht nur planen - auch nachweisbar umsetzen.
 
-### 6.10 Grundschutz++-Abdeckung
+### 6.10 Zero-Trust-Ausbaupfad
 
-Gepruefte Quelle:
-`/home/enricow79/Dokumente/Techniche Dokumente/Grundschutzpp_OSCAL_Katalogbericht.pdf`
+Grundschutz wird in diesem Arbeitsstand bewusst zurueckgestellt. Der sinnvolle naechste Fokus fuer ISCY ist Zero Trust als laufende technische Posture-Sicht.
 
-Der Bericht beschreibt den Anwenderkatalog Grundschutz++ als OSCAL-Katalog, Version 1.1.3, Stand 02.04.2026 05:14 UTC. Der Umfang im Bericht ist:
+Was aktuell belastbar vorhanden ist:
 
-- 20 Praktiken
-- 998 Controls
-- 152 Controls mit `MUSS`
-- 620 Controls mit `SOLLTE`
-- 226 Controls mit `KANN`
+- Rust-only Backend mit Zero-Trust-Webansicht unter `/zero-trust/`
+- read-only Agent fuer Windows, macOS und Linux
+- Enrollment-Token, Agent-Secret und optionale mTLS-Fingerprint-Bindung
+- Inventar, Heartbeat und lokale OS-/MDM-/EDR-Findings
+- Scores nach Device und Pillar
+- offene Findings nach Severity
+- Fokuskarte fuer den naechsten fachlich sinnvollen Schritt
 
-Die 20 Praktiken sind:
+Was als naechstes fachlich am meisten bringt:
 
-- GC: Governance und Compliance
-- STM: Strukturmodellierung
-- UMS: Umsetzung
-- VRB: Verbesserung
-- PERF: Monitoring-Evaluation
-- RISK: Risikomanagement
-- ASST: Informationen und Assets
-- PERS: Personal
-- BES: Beschaffungsmanagement
-- DLS: Dienstleistersteuerung
-- TEST: Aenderungen und Tests
-- GEB: Gebaeudemanagement
-- SENS: Sensibilisierung
-- ARCH: Architektur
-- BER: Berechtigung
-- NOT: Notfallplanung
-- DET: Detektion
-- REA: Sicherheitsvorfallsbehandlung
-- KONF: Konfiguration
-- DEV: Entwicklung
+1. Agent-Abdeckung je Plattform messen  
+   Pro Tenant sichtbar machen, wie viele Windows-, macOS- und Linux-Systeme erwartet werden und wie viele davon frisch melden.
+2. Findings mit Risiken und Evidenzen verbinden  
+   Aus wiederkehrenden High-/Critical-Findings sollten Risiken, Massnahmen und Evidenzanforderungen ableitbar sein.
+3. MDM-/EDR-Integrationen vorbereiten  
+   Intune, Jamf, Microsoft Defender, Wazuh, CrowdStrike oder SentinelOne sollten zunaechst als Import-/Connector-Schicht angebunden werden, nicht als Fernsteuerung.
+4. Softwareinventar und CVE-Korrelation ergaenzen  
+   Agent- oder MDM-Inventar sollte mit dem CVE-Bereich verbunden werden, damit betroffene Systeme schneller sichtbar sind.
+5. Ausnahme- und Ablaufdatum erzwingen  
+   Akzeptierte Abweichungen sollten Owner, Begruendung, Laufzeit und Wiedervorlage haben.
+6. Signierte Agent-Pakete bauen  
+   Windows MSI/Intune-Paket, macOS PKG/Jamf-Profil und Linux systemd-Pakete sind fuer produktive Rollouts wichtiger als weitere Einzelchecks.
+7. Remediation getrennt halten  
+   Automatische Aenderungen am Endgeraet sollten erst spaeter als signierter, auditierbarer Policy-Schritt kommen.
 
-Fachliche Bewertung des aktuellen ISCY-Stands:
-
-- ISCY deckt die Grundschutz++-Arbeitslogik teilweise ab: Scope, Prozesse, Assets, Risiken, Anforderungen, Evidenzen, Assessments, Audits, Findings, Management Reviews, Roadmap und kontinuierliche Verbesserung sind als Plattformfunktionen vorhanden.
-- Die vorhandenen Katalogdaten enthalten 19 Assessment-Domaenen, 74 Bewertungsfragen, versionierte Mappings fuer ISO 27001, NIS2, KRITIS und CRA sowie regulatorische Anforderungen und Frage-Mappings.
-- Die Zero-Trust-Agenten liefern technische Nachweise fuer Teile von ASST, DET, KONF und BER, zum Beispiel Inventar, Verschluesselung, Secure Boot, Firewall, MDM/Endpoint-Management und Endpoint Protection.
-- KRITIS- und BSI-nahe Themen sind fachlich vorhanden, aber nicht als vollstaendiger Grundschutz++-OSCAL-Katalog importiert.
-
-Was noch fehlt fuer eine vollstaendige Grundschutz++-Abdeckung:
-
-- ein eigenes Framework `GRUNDSCHUTZ++` oder `IT_GRUNDSCHUTZ` im Requirement-Katalog
-- Import oder Seed der 20 Praktiken und 998 Controls aus dem OSCAL-Katalog
-- Uebernahme der `MUSS`/`SOLLTE`/`KANN`-Einstufungen
-- eindeutige Control-IDs, Titel, Beschreibungen, Zielobjekte und Evidenzanforderungen aus dem OSCAL-Katalog
-- Mapping der vorhandenen ISCY-Fragen, Agent-Findings, Risiken und Evidenzen auf konkrete Grundschutz++-Controls
-- ein auswertbarer Grundschutz++-Abdeckungsgrad je Tenant, Scope, Asset und Zielobjekt
-
-Kurzurteil:
-ISCY ist als Arbeitsplattform fuer Grundschutz++ gut vorbereitet und deckt viele Management-, Risiko-, Nachweis- und technische Posture-Themen ab. Eine belastbare Aussage "Grundschutz++ vollstaendig abgedeckt" waere aber erst korrekt, wenn der konkrete OSCAL-Katalog mit seinen 998 Controls importiert, versioniert und gegen die vorhandenen Fragen, Evidenzen und Agent-Findings gemappt ist.
+Fachliches Kurzurteil:
+ISCY ist fuer Zero Trust jetzt gut positioniert. Die naechste Reife entsteht nicht durch aggressivere Agenten, sondern durch bessere Abdeckung, Priorisierung, Nachweisverknuepfung und saubere Deployment-Pakete.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
