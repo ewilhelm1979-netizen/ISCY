@@ -952,24 +952,36 @@ fn api_error_response(
         .into_response()
 }
 
-fn validated_cve_id(raw_cve_id: &str) -> Result<String, Response> {
+struct ApiError {
+    status: StatusCode,
+    error_code: &'static str,
+    message: String,
+}
+
+impl ApiError {
+    fn into_response(self) -> Response {
+        api_error_response(self.status, self.error_code, self.message)
+    }
+}
+
+fn validated_cve_id(raw_cve_id: &str) -> Result<String, ApiError> {
     let normalized = normalize_cve_id(raw_cve_id);
     if normalized.is_empty() {
-        return Err(api_error_response(
-            StatusCode::BAD_REQUEST,
-            "empty_cve_id",
-            "CVE-ID darf nicht leer sein.",
-        ));
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            error_code: "empty_cve_id",
+            message: "CVE-ID darf nicht leer sein.".to_string(),
+        });
     }
     if !is_valid_cve_id(&normalized) {
-        return Err(api_error_response(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "invalid_cve_id",
-            format!(
+        return Err(ApiError {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            error_code: "invalid_cve_id",
+            message: format!(
                 "CVE-ID '{}' entspricht nicht dem erwarteten Format CVE-YYYY-NNNN.",
                 normalized
             ),
-        ));
+        });
     }
     Ok(normalized)
 }
@@ -1107,7 +1119,7 @@ fn first_nvd_cve(payload: &Value) -> Option<Value> {
 fn nvd_normalize_response(payload: NvdImportRequest) -> Response {
     let normalized = match validated_cve_id(&payload.cve_id) {
         Ok(normalized) => normalized,
-        Err(response) => return response,
+        Err(err) => return err.into_response(),
     };
     (
         StatusCode::OK,
@@ -8306,7 +8318,7 @@ async fn nvd_import(
 ) -> Response {
     let normalized = match validated_cve_id(&payload.cve_id) {
         Ok(normalized) => normalized,
-        Err(response) => return response,
+        Err(err) => return err.into_response(),
     };
     let Some(store) = state.cve_store.as_ref() else {
         return api_error_response(
@@ -8357,7 +8369,7 @@ async fn nvd_upsert(
     let record = NvdCveRecord::from_nvd_value(&payload.cve, &raw_payload, fallback_cve_id);
     let normalized = match validated_cve_id(&record.cve_id) {
         Ok(normalized) => normalized,
-        Err(response) => return response,
+        Err(err) => return err.into_response(),
     };
 
     let Some(store) = state.cve_store.as_ref() else {
