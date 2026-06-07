@@ -16,7 +16,6 @@
       system:
       let
         pkgs = import nixpkgs { inherit system; };
-        python = pkgs.python311;
         runtimeLibs = pkgs.lib.makeLibraryPath [
           pkgs.stdenv.cc.cc.lib
           pkgs.zlib
@@ -78,7 +77,6 @@
 
         devShells.default = pkgs.mkShell {
           packages = [
-            python
             pkgs.git
             pkgs.pkg-config
             pkgs.cmake

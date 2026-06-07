@@ -530,7 +530,7 @@ Wenn du ISCY schnell und reproduzierbar starten willst, nutze Docker.
 1. `make docker-check`  
    Prueft zuerst alle Compose-Dateien auf Syntax und Zusammenbau.
 2. `make docker-smoke`  
-   Startet eine kurze Funktionsprobe (DB, Migration, Django-Check) und faehrt danach wieder herunter.
+   Startet eine kurze Rust-Funktionsprobe (DB, Healthcheck und zentrale API-Probes) und faehrt danach wieder herunter.
 3. Danach den gewuenschten Modus starten  
    - lokal: `make dev-up`  
    - stage: `make stage-up`  
@@ -641,13 +641,10 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 - Risiken nicht technisch, sondern geschaeftlich formulieren
 - Produkt- und Schwachstellenlogik nur dort aktivieren, wo sie wirklich gebraucht wird
 
-## 10. Git- und PDF-Bezug dieses Handbuchs
+## 10. Git-Bezug dieses Handbuchs
 
 Dieses Handbuch ist bewusst als Markdown-Datei im Repository abgelegt, damit es:
 
 - versioniert werden kann
 - mit dem Produkt mitwaechst
 - in Pull Requests geprueft werden kann
-- als PDF exportierbar bleibt
-
-Der PDF-Export erfolgt ueber das Skript `scripts/export_iscy_handbook_pdf.py`.

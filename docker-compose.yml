@@ -16,72 +16,21 @@ services:
 
   app:
     build:
-      context: .
-      args:
-        INSTALL_LOCAL_LLM: ${INSTALL_LOCAL_LLM:-false}
+      context: ./rust/iscy-backend
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
-      rust-backend:
-        condition: service_healthy
-    env_file:
-      - .env
-    environment:
-      DEBUG: ${DEBUG:-False}
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://isms:isms@db:5432/isms}
-      WAIT_FOR_DB: ${WAIT_FOR_DB:-1}
-      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
-      RUN_COLLECTSTATIC: ${RUN_COLLECTSTATIC:-0}
-      RUN_SEEDS: ${RUN_SEEDS:-0}
-      DJANGO_CHECK: ${DJANGO_CHECK:-1}
-      APP_SERVER: ${APP_SERVER:-gunicorn}
-      PORT: "8000"
-      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
-      GUNICORN_TIMEOUT: ${GUNICORN_TIMEOUT:-120}
-      RUST_BACKEND_URL: ${RUST_BACKEND_URL:-http://rust-backend:9000}
-      LOCAL_LLM_RUST_URL: ${LOCAL_LLM_RUST_URL:-http://rust-backend:9000}
-      RISK_SCORING_BACKEND: ${RISK_SCORING_BACKEND:-rust_service}
-      GUIDANCE_SCORING_BACKEND: ${GUIDANCE_SCORING_BACKEND:-rust_service}
-      REPORT_SUMMARY_BACKEND: ${REPORT_SUMMARY_BACKEND:-rust_service}
-      REPORT_SNAPSHOT_BACKEND: ${REPORT_SNAPSHOT_BACKEND:-rust_service}
-      DASHBOARD_SUMMARY_BACKEND: ${DASHBOARD_SUMMARY_BACKEND:-rust_service}
-      CATALOG_BACKEND: ${CATALOG_BACKEND:-rust_service}
-      REQUIREMENTS_BACKEND: ${REQUIREMENTS_BACKEND:-rust_service}
-      ASSET_INVENTORY_BACKEND: ${ASSET_INVENTORY_BACKEND:-rust_service}
-      PROCESS_REGISTER_BACKEND: ${PROCESS_REGISTER_BACKEND:-rust_service}
-      RISK_REGISTER_BACKEND: ${RISK_REGISTER_BACKEND:-rust_service}
-      EVIDENCE_REGISTER_BACKEND: ${EVIDENCE_REGISTER_BACKEND:-rust_service}
-      ASSESSMENT_REGISTER_BACKEND: ${ASSESSMENT_REGISTER_BACKEND:-rust_service}
-      ROADMAP_REGISTER_BACKEND: ${ROADMAP_REGISTER_BACKEND:-rust_service}
-      WIZARD_RESULTS_BACKEND: ${WIZARD_RESULTS_BACKEND:-rust_service}
-      IMPORT_CENTER_BACKEND: ${IMPORT_CENTER_BACKEND:-rust_service}
-      PRODUCT_SECURITY_BACKEND: ${PRODUCT_SECURITY_BACKEND:-rust_service}
-      RUST_ONLY_MODE: ${RUST_ONLY_MODE:-true}
-      RUST_STRICT_MODE: ${RUST_STRICT_MODE:-true}
-    expose:
-      - "8000"
-    volumes:
-      - media_data:/app/media
-      - static_data:/app/staticfiles
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready/', timeout=5)\""]
-      interval: 20s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
-  rust-backend:
-    build:
-      context: ./rust/iscy-backend
-    restart: unless-stopped
     environment:
       RUST_BACKEND_BIND: "0.0.0.0:9000"
       DATABASE_URL: ${DATABASE_URL:-postgresql://isms:isms@db:5432/isms}
-    expose:
-      - "9000"
+      ISCY_MEDIA_ROOT: ${ISCY_MEDIA_ROOT:-/app/media}
+      NVD_API_BASE_URL: ${NVD_API_BASE_URL:-https://services.nvd.nist.gov}
+      NVD_API_KEY: ${NVD_API_KEY:-}
+    ports:
+      - "${ISCY_HTTP_PORT:-9000}:9000"
+    volumes:
+      - media_data:/app/media
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9000/health/live || exit 1"]
       interval: 20s
@@ -92,4 +41,3 @@ services:
 volumes:
   postgres_data:
   media_data:
-  static_data:

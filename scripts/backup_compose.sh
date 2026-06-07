@@ -31,7 +31,7 @@ docker compose "${COMPOSE_ARGS[@]}" exec -T db \
   pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip -c > "$TARGET_DIR/postgres.sql.gz"
 
 docker compose "${COMPOSE_ARGS[@]}" run --rm --entrypoint sh app \
-  -lc 'mkdir -p /app/media /app/staticfiles /app/models && tar -C /app -czf - media staticfiles models 2>/dev/null || true' \
+  -lc 'mkdir -p /app/media && tar -C /app -czf - media 2>/dev/null || true' \
   > "$TARGET_DIR/storage.tar.gz"
 
 if [[ -f "$ENV_FILE" ]]; then

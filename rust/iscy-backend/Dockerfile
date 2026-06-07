@@ -3,6 +3,7 @@ WORKDIR /build
 
 COPY Cargo.toml ./
 COPY src ./src
+COPY seeds ./seeds
 
 RUN cargo build --release
 
