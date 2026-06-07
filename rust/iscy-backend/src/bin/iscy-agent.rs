@@ -1,4 +1,4 @@
-use std::{env, fs, process::Command};
+use std::{env, fs, path::Path as FsPath, process::Command};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -199,39 +199,707 @@ fn collect_inventory() -> DeviceInventory {
 
 fn heartbeat_payload(inventory: &DeviceInventory) -> Value {
     json!({
-        "agent_version": inventory.agent_version,
+        "agent_version": &inventory.agent_version,
         "status": "OK",
         "summary": {
-            "hostname": inventory.hostname,
-            "os_family": inventory.os_family,
-            "os_version": inventory.os_version,
-            "architecture": inventory.architecture,
+            "hostname": &inventory.hostname,
+            "os_family": &inventory.os_family,
+            "os_version": &inventory.os_version,
+            "architecture": &inventory.architecture,
             "collector_mode": "read_only"
         }
     })
 }
 
 fn findings_payload(inventory: &DeviceInventory) -> Value {
+    let mut findings = vec![os_inventory_finding(inventory)];
+    findings.push(disk_encryption_finding(inventory));
+    findings.push(platform_integrity_finding(inventory));
+    findings.push(host_firewall_finding(inventory));
+    findings.push(mdm_enrollment_finding(inventory));
+    findings.push(endpoint_protection_finding(inventory));
+    json!({ "findings": findings })
+}
+
+fn os_inventory_finding(inventory: &DeviceInventory) -> Value {
+    finding(
+        FindingSpec {
+            check_id: "device.os_patch_level",
+            pillar: "DEVICES",
+            severity: "INFO",
+            status: "OBSERVED",
+            title: "OS posture inventory captured",
+            description: "Read-only agent captured OS and architecture posture metadata.",
+            recommendation:
+                "Correlate this endpoint inventory with MDM or patch-management compliance evidence.",
+        },
+        json!({
+            "hostname": &inventory.hostname,
+            "os_family": &inventory.os_family,
+            "os_version": &inventory.os_version,
+            "architecture": &inventory.architecture,
+            "agent_version": &inventory.agent_version,
+            "collector": "os_inventory"
+        }),
+    )
+}
+
+fn disk_encryption_finding(inventory: &DeviceInventory) -> Value {
+    let signal = match inventory.os_family.as_str() {
+        "linux" => linux_disk_encryption_signal(),
+        "macos" => macos_filevault_signal(),
+        "windows" => windows_bitlocker_signal(),
+        other => PostureSignal::unknown(
+            "platform_unsupported",
+            json!({ "os_family": other, "collector": "disk_encryption" }),
+        ),
+    };
+    signal.to_finding(
+        "device.disk_encryption",
+        "DEVICES",
+        "HIGH",
+        "Disk encryption enabled",
+        "Endpoint storage encryption could not be confirmed by the read-only collector.",
+        "Enable BitLocker, FileVault or LUKS and connect encryption evidence to ISCY.",
+    )
+}
+
+fn platform_integrity_finding(inventory: &DeviceInventory) -> Value {
+    let signal = match inventory.os_family.as_str() {
+        "linux" => linux_secure_boot_signal(),
+        "macos" => macos_platform_integrity_signal(),
+        "windows" => windows_secure_boot_signal(),
+        other => PostureSignal::unknown(
+            "platform_unsupported",
+            json!({ "os_family": other, "collector": "platform_integrity" }),
+        ),
+    };
+    signal.to_finding(
+        "device.secure_boot",
+        "DEVICES",
+        "MEDIUM",
+        "Secure boot posture",
+        "Secure boot or comparable platform-integrity posture could not be confirmed.",
+        "Enable secure boot or document compensating controls for unsupported hosts.",
+    )
+}
+
+fn host_firewall_finding(inventory: &DeviceInventory) -> Value {
+    let signal = match inventory.os_family.as_str() {
+        "linux" => linux_firewall_signal(),
+        "macos" => macos_firewall_signal(),
+        "windows" => windows_firewall_signal(),
+        other => PostureSignal::unknown(
+            "platform_unsupported",
+            json!({ "os_family": other, "collector": "host_firewall" }),
+        ),
+    };
+    signal.to_finding(
+        "network.host_firewall",
+        "NETWORKS",
+        "MEDIUM",
+        "Host firewall enabled",
+        "Host firewall policy could not be confirmed by the read-only collector.",
+        "Enable host firewall policy and store policy evidence.",
+    )
+}
+
+fn mdm_enrollment_finding(inventory: &DeviceInventory) -> Value {
+    let signal = match inventory.os_family.as_str() {
+        "linux" => linux_management_signal(),
+        "macos" => macos_mdm_signal(),
+        "windows" => windows_mdm_signal(),
+        other => PostureSignal::unknown(
+            "platform_unsupported",
+            json!({ "os_family": other, "collector": "mdm_enrollment" }),
+        ),
+    };
+    signal.to_finding(
+        "identity.mdm_enrollment",
+        "IDENTITY",
+        "HIGH",
+        "Managed device enrollment",
+        "Managed device enrollment or endpoint-management signal could not be confirmed.",
+        "Enroll devices into Intune, Jamf or an equivalent MDM and map compliance state into ISCY.",
+    )
+}
+
+fn endpoint_protection_finding(inventory: &DeviceInventory) -> Value {
+    let signal = match inventory.os_family.as_str() {
+        "linux" => linux_endpoint_protection_signal(),
+        "macos" => macos_endpoint_protection_signal(),
+        "windows" => windows_endpoint_protection_signal(),
+        other => PostureSignal::unknown(
+            "platform_unsupported",
+            json!({ "os_family": other, "collector": "endpoint_protection" }),
+        ),
+    };
+    signal.to_finding(
+        "device.endpoint_protection",
+        "DEVICES",
+        "HIGH",
+        "Endpoint protection present",
+        "Endpoint protection or EDR health could not be confirmed by the read-only collector.",
+        "Deploy and monitor EDR or endpoint protection and ingest health evidence.",
+    )
+}
+
+#[derive(Debug, Clone)]
+struct PostureSignal {
+    detected: Option<bool>,
+    method: &'static str,
+    evidence: Value,
+}
+
+impl PostureSignal {
+    fn observed(method: &'static str, evidence: Value) -> Self {
+        Self {
+            detected: Some(true),
+            method,
+            evidence,
+        }
+    }
+
+    fn missing(method: &'static str, evidence: Value) -> Self {
+        Self {
+            detected: Some(false),
+            method,
+            evidence,
+        }
+    }
+
+    fn unknown(method: &'static str, evidence: Value) -> Self {
+        Self {
+            detected: None,
+            method,
+            evidence,
+        }
+    }
+
+    fn to_finding(
+        &self,
+        check_id: &'static str,
+        pillar: &'static str,
+        gap_severity: &'static str,
+        title: &'static str,
+        missing_description: &'static str,
+        recommendation: &'static str,
+    ) -> Value {
+        let (severity, status, description) = match self.detected {
+            Some(true) => (
+                "INFO",
+                "OBSERVED",
+                "Read-only collector observed a local posture signal for this control.",
+            ),
+            Some(false) => (gap_severity, "OPEN", missing_description),
+            None => (
+                gap_severity,
+                "OPEN",
+                "Read-only collector could not determine this posture signal on the endpoint.",
+            ),
+        };
+        let mut evidence = self.evidence.clone();
+        if let Some(evidence_object) = evidence.as_object_mut() {
+            evidence_object.insert("method".to_string(), json!(self.method));
+            evidence_object.insert("detected".to_string(), json!(self.detected));
+            evidence_object.insert("collector_mode".to_string(), json!("read_only"));
+        }
+        finding(
+            FindingSpec {
+                check_id,
+                pillar,
+                severity,
+                status,
+                title,
+                description,
+                recommendation,
+            },
+            evidence,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FindingSpec {
+    check_id: &'static str,
+    pillar: &'static str,
+    severity: &'static str,
+    status: &'static str,
+    title: &'static str,
+    description: &'static str,
+    recommendation: &'static str,
+}
+
+fn finding(spec: FindingSpec, evidence: Value) -> Value {
     json!({
-        "findings": [
-            {
-                "check_id": "device.os_patch_level",
-                "pillar": "DEVICES",
-                "severity": "INFO",
-                "status": "OBSERVED",
-                "title": "OS posture inventory captured",
-                "description": "Read-only agent captured OS and architecture posture metadata.",
-                "recommendation": "Correlate this endpoint inventory with MDM or patch-management compliance evidence.",
-                "evidence": {
-                    "hostname": inventory.hostname,
-                    "os_family": inventory.os_family,
-                    "os_version": inventory.os_version,
-                    "architecture": inventory.architecture,
-                    "agent_version": inventory.agent_version
-                }
-            }
-        ]
+        "check_id": spec.check_id,
+        "pillar": spec.pillar,
+        "severity": spec.severity,
+        "status": spec.status,
+        "title": spec.title,
+        "description": spec.description,
+        "recommendation": spec.recommendation,
+        "evidence": evidence
     })
+}
+
+fn linux_disk_encryption_signal() -> PostureSignal {
+    let root_mount = command_output("findmnt", &["-no", "SOURCE,FSTYPE", "/"])
+        .or_else(linux_root_mount_from_proc);
+    let luks_devices = linux_luks_devices();
+    let root_encrypted = root_mount
+        .as_deref()
+        .map(root_mount_looks_encrypted)
+        .unwrap_or(false);
+    if root_encrypted || !luks_devices.is_empty() {
+        return PostureSignal::observed(
+            "linux_luks_findmnt",
+            json!({ "root_mount": root_mount, "luks_devices": luks_devices }),
+        );
+    }
+    if root_mount.is_some() {
+        return PostureSignal::missing(
+            "linux_luks_findmnt",
+            json!({ "root_mount": root_mount, "luks_devices": luks_devices }),
+        );
+    }
+    PostureSignal::unknown(
+        "linux_luks_findmnt",
+        json!({ "root_mount": null, "luks_devices": luks_devices }),
+    )
+}
+
+fn linux_root_mount_from_proc() -> Option<String> {
+    let content = fs::read_to_string("/proc/mounts").ok()?;
+    content.lines().find_map(|line| {
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        (parts.len() >= 3 && parts[1] == "/").then(|| format!("{} {}", parts[0], parts[2]))
+    })
+}
+
+fn root_mount_looks_encrypted(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("/dev/mapper")
+        || value.contains("crypt")
+        || value.contains("luks")
+        || value.contains("dm-")
+}
+
+fn linux_luks_devices() -> Vec<String> {
+    let Ok(entries) = fs::read_dir("/sys/block") else {
+        return Vec::new();
+    };
+    let mut devices = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("dm-") {
+            continue;
+        }
+        let uuid_path = entry.path().join("dm/uuid");
+        let Ok(uuid) = fs::read_to_string(uuid_path) else {
+            continue;
+        };
+        if uuid.to_ascii_lowercase().contains("crypt") || uuid.to_ascii_lowercase().contains("luks")
+        {
+            devices.push(name);
+        }
+    }
+    devices
+}
+
+fn linux_secure_boot_signal() -> PostureSignal {
+    match linux_secure_boot_enabled() {
+        Some(true) => {
+            PostureSignal::observed("linux_efi_secureboot", json!({ "secure_boot": true }))
+        }
+        Some(false) => {
+            PostureSignal::missing("linux_efi_secureboot", json!({ "secure_boot": false }))
+        }
+        None => PostureSignal::unknown(
+            "linux_efi_secureboot",
+            json!({ "secure_boot": null, "reason": "efi_variable_unavailable" }),
+        ),
+    }
+}
+
+fn linux_secure_boot_enabled() -> Option<bool> {
+    let entries = fs::read_dir("/sys/firmware/efi/efivars").ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("SecureBoot-") {
+            continue;
+        }
+        let bytes = fs::read(entry.path()).ok()?;
+        if bytes.len() >= 5 {
+            return Some(bytes[4] == 1);
+        }
+    }
+    None
+}
+
+fn linux_firewall_signal() -> PostureSignal {
+    let active_services = active_systemd_services(&["firewalld", "ufw", "nftables"]);
+    let ufw = command_output("ufw", &["status"]).unwrap_or_default();
+    let nft_rules = command_output("nft", &["list", "ruleset"]).unwrap_or_default();
+    let iptables_rules = command_output("iptables", &["-S"]).unwrap_or_default();
+    let detected = !active_services.is_empty()
+        || ufw.to_ascii_lowercase().contains("status: active")
+        || !nft_rules.trim().is_empty()
+        || iptables_rules.lines().any(|line| line.starts_with("-A "));
+    if detected {
+        return PostureSignal::observed(
+            "linux_firewall_services",
+            json!({ "active_services": active_services, "ufw": ufw, "nft_rules_present": !nft_rules.trim().is_empty(), "iptables_rules_present": iptables_rules.lines().any(|line| line.starts_with("-A ")) }),
+        );
+    }
+    PostureSignal::missing(
+        "linux_firewall_services",
+        json!({ "active_services": active_services, "ufw": ufw, "nft_rules_present": false, "iptables_rules_present": false }),
+    )
+}
+
+fn linux_management_signal() -> PostureSignal {
+    let active_services = active_systemd_services(&[
+        "osqueryd",
+        "puppet",
+        "chef-client",
+        "salt-minion",
+        "waagent",
+        "amazon-ssm-agent",
+        "google-osconfig-agent",
+        "tacticalagent",
+        "meshagent",
+    ]);
+    let paths = existing_paths(&[
+        "/etc/osquery",
+        "/opt/osquery",
+        "/opt/puppetlabs",
+        "/etc/salt",
+        "/opt/tanium",
+        "/var/lib/waagent",
+        "/var/lib/amazon/ssm",
+    ]);
+    if !active_services.is_empty() || !paths.is_empty() {
+        return PostureSignal::observed(
+            "linux_management_agent",
+            json!({ "active_services": active_services, "paths": paths }),
+        );
+    }
+    PostureSignal::missing(
+        "linux_management_agent",
+        json!({ "active_services": active_services, "paths": paths }),
+    )
+}
+
+fn linux_endpoint_protection_signal() -> PostureSignal {
+    let active_services = active_systemd_services(&[
+        "falcon-sensor",
+        "mdatp",
+        "wazuh-agent",
+        "osqueryd",
+        "sentinelone",
+        "auditd",
+        "carbonblack",
+        "cbdaemon",
+    ]);
+    let paths = existing_paths(&[
+        "/opt/CrowdStrike",
+        "/opt/microsoft/mdatp",
+        "/var/ossec",
+        "/opt/sentinelone",
+        "/etc/audit",
+        "/var/lib/osquery",
+    ]);
+    if !active_services.is_empty() || !paths.is_empty() {
+        return PostureSignal::observed(
+            "linux_edr_agent",
+            json!({ "active_services": active_services, "paths": paths }),
+        );
+    }
+    PostureSignal::missing(
+        "linux_edr_agent",
+        json!({ "active_services": active_services, "paths": paths }),
+    )
+}
+
+fn active_systemd_services(service_names: &[&str]) -> Vec<String> {
+    service_names
+        .iter()
+        .filter_map(|service| {
+            let output = command_output("systemctl", &["is-active", service])?;
+            (output.trim() == "active").then(|| (*service).to_string())
+        })
+        .collect()
+}
+
+fn existing_paths(paths: &[&str]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| FsPath::new(path).exists())
+        .map(|path| (*path).to_string())
+        .collect()
+}
+
+fn macos_filevault_signal() -> PostureSignal {
+    let output = command_output("fdesetup", &["status"]);
+    match output.as_deref().map(str::to_ascii_lowercase) {
+        Some(value) if value.contains("filevault is on") => {
+            PostureSignal::observed("macos_fdesetup", json!({ "output": output }))
+        }
+        Some(value) if value.contains("filevault is off") => {
+            PostureSignal::missing("macos_fdesetup", json!({ "output": output }))
+        }
+        Some(_) => PostureSignal::unknown("macos_fdesetup", json!({ "output": output })),
+        None => PostureSignal::unknown(
+            "macos_fdesetup",
+            json!({ "reason": "command_unavailable_or_denied" }),
+        ),
+    }
+}
+
+fn macos_platform_integrity_signal() -> PostureSignal {
+    let sip = command_output("csrutil", &["status"]);
+    let authenticated_root = command_output("csrutil", &["authenticated-root", "status"]);
+    let sip_enabled = sip
+        .as_deref()
+        .map(|value| value.to_ascii_lowercase().contains("enabled"))
+        .unwrap_or(false);
+    let root_enabled = authenticated_root
+        .as_deref()
+        .map(|value| value.to_ascii_lowercase().contains("enabled"))
+        .unwrap_or(false);
+    if sip_enabled || root_enabled {
+        return PostureSignal::observed(
+            "macos_platform_integrity",
+            json!({ "sip": sip, "authenticated_root": authenticated_root }),
+        );
+    }
+    if sip.is_some() || authenticated_root.is_some() {
+        return PostureSignal::missing(
+            "macos_platform_integrity",
+            json!({ "sip": sip, "authenticated_root": authenticated_root }),
+        );
+    }
+    PostureSignal::unknown(
+        "macos_platform_integrity",
+        json!({ "reason": "command_unavailable_or_denied" }),
+    )
+}
+
+fn macos_firewall_signal() -> PostureSignal {
+    let output = command_output(
+        "/usr/libexec/ApplicationFirewall/socketfilterfw",
+        &["--getglobalstate"],
+    );
+    match output.as_deref().map(str::to_ascii_lowercase) {
+        Some(value) if value.contains("enabled") => {
+            PostureSignal::observed("macos_socketfilterfw", json!({ "output": output }))
+        }
+        Some(value) if value.contains("disabled") => {
+            PostureSignal::missing("macos_socketfilterfw", json!({ "output": output }))
+        }
+        Some(_) => PostureSignal::unknown("macos_socketfilterfw", json!({ "output": output })),
+        None => PostureSignal::unknown(
+            "macos_socketfilterfw",
+            json!({ "reason": "command_unavailable_or_denied" }),
+        ),
+    }
+}
+
+fn macos_mdm_signal() -> PostureSignal {
+    let output = command_output("profiles", &["status", "-type", "enrollment"]);
+    match output.as_deref().map(str::to_ascii_lowercase) {
+        Some(value)
+            if value.contains("mdm enrollment: yes") || value.contains("enrolled via dep: yes") =>
+        {
+            PostureSignal::observed("macos_profiles_mdm", json!({ "output": output }))
+        }
+        Some(value) if value.contains("mdm enrollment: no") => {
+            PostureSignal::missing("macos_profiles_mdm", json!({ "output": output }))
+        }
+        Some(_) => PostureSignal::unknown("macos_profiles_mdm", json!({ "output": output })),
+        None => PostureSignal::unknown(
+            "macos_profiles_mdm",
+            json!({ "reason": "command_unavailable_or_denied" }),
+        ),
+    }
+}
+
+fn macos_endpoint_protection_signal() -> PostureSignal {
+    let paths = existing_paths(&[
+        "/Library/LaunchDaemons/com.crowdstrike.falcon.Agent.plist",
+        "/Library/LaunchDaemons/com.microsoft.wdav.plist",
+        "/Library/LaunchDaemons/com.sentinelone.sentineld.plist",
+        "/Library/LaunchDaemons/com.jamf.management.daemon.plist",
+        "/Applications/Windows Defender.app",
+        "/Applications/CrowdStrike Falcon.app",
+    ]);
+    if !paths.is_empty() {
+        return PostureSignal::observed("macos_edr_paths", json!({ "paths": paths }));
+    }
+    PostureSignal::missing("macos_edr_paths", json!({ "paths": paths }))
+}
+
+fn windows_bitlocker_signal() -> PostureSignal {
+    let output = powershell_output(
+        "$v = Get-BitLockerVolume -MountPoint $env:SystemDrive -ErrorAction SilentlyContinue; if ($v) { $v.ProtectionStatus }",
+    )
+    .or_else(|| command_output("manage-bde", &["-status", "C:"]));
+    match output.as_deref().map(str::to_ascii_lowercase) {
+        Some(value) if bitlocker_output_reports_enabled(&value) => {
+            PostureSignal::observed("windows_bitlocker", json!({ "output": output }))
+        }
+        Some(value) if bitlocker_output_reports_disabled(&value) => {
+            PostureSignal::missing("windows_bitlocker", json!({ "output": output }))
+        }
+        Some(_) => PostureSignal::unknown("windows_bitlocker", json!({ "output": output })),
+        None => PostureSignal::unknown(
+            "windows_bitlocker",
+            json!({ "reason": "command_unavailable_or_denied" }),
+        ),
+    }
+}
+
+fn bitlocker_output_reports_enabled(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.lines().any(|line| {
+        let line = line.trim();
+        line == "on"
+            || line.contains("protectionstatus") && line.ends_with("on")
+            || line.contains("protection status:") && line.contains("protection on")
+            || line.contains("percentage encrypted:")
+                && bitlocker_percentage(line)
+                    .map(|percentage| percentage >= 99.9)
+                    .unwrap_or(false)
+    })
+}
+
+fn bitlocker_output_reports_disabled(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.lines().any(|line| {
+        let line = line.trim();
+        line == "off"
+            || line.contains("protectionstatus") && line.ends_with("off")
+            || line.contains("protection status:") && line.contains("protection off")
+            || line.contains("percentage encrypted:")
+                && bitlocker_percentage(line)
+                    .map(|percentage| percentage <= 0.1)
+                    .unwrap_or(false)
+    })
+}
+
+fn bitlocker_percentage(line: &str) -> Option<f64> {
+    let (_, value) = line.split_once(':')?;
+    let number = value
+        .trim()
+        .trim_end_matches('%')
+        .split_whitespace()
+        .next()?;
+    number.parse::<f64>().ok()
+}
+
+fn windows_secure_boot_signal() -> PostureSignal {
+    let output = powershell_output("Confirm-SecureBootUEFI -ErrorAction SilentlyContinue");
+    match output.as_deref().map(str::trim) {
+        Some("True") => PostureSignal::observed("windows_secure_boot", json!({ "output": output })),
+        Some("False") => PostureSignal::missing("windows_secure_boot", json!({ "output": output })),
+        Some(_) => PostureSignal::unknown("windows_secure_boot", json!({ "output": output })),
+        None => PostureSignal::unknown(
+            "windows_secure_boot",
+            json!({ "reason": "command_unavailable_or_denied" }),
+        ),
+    }
+}
+
+fn windows_firewall_signal() -> PostureSignal {
+    let output = powershell_output(
+        "Get-NetFirewallProfile -ErrorAction SilentlyContinue | ForEach-Object { $_.Enabled }",
+    );
+    let bools = parse_bool_lines(output.as_deref().unwrap_or_default());
+    if !bools.is_empty() && bools.iter().all(|value| *value) {
+        return PostureSignal::observed("windows_firewall_profile", json!({ "output": output }));
+    }
+    if !bools.is_empty() {
+        return PostureSignal::missing("windows_firewall_profile", json!({ "output": output }));
+    }
+    PostureSignal::unknown(
+        "windows_firewall_profile",
+        json!({ "reason": "command_unavailable_or_denied" }),
+    )
+}
+
+fn windows_mdm_signal() -> PostureSignal {
+    let output = powershell_output(
+        "$items = Get-ChildItem 'HKLM:\\SOFTWARE\\Microsoft\\Enrollments' -ErrorAction SilentlyContinue; if ($items) { 'ENROLLMENT_KEYS=' + $items.Count } else { 'ENROLLMENT_KEYS=0' }",
+    );
+    match output.as_deref() {
+        Some(value) if value.contains("ENROLLMENT_KEYS=0") => {
+            PostureSignal::missing("windows_mdm_registry", json!({ "output": output }))
+        }
+        Some(value) if value.contains("ENROLLMENT_KEYS=") => {
+            PostureSignal::observed("windows_mdm_registry", json!({ "output": output }))
+        }
+        Some(_) => PostureSignal::unknown("windows_mdm_registry", json!({ "output": output })),
+        None => PostureSignal::unknown(
+            "windows_mdm_registry",
+            json!({ "reason": "command_unavailable_or_denied" }),
+        ),
+    }
+}
+
+fn windows_endpoint_protection_signal() -> PostureSignal {
+    let defender = powershell_output(
+        "$s = Get-MpComputerStatus -ErrorAction SilentlyContinue; if ($s) { 'AM=' + $s.AMServiceEnabled + ';RTP=' + $s.RealTimeProtectionEnabled }",
+    );
+    match defender.as_deref().map(str::to_ascii_lowercase) {
+        Some(value) if value.contains("am=true") && value.contains("rtp=true") => {
+            PostureSignal::observed("windows_defender_status", json!({ "output": defender }))
+        }
+        Some(value) if value.contains("am=false") || value.contains("rtp=false") => {
+            PostureSignal::missing("windows_defender_status", json!({ "output": defender }))
+        }
+        Some(_) => PostureSignal::unknown("windows_defender_status", json!({ "output": defender })),
+        None => PostureSignal::unknown(
+            "windows_defender_status",
+            json!({ "reason": "command_unavailable_or_denied" }),
+        ),
+    }
+}
+
+fn powershell_output(script: &str) -> Option<String> {
+    command_output(
+        "powershell",
+        &[
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
+    )
+    .or_else(|| {
+        command_output(
+            "powershell.exe",
+            &[
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
+        )
+    })
+}
+
+fn parse_bool_lines(output: &str) -> Vec<bool> {
+    output
+        .lines()
+        .filter_map(|line| match line.trim().to_ascii_lowercase().as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        })
+        .collect()
 }
 
 fn hostname() -> String {
@@ -277,4 +945,67 @@ fn print_usage() {
     println!(
         "ISCY Agent\n\nOptions:\n  --backend-url URL          ISCY backend URL\n  --tenant-id ID             Tenant ID\n  --user-id ID               User ID for local/admin intake fallback\n  --enrollment-token TOKEN   One-time or scoped enrollment token\n  --agent-secret SECRET      Existing agent secret for secret-based intake\n  --mtls-fingerprint FP      Client certificate fingerprint forwarded by mTLS proxy\n  --dry-run                  Print payloads without sending\n  --self-test                Print local inventory and exit\n\nEnvironment:\n  ISCY_BACKEND_URL, ISCY_TENANT_ID, ISCY_USER_ID, ISCY_AGENT_ENROLLMENT_TOKEN, ISCY_AGENT_SECRET, ISCY_AGENT_MTLS_FINGERPRINT, ISCY_AGENT_DEVICE_ID, ISCY_ASSET_ID"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_inventory(os_family: &str) -> DeviceInventory {
+        DeviceInventory {
+            asset_id: None,
+            stable_device_id: format!("test-{os_family}"),
+            hostname: "test-host".to_string(),
+            os_family: os_family.to_string(),
+            os_version: "test-os".to_string(),
+            architecture: "x86_64".to_string(),
+            agent_version: "0.3.0".to_string(),
+            deployment_channel: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn bool_line_parser_reads_powershell_boolean_output() {
+        assert_eq!(
+            parse_bool_lines("True\nFalse\nignored\ntrue"),
+            vec![true, false, true]
+        );
+    }
+
+    #[test]
+    fn root_mount_parser_detects_encrypted_linux_roots() {
+        assert!(root_mount_looks_encrypted("/dev/mapper/cryptroot ext4"));
+        assert!(root_mount_looks_encrypted("/dev/dm-0 btrfs"));
+        assert!(!root_mount_looks_encrypted("/dev/nvme0n1p2 ext4"));
+    }
+
+    #[test]
+    fn bitlocker_parser_does_not_treat_protection_off_as_on() {
+        assert!(bitlocker_output_reports_enabled(
+            "Protection Status: Protection On"
+        ));
+        assert!(bitlocker_output_reports_enabled("On"));
+        assert!(!bitlocker_output_reports_enabled(
+            "Protection Status: Protection Off"
+        ));
+        assert!(bitlocker_output_reports_disabled(
+            "Protection Status: Protection Off"
+        ));
+    }
+
+    #[test]
+    fn findings_payload_contains_zero_trust_collectors() {
+        let payload = findings_payload(&test_inventory("linux"));
+        let findings = payload["findings"].as_array().unwrap();
+        let check_ids = findings
+            .iter()
+            .filter_map(|finding| finding["check_id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(check_ids.contains(&"device.os_patch_level"));
+        assert!(check_ids.contains(&"device.disk_encryption"));
+        assert!(check_ids.contains(&"device.secure_boot"));
+        assert!(check_ids.contains(&"network.host_firewall"));
+        assert!(check_ids.contains(&"identity.mdm_enrollment"));
+        assert!(check_ids.contains(&"device.endpoint_protection"));
+    }
 }

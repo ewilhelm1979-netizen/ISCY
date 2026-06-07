@@ -1,4 +1,4 @@
-# ISCY V23.6.2 / Rust 0.2.2
+# ISCY V23.7 / Rust 0.3.0
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -96,7 +96,7 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 
 ## Zero-Trust Agent
 
-ISCY `0.2.2` enthaelt einen read-only Agent-MVP fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.0` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 
@@ -104,6 +104,15 @@ Die produktive Agent-Aufnahme ist gehaertet:
 - Agenten enrollen mit `x-iscy-agent-enrollment-token` und erhalten einmalig ein Agent-Secret.
 - Heartbeats und Findings koennen danach mit `x-iscy-agent-secret` gemeldet werden.
 - Optional kann ein mTLS-Client-Zertifikat per Fingerprint an Token und Agent gebunden werden.
+
+Die lokalen Collector-Module pruefen read-only:
+
+- OS-Baseline und Patch-Inventar
+- Datentraeger-Verschluesselung: BitLocker, FileVault oder LUKS
+- Secure Boot beziehungsweise Plattformintegritaet
+- Host-Firewall
+- MDM-/Endpoint-Management-Signale
+- Endpoint Protection beziehungsweise EDR-Signale
 
 Lokaler Payload-Test:
 

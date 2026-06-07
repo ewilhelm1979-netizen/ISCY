@@ -1,12 +1,12 @@
 # Zero-Trust Agent
 
-Version: ISCY Rust Backend `0.2.2`
+Version: ISCY Rust Backend `0.3.0`
 
 ## Zielbild
 
 Der ISCY Agent ist ein read-only Posture Collector fuer Windows, macOS und Linux. Er meldet Endpoint-Inventar, Heartbeats und Zero-Trust-Findings an die Plattform. Die Plattform korreliert diese Daten mit Assets, Risiken, Evidenzen, Assessments und Roadmap-Arbeit.
 
-Der MVP ist bewusst kein EDR, kein Remote-Control-Agent und kein automatischer Remediation-Daemon.
+Der Agent ist bewusst kein EDR, kein Remote-Control-Agent und kein automatischer Remediation-Daemon.
 
 ## Zero-Trust-Scope
 
@@ -21,7 +21,7 @@ Der Check-Katalog orientiert sich an den Zero-Trust-Saeulen:
 - Automation/Orchestration
 - Governance
 
-Der erste Agent liefert sichere Baseline-Telemetrie:
+Der Agent liefert sichere Baseline-Telemetrie und lokale read-only Posture-Signale:
 
 - Hostname
 - OS-Familie und OS-Version
@@ -30,8 +30,11 @@ Der erste Agent liefert sichere Baseline-Telemetrie:
 - Deployment-Channel
 - Heartbeat-Status
 - `OBSERVED`-Finding fuer OS/Posture-Inventar
-
-Konkrete Gaps wie fehlende Verschluesselung, fehlendes EDR oder offene Remote-Administration koennen ueber dieselben Intake-Endpunkte gemeldet werden, sobald MDM-, EDR- oder OS-spezifische Collector-Module belastbare Evidenz liefern.
+- Datentraeger-Verschluesselung: BitLocker, FileVault oder LUKS
+- Secure Boot beziehungsweise vergleichbare Plattformintegritaet
+- Host-Firewall
+- MDM-/Endpoint-Management-Signale
+- Endpoint Protection beziehungsweise EDR-Signale
 
 ## API
 
@@ -116,7 +119,7 @@ Fuer Intune oder andere MDM-Systeme kann dieses Binary als Win32-App verteilt un
 
 ## Was der Agent aktuell prueft
 
-Der aktuelle Collector arbeitet read-only und meldet belastbare Baseline-Telemetrie:
+Der aktuelle Collector arbeitet read-only und meldet belastbare lokale Signale:
 
 - Hostname
 - OS-Familie und OS-Version
@@ -124,9 +127,14 @@ Der aktuelle Collector arbeitet read-only und meldet belastbare Baseline-Telemet
 - Agent-Version
 - Deployment-Channel
 - Heartbeat-Status
-- ein `OBSERVED`-Finding fuer `device.os_patch_level`
+- `device.os_patch_level`
+- `device.disk_encryption`
+- `device.secure_boot`
+- `network.host_firewall`
+- `identity.mdm_enrollment`
+- `device.endpoint_protection`
 
-Der Plattform-Katalog kennt zusaetzlich diese Zero-Trust-Pruefpunkte, die ueber dieselben Findings-Endpunkte aufgenommen werden koennen:
+Die Plattform kann zusaetzlich diese Zero-Trust-Pruefpunkte ueber dieselben Findings-Endpunkte aufnehmen:
 
 - Datentraeger-Verschluesselung: BitLocker, FileVault oder LUKS
 - Secure-Boot- beziehungsweise Plattformintegritaetsstatus
@@ -139,7 +147,7 @@ Der Plattform-Katalog kennt zusaetzlich diese Zero-Trust-Pruefpunkte, die ueber 
 - Softwareinventar fuer CVE-Korrelation
 - Removable-Media-Policy
 
-Wichtig: In `0.2.2` liest der Basisagent diese tiefen OS-/MDM-/EDR-Signale noch nicht selbst aus. Er liefert den sicheren Intake, die Plattformdatenstruktur und die Baseline. Konkrete Windows/macOS/Linux-Pruefmodule koennen danach gezielt erweitert werden.
+Wichtig: In `0.3.0` liest der Agent lokale OS-/MDM-/EDR-Signale nur read-only und konservativ. Wenn ein Signal nicht sicher bestaetigt werden kann, wird das als offene Evidenzluecke gemeldet statt als erfundener Compliance-Nachweis.
 
 ## Deployment-Zielpfade
 
