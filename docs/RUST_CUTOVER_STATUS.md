@@ -24,7 +24,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Assessments
 - Organizations
 - Risks
-- Incidents inklusive NIS2-Meldefristen und Fallakten
+- Incidents inklusive NIS2-Meldefristen, Fallakten, Detailbearbeitung und Markdown-Meldepaket
 - Evidence inklusive Upload
 - Reports
 - Roadmap

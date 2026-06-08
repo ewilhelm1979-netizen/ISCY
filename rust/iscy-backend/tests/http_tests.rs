@@ -2578,6 +2578,50 @@ async fn incident_update_updates_status_and_sent_marker() {
 }
 
 #[tokio::test]
+async fn incident_nis2_export_returns_markdown_package() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/nis2-export")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/markdown"));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(markdown.contains("# ISCY NIS2-Meldepaket"));
+    assert!(markdown.contains("Credential phishing campaign"));
+    assert!(markdown.contains("24h-Fruehwarnung"));
+    assert!(markdown.contains("BSI-CASE-1"));
+}
+
+#[tokio::test]
 async fn evidence_overview_requires_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(
@@ -4498,9 +4542,75 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Credential phishing campaign"));
+    assert!(html.contains("/incidents/1?tenant_id=42"));
     assert!(html.contains("NIS2 meldepflichtig"));
     assert!(html.contains("Ueberfaellig"));
     assert!(!html.contains("Rust-Web-Migrationsroute"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Fallakte bearbeiten"));
+    assert!(html.contains("Markdown herunterladen"));
+    assert!(html.contains("Customer portal support users affected."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/incidents/1")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "title=Credential+phishing+contained&severity=HIGH&status=CONTAINED&owner_id=8&reporter_id=7&related_risk_id=10&related_asset_id=1&related_process_id=1&detected_at=2026-04-20T10%3A00%3A00Z&nis2_reportable=on&notification_sent_at=2026-04-22T18%3A00%3A00Z&authority_reference=BSI-CASE-3&summary=Updated+from+detail&stakeholder_summary=Updated+stakeholder&lessons_learned=Improve+playbooks",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let stored: (String, String) =
+        sqlx::query_as("SELECT status, authority_reference FROM incidents_incident WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.0, "CONTAINED");
+    assert_eq!(stored.1, "BSI-CASE-3");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1/nis2-export?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(markdown.contains("Credential phishing contained"));
+    assert!(markdown.contains("Improve playbooks"));
 
     let response = app
         .clone()

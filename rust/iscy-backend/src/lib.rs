@@ -3,7 +3,7 @@ use axum::{
     extract::{DefaultBodyLimit, Json, Path, State},
     extract::{Form, Query},
     http::{
-        header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE},
+        header::{AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE},
         HeaderMap, HeaderValue, StatusCode,
     },
     response::{Html, IntoResponse, Redirect, Response},
@@ -3761,6 +3761,68 @@ async fn incident_update(
     }
 }
 
+async fn incident_nis2_export(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.incident_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Incident-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.incident_detail(context.tenant_id, incident_id).await {
+        Ok(Some(incident)) => markdown_download_response(
+            &format!("iscy-incident-{}-nis2.md", incident.id),
+            incident_nis2_markdown(&incident),
+        ),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "incident_not_found",
+                message: format!("Incident {} wurde nicht gefunden.", incident_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Incident-Meldepaket konnte nicht erstellt werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn evidence_overview(
     Query(query): Query<EvidenceOverviewQuery>,
     State(state): State<AppState>,
@@ -5399,7 +5461,7 @@ async fn web_incidents(
                     format!(
                         r#"<tr><td><a href="{}">{}</a><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                         web_path_with_context(
-                            &format!("/api/v1/incidents/{}", incident.id),
+                            &format!("/incidents/{}", incident.id),
                             Some(&context)
                         ),
                         html_escape(&incident.title),
@@ -5516,6 +5578,197 @@ async fn web_incidents_submit(
         Ok(_) => {
             Redirect::to(&web_path_with_context("/incidents/", Some(&context))).into_response()
         }
+        Err(err) => {
+            web_error_page("Incidents", "/incidents/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
+async fn web_incident_detail(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Incidents", "/incidents/");
+    };
+    let Some(store) = state.incident_store.clone() else {
+        return web_store_missing("Incidents", "/incidents/", &context, "Incident");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    match store.incident_detail(context.tenant_id, incident_id).await {
+        Ok(Some(incident)) => {
+            let related_risk = incident.related_risk_title.as_deref().unwrap_or("-");
+            let related_asset = incident.related_asset_name.as_deref().unwrap_or("-");
+            let related_process = incident.related_process_name.as_deref().unwrap_or("-");
+            let owner = incident.owner_display.as_deref().unwrap_or("-");
+            let reporter = incident.reporter_display.as_deref().unwrap_or("-");
+            let export_href = web_path_with_context(
+                &format!("/incidents/{}/nis2-export", incident.id),
+                Some(&context),
+            );
+            let api_export_href = web_path_with_context(
+                &format!("/api/v1/incidents/{}/nis2-export", incident.id),
+                Some(&context),
+            );
+            let edit_panel = if can_write {
+                incident_edit_form_panel(&context, &incident)
+            } else {
+                r#"<article class="panel wide"><h2>Bearbeiten</h2><p>Fuer Aenderungen ist eine schreibende ISCY-Rolle notwendig.</p></article>"#.to_string()
+            };
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>{}</h1><p>NIS2-Fallakte und Meldepaket</p></section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <h2>Fallakte</h2>
+                    <table>
+                      <tbody>
+                        <tr><th>Status</th><td>{}</td><th>Severity</th><td>{}</td></tr>
+                        <tr><th>NIS2</th><td>{}</td><th>Owner</th><td>{}</td></tr>
+                        <tr><th>Reporter</th><td>{}</td><th>Behoerdenreferenz</th><td>{}</td></tr>
+                        <tr><th>Risiko</th><td>{}</td><th>Asset</th><td>{}</td></tr>
+                        <tr><th>Prozess</th><td>{}</td><th>Erkannt</th><td>{}</td></tr>
+                        <tr><th>24h-Fruehwarnung</th><td>{} ({})</td><th>72h-Meldung</th><td>{} ({})</td></tr>
+                        <tr><th>30-Tage-Bericht</th><td>{} ({})</td><th>Final gemeldet</th><td>{}</td></tr>
+                      </tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Beschreibung</h2>
+                    <p>{}</p>
+                    <h2>Stakeholder</h2>
+                    <p>{}</p>
+                    <h2>Lessons Learned</h2>
+                    <p>{}</p>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Meldepaket</h2>
+                    <p><a href="{}">Markdown herunterladen</a></p>
+                    <p><a href="{}">API-Export oeffnen</a></p>
+                  </article>
+                  {}
+                </section>
+                "#,
+                html_escape(&incident.title),
+                html_escape(&incident.status_label),
+                html_escape(&incident.severity_label),
+                html_escape(&incident.nis2_reportability_label),
+                html_escape(owner),
+                html_escape(reporter),
+                html_escape(&incident.authority_reference),
+                html_escape(related_risk),
+                html_escape(related_asset),
+                html_escape(related_process),
+                html_escape(incident.detected_at.as_deref().unwrap_or("-")),
+                html_escape(incident.early_warning_due_at.as_deref().unwrap_or("-")),
+                html_escape(&incident.early_warning_state_label),
+                html_escape(incident.notification_due_at.as_deref().unwrap_or("-")),
+                html_escape(&incident.notification_state_label),
+                html_escape(incident.final_report_due_at.as_deref().unwrap_or("-")),
+                html_escape(&incident.final_report_state_label),
+                html_escape(incident.final_report_sent_at.as_deref().unwrap_or("-")),
+                html_escape(&incident.summary),
+                html_escape(&incident.stakeholder_summary),
+                html_escape(&incident.lessons_learned),
+                html_escape(&export_href),
+                html_escape(&api_export_href),
+                edit_panel,
+            );
+            web_page("Incidents", "/incidents/", Some(&context), &body)
+        }
+        Ok(None) => web_error_page(
+            "Incidents",
+            "/incidents/",
+            &context,
+            &format!("Incident {} wurde nicht gefunden.", incident_id),
+        ),
+        Err(err) => web_error_page("Incidents", "/incidents/", &context, &err.to_string()),
+    }
+}
+
+async fn web_incident_detail_submit(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebIncidentForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Incidents", "/incidents/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Incidents",
+            "/incidents/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.incident_store else {
+        return web_store_missing("Incidents", "/incidents/", &context, "Incident").into_response();
+    };
+    let payload = match web_incident_form_request(form) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return web_error_page("Incidents", "/incidents/", &context, &message).into_response()
+        }
+    };
+    match store
+        .update_incident(auth_context.tenant_id, incident_id, payload)
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            &format!("/incidents/{}", incident_id),
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Incidents",
+            "/incidents/",
+            &context,
+            &format!("Incident {} wurde nicht gefunden.", incident_id),
+        )
+        .into_response(),
+        Err(err) => {
+            web_error_page("Incidents", "/incidents/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
+async fn web_incident_nis2_export(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Incidents", "/incidents/").into_response();
+    };
+    let Some(store) = state.incident_store else {
+        return web_store_missing("Incidents", "/incidents/", &context, "Incident").into_response();
+    };
+    match store.incident_detail(context.tenant_id, incident_id).await {
+        Ok(Some(incident)) => markdown_download_response(
+            &format!("iscy-incident-{}-nis2.md", incident.id),
+            incident_nis2_markdown(&incident),
+        ),
+        Ok(None) => web_error_page(
+            "Incidents",
+            "/incidents/",
+            &context,
+            &format!("Incident {} wurde nicht gefunden.", incident_id),
+        )
+        .into_response(),
         Err(err) => {
             web_error_page("Incidents", "/incidents/", &context, &err.to_string()).into_response()
         }
@@ -7019,6 +7272,212 @@ fn optional_form_text_for_write(value: Option<String>) -> Option<Option<String>>
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .map(Some)
+}
+
+fn incident_edit_form_panel(
+    context: &WebContext,
+    incident: &incident_store::IncidentSummary,
+) -> String {
+    let action = web_path_with_context(&format!("/incidents/{}", incident.id), Some(context));
+    let owner_id = incident
+        .owner_id
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let reporter_id = incident
+        .reporter_id
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let related_risk_id = incident
+        .related_risk_id
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let related_asset_id = incident
+        .related_asset_id
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    let related_process_id = incident
+        .related_process_id
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    format!(
+        r#"
+        <article class="panel wide">
+          <h2>Fallakte bearbeiten</h2>
+          <form method="post" action="{}">
+            <div class="form-grid">
+              <label>Titel<input name="title" type="text" required value="{}"></label>
+              <label>Severity<select name="severity">{}</select></label>
+              <label>Status<select name="status">{}</select></label>
+              <label>Owner-ID<input name="owner_id" type="number" min="1" value="{}"></label>
+              <label>Reporter-ID<input name="reporter_id" type="number" min="1" value="{}"></label>
+              <label>Risk-ID<input name="related_risk_id" type="number" min="1" value="{}"></label>
+              <label>Asset-ID<input name="related_asset_id" type="number" min="1" value="{}"></label>
+              <label>Process-ID<input name="related_process_id" type="number" min="1" value="{}"></label>
+              <label>Erkannt am<input name="detected_at" type="text" value="{}"></label>
+              <label>Bestaetigt am<input name="confirmed_at" type="text" value="{}"></label>
+              <label>Eingedaemmt am<input name="contained_at" type="text" value="{}"></label>
+              <label>Behoben am<input name="resolved_at" type="text" value="{}"></label>
+              <label>24h gesendet<input name="early_warning_sent_at" type="text" value="{}"></label>
+              <label>72h gesendet<input name="notification_sent_at" type="text" value="{}"></label>
+              <label>Final gesendet<input name="final_report_sent_at" type="text" value="{}"></label>
+              <label>Behoerden-/Case-Referenz<input name="authority_reference" type="text" value="{}"></label>
+            </div>
+            <label class="checkbox-row"><input name="nis2_reportable" type="checkbox" value="1"{}> NIS2-meldepflichtig behandeln</label>
+            <label>Kurzbeschreibung<textarea name="summary" rows="4">{}</textarea></label>
+            <label>Stakeholder-Zusammenfassung<textarea name="stakeholder_summary" rows="3">{}</textarea></label>
+            <label>Lessons Learned<textarea name="lessons_learned" rows="3">{}</textarea></label>
+            <button type="submit">Fallakte speichern</button>
+          </form>
+        </article>
+        "#,
+        html_escape(&action),
+        html_escape(&incident.title),
+        incident_severity_options_for(&incident.severity),
+        incident_status_options_for(&incident.status),
+        html_escape(&owner_id),
+        html_escape(&reporter_id),
+        html_escape(&related_risk_id),
+        html_escape(&related_asset_id),
+        html_escape(&related_process_id),
+        html_escape(incident.detected_at.as_deref().unwrap_or("")),
+        html_escape(incident.confirmed_at.as_deref().unwrap_or("")),
+        html_escape(incident.contained_at.as_deref().unwrap_or("")),
+        html_escape(incident.resolved_at.as_deref().unwrap_or("")),
+        html_escape(incident.early_warning_sent_at.as_deref().unwrap_or("")),
+        html_escape(incident.notification_sent_at.as_deref().unwrap_or("")),
+        html_escape(incident.final_report_sent_at.as_deref().unwrap_or("")),
+        html_escape(&incident.authority_reference),
+        checked_attr(incident.nis2_reportable),
+        html_escape(&incident.summary),
+        html_escape(&incident.stakeholder_summary),
+        html_escape(&incident.lessons_learned),
+    )
+}
+
+fn incident_nis2_markdown(incident: &incident_store::IncidentSummary) -> String {
+    format!(
+        r#"# ISCY NIS2-Meldepaket: {}
+
+## Fallakte
+
+| Feld | Wert |
+| --- | --- |
+| Incident-ID | {} |
+| Tenant-ID | {} |
+| Titel | {} |
+| Severity | {} |
+| Status | {} |
+| NIS2-Einstufung | {} |
+| Behoerden-/Case-Referenz | {} |
+
+## Betroffene Bezuege
+
+| Bezug | Wert |
+| --- | --- |
+| Reporter | {} |
+| Owner | {} |
+| Risiko | {} |
+| Asset | {} |
+| Prozess | {} |
+
+## Meldefristen
+
+| Schritt | Faellig | Gesendet | Status |
+| --- | --- | --- | --- |
+| 24h-Fruehwarnung | {} | {} | {} |
+| 72h-Meldung | {} | {} | {} |
+| 30-Tage-Abschlussbericht | {} | {} | {} |
+
+## Beschreibung
+
+{}
+
+## Stakeholder-Zusammenfassung
+
+{}
+
+## Lessons Learned
+
+{}
+
+## Zeitlinie
+
+| Ereignis | Zeitpunkt |
+| --- | --- |
+| Erkannt | {} |
+| Bestaetigt | {} |
+| Eingedaemmt | {} |
+| Behoben | {} |
+| Erstellt | {} |
+| Aktualisiert | {} |
+"#,
+        md_value(&incident.title),
+        incident.id,
+        incident.tenant_id,
+        md_value(&incident.title),
+        md_value(&incident.severity_label),
+        md_value(&incident.status_label),
+        md_value(&incident.nis2_reportability_label),
+        md_value(&incident.authority_reference),
+        md_optional(incident.reporter_display.as_deref()),
+        md_optional(incident.owner_display.as_deref()),
+        md_optional(incident.related_risk_title.as_deref()),
+        md_optional(incident.related_asset_name.as_deref()),
+        md_optional(incident.related_process_name.as_deref()),
+        md_optional(incident.early_warning_due_at.as_deref()),
+        md_optional(incident.early_warning_sent_at.as_deref()),
+        md_value(&incident.early_warning_state_label),
+        md_optional(incident.notification_due_at.as_deref()),
+        md_optional(incident.notification_sent_at.as_deref()),
+        md_value(&incident.notification_state_label),
+        md_optional(incident.final_report_due_at.as_deref()),
+        md_optional(incident.final_report_sent_at.as_deref()),
+        md_value(&incident.final_report_state_label),
+        md_block(&incident.summary),
+        md_block(&incident.stakeholder_summary),
+        md_block(&incident.lessons_learned),
+        md_optional(incident.detected_at.as_deref()),
+        md_optional(incident.confirmed_at.as_deref()),
+        md_optional(incident.contained_at.as_deref()),
+        md_optional(incident.resolved_at.as_deref()),
+        md_value(&incident.created_at),
+        md_value(&incident.updated_at),
+    )
+}
+
+fn markdown_download_response(file_name: &str, body: String) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/markdown; charset=utf-8"),
+    );
+    let disposition = format!("attachment; filename=\"{}\"", file_name);
+    if let Ok(value) = HeaderValue::from_str(&disposition) {
+        headers.insert(CONTENT_DISPOSITION, value);
+    }
+    (StatusCode::OK, headers, body).into_response()
+}
+
+fn md_optional(value: Option<&str>) -> String {
+    value.map(md_value).unwrap_or_else(|| "-".to_string())
+}
+
+fn md_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "-".to_string()
+    } else {
+        trimmed.replace('|', "\\|")
+    }
+}
+
+fn md_block(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "-".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn incident_severity_options_for(selected_status: &str) -> String {
@@ -10229,6 +10688,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/incidents/{incident_id}",
             get(incident_detail).patch(incident_update),
         )
+        .route(
+            "/api/v1/incidents/{incident_id}/nis2-export",
+            get(incident_nis2_export),
+        )
         .route("/api/v1/evidence", get(evidence_overview))
         .route("/api/v1/evidence/uploads", post(evidence_upload))
         .route(
@@ -10277,6 +10740,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/dashboard/", get(web_dashboard))
         .route("/zero-trust/", get(web_zero_trust))
         .route("/incidents/", get(web_incidents).post(web_incidents_submit))
+        .route(
+            "/incidents/{incident_id}",
+            get(web_incident_detail).post(web_incident_detail_submit),
+        )
+        .route(
+            "/incidents/{incident_id}/nis2-export",
+            get(web_incident_nis2_export),
+        )
         .route("/catalog/", get(web_catalog))
         .route("/reports/", get(web_reports))
         .route("/roadmap/", get(web_roadmap))

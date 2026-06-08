@@ -95,6 +95,8 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 - `/cves/`
 - `/admin/users/`
 
+Incidents werden als Rust-Fallakten unter `/incidents/` gefuehrt. Detailseiten unter `/incidents/{id}` erlauben die Bearbeitung von Status, Severity, Meldezeitpunkten und Behoerdenreferenz; das NIS2-Meldepaket kann als Markdown ueber `/incidents/{id}/nis2-export` oder `/api/v1/incidents/{id}/nis2-export` exportiert werden.
+
 ## Zero-Trust Agent
 
 ISCY `0.3.0` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.

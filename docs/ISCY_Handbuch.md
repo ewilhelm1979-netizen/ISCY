@@ -561,6 +561,8 @@ Wenn ein Incident als NIS2-meldepflichtig markiert wird, berechnet ISCY die rele
 
 Die Uebersicht zeigt offene Faelle, NIS2-relevante Faelle und ueberfaellige Meldeschritte. Gesendete Meldungen koennen ueber die API als Zeitstempel gepflegt werden.
 
+Die Detailseite `/incidents/{id}` dient als operative Fallakte. Dort koennen berechtigte Rollen Status, Severity, Behoerdenreferenz, Zeitlinie und Meldezeitpunkte pflegen. Das Markdown-Meldepaket unter `/incidents/{id}/nis2-export` buendelt Fallakte, betroffene Bezuege, 24h-/72h-/30-Tage-Fristen, Stakeholder-Zusammenfassung und Lessons Learned fuer Audit- oder Meldezwecke.
+
 ### 6.6 SOC-Playbook fuer Phishing- und aehnliche Incident-Faelle
 
 Empfohlene Kette fuer die operative Bearbeitung:
