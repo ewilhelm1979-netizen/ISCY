@@ -78,6 +78,7 @@ rust-smoke:
 	curl -fsS -b "$$cookie_file" "$$url/dashboard/" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/admin/users/" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/imports/" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/incidents/" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/users" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/roles" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/groups" >/dev/null; \
@@ -88,6 +89,7 @@ rust-smoke:
 	curl -fsS "$$url/dashboard/?tenant_id=1&user_id=1" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/catalog/domains" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/requirements" >/dev/null; \
+	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/incidents" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/product-security/overview" >/dev/null; \
 	echo "Rust smoke OK: $$url"
 

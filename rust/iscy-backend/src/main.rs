@@ -13,6 +13,7 @@ use iscy_backend::{
     db_admin::{run_db_admin_action, DbAdminAction},
     evidence_store::EvidenceStore,
     import_store::ImportStore,
+    incident_store::IncidentStore,
     process_store::ProcessStore,
     product_security_store::ProductSecurityStore,
     report_store::ReportStore,
@@ -68,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
         process_store,
         risk_store,
         evidence_store,
+        incident_store,
         import_store,
         assessment_store,
         roadmap_store,
@@ -88,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
             let process_store = ProcessStore::connect(&database_url).await?;
             let risk_store = RiskStore::connect(&database_url).await?;
             let evidence_store = EvidenceStore::connect(&database_url).await?;
+            let incident_store = IncidentStore::connect(&database_url).await?;
             let import_store = ImportStore::connect(&database_url).await?;
             let assessment_store = AssessmentStore::connect(&database_url).await?;
             let roadmap_store = RoadmapStore::connect(&database_url).await?;
@@ -107,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(process_store),
                 Some(risk_store),
                 Some(evidence_store),
+                Some(incident_store),
                 Some(import_store),
                 Some(assessment_store),
                 Some(roadmap_store),
@@ -116,7 +120,7 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => (
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None, None, None,
+            None, None, None, None, None,
         ),
     };
     let state = AppState::with_stores(cve_store, tenant_store)
@@ -131,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
         .with_process_store(process_store)
         .with_risk_store(risk_store)
         .with_evidence_store(evidence_store)
+        .with_incident_store(incident_store)
         .with_evidence_media_root(Some(evidence_media_root_from_env()))
         .with_import_store(import_store)
         .with_assessment_store(assessment_store)

@@ -72,6 +72,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AGENT_ENROLLMENT_HARDENING_SCHEMA,
         postgres_sql: POSTGRES_AGENT_ENROLLMENT_HARDENING_SCHEMA,
     },
+    Migration {
+        version: "0009_rust_incident_core",
+        sqlite_sql: SQLITE_INCIDENT_SCHEMA,
+        postgres_sql: POSTGRES_INCIDENT_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -318,6 +323,80 @@ CREATE TABLE IF NOT EXISTS zero_trust_agent_enrollment_token (
 CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_token_tenant ON zero_trust_agent_enrollment_token(tenant_id, status);
 CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_token_hash ON zero_trust_agent_enrollment_token(tenant_id, token_hash);
 CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_device_auth ON zero_trust_agent_device(tenant_id, auth_model, enrollment_status);
+"#;
+
+const SQLITE_INCIDENT_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS incidents_incident (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    reporter_id INTEGER NULL,
+    owner_id INTEGER NULL,
+    related_risk_id INTEGER NULL,
+    related_asset_id INTEGER NULL,
+    related_process_id INTEGER NULL,
+    title varchar(255) NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    status varchar(32) NOT NULL DEFAULT 'TRIAGE',
+    detected_at TEXT NULL,
+    confirmed_at TEXT NULL,
+    contained_at TEXT NULL,
+    resolved_at TEXT NULL,
+    nis2_reportable bool NOT NULL DEFAULT 0,
+    early_warning_due_at TEXT NULL,
+    early_warning_sent_at TEXT NULL,
+    notification_due_at TEXT NULL,
+    notification_sent_at TEXT NULL,
+    final_report_due_at TEXT NULL,
+    final_report_sent_at TEXT NULL,
+    authority_reference varchar(255) NOT NULL DEFAULT '',
+    stakeholder_summary TEXT NOT NULL DEFAULT '',
+    lessons_learned TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_tenant_status ON incidents_incident(tenant_id, status, severity);
+CREATE INDEX IF NOT EXISTS idx_incidents_tenant_nis2 ON incidents_incident(tenant_id, nis2_reportable, notification_due_at);
+CREATE INDEX IF NOT EXISTS idx_incidents_related_risk ON incidents_incident(tenant_id, related_risk_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_related_asset ON incidents_incident(tenant_id, related_asset_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_related_process ON incidents_incident(tenant_id, related_process_id);
+"#;
+
+const POSTGRES_INCIDENT_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS incidents_incident (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    reporter_id BIGINT NULL,
+    owner_id BIGINT NULL,
+    related_risk_id BIGINT NULL,
+    related_asset_id BIGINT NULL,
+    related_process_id BIGINT NULL,
+    title varchar(255) NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    status varchar(32) NOT NULL DEFAULT 'TRIAGE',
+    detected_at TEXT NULL,
+    confirmed_at TEXT NULL,
+    contained_at TEXT NULL,
+    resolved_at TEXT NULL,
+    nis2_reportable BOOLEAN NOT NULL DEFAULT FALSE,
+    early_warning_due_at TEXT NULL,
+    early_warning_sent_at TEXT NULL,
+    notification_due_at TEXT NULL,
+    notification_sent_at TEXT NULL,
+    final_report_due_at TEXT NULL,
+    final_report_sent_at TEXT NULL,
+    authority_reference varchar(255) NOT NULL DEFAULT '',
+    stakeholder_summary TEXT NOT NULL DEFAULT '',
+    lessons_learned TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text
+);
+CREATE INDEX IF NOT EXISTS idx_incidents_tenant_status ON incidents_incident(tenant_id, status, severity);
+CREATE INDEX IF NOT EXISTS idx_incidents_tenant_nis2 ON incidents_incident(tenant_id, nis2_reportable, notification_due_at);
+CREATE INDEX IF NOT EXISTS idx_incidents_related_risk ON incidents_incident(tenant_id, related_risk_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_related_asset ON incidents_incident(tenant_id, related_asset_id);
+CREATE INDEX IF NOT EXISTS idx_incidents_related_process ON incidents_incident(tenant_id, related_process_id);
 "#;
 
 const SQLITE_AUTH_RBAC_SCHEMA: &str = r#"
@@ -2137,6 +2216,21 @@ INSERT OR IGNORE INTO risks_risk (
     'Roll out phishing-resistant MFA', '2026-06-30', NULL, NULL, '2026-07-15',
     '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
 );
+INSERT OR IGNORE INTO incidents_incident (
+    id, tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id, related_process_id,
+    title, summary, severity, status, detected_at, confirmed_at, contained_at, resolved_at,
+    nis2_reportable, early_warning_due_at, early_warning_sent_at, notification_due_at,
+    notification_sent_at, final_report_due_at, final_report_sent_at, authority_reference,
+    stakeholder_summary, lessons_learned, created_at, updated_at
+) VALUES (
+    1, 1, 1, 1, 1, 1, 1,
+    'Credential phishing campaign', 'Demo incident with NIS2 notification tracking.',
+    'HIGH', 'CONFIRMED', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z', NULL, NULL,
+    1, '2026-04-23T10:00:00Z', NULL, '2026-04-25T10:00:00Z',
+    NULL, '2026-05-22T10:00:00Z', NULL, '',
+    'Credential phishing affects the customer portal operating process.',
+    '', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z'
+);
 INSERT OR IGNORE INTO wizard_assessmentsession (
     id, tenant_id, started_by_id, assessment_type, status, current_step, applicability_result,
     applicability_reasoning, executive_summary, progress_percent, completed_at, created_at, updated_at
@@ -2442,6 +2536,21 @@ INSERT INTO risks_risk (
     'Phishing campaign', 'Weak MFA coverage', 5, 4, 3, 3, 'TREATING', 'MITIGATE',
     'Roll out phishing-resistant MFA', '2026-06-30', NULL, NULL, '2026-07-15',
     '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO incidents_incident (
+    id, tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id, related_process_id,
+    title, summary, severity, status, detected_at, confirmed_at, contained_at, resolved_at,
+    nis2_reportable, early_warning_due_at, early_warning_sent_at, notification_due_at,
+    notification_sent_at, final_report_due_at, final_report_sent_at, authority_reference,
+    stakeholder_summary, lessons_learned, created_at, updated_at
+) VALUES (
+    1, 1, 1, 1, 1, 1, 1,
+    'Credential phishing campaign', 'Demo incident with NIS2 notification tracking.',
+    'HIGH', 'CONFIRMED', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z', NULL, NULL,
+    TRUE, '2026-04-23T10:00:00Z', NULL, '2026-04-25T10:00:00Z',
+    NULL, '2026-05-22T10:00:00Z', NULL, '',
+    'Credential phishing affects the customer portal operating process.',
+    '', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z'
 ) ON CONFLICT (id) DO NOTHING;
 INSERT INTO wizard_assessmentsession (
     id, tenant_id, started_by_id, assessment_type, status, current_step, applicability_result,

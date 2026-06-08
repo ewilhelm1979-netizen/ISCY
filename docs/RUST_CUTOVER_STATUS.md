@@ -1,6 +1,6 @@
 # ISCY Rust-Cutover-Status
 
-Stand: 2026-06-07
+Stand: 2026-06-08
 
 ## Kurzfassung
 
@@ -24,6 +24,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Assessments
 - Organizations
 - Risks
+- Incidents inklusive NIS2-Meldefristen und Fallakten
 - Evidence inklusive Upload
 - Reports
 - Roadmap

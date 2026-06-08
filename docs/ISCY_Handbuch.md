@@ -549,7 +549,19 @@ Hier wird aus einer technischen Schwachstellenmeldung eine geschaeftlich nutzbar
 4. Risiko und Vulnerability automatisch verknuepfen
 5. Massnahmen ueber Roadmap oder Behandlung steuern
 
-### 6.5 SOC-Playbook fuer Phishing- und aehnliche Incident-Faelle
+### 6.5 Incident- und NIS2-Meldeworkflow
+
+Die Rust-Webroute `/incidents/` fuehrt operative Sicherheitsvorfaelle als mandantenfaehige Fallakten. Ein Incident kann Reporter, Owner, Risiko, Asset und Prozess referenzieren und enthaelt Status, Severity, Stakeholder-Zusammenfassung sowie Behoerden- oder Case-Referenz.
+
+Wenn ein Incident als NIS2-meldepflichtig markiert wird, berechnet ISCY die relevanten Fristen aus dem Erkennungszeitpunkt:
+
+1. 24h-Fruehwarnung
+2. 72h-Meldung
+3. Abschlussbericht nach 30 Tagen
+
+Die Uebersicht zeigt offene Faelle, NIS2-relevante Faelle und ueberfaellige Meldeschritte. Gesendete Meldungen koennen ueber die API als Zeitstempel gepflegt werden.
+
+### 6.6 SOC-Playbook fuer Phishing- und aehnliche Incident-Faelle
 
 Empfohlene Kette fuer die operative Bearbeitung:
 
@@ -574,7 +586,7 @@ Empfohlene Kette fuer die operative Bearbeitung:
 
 Merksatz: Erst verstehen, dann bewerten, dann eindaemmen, dann eskalieren - wenn Risiko oder Komplexitaet es verlangen.
 
-### 6.6 ISCY lokal starten
+### 6.7 ISCY lokal starten
 
 Einfachster lokaler Start:
 

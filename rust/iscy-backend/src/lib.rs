@@ -34,6 +34,7 @@ pub mod db_admin;
 pub mod evidence_store;
 pub mod import_preview;
 pub mod import_store;
+pub mod incident_store;
 pub mod process_store;
 pub mod product_security_store;
 pub mod report_store;
@@ -55,6 +56,7 @@ use dashboard_store::DashboardStore;
 use evidence_store::EvidenceStore;
 use import_preview::{ImportPreview, ImportUploadFile};
 use import_store::ImportStore;
+use incident_store::IncidentStore;
 use process_store::ProcessStore;
 use product_security_store::ProductSecurityStore;
 use report_store::ReportStore;
@@ -76,6 +78,7 @@ pub struct AppState {
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
     pub evidence_store: Option<EvidenceStore>,
+    pub incident_store: Option<IncidentStore>,
     pub import_store: Option<ImportStore>,
     pub process_store: Option<ProcessStore>,
     pub product_security_store: Option<ProductSecurityStore>,
@@ -101,6 +104,7 @@ impl AppState {
             cve_store,
             dashboard_store: None,
             evidence_store: None,
+            incident_store: None,
             import_store: None,
             process_store: None,
             product_security_store: None,
@@ -126,6 +130,7 @@ impl AppState {
             cve_store,
             dashboard_store: None,
             evidence_store: None,
+            incident_store: None,
             import_store: None,
             process_store: None,
             product_security_store: None,
@@ -162,6 +167,11 @@ impl AppState {
 
     pub fn with_evidence_store(mut self, evidence_store: Option<EvidenceStore>) -> Self {
         self.evidence_store = evidence_store;
+        self
+    }
+
+    pub fn with_incident_store(mut self, incident_store: Option<IncidentStore>) -> Self {
+        self.incident_store = incident_store;
         self
     }
 
@@ -486,6 +496,30 @@ struct WebCveAssessmentForm {
     run_llm: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebIncidentForm {
+    title: String,
+    summary: Option<String>,
+    severity: Option<String>,
+    status: Option<String>,
+    owner_id: Option<String>,
+    reporter_id: Option<String>,
+    related_risk_id: Option<String>,
+    related_asset_id: Option<String>,
+    related_process_id: Option<String>,
+    detected_at: Option<String>,
+    confirmed_at: Option<String>,
+    contained_at: Option<String>,
+    resolved_at: Option<String>,
+    nis2_reportable: Option<String>,
+    early_warning_sent_at: Option<String>,
+    notification_sent_at: Option<String>,
+    final_report_sent_at: Option<String>,
+    authority_reference: Option<String>,
+    stakeholder_summary: Option<String>,
+    lessons_learned: Option<String>,
+}
+
 fn deserialize_optional_form_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -648,6 +682,26 @@ pub struct RiskWriteResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub result: risk_store::RiskWriteResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IncidentRegisterResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub incidents: Vec<incident_store::IncidentSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IncidentDetailResponse {
+    pub api_version: &'static str,
+    pub incident: incident_store::IncidentSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IncidentWriteResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: incident_store::IncidentWriteResult,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3456,6 +3510,257 @@ async fn risk_update(
     }
 }
 
+async fn incident_register(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.incident_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Incident-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_incidents(context.tenant_id, 200).await {
+        Ok(incidents) => (
+            StatusCode::OK,
+            Json(IncidentRegisterResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                incidents,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Incidentliste konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn incident_detail(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.incident_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Incident-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.incident_detail(context.tenant_id, incident_id).await {
+        Ok(Some(incident)) => (
+            StatusCode::OK,
+            Json(IncidentDetailResponse {
+                api_version: "v1",
+                incident,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "incident_not_found",
+                message: format!("Incident {} wurde nicht gefunden.", incident_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Incidentdetail konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn incident_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<incident_store::IncidentWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.incident_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Incident-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.create_incident(context.tenant_id, payload).await {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(IncidentWriteResponse {
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Incident konnte nicht erstellt werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn incident_update(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<incident_store::IncidentWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.incident_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Incident-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .update_incident(context.tenant_id, incident_id, payload)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(IncidentWriteResponse {
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "incident_not_found",
+                message: format!("Incident {} wurde nicht gefunden.", incident_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Incident konnte nicht aktualisiert werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn evidence_overview(
     Query(query): Query<EvidenceOverviewQuery>,
     State(state): State<AppState>,
@@ -5056,6 +5361,167 @@ async fn web_risks(
     }
 }
 
+async fn web_incidents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Incidents", "/incidents/");
+    };
+    let Some(store) = state.incident_store.clone() else {
+        return web_store_missing("Incidents", "/incidents/", &context, "Incident");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    match store.list_incidents(context.tenant_id, 50).await {
+        Ok(incidents) => {
+            let reportable_count = incidents
+                .iter()
+                .filter(|incident| incident.nis2_reportable)
+                .count() as i64;
+            let open_count = incidents
+                .iter()
+                .filter(|incident| !matches!(incident.status.as_str(), "RESOLVED" | "CLOSED"))
+                .count() as i64;
+            let overdue_count = incidents
+                .iter()
+                .filter(|incident| {
+                    matches!(incident.early_warning_state.as_str(), "OVERDUE")
+                        || matches!(incident.notification_state.as_str(), "OVERDUE")
+                        || matches!(incident.final_report_state.as_str(), "OVERDUE")
+                })
+                .count() as i64;
+            let rows = incidents
+                .iter()
+                .map(|incident| {
+                    format!(
+                        r#"<tr><td><a href="{}">{}</a><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        web_path_with_context(
+                            &format!("/api/v1/incidents/{}", incident.id),
+                            Some(&context)
+                        ),
+                        html_escape(&incident.title),
+                        html_escape(&incident.summary),
+                        html_escape(&incident.severity_label),
+                        html_escape(&incident.status_label),
+                        html_escape(&incident.nis2_reportability_label),
+                        html_escape(&incident.early_warning_state_label),
+                        html_escape(&incident.notification_state_label),
+                        html_escape(incident.owner_display.as_deref().unwrap_or("-")),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let form_panel = if can_write {
+                format!(
+                    r#"
+                    <article class="panel wide">
+                      <h2>Incident erfassen</h2>
+                      <form method="post" action="{}">
+                        <div class="form-grid">
+                          <label>Titel<input name="title" type="text" required></label>
+                          <label>Severity<select name="severity">{}</select></label>
+                          <label>Status<select name="status">{}</select></label>
+                          <label>Owner-ID<input name="owner_id" type="number" min="1"></label>
+                          <label>Reporter-ID<input name="reporter_id" type="number" min="1"></label>
+                          <label>Risk-ID<input name="related_risk_id" type="number" min="1"></label>
+                          <label>Asset-ID<input name="related_asset_id" type="number" min="1"></label>
+                          <label>Process-ID<input name="related_process_id" type="number" min="1"></label>
+                          <label>Erkannt am<input name="detected_at" type="date"></label>
+                        </div>
+                        <label><input name="nis2_reportable" type="checkbox"> NIS2-meldepflichtig behandeln</label>
+                        <label>Kurzbeschreibung<textarea name="summary" rows="4"></textarea></label>
+                        <label>Stakeholder-Zusammenfassung<textarea name="stakeholder_summary" rows="3"></textarea></label>
+                        <label>Behoerden-/Case-Referenz<input name="authority_reference" type="text"></label>
+                        <button type="submit">Incident anlegen</button>
+                      </form>
+                    </article>
+                    "#,
+                    web_path_with_context("/incidents/", Some(&context)),
+                    incident_severity_options_for("HIGH"),
+                    incident_status_options_for("TRIAGE"),
+                )
+            } else {
+                r#"<article class="panel wide"><h2>Incident erfassen</h2><p>Fuer neue Incidents ist eine schreibende ISCY-Rolle notwendig.</p></article>"#.to_string()
+            };
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Incidents</h1><p>NIS2-Fallakte, Meldefristen und Nachverfolgung</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <table>
+                      <thead><tr><th>Incident</th><th>Severity</th><th>Status</th><th>NIS2</th><th>24h</th><th>72h</th><th>Owner</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  {}
+                </section>
+                "#,
+                metric_card("Offen", open_count),
+                metric_card("NIS2", reportable_count),
+                metric_card("Ueberfaellig", overdue_count),
+                if rows.is_empty() {
+                    web_empty_row(7, "Keine Incidents vorhanden.")
+                } else {
+                    rows
+                },
+                form_panel,
+            );
+            web_page("Incidents", "/incidents/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Incidents", "/incidents/", &context, &err.to_string()),
+    }
+}
+
+async fn web_incidents_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebIncidentForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Incidents", "/incidents/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Incidents",
+            "/incidents/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.incident_store else {
+        return web_store_missing("Incidents", "/incidents/", &context, "Incident").into_response();
+    };
+    let payload = match web_incident_form_request(form) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return web_error_page("Incidents", "/incidents/", &context, &message).into_response()
+        }
+    };
+    match store.create_incident(auth_context.tenant_id, payload).await {
+        Ok(_) => {
+            Redirect::to(&web_path_with_context("/incidents/", Some(&context))).into_response()
+        }
+        Err(err) => {
+            web_error_page("Incidents", "/incidents/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
 async fn web_evidence(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -6521,6 +6987,82 @@ fn web_cve_assessment_form_request(
     })
 }
 
+fn web_incident_form_request(
+    form: WebIncidentForm,
+) -> Result<incident_store::IncidentWriteRequest, String> {
+    Ok(incident_store::IncidentWriteRequest {
+        reporter_id: Some(optional_form_i64(form.reporter_id, "Reporter")?),
+        owner_id: Some(optional_form_i64(form.owner_id, "Owner")?),
+        related_risk_id: Some(optional_form_i64(form.related_risk_id, "Risiko")?),
+        related_asset_id: Some(optional_form_i64(form.related_asset_id, "Asset")?),
+        related_process_id: Some(optional_form_i64(form.related_process_id, "Prozess")?),
+        title: Some(form.title),
+        summary: form.summary,
+        severity: form.severity,
+        status: form.status,
+        detected_at: optional_form_text_for_write(form.detected_at),
+        confirmed_at: optional_form_text_for_write(form.confirmed_at),
+        contained_at: optional_form_text_for_write(form.contained_at),
+        resolved_at: optional_form_text_for_write(form.resolved_at),
+        nis2_reportable: Some(form.nis2_reportable.is_some()),
+        early_warning_sent_at: optional_form_text_for_write(form.early_warning_sent_at),
+        notification_sent_at: optional_form_text_for_write(form.notification_sent_at),
+        final_report_sent_at: optional_form_text_for_write(form.final_report_sent_at),
+        authority_reference: form.authority_reference,
+        stakeholder_summary: form.stakeholder_summary,
+        lessons_learned: form.lessons_learned,
+    })
+}
+
+fn optional_form_text_for_write(value: Option<String>) -> Option<Option<String>> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(Some)
+}
+
+fn incident_severity_options_for(selected_status: &str) -> String {
+    [
+        ("CRITICAL", "Kritisch"),
+        ("HIGH", "Hoch"),
+        ("MEDIUM", "Mittel"),
+        ("LOW", "Niedrig"),
+        ("INFO", "Info"),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            value,
+            selected_attr(value == &selected_status),
+            label
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn incident_status_options_for(selected_status: &str) -> String {
+    [
+        ("TRIAGE", "Triage"),
+        ("CONFIRMED", "Bestaetigt"),
+        ("CONTAINED", "Eingedaemmt"),
+        ("RESOLVED", "Behoben"),
+        ("CLOSED", "Geschlossen"),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            value,
+            selected_attr(value == &selected_status),
+            label
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
 fn web_cve_assessment_form_panel(
     context: &WebContext,
     options: Option<&cve_store::CveAssessmentFormOptions>,
@@ -7798,6 +8340,7 @@ fn web_page(
         ("/dashboard/", "Dashboard"),
         ("/navigator/", "Navigator"),
         ("/zero-trust/", "Zero Trust"),
+        ("/incidents/", "Incidents"),
         ("/cves/", "CVEs"),
         ("/risks/", "Risks"),
         ("/evidence/", "Evidence"),
@@ -9678,6 +10221,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/risks/{risk_id}",
             get(risk_detail).patch(risk_update),
         )
+        .route(
+            "/api/v1/incidents",
+            get(incident_register).post(incident_create),
+        )
+        .route(
+            "/api/v1/incidents/{incident_id}",
+            get(incident_detail).patch(incident_update),
+        )
         .route("/api/v1/evidence", get(evidence_overview))
         .route("/api/v1/evidence/uploads", post(evidence_upload))
         .route(
@@ -9725,6 +10276,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/navigator/", get(web_navigator))
         .route("/dashboard/", get(web_dashboard))
         .route("/zero-trust/", get(web_zero_trust))
+        .route("/incidents/", get(web_incidents).post(web_incidents_submit))
         .route("/catalog/", get(web_catalog))
         .route("/reports/", get(web_reports))
         .route("/roadmap/", get(web_roadmap))

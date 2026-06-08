@@ -6,10 +6,10 @@ use iscy_backend::{
     account_store::AccountStore, agent_store::AgentStore, app_router, app_router_with_state,
     assessment_store::AssessmentStore, asset_store::AssetStore, auth_store::AuthStore,
     catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore, db_admin,
-    evidence_store::EvidenceStore, import_store::ImportStore, process_store::ProcessStore,
-    product_security_store::ProductSecurityStore, report_store::ReportStore,
-    requirement_store::RequirementStore, risk_store::RiskStore, roadmap_store::RoadmapStore,
-    tenant_store::TenantStore, wizard_store::WizardStore, AppState,
+    evidence_store::EvidenceStore, import_store::ImportStore, incident_store::IncidentStore,
+    process_store::ProcessStore, product_security_store::ProductSecurityStore,
+    report_store::ReportStore, requirement_store::RequirementStore, risk_store::RiskStore,
+    roadmap_store::RoadmapStore, tenant_store::TenantStore, wizard_store::WizardStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use std::{
@@ -2295,6 +2295,289 @@ async fn risk_update_blocks_foreign_tenant_risk() {
 }
 
 #[tokio::test]
+async fn incident_register_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn incident_register_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn incident_register_returns_tenant_incidents_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["incidents"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        payload["incidents"][0]["title"],
+        "Credential phishing campaign"
+    );
+    assert_eq!(payload["incidents"][0]["severity"], "HIGH");
+    assert_eq!(payload["incidents"][0]["status"], "CONFIRMED");
+    assert_eq!(payload["incidents"][0]["nis2_reportable"], true);
+    assert_eq!(
+        payload["incidents"][0]["related_risk_title"],
+        "Credential Phishing"
+    );
+    assert_eq!(
+        payload["incidents"][0]["related_asset_name"],
+        "Customer Portal"
+    );
+    assert_eq!(
+        payload["incidents"][0]["related_process_name"],
+        "Incident Intake"
+    );
+    assert_eq!(payload["incidents"][0]["reporter_display"], "Ada Lovelace");
+    assert_eq!(payload["incidents"][0]["owner_display"], "grace");
+    assert_eq!(payload["incidents"][0]["early_warning_state"], "SENT");
+    assert_eq!(payload["incidents"][0]["notification_state"], "OVERDUE");
+}
+
+#[tokio::test]
+async fn incident_create_persists_nis2_deadlines_and_links() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "title":"NIS2 reportable outage",
+                        "summary":"Customer portal outage",
+                        "severity":"CRITICAL",
+                        "status":"CONFIRMED",
+                        "owner_id":7,
+                        "reporter_id":7,
+                        "related_risk_id":10,
+                        "related_asset_id":1,
+                        "related_process_id":1,
+                        "detected_at":"2026-06-08T10:00:00Z",
+                        "nis2_reportable":true,
+                        "stakeholder_summary":"Potential service impact"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["incident"]["title"], "NIS2 reportable outage");
+    assert_eq!(payload["incident"]["severity"], "CRITICAL");
+    assert_eq!(payload["incident"]["nis2_reportable"], true);
+    assert_eq!(
+        payload["incident"]["related_risk_title"],
+        "Credential Phishing"
+    );
+    assert_eq!(
+        payload["incident"]["early_warning_due_at"],
+        "2026-06-09T10:00:00+00:00"
+    );
+    assert_eq!(
+        payload["incident"]["notification_due_at"],
+        "2026-06-11T10:00:00+00:00"
+    );
+    assert_eq!(
+        payload["incident"]["final_report_due_at"],
+        "2026-07-08T10:00:00+00:00"
+    );
+}
+
+#[tokio::test]
+async fn incident_create_rejects_read_only_role() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"title":"Blocked incident"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "insufficient_role");
+}
+
+#[tokio::test]
+async fn incident_detail_blocks_foreign_tenant_incident() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/2")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "incident_not_found");
+}
+
+#[tokio::test]
+async fn incident_update_updates_status_and_sent_marker() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/incidents/1")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "status":"CONTAINED",
+                        "notification_sent_at":"2026-04-22T18:00:00Z",
+                        "authority_reference":"BSI-CASE-2"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["incident"]["status"], "CONTAINED");
+    assert_eq!(payload["incident"]["notification_state"], "SENT");
+    assert_eq!(payload["incident"]["authority_reference"], "BSI-CASE-2");
+}
+
+#[tokio::test]
 async fn evidence_overview_requires_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(
@@ -4081,6 +4364,7 @@ async fn rust_web_surface_routes_return_ok() {
         "/processes/",
         "/requirements/",
         "/risks/",
+        "/incidents/",
         "/assessments/",
         "/organizations/",
         "/admin/users/",
@@ -4181,6 +4465,69 @@ async fn rust_web_risks_renders_rows_from_database() {
     assert!(html.contains("Kritisch"));
     assert!(html.contains("Ada Lovelace"));
     assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_incidents_renders_and_creates_incident() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Credential phishing campaign"));
+    assert!(html.contains("NIS2 meldepflichtig"));
+    assert!(html.contains("Ueberfaellig"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/incidents/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "title=Web+Incident&severity=HIGH&status=TRIAGE&owner_id=7&reporter_id=7&related_risk_id=10&related_asset_id=1&related_process_id=1&detected_at=2026-06-08&nis2_reportable=on&summary=Created+from+web",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let stored_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM incidents_incident WHERE tenant_id = 42 AND title = 'Web Incident'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_count, 1);
 }
 
 #[tokio::test]
@@ -5038,7 +5385,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0005_rust_auth_rbac_core",
             "0006_rust_auth_group_permission_core",
             "0007_rust_zero_trust_agent_core",
-            "0008_rust_agent_enrollment_hardening"
+            "0008_rust_agent_enrollment_hardening",
+            "0009_rust_incident_core"
         ]
     );
     assert!(
@@ -5060,6 +5408,9 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
         .await
         .unwrap());
     assert!(db_admin::sqlite_table_exists(&pool, "django_content_type")
+        .await
+        .unwrap());
+    assert!(db_admin::sqlite_table_exists(&pool, "incidents_incident")
         .await
         .unwrap());
     assert!(db_admin::sqlite_table_exists(&pool, "auth_permission")
@@ -7850,6 +8201,143 @@ async fn insert_risk_fixture(pool: &SqlitePool) {
                 NULL,
                 '2026-04-03T10:00:00Z',
                 '2026-04-03T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_incident_table(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE incidents_incident (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL,
+            reporter_id INTEGER NULL,
+            owner_id INTEGER NULL,
+            related_risk_id INTEGER NULL,
+            related_asset_id INTEGER NULL,
+            related_process_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+            status varchar(32) NOT NULL DEFAULT 'TRIAGE',
+            detected_at TEXT NULL,
+            confirmed_at TEXT NULL,
+            contained_at TEXT NULL,
+            resolved_at TEXT NULL,
+            nis2_reportable bool NOT NULL DEFAULT 0,
+            early_warning_due_at TEXT NULL,
+            early_warning_sent_at TEXT NULL,
+            notification_due_at TEXT NULL,
+            notification_sent_at TEXT NULL,
+            final_report_due_at TEXT NULL,
+            final_report_sent_at TEXT NULL,
+            authority_reference varchar(255) NOT NULL DEFAULT '',
+            stakeholder_summary TEXT NOT NULL DEFAULT '',
+            lessons_learned TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_incident_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO incidents_incident (
+            id,
+            tenant_id,
+            reporter_id,
+            owner_id,
+            related_risk_id,
+            related_asset_id,
+            related_process_id,
+            title,
+            summary,
+            severity,
+            status,
+            detected_at,
+            confirmed_at,
+            contained_at,
+            resolved_at,
+            nis2_reportable,
+            early_warning_due_at,
+            early_warning_sent_at,
+            notification_due_at,
+            notification_sent_at,
+            final_report_due_at,
+            final_report_sent_at,
+            authority_reference,
+            stakeholder_summary,
+            lessons_learned,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                1,
+                42,
+                7,
+                8,
+                10,
+                1,
+                1,
+                'Credential phishing campaign',
+                'SOC detected active credential phishing against support users.',
+                'HIGH',
+                'CONFIRMED',
+                '2026-04-20T10:00:00Z',
+                '2026-04-20T11:00:00Z',
+                NULL,
+                NULL,
+                1,
+                '2026-04-21T10:00:00Z',
+                '2026-04-20T18:00:00Z',
+                '2026-04-23T10:00:00Z',
+                NULL,
+                '2026-05-20T10:00:00Z',
+                NULL,
+                'BSI-CASE-1',
+                'Customer portal support users affected.',
+                '',
+                '2026-04-20T10:00:00Z',
+                '2026-04-20T11:00:00Z'
+            ),
+            (
+                2,
+                99,
+                9,
+                9,
+                11,
+                2,
+                2,
+                'Foreign incident',
+                'Other tenant incident',
+                'CRITICAL',
+                'TRIAGE',
+                '2026-04-20T10:00:00Z',
+                NULL,
+                NULL,
+                NULL,
+                0,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                '',
+                '',
+                '',
+                '2026-04-20T10:00:00Z',
+                '2026-04-20T10:00:00Z'
             )
         "#,
     )

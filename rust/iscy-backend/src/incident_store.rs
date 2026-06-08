@@ -1,0 +1,1264 @@
+use anyhow::{bail, Context};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use serde::{Deserialize, Deserializer, Serialize};
+use sqlx::{
+    postgres::{PgPool, PgPoolOptions, PgRow},
+    sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
+    Row,
+};
+
+use crate::cve_store::normalize_database_url;
+
+#[derive(Clone)]
+pub enum IncidentStore {
+    Postgres(PgPool),
+    Sqlite(SqlitePool),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IncidentSummary {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub reporter_id: Option<i64>,
+    pub reporter_display: Option<String>,
+    pub owner_id: Option<i64>,
+    pub owner_display: Option<String>,
+    pub related_risk_id: Option<i64>,
+    pub related_risk_title: Option<String>,
+    pub related_asset_id: Option<i64>,
+    pub related_asset_name: Option<String>,
+    pub related_process_id: Option<i64>,
+    pub related_process_name: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub severity: String,
+    pub severity_label: String,
+    pub status: String,
+    pub status_label: String,
+    pub detected_at: Option<String>,
+    pub confirmed_at: Option<String>,
+    pub contained_at: Option<String>,
+    pub resolved_at: Option<String>,
+    pub nis2_reportable: bool,
+    pub nis2_reportability_label: String,
+    pub early_warning_due_at: Option<String>,
+    pub early_warning_sent_at: Option<String>,
+    pub early_warning_state: String,
+    pub early_warning_state_label: String,
+    pub notification_due_at: Option<String>,
+    pub notification_sent_at: Option<String>,
+    pub notification_state: String,
+    pub notification_state_label: String,
+    pub final_report_due_at: Option<String>,
+    pub final_report_sent_at: Option<String>,
+    pub final_report_state: String,
+    pub final_report_state_label: String,
+    pub authority_reference: String,
+    pub stakeholder_summary: String,
+    pub lessons_learned: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IncidentWriteRequest {
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub reporter_id: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub owner_id: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub related_risk_id: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub related_asset_id: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub related_process_id: Option<Option<i64>>,
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub severity: Option<String>,
+    pub status: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub detected_at: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub confirmed_at: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub contained_at: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub resolved_at: Option<Option<String>>,
+    pub nis2_reportable: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub early_warning_sent_at: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub notification_sent_at: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub final_report_sent_at: Option<Option<String>>,
+    pub authority_reference: Option<String>,
+    pub stakeholder_summary: Option<String>,
+    pub lessons_learned: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IncidentWriteResult {
+    pub incident: IncidentSummary,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TenantRelation {
+    User,
+    Risk,
+    Asset,
+    Process,
+}
+
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+impl IncidentStore {
+    pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
+        let normalized_url = normalize_database_url(database_url);
+        if normalized_url.starts_with("postgres://") || normalized_url.starts_with("postgresql://")
+        {
+            let pool = PgPoolOptions::new()
+                .max_connections(5)
+                .connect(&normalized_url)
+                .await
+                .context("PostgreSQL-Verbindung fuer Incident-Store fehlgeschlagen")?;
+            return Ok(Self::Postgres(pool));
+        }
+        if normalized_url.starts_with("sqlite:") {
+            let pool = SqlitePoolOptions::new()
+                .max_connections(5)
+                .connect(&normalized_url)
+                .await
+                .context("SQLite-Verbindung fuer Incident-Store fehlgeschlagen")?;
+            return Ok(Self::Sqlite(pool));
+        }
+        bail!("Nicht unterstuetztes DATABASE_URL-Schema fuer Rust-Incident-Store");
+    }
+
+    pub fn from_sqlite_pool(pool: SqlitePool) -> Self {
+        Self::Sqlite(pool)
+    }
+
+    pub async fn list_incidents(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<IncidentSummary>> {
+        match self {
+            Self::Postgres(pool) => list_incidents_postgres(pool, tenant_id, limit).await,
+            Self::Sqlite(pool) => list_incidents_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
+    pub async fn incident_detail(
+        &self,
+        tenant_id: i64,
+        incident_id: i64,
+    ) -> anyhow::Result<Option<IncidentSummary>> {
+        match self {
+            Self::Postgres(pool) => incident_detail_postgres(pool, tenant_id, incident_id).await,
+            Self::Sqlite(pool) => incident_detail_sqlite(pool, tenant_id, incident_id).await,
+        }
+    }
+
+    pub async fn create_incident(
+        &self,
+        tenant_id: i64,
+        payload: IncidentWriteRequest,
+    ) -> anyhow::Result<IncidentWriteResult> {
+        match self {
+            Self::Postgres(pool) => create_incident_postgres(pool, tenant_id, payload).await,
+            Self::Sqlite(pool) => create_incident_sqlite(pool, tenant_id, payload).await,
+        }
+    }
+
+    pub async fn update_incident(
+        &self,
+        tenant_id: i64,
+        incident_id: i64,
+        payload: IncidentWriteRequest,
+    ) -> anyhow::Result<Option<IncidentWriteResult>> {
+        match self {
+            Self::Postgres(pool) => {
+                update_incident_postgres(pool, tenant_id, incident_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                update_incident_sqlite(pool, tenant_id, incident_id, payload).await
+            }
+        }
+    }
+}
+
+async fn list_incidents_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<IncidentSummary>> {
+    let sql = incident_select_postgres_sql("WHERE incident.tenant_id = $1", "$2");
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-Incidentliste konnte nicht gelesen werden")?;
+    rows.into_iter()
+        .map(summary_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn list_incidents_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<IncidentSummary>> {
+    let sql = incident_select_sqlite_sql("WHERE incident.tenant_id = ?1", "?2");
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("SQLite-Incidentliste konnte nicht gelesen werden")?;
+    rows.into_iter()
+        .map(summary_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn incident_detail_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+) -> anyhow::Result<Option<IncidentSummary>> {
+    let sql =
+        incident_select_postgres_sql("WHERE incident.tenant_id = $1 AND incident.id = $2", "1");
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(incident_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Incidentdetail konnte nicht gelesen werden")?;
+    row.map(summary_from_pg_row).transpose().map_err(Into::into)
+}
+
+async fn incident_detail_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+) -> anyhow::Result<Option<IncidentSummary>> {
+    let sql = incident_select_sqlite_sql("WHERE incident.tenant_id = ?1 AND incident.id = ?2", "1");
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(incident_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Incidentdetail konnte nicht gelesen werden")?;
+    row.map(summary_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn create_incident_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    payload: IncidentWriteRequest,
+) -> anyhow::Result<IncidentWriteResult> {
+    let write = NewIncident::from_create_payload(payload)?;
+    validate_relations_postgres(pool, tenant_id, &write).await?;
+    let row = sqlx::query(
+        r#"
+        INSERT INTO incidents_incident (
+            tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id,
+            related_process_id, title, summary, severity, status, detected_at,
+            confirmed_at, contained_at, resolved_at, nis2_reportable,
+            early_warning_due_at, early_warning_sent_at, notification_due_at,
+            notification_sent_at, final_report_due_at, final_report_sent_at,
+            authority_reference, stakeholder_summary, lessons_learned, created_at, updated_at
+        )
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+            $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(write.reporter_id)
+    .bind(write.owner_id)
+    .bind(write.related_risk_id)
+    .bind(write.related_asset_id)
+    .bind(write.related_process_id)
+    .bind(&write.title)
+    .bind(&write.summary)
+    .bind(&write.severity)
+    .bind(&write.status)
+    .bind(write.detected_at.as_deref())
+    .bind(write.confirmed_at.as_deref())
+    .bind(write.contained_at.as_deref())
+    .bind(write.resolved_at.as_deref())
+    .bind(write.nis2_reportable)
+    .bind(write.early_warning_due_at.as_deref())
+    .bind(write.early_warning_sent_at.as_deref())
+    .bind(write.notification_due_at.as_deref())
+    .bind(write.notification_sent_at.as_deref())
+    .bind(write.final_report_due_at.as_deref())
+    .bind(write.final_report_sent_at.as_deref())
+    .bind(&write.authority_reference)
+    .bind(&write.stakeholder_summary)
+    .bind(&write.lessons_learned)
+    .bind(&write.now)
+    .bind(&write.now)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Incident konnte nicht angelegt werden")?;
+    let id: i64 = row.try_get("id")?;
+    incident_detail_postgres(pool, tenant_id, id)
+        .await?
+        .map(|incident| IncidentWriteResult { incident })
+        .context("Neu angelegter Incident konnte nicht gelesen werden")
+}
+
+async fn create_incident_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    payload: IncidentWriteRequest,
+) -> anyhow::Result<IncidentWriteResult> {
+    let write = NewIncident::from_create_payload(payload)?;
+    validate_relations_sqlite(pool, tenant_id, &write).await?;
+    let result = sqlx::query(
+        r#"
+        INSERT INTO incidents_incident (
+            tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id,
+            related_process_id, title, summary, severity, status, detected_at,
+            confirmed_at, contained_at, resolved_at, nis2_reportable,
+            early_warning_due_at, early_warning_sent_at, notification_due_at,
+            notification_sent_at, final_report_due_at, final_report_sent_at,
+            authority_reference, stakeholder_summary, lessons_learned, created_at, updated_at
+        )
+        VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
+        )
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(write.reporter_id)
+    .bind(write.owner_id)
+    .bind(write.related_risk_id)
+    .bind(write.related_asset_id)
+    .bind(write.related_process_id)
+    .bind(&write.title)
+    .bind(&write.summary)
+    .bind(&write.severity)
+    .bind(&write.status)
+    .bind(write.detected_at.as_deref())
+    .bind(write.confirmed_at.as_deref())
+    .bind(write.contained_at.as_deref())
+    .bind(write.resolved_at.as_deref())
+    .bind(write.nis2_reportable)
+    .bind(write.early_warning_due_at.as_deref())
+    .bind(write.early_warning_sent_at.as_deref())
+    .bind(write.notification_due_at.as_deref())
+    .bind(write.notification_sent_at.as_deref())
+    .bind(write.final_report_due_at.as_deref())
+    .bind(write.final_report_sent_at.as_deref())
+    .bind(&write.authority_reference)
+    .bind(&write.stakeholder_summary)
+    .bind(&write.lessons_learned)
+    .bind(&write.now)
+    .bind(&write.now)
+    .execute(pool)
+    .await
+    .context("SQLite-Incident konnte nicht angelegt werden")?;
+    let id = result.last_insert_rowid();
+    incident_detail_sqlite(pool, tenant_id, id)
+        .await?
+        .map(|incident| IncidentWriteResult { incident })
+        .context("Neu angelegter Incident konnte nicht gelesen werden")
+}
+
+async fn update_incident_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    payload: IncidentWriteRequest,
+) -> anyhow::Result<Option<IncidentWriteResult>> {
+    let Some(current) = incident_detail_postgres(pool, tenant_id, incident_id).await? else {
+        return Ok(None);
+    };
+    let write = ExistingIncident::from_update_payload(current, payload)?;
+    validate_relations_postgres(pool, tenant_id, &write.as_new_incident()).await?;
+    sqlx::query(
+        r#"
+        UPDATE incidents_incident
+        SET reporter_id = $3, owner_id = $4, related_risk_id = $5, related_asset_id = $6,
+            related_process_id = $7, title = $8, summary = $9, severity = $10, status = $11,
+            detected_at = $12, confirmed_at = $13, contained_at = $14, resolved_at = $15,
+            nis2_reportable = $16, early_warning_due_at = $17, early_warning_sent_at = $18,
+            notification_due_at = $19, notification_sent_at = $20, final_report_due_at = $21,
+            final_report_sent_at = $22, authority_reference = $23,
+            stakeholder_summary = $24, lessons_learned = $25, updated_at = $26
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(write.reporter_id)
+    .bind(write.owner_id)
+    .bind(write.related_risk_id)
+    .bind(write.related_asset_id)
+    .bind(write.related_process_id)
+    .bind(&write.title)
+    .bind(&write.summary)
+    .bind(&write.severity)
+    .bind(&write.status)
+    .bind(write.detected_at.as_deref())
+    .bind(write.confirmed_at.as_deref())
+    .bind(write.contained_at.as_deref())
+    .bind(write.resolved_at.as_deref())
+    .bind(write.nis2_reportable)
+    .bind(write.early_warning_due_at.as_deref())
+    .bind(write.early_warning_sent_at.as_deref())
+    .bind(write.notification_due_at.as_deref())
+    .bind(write.notification_sent_at.as_deref())
+    .bind(write.final_report_due_at.as_deref())
+    .bind(write.final_report_sent_at.as_deref())
+    .bind(&write.authority_reference)
+    .bind(&write.stakeholder_summary)
+    .bind(&write.lessons_learned)
+    .bind(&write.now)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Incident konnte nicht aktualisiert werden")?;
+    incident_detail_postgres(pool, tenant_id, incident_id)
+        .await?
+        .map(|incident| IncidentWriteResult { incident })
+        .context("Aktualisierter Incident konnte nicht gelesen werden")
+        .map(Some)
+}
+
+async fn update_incident_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    payload: IncidentWriteRequest,
+) -> anyhow::Result<Option<IncidentWriteResult>> {
+    let Some(current) = incident_detail_sqlite(pool, tenant_id, incident_id).await? else {
+        return Ok(None);
+    };
+    let write = ExistingIncident::from_update_payload(current, payload)?;
+    validate_relations_sqlite(pool, tenant_id, &write.as_new_incident()).await?;
+    sqlx::query(
+        r#"
+        UPDATE incidents_incident
+        SET reporter_id = ?3, owner_id = ?4, related_risk_id = ?5, related_asset_id = ?6,
+            related_process_id = ?7, title = ?8, summary = ?9, severity = ?10, status = ?11,
+            detected_at = ?12, confirmed_at = ?13, contained_at = ?14, resolved_at = ?15,
+            nis2_reportable = ?16, early_warning_due_at = ?17, early_warning_sent_at = ?18,
+            notification_due_at = ?19, notification_sent_at = ?20, final_report_due_at = ?21,
+            final_report_sent_at = ?22, authority_reference = ?23,
+            stakeholder_summary = ?24, lessons_learned = ?25, updated_at = ?26
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(write.reporter_id)
+    .bind(write.owner_id)
+    .bind(write.related_risk_id)
+    .bind(write.related_asset_id)
+    .bind(write.related_process_id)
+    .bind(&write.title)
+    .bind(&write.summary)
+    .bind(&write.severity)
+    .bind(&write.status)
+    .bind(write.detected_at.as_deref())
+    .bind(write.confirmed_at.as_deref())
+    .bind(write.contained_at.as_deref())
+    .bind(write.resolved_at.as_deref())
+    .bind(write.nis2_reportable)
+    .bind(write.early_warning_due_at.as_deref())
+    .bind(write.early_warning_sent_at.as_deref())
+    .bind(write.notification_due_at.as_deref())
+    .bind(write.notification_sent_at.as_deref())
+    .bind(write.final_report_due_at.as_deref())
+    .bind(write.final_report_sent_at.as_deref())
+    .bind(&write.authority_reference)
+    .bind(&write.stakeholder_summary)
+    .bind(&write.lessons_learned)
+    .bind(&write.now)
+    .execute(pool)
+    .await
+    .context("SQLite-Incident konnte nicht aktualisiert werden")?;
+    incident_detail_sqlite(pool, tenant_id, incident_id)
+        .await?
+        .map(|incident| IncidentWriteResult { incident })
+        .context("Aktualisierter Incident konnte nicht gelesen werden")
+        .map(Some)
+}
+
+#[derive(Debug, Clone)]
+struct NewIncident {
+    reporter_id: Option<i64>,
+    owner_id: Option<i64>,
+    related_risk_id: Option<i64>,
+    related_asset_id: Option<i64>,
+    related_process_id: Option<i64>,
+    title: String,
+    summary: String,
+    severity: String,
+    status: String,
+    detected_at: Option<String>,
+    confirmed_at: Option<String>,
+    contained_at: Option<String>,
+    resolved_at: Option<String>,
+    nis2_reportable: bool,
+    early_warning_due_at: Option<String>,
+    early_warning_sent_at: Option<String>,
+    notification_due_at: Option<String>,
+    notification_sent_at: Option<String>,
+    final_report_due_at: Option<String>,
+    final_report_sent_at: Option<String>,
+    authority_reference: String,
+    stakeholder_summary: String,
+    lessons_learned: String,
+    now: String,
+}
+
+#[derive(Debug, Clone)]
+struct ExistingIncident {
+    reporter_id: Option<i64>,
+    owner_id: Option<i64>,
+    related_risk_id: Option<i64>,
+    related_asset_id: Option<i64>,
+    related_process_id: Option<i64>,
+    title: String,
+    summary: String,
+    severity: String,
+    status: String,
+    detected_at: Option<String>,
+    confirmed_at: Option<String>,
+    contained_at: Option<String>,
+    resolved_at: Option<String>,
+    nis2_reportable: bool,
+    early_warning_due_at: Option<String>,
+    early_warning_sent_at: Option<String>,
+    notification_due_at: Option<String>,
+    notification_sent_at: Option<String>,
+    final_report_due_at: Option<String>,
+    final_report_sent_at: Option<String>,
+    authority_reference: String,
+    stakeholder_summary: String,
+    lessons_learned: String,
+    now: String,
+}
+
+impl NewIncident {
+    fn from_create_payload(payload: IncidentWriteRequest) -> anyhow::Result<Self> {
+        let now = Utc::now().to_rfc3339();
+        let title = normalize_required_text(payload.title.as_deref(), "Incident-Titel")?;
+        let summary = normalize_optional_text(payload.summary.as_deref());
+        let severity = normalize_severity(payload.severity.as_deref());
+        let status = normalize_status(payload.status.as_deref());
+        let detected_at = normalize_optional_datetime(payload.detected_at.flatten().as_deref())?
+            .or_else(|| Some(now.clone()));
+        let confirmed_at = normalize_optional_datetime(payload.confirmed_at.flatten().as_deref())?;
+        let contained_at = normalize_optional_datetime(payload.contained_at.flatten().as_deref())?;
+        let resolved_at = normalize_optional_datetime(payload.resolved_at.flatten().as_deref())?;
+        let nis2_reportable = payload.nis2_reportable.unwrap_or(false);
+        let deadlines = nis2_deadlines(nis2_reportable, detected_at.as_deref());
+        Ok(Self {
+            reporter_id: payload.reporter_id.flatten(),
+            owner_id: payload.owner_id.flatten(),
+            related_risk_id: payload.related_risk_id.flatten(),
+            related_asset_id: payload.related_asset_id.flatten(),
+            related_process_id: payload.related_process_id.flatten(),
+            title,
+            summary,
+            severity,
+            status,
+            detected_at,
+            confirmed_at,
+            contained_at,
+            resolved_at,
+            nis2_reportable,
+            early_warning_due_at: deadlines.early_warning_due_at,
+            early_warning_sent_at: normalize_optional_datetime(
+                payload.early_warning_sent_at.flatten().as_deref(),
+            )?,
+            notification_due_at: deadlines.notification_due_at,
+            notification_sent_at: normalize_optional_datetime(
+                payload.notification_sent_at.flatten().as_deref(),
+            )?,
+            final_report_due_at: deadlines.final_report_due_at,
+            final_report_sent_at: normalize_optional_datetime(
+                payload.final_report_sent_at.flatten().as_deref(),
+            )?,
+            authority_reference: normalize_optional_text(payload.authority_reference.as_deref()),
+            stakeholder_summary: normalize_optional_text(payload.stakeholder_summary.as_deref()),
+            lessons_learned: normalize_optional_text(payload.lessons_learned.as_deref()),
+            now,
+        })
+    }
+}
+
+impl ExistingIncident {
+    fn from_update_payload(
+        current: IncidentSummary,
+        payload: IncidentWriteRequest,
+    ) -> anyhow::Result<Self> {
+        let now = Utc::now().to_rfc3339();
+        let title = match payload.title {
+            Some(title) => normalize_required_text(Some(&title), "Incident-Titel")?,
+            None => current.title,
+        };
+        let summary = payload
+            .summary
+            .map(|value| normalize_optional_text(Some(&value)))
+            .unwrap_or(current.summary);
+        let severity = payload
+            .severity
+            .map(|value| normalize_severity(Some(&value)))
+            .unwrap_or(current.severity);
+        let status = payload
+            .status
+            .map(|value| normalize_status(Some(&value)))
+            .unwrap_or(current.status);
+        let detected_at = match payload.detected_at {
+            Some(value) => normalize_optional_datetime(value.as_deref())?,
+            None => current.detected_at,
+        };
+        let confirmed_at = match payload.confirmed_at {
+            Some(value) => normalize_optional_datetime(value.as_deref())?,
+            None => current.confirmed_at,
+        };
+        let contained_at = match payload.contained_at {
+            Some(value) => normalize_optional_datetime(value.as_deref())?,
+            None => current.contained_at,
+        };
+        let resolved_at = match payload.resolved_at {
+            Some(value) => normalize_optional_datetime(value.as_deref())?,
+            None => current.resolved_at,
+        };
+        let nis2_reportable = payload.nis2_reportable.unwrap_or(current.nis2_reportable);
+        let deadlines = nis2_deadlines(nis2_reportable, detected_at.as_deref());
+        Ok(Self {
+            reporter_id: payload.reporter_id.unwrap_or(current.reporter_id),
+            owner_id: payload.owner_id.unwrap_or(current.owner_id),
+            related_risk_id: payload.related_risk_id.unwrap_or(current.related_risk_id),
+            related_asset_id: payload.related_asset_id.unwrap_or(current.related_asset_id),
+            related_process_id: payload
+                .related_process_id
+                .unwrap_or(current.related_process_id),
+            title,
+            summary,
+            severity,
+            status,
+            detected_at,
+            confirmed_at,
+            contained_at,
+            resolved_at,
+            nis2_reportable,
+            early_warning_due_at: deadlines.early_warning_due_at,
+            early_warning_sent_at: match payload.early_warning_sent_at {
+                Some(value) => normalize_optional_datetime(value.as_deref())?,
+                None => current.early_warning_sent_at,
+            },
+            notification_due_at: deadlines.notification_due_at,
+            notification_sent_at: match payload.notification_sent_at {
+                Some(value) => normalize_optional_datetime(value.as_deref())?,
+                None => current.notification_sent_at,
+            },
+            final_report_due_at: deadlines.final_report_due_at,
+            final_report_sent_at: match payload.final_report_sent_at {
+                Some(value) => normalize_optional_datetime(value.as_deref())?,
+                None => current.final_report_sent_at,
+            },
+            authority_reference: payload
+                .authority_reference
+                .map(|value| normalize_optional_text(Some(&value)))
+                .unwrap_or(current.authority_reference),
+            stakeholder_summary: payload
+                .stakeholder_summary
+                .map(|value| normalize_optional_text(Some(&value)))
+                .unwrap_or(current.stakeholder_summary),
+            lessons_learned: payload
+                .lessons_learned
+                .map(|value| normalize_optional_text(Some(&value)))
+                .unwrap_or(current.lessons_learned),
+            now,
+        })
+    }
+
+    fn as_new_incident(&self) -> NewIncident {
+        NewIncident {
+            reporter_id: self.reporter_id,
+            owner_id: self.owner_id,
+            related_risk_id: self.related_risk_id,
+            related_asset_id: self.related_asset_id,
+            related_process_id: self.related_process_id,
+            title: self.title.clone(),
+            summary: self.summary.clone(),
+            severity: self.severity.clone(),
+            status: self.status.clone(),
+            detected_at: self.detected_at.clone(),
+            confirmed_at: self.confirmed_at.clone(),
+            contained_at: self.contained_at.clone(),
+            resolved_at: self.resolved_at.clone(),
+            nis2_reportable: self.nis2_reportable,
+            early_warning_due_at: self.early_warning_due_at.clone(),
+            early_warning_sent_at: self.early_warning_sent_at.clone(),
+            notification_due_at: self.notification_due_at.clone(),
+            notification_sent_at: self.notification_sent_at.clone(),
+            final_report_due_at: self.final_report_due_at.clone(),
+            final_report_sent_at: self.final_report_sent_at.clone(),
+            authority_reference: self.authority_reference.clone(),
+            stakeholder_summary: self.stakeholder_summary.clone(),
+            lessons_learned: self.lessons_learned.clone(),
+            now: self.now.clone(),
+        }
+    }
+}
+
+struct NIS2Deadlines {
+    early_warning_due_at: Option<String>,
+    notification_due_at: Option<String>,
+    final_report_due_at: Option<String>,
+}
+
+fn nis2_deadlines(nis2_reportable: bool, detected_at: Option<&str>) -> NIS2Deadlines {
+    if !nis2_reportable {
+        return NIS2Deadlines {
+            early_warning_due_at: None,
+            notification_due_at: None,
+            final_report_due_at: None,
+        };
+    }
+    let base = detected_at
+        .and_then(parse_datetime)
+        .unwrap_or_else(Utc::now);
+    NIS2Deadlines {
+        early_warning_due_at: Some((base + Duration::hours(24)).to_rfc3339()),
+        notification_due_at: Some((base + Duration::hours(72)).to_rfc3339()),
+        final_report_due_at: Some((base + Duration::days(30)).to_rfc3339()),
+    }
+}
+
+async fn validate_relations_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident: &NewIncident,
+) -> anyhow::Result<()> {
+    validate_relation_postgres(pool, tenant_id, incident.reporter_id, TenantRelation::User).await?;
+    validate_relation_postgres(pool, tenant_id, incident.owner_id, TenantRelation::User).await?;
+    validate_relation_postgres(
+        pool,
+        tenant_id,
+        incident.related_risk_id,
+        TenantRelation::Risk,
+    )
+    .await?;
+    validate_relation_postgres(
+        pool,
+        tenant_id,
+        incident.related_asset_id,
+        TenantRelation::Asset,
+    )
+    .await?;
+    validate_relation_postgres(
+        pool,
+        tenant_id,
+        incident.related_process_id,
+        TenantRelation::Process,
+    )
+    .await
+}
+
+async fn validate_relations_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident: &NewIncident,
+) -> anyhow::Result<()> {
+    validate_relation_sqlite(pool, tenant_id, incident.reporter_id, TenantRelation::User).await?;
+    validate_relation_sqlite(pool, tenant_id, incident.owner_id, TenantRelation::User).await?;
+    validate_relation_sqlite(
+        pool,
+        tenant_id,
+        incident.related_risk_id,
+        TenantRelation::Risk,
+    )
+    .await?;
+    validate_relation_sqlite(
+        pool,
+        tenant_id,
+        incident.related_asset_id,
+        TenantRelation::Asset,
+    )
+    .await?;
+    validate_relation_sqlite(
+        pool,
+        tenant_id,
+        incident.related_process_id,
+        TenantRelation::Process,
+    )
+    .await
+}
+
+async fn validate_relation_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    id: Option<i64>,
+    relation: TenantRelation,
+) -> anyhow::Result<()> {
+    let Some(id) = id else {
+        return Ok(());
+    };
+    let sql = match relation {
+        TenantRelation::User => {
+            "SELECT 1::BIGINT FROM accounts_user WHERE tenant_id = $1 AND id = $2"
+        }
+        TenantRelation::Risk => "SELECT 1::BIGINT FROM risks_risk WHERE tenant_id = $1 AND id = $2",
+        TenantRelation::Asset => {
+            "SELECT 1::BIGINT FROM assets_app_informationasset WHERE tenant_id = $1 AND id = $2"
+        }
+        TenantRelation::Process => {
+            "SELECT 1::BIGINT FROM processes_process WHERE tenant_id = $1 AND id = $2"
+        }
+    };
+    let exists: Option<i64> = sqlx::query_scalar(sql)
+        .bind(tenant_id)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    if exists.is_none() {
+        bail!(
+            "Incident-Bezug {:?}={} gehoert nicht zum Tenant",
+            relation,
+            id
+        );
+    }
+    Ok(())
+}
+
+async fn validate_relation_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    id: Option<i64>,
+    relation: TenantRelation,
+) -> anyhow::Result<()> {
+    let Some(id) = id else {
+        return Ok(());
+    };
+    let sql = match relation {
+        TenantRelation::User => "SELECT 1 FROM accounts_user WHERE tenant_id = ? AND id = ?",
+        TenantRelation::Risk => "SELECT 1 FROM risks_risk WHERE tenant_id = ? AND id = ?",
+        TenantRelation::Asset => {
+            "SELECT 1 FROM assets_app_informationasset WHERE tenant_id = ? AND id = ?"
+        }
+        TenantRelation::Process => "SELECT 1 FROM processes_process WHERE tenant_id = ? AND id = ?",
+    };
+    let exists: Option<i64> = sqlx::query_scalar(sql)
+        .bind(tenant_id)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    if exists.is_none() {
+        bail!(
+            "Incident-Bezug {:?}={} gehoert nicht zum Tenant",
+            relation,
+            id
+        );
+    }
+    Ok(())
+}
+
+fn incident_select_postgres_sql(where_clause: &str, limit_placeholder: &str) -> String {
+    format!(
+        r#"
+        SELECT
+            incident.id,
+            incident.tenant_id,
+            incident.reporter_id,
+            reporter.username AS reporter_username,
+            reporter.first_name AS reporter_first_name,
+            reporter.last_name AS reporter_last_name,
+            incident.owner_id,
+            owner.username AS owner_username,
+            owner.first_name AS owner_first_name,
+            owner.last_name AS owner_last_name,
+            incident.related_risk_id,
+            risk.title AS related_risk_title,
+            incident.related_asset_id,
+            asset.name AS related_asset_name,
+            incident.related_process_id,
+            proc.name AS related_process_name,
+            incident.title,
+            incident.summary,
+            incident.severity,
+            incident.status,
+            incident.detected_at::text AS detected_at,
+            incident.confirmed_at::text AS confirmed_at,
+            incident.contained_at::text AS contained_at,
+            incident.resolved_at::text AS resolved_at,
+            incident.nis2_reportable,
+            incident.early_warning_due_at::text AS early_warning_due_at,
+            incident.early_warning_sent_at::text AS early_warning_sent_at,
+            incident.notification_due_at::text AS notification_due_at,
+            incident.notification_sent_at::text AS notification_sent_at,
+            incident.final_report_due_at::text AS final_report_due_at,
+            incident.final_report_sent_at::text AS final_report_sent_at,
+            incident.authority_reference,
+            incident.stakeholder_summary,
+            incident.lessons_learned,
+            incident.created_at::text AS created_at,
+            incident.updated_at::text AS updated_at
+        FROM incidents_incident incident
+        LEFT JOIN accounts_user reporter ON reporter.id = incident.reporter_id AND reporter.tenant_id = incident.tenant_id
+        LEFT JOIN accounts_user owner ON owner.id = incident.owner_id AND owner.tenant_id = incident.tenant_id
+        LEFT JOIN risks_risk risk ON risk.id = incident.related_risk_id AND risk.tenant_id = incident.tenant_id
+        LEFT JOIN assets_app_informationasset asset ON asset.id = incident.related_asset_id AND asset.tenant_id = incident.tenant_id
+        LEFT JOIN processes_process proc ON proc.id = incident.related_process_id AND proc.tenant_id = incident.tenant_id
+        {where_clause}
+        ORDER BY
+            CASE incident.severity
+                WHEN 'CRITICAL' THEN 1
+                WHEN 'HIGH' THEN 2
+                WHEN 'MEDIUM' THEN 3
+                WHEN 'LOW' THEN 4
+                ELSE 5
+            END,
+            incident.detected_at DESC NULLS LAST,
+            incident.id DESC
+        LIMIT {limit_placeholder}
+        "#
+    )
+}
+
+fn incident_select_sqlite_sql(where_clause: &str, limit_placeholder: &str) -> String {
+    format!(
+        r#"
+        SELECT
+            incident.id,
+            incident.tenant_id,
+            incident.reporter_id,
+            reporter.username AS reporter_username,
+            reporter.first_name AS reporter_first_name,
+            reporter.last_name AS reporter_last_name,
+            incident.owner_id,
+            owner.username AS owner_username,
+            owner.first_name AS owner_first_name,
+            owner.last_name AS owner_last_name,
+            incident.related_risk_id,
+            risk.title AS related_risk_title,
+            incident.related_asset_id,
+            asset.name AS related_asset_name,
+            incident.related_process_id,
+            proc.name AS related_process_name,
+            incident.title,
+            incident.summary,
+            incident.severity,
+            incident.status,
+            CAST(incident.detected_at AS TEXT) AS detected_at,
+            CAST(incident.confirmed_at AS TEXT) AS confirmed_at,
+            CAST(incident.contained_at AS TEXT) AS contained_at,
+            CAST(incident.resolved_at AS TEXT) AS resolved_at,
+            incident.nis2_reportable,
+            CAST(incident.early_warning_due_at AS TEXT) AS early_warning_due_at,
+            CAST(incident.early_warning_sent_at AS TEXT) AS early_warning_sent_at,
+            CAST(incident.notification_due_at AS TEXT) AS notification_due_at,
+            CAST(incident.notification_sent_at AS TEXT) AS notification_sent_at,
+            CAST(incident.final_report_due_at AS TEXT) AS final_report_due_at,
+            CAST(incident.final_report_sent_at AS TEXT) AS final_report_sent_at,
+            incident.authority_reference,
+            incident.stakeholder_summary,
+            incident.lessons_learned,
+            CAST(incident.created_at AS TEXT) AS created_at,
+            CAST(incident.updated_at AS TEXT) AS updated_at
+        FROM incidents_incident incident
+        LEFT JOIN accounts_user reporter ON reporter.id = incident.reporter_id AND reporter.tenant_id = incident.tenant_id
+        LEFT JOIN accounts_user owner ON owner.id = incident.owner_id AND owner.tenant_id = incident.tenant_id
+        LEFT JOIN risks_risk risk ON risk.id = incident.related_risk_id AND risk.tenant_id = incident.tenant_id
+        LEFT JOIN assets_app_informationasset asset ON asset.id = incident.related_asset_id AND asset.tenant_id = incident.tenant_id
+        LEFT JOIN processes_process proc ON proc.id = incident.related_process_id AND proc.tenant_id = incident.tenant_id
+        {where_clause}
+        ORDER BY
+            CASE incident.severity
+                WHEN 'CRITICAL' THEN 1
+                WHEN 'HIGH' THEN 2
+                WHEN 'MEDIUM' THEN 3
+                WHEN 'LOW' THEN 4
+                ELSE 5
+            END,
+            incident.detected_at DESC,
+            incident.id DESC
+        LIMIT {limit_placeholder}
+        "#
+    )
+}
+
+fn summary_from_pg_row(row: PgRow) -> Result<IncidentSummary, sqlx::Error> {
+    let severity: String = row.try_get("severity")?;
+    let status: String = row.try_get("status")?;
+    let nis2_reportable: bool = row.try_get("nis2_reportable")?;
+    let early_warning_due_at: Option<String> = row.try_get("early_warning_due_at")?;
+    let early_warning_sent_at: Option<String> = row.try_get("early_warning_sent_at")?;
+    let notification_due_at: Option<String> = row.try_get("notification_due_at")?;
+    let notification_sent_at: Option<String> = row.try_get("notification_sent_at")?;
+    let final_report_due_at: Option<String> = row.try_get("final_report_due_at")?;
+    let final_report_sent_at: Option<String> = row.try_get("final_report_sent_at")?;
+    let early_warning_state = deadline_state(&early_warning_due_at, &early_warning_sent_at);
+    let notification_state = deadline_state(&notification_due_at, &notification_sent_at);
+    let final_report_state = deadline_state(&final_report_due_at, &final_report_sent_at);
+    Ok(IncidentSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        reporter_id: row.try_get("reporter_id")?,
+        reporter_display: user_display(
+            row.try_get("reporter_username")?,
+            row.try_get("reporter_first_name")?,
+            row.try_get("reporter_last_name")?,
+        ),
+        owner_id: row.try_get("owner_id")?,
+        owner_display: user_display(
+            row.try_get("owner_username")?,
+            row.try_get("owner_first_name")?,
+            row.try_get("owner_last_name")?,
+        ),
+        related_risk_id: row.try_get("related_risk_id")?,
+        related_risk_title: row.try_get("related_risk_title")?,
+        related_asset_id: row.try_get("related_asset_id")?,
+        related_asset_name: row.try_get("related_asset_name")?,
+        related_process_id: row.try_get("related_process_id")?,
+        related_process_name: row.try_get("related_process_name")?,
+        title: row.try_get("title")?,
+        summary: row.try_get("summary")?,
+        severity_label: severity_label(&severity).to_string(),
+        severity,
+        status_label: status_label(&status).to_string(),
+        status,
+        detected_at: row.try_get("detected_at")?,
+        confirmed_at: row.try_get("confirmed_at")?,
+        contained_at: row.try_get("contained_at")?,
+        resolved_at: row.try_get("resolved_at")?,
+        nis2_reportability_label: reportability_label(nis2_reportable).to_string(),
+        nis2_reportable,
+        early_warning_due_at,
+        early_warning_sent_at,
+        early_warning_state_label: deadline_state_label(&early_warning_state).to_string(),
+        early_warning_state,
+        notification_due_at,
+        notification_sent_at,
+        notification_state_label: deadline_state_label(&notification_state).to_string(),
+        notification_state,
+        final_report_due_at,
+        final_report_sent_at,
+        final_report_state_label: deadline_state_label(&final_report_state).to_string(),
+        final_report_state,
+        authority_reference: row.try_get("authority_reference")?,
+        stakeholder_summary: row.try_get("stakeholder_summary")?,
+        lessons_learned: row.try_get("lessons_learned")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn summary_from_sqlite_row(row: SqliteRow) -> Result<IncidentSummary, sqlx::Error> {
+    let severity: String = row.try_get("severity")?;
+    let status: String = row.try_get("status")?;
+    let nis2_reportable: bool = row.try_get("nis2_reportable")?;
+    let early_warning_due_at: Option<String> = row.try_get("early_warning_due_at")?;
+    let early_warning_sent_at: Option<String> = row.try_get("early_warning_sent_at")?;
+    let notification_due_at: Option<String> = row.try_get("notification_due_at")?;
+    let notification_sent_at: Option<String> = row.try_get("notification_sent_at")?;
+    let final_report_due_at: Option<String> = row.try_get("final_report_due_at")?;
+    let final_report_sent_at: Option<String> = row.try_get("final_report_sent_at")?;
+    let early_warning_state = deadline_state(&early_warning_due_at, &early_warning_sent_at);
+    let notification_state = deadline_state(&notification_due_at, &notification_sent_at);
+    let final_report_state = deadline_state(&final_report_due_at, &final_report_sent_at);
+    Ok(IncidentSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        reporter_id: row.try_get("reporter_id")?,
+        reporter_display: user_display(
+            row.try_get("reporter_username")?,
+            row.try_get("reporter_first_name")?,
+            row.try_get("reporter_last_name")?,
+        ),
+        owner_id: row.try_get("owner_id")?,
+        owner_display: user_display(
+            row.try_get("owner_username")?,
+            row.try_get("owner_first_name")?,
+            row.try_get("owner_last_name")?,
+        ),
+        related_risk_id: row.try_get("related_risk_id")?,
+        related_risk_title: row.try_get("related_risk_title")?,
+        related_asset_id: row.try_get("related_asset_id")?,
+        related_asset_name: row.try_get("related_asset_name")?,
+        related_process_id: row.try_get("related_process_id")?,
+        related_process_name: row.try_get("related_process_name")?,
+        title: row.try_get("title")?,
+        summary: row.try_get("summary")?,
+        severity_label: severity_label(&severity).to_string(),
+        severity,
+        status_label: status_label(&status).to_string(),
+        status,
+        detected_at: row.try_get("detected_at")?,
+        confirmed_at: row.try_get("confirmed_at")?,
+        contained_at: row.try_get("contained_at")?,
+        resolved_at: row.try_get("resolved_at")?,
+        nis2_reportability_label: reportability_label(nis2_reportable).to_string(),
+        nis2_reportable,
+        early_warning_due_at,
+        early_warning_sent_at,
+        early_warning_state_label: deadline_state_label(&early_warning_state).to_string(),
+        early_warning_state,
+        notification_due_at,
+        notification_sent_at,
+        notification_state_label: deadline_state_label(&notification_state).to_string(),
+        notification_state,
+        final_report_due_at,
+        final_report_sent_at,
+        final_report_state_label: deadline_state_label(&final_report_state).to_string(),
+        final_report_state,
+        authority_reference: row.try_get("authority_reference")?,
+        stakeholder_summary: row.try_get("stakeholder_summary")?,
+        lessons_learned: row.try_get("lessons_learned")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn normalize_required_text(value: Option<&str>, label: &str) -> anyhow::Result<String> {
+    let normalized = normalize_optional_text(value);
+    if normalized.is_empty() {
+        bail!("{label} darf nicht leer sein");
+    }
+    Ok(normalized)
+}
+
+fn normalize_optional_text(value: Option<&str>) -> String {
+    value.unwrap_or("").trim().to_string()
+}
+
+fn normalize_severity(value: Option<&str>) -> String {
+    match value.unwrap_or("MEDIUM").trim().to_uppercase().as_str() {
+        "CRITICAL" => "CRITICAL".to_string(),
+        "HIGH" => "HIGH".to_string(),
+        "LOW" => "LOW".to_string(),
+        "INFO" => "INFO".to_string(),
+        _ => "MEDIUM".to_string(),
+    }
+}
+
+fn normalize_status(value: Option<&str>) -> String {
+    match value.unwrap_or("TRIAGE").trim().to_uppercase().as_str() {
+        "TRIAGE" => "TRIAGE".to_string(),
+        "CONFIRMED" => "CONFIRMED".to_string(),
+        "CONTAINED" => "CONTAINED".to_string(),
+        "RESOLVED" => "RESOLVED".to_string(),
+        "CLOSED" => "CLOSED".to_string(),
+        _ => "TRIAGE".to_string(),
+    }
+}
+
+fn normalize_optional_datetime(value: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    parse_datetime(value)
+        .map(|datetime| Some(datetime.to_rfc3339()))
+        .with_context(|| format!("Zeitpunkt '{value}' muss RFC3339 oder YYYY-MM-DD sein"))
+}
+
+fn parse_datetime(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|datetime| datetime.with_timezone(&Utc))
+        .or_else(|| {
+            NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                .ok()
+                .and_then(|date| date.and_hms_opt(0, 0, 0))
+                .map(|datetime| datetime.and_utc())
+        })
+}
+
+fn deadline_state(due_at: &Option<String>, sent_at: &Option<String>) -> String {
+    if sent_at.is_some() {
+        return "SENT".to_string();
+    }
+    let Some(due_at) = due_at.as_deref().and_then(parse_datetime) else {
+        return "NOT_APPLICABLE".to_string();
+    };
+    let now = Utc::now();
+    if due_at < now {
+        "OVERDUE".to_string()
+    } else if due_at <= now + Duration::hours(12) {
+        "DUE_SOON".to_string()
+    } else {
+        "PENDING".to_string()
+    }
+}
+
+fn severity_label(value: &str) -> &'static str {
+    match value {
+        "CRITICAL" => "Kritisch",
+        "HIGH" => "Hoch",
+        "MEDIUM" => "Mittel",
+        "LOW" => "Niedrig",
+        "INFO" => "Info",
+        _ => "Mittel",
+    }
+}
+
+fn status_label(value: &str) -> &'static str {
+    match value {
+        "TRIAGE" => "Triage",
+        "CONFIRMED" => "Bestaetigt",
+        "CONTAINED" => "Eingedaemmt",
+        "RESOLVED" => "Behoben",
+        "CLOSED" => "Geschlossen",
+        _ => "Triage",
+    }
+}
+
+fn deadline_state_label(value: &str) -> &'static str {
+    match value {
+        "SENT" => "Gemeldet",
+        "OVERDUE" => "Ueberfaellig",
+        "DUE_SOON" => "Faellig bald",
+        "PENDING" => "Ausstehend",
+        _ => "Nicht relevant",
+    }
+}
+
+fn reportability_label(value: bool) -> &'static str {
+    if value {
+        "NIS2 meldepflichtig"
+    } else {
+        "Noch nicht NIS2 meldepflichtig"
+    }
+}
+
+fn user_display(
+    username: Option<String>,
+    first_name: Option<String>,
+    last_name: Option<String>,
+) -> Option<String> {
+    let full_name = format!(
+        "{} {}",
+        first_name.unwrap_or_default().trim(),
+        last_name.unwrap_or_default().trim()
+    )
+    .trim()
+    .to_string();
+    if !full_name.is_empty() {
+        Some(full_name)
+    } else {
+        username.filter(|value| !value.trim().is_empty())
+    }
+}
