@@ -95,7 +95,7 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 - `/cves/`
 - `/admin/users/`
 
-Incidents werden als Rust-Fallakten unter `/incidents/` gefuehrt. Detailseiten unter `/incidents/{id}` erlauben die Bearbeitung von Status, Severity, Meldezeitpunkten und Behoerdenreferenz; das NIS2-Meldepaket kann als Markdown ueber `/incidents/{id}/nis2-export` oder `/api/v1/incidents/{id}/nis2-export` exportiert werden.
+Incidents werden als Rust-Fallakten unter `/incidents/` gefuehrt. Detailseiten unter `/incidents/{id}` erlauben die Bearbeitung von Typ, Runbook, Status, Severity, Meldezeitpunkten und Behoerdenreferenz; verknuepfte Evidence wird direkt in der Fallakte angezeigt. Das NIS2-Meldepaket kann als Markdown, HTML oder PDF ueber `/incidents/{id}/nis2-export`, `/incidents/{id}/nis2-export.html`, `/incidents/{id}/nis2-export.pdf` sowie die entsprechenden `/api/v1/incidents/{id}/...` Endpunkte exportiert werden.
 
 ## Zero-Trust Agent
 

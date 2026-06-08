@@ -40,6 +40,8 @@ pub struct EvidenceItemSummary {
     pub requirement_framework: Option<String>,
     pub requirement_code: Option<String>,
     pub requirement_title: Option<String>,
+    pub incident_id: Option<i64>,
+    pub incident_title: Option<String>,
     pub mapping_program_name: Option<String>,
     pub mapping_version: Option<String>,
     pub source_authority: Option<String>,
@@ -106,6 +108,7 @@ pub struct EvidenceItemCreateRequest {
     pub domain_id: Option<i64>,
     pub measure_id: Option<i64>,
     pub requirement_id: Option<i64>,
+    pub incident_id: Option<i64>,
     pub title: String,
     pub description: String,
     pub linked_requirement: String,
@@ -212,6 +215,22 @@ impl EvidenceStore {
             }
             Self::Sqlite(pool) => {
                 create_evidence_item_sqlite(pool, tenant_id, owner_id, payload).await
+            }
+        }
+    }
+
+    pub async fn list_evidence_for_incident(
+        &self,
+        tenant_id: i64,
+        incident_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EvidenceItemSummary>> {
+        match self {
+            Self::Postgres(pool) => {
+                list_evidence_items_for_incident_postgres(pool, tenant_id, incident_id, limit).await
+            }
+            Self::Sqlite(pool) => {
+                list_evidence_items_for_incident_sqlite(pool, tenant_id, incident_id, limit).await
             }
         }
     }
@@ -470,6 +489,7 @@ async fn create_evidence_item_postgres(
             domain_id,
             measure_id,
             requirement_id,
+            incident_id,
             title,
             description,
             linked_requirement,
@@ -482,7 +502,7 @@ async fn create_evidence_item_postgres(
             created_at,
             updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NULL, NULL, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL, NULL, NOW(), NOW())
         RETURNING id
         "#,
     )
@@ -491,6 +511,7 @@ async fn create_evidence_item_postgres(
     .bind(payload.domain_id)
     .bind(payload.measure_id)
     .bind(payload.requirement_id)
+    .bind(payload.incident_id)
     .bind(title)
     .bind(description)
     .bind(linked_requirement)
@@ -528,6 +549,7 @@ async fn create_evidence_item_sqlite(
             domain_id,
             measure_id,
             requirement_id,
+            incident_id,
             title,
             description,
             linked_requirement,
@@ -540,7 +562,7 @@ async fn create_evidence_item_sqlite(
             created_at,
             updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, NULL, datetime('now'), datetime('now'))
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, NULL, datetime('now'), datetime('now'))
         "#,
     )
     .bind(tenant_id)
@@ -548,6 +570,7 @@ async fn create_evidence_item_sqlite(
     .bind(payload.domain_id)
     .bind(payload.measure_id)
     .bind(payload.requirement_id)
+    .bind(payload.incident_id)
     .bind(title)
     .bind(description)
     .bind(linked_requirement)
@@ -581,6 +604,8 @@ async fn list_evidence_items_postgres(
             req.framework AS requirement_framework,
             req.code AS requirement_code,
             req.title AS requirement_title,
+            item.incident_id,
+            incident.title AS incident_title,
             mv.program_name AS mapping_program_name,
             mv.version AS mapping_version,
             src.authority AS source_authority,
@@ -610,6 +635,8 @@ async fn list_evidence_items_postgres(
             ON measure.id = item.measure_id
         LEFT JOIN requirements_app_requirement req
             ON req.id = item.requirement_id
+        LEFT JOIN incidents_incident incident
+            ON incident.id = item.incident_id AND incident.tenant_id = item.tenant_id
         LEFT JOIN requirements_app_mappingversion mv
             ON mv.id = req.mapping_version_id
         LEFT JOIN requirements_app_regulatorysource src
@@ -656,6 +683,8 @@ async fn list_evidence_items_sqlite(
             req.framework AS requirement_framework,
             req.code AS requirement_code,
             req.title AS requirement_title,
+            item.incident_id,
+            incident.title AS incident_title,
             mv.program_name AS mapping_program_name,
             mv.version AS mapping_version,
             src.authority AS source_authority,
@@ -685,6 +714,8 @@ async fn list_evidence_items_sqlite(
             ON measure.id = item.measure_id
         LEFT JOIN requirements_app_requirement req
             ON req.id = item.requirement_id
+        LEFT JOIN incidents_incident incident
+            ON incident.id = item.incident_id AND incident.tenant_id = item.tenant_id
         LEFT JOIN requirements_app_mappingversion mv
             ON mv.id = req.mapping_version_id
         LEFT JOIN requirements_app_regulatorysource src
@@ -711,6 +742,36 @@ async fn list_evidence_items_sqlite(
         .map(evidence_item_from_sqlite_row)
         .collect::<Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+async fn list_evidence_items_for_incident_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<EvidenceItemSummary>> {
+    let scan_limit = limit.saturating_mul(10).max(limit).max(100);
+    let items = list_evidence_items_postgres(pool, tenant_id, None, scan_limit).await?;
+    Ok(items
+        .into_iter()
+        .filter(|item| item.incident_id == Some(incident_id))
+        .take(limit.max(0) as usize)
+        .collect())
+}
+
+async fn list_evidence_items_for_incident_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<EvidenceItemSummary>> {
+    let scan_limit = limit.saturating_mul(10).max(limit).max(100);
+    let items = list_evidence_items_sqlite(pool, tenant_id, None, scan_limit).await?;
+    Ok(items
+        .into_iter()
+        .filter(|item| item.incident_id == Some(incident_id))
+        .take(limit.max(0) as usize)
+        .collect())
 }
 
 async fn evidence_item_by_id_postgres(
@@ -924,6 +985,8 @@ fn evidence_item_detail_postgres_sql() -> &'static str {
         req.framework AS requirement_framework,
         req.code AS requirement_code,
         req.title AS requirement_title,
+        item.incident_id,
+        incident.title AS incident_title,
         mv.program_name AS mapping_program_name,
         mv.version AS mapping_version,
         src.authority AS source_authority,
@@ -953,6 +1016,8 @@ fn evidence_item_detail_postgres_sql() -> &'static str {
         ON measure.id = item.measure_id
     LEFT JOIN requirements_app_requirement req
         ON req.id = item.requirement_id
+    LEFT JOIN incidents_incident incident
+        ON incident.id = item.incident_id AND incident.tenant_id = item.tenant_id
     LEFT JOIN requirements_app_mappingversion mv
         ON mv.id = req.mapping_version_id
     LEFT JOIN requirements_app_regulatorysource src
@@ -978,6 +1043,8 @@ fn evidence_item_detail_sqlite_sql() -> &'static str {
         req.framework AS requirement_framework,
         req.code AS requirement_code,
         req.title AS requirement_title,
+        item.incident_id,
+        incident.title AS incident_title,
         mv.program_name AS mapping_program_name,
         mv.version AS mapping_version,
         src.authority AS source_authority,
@@ -1007,6 +1074,8 @@ fn evidence_item_detail_sqlite_sql() -> &'static str {
         ON measure.id = item.measure_id
     LEFT JOIN requirements_app_requirement req
         ON req.id = item.requirement_id
+    LEFT JOIN incidents_incident incident
+        ON incident.id = item.incident_id AND incident.tenant_id = item.tenant_id
     LEFT JOIN requirements_app_mappingversion mv
         ON mv.id = req.mapping_version_id
     LEFT JOIN requirements_app_regulatorysource src
@@ -1032,6 +1101,8 @@ fn evidence_item_from_pg_row(row: PgRow) -> Result<EvidenceItemSummary, sqlx::Er
         requirement_framework: row.try_get("requirement_framework")?,
         requirement_code: row.try_get("requirement_code")?,
         requirement_title: row.try_get("requirement_title")?,
+        incident_id: row.try_get("incident_id")?,
+        incident_title: row.try_get("incident_title")?,
         mapping_program_name: row.try_get("mapping_program_name")?,
         mapping_version: row.try_get("mapping_version")?,
         source_authority: row.try_get("source_authority")?,
@@ -1067,6 +1138,8 @@ fn evidence_item_from_sqlite_row(row: SqliteRow) -> Result<EvidenceItemSummary, 
         requirement_framework: row.try_get("requirement_framework")?,
         requirement_code: row.try_get("requirement_code")?,
         requirement_title: row.try_get("requirement_title")?,
+        incident_id: row.try_get("incident_id")?,
+        incident_title: row.try_get("incident_title")?,
         mapping_program_name: row.try_get("mapping_program_name")?,
         mapping_version: row.try_get("mapping_version")?,
         source_authority: row.try_get("source_authority")?,
@@ -1206,6 +1279,19 @@ async fn validate_evidence_item_refs_postgres(
             bail!("Massnahme {measure_id} wurde fuer diesen Tenant nicht gefunden.");
         }
     }
+    if let Some(incident_id) = payload.incident_id {
+        let exists: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM incidents_incident WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(incident_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Incident fuer Evidence konnte nicht validiert werden")?;
+        if exists.is_none() {
+            bail!("Incident {incident_id} wurde fuer diesen Tenant nicht gefunden.");
+        }
+    }
     Ok(())
 }
 
@@ -1236,6 +1322,19 @@ async fn validate_evidence_item_refs_sqlite(
         .context("SQLite-Massnahme fuer Evidence konnte nicht validiert werden")?;
         if exists.is_none() {
             bail!("Massnahme {measure_id} wurde fuer diesen Tenant nicht gefunden.");
+        }
+    }
+    if let Some(incident_id) = payload.incident_id {
+        let exists: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM incidents_incident WHERE tenant_id = ?1 AND id = ?2",
+        )
+        .bind(tenant_id)
+        .bind(incident_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Incident fuer Evidence konnte nicht validiert werden")?;
+        if exists.is_none() {
+            bail!("Incident {incident_id} wurde fuer diesen Tenant nicht gefunden.");
         }
     }
     Ok(())

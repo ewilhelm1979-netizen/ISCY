@@ -500,6 +500,8 @@ struct WebCveAssessmentForm {
 struct WebIncidentForm {
     title: String,
     summary: Option<String>,
+    incident_type: Option<String>,
+    runbook_template: Option<String>,
     severity: Option<String>,
     status: Option<String>,
     owner_id: Option<String>,
@@ -3766,6 +3768,31 @@ async fn incident_nis2_export(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
+    incident_nis2_export_format(incident_id, state, headers, IncidentExportFormat::Markdown).await
+}
+
+async fn incident_nis2_export_html(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    incident_nis2_export_format(incident_id, state, headers, IncidentExportFormat::Html).await
+}
+
+async fn incident_nis2_export_pdf(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    incident_nis2_export_format(incident_id, state, headers, IncidentExportFormat::Pdf).await
+}
+
+async fn incident_nis2_export_format(
+    incident_id: i64,
+    state: AppState,
+    headers: HeaderMap,
+    export_format: IncidentExportFormat,
+) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
         Err(err) => {
@@ -3782,7 +3809,7 @@ async fn incident_nis2_export(
         }
     };
 
-    let Some(store) = state.incident_store else {
+    let Some(store) = state.incident_store.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiErrorResponse {
@@ -3796,10 +3823,11 @@ async fn incident_nis2_export(
     };
 
     match store.incident_detail(context.tenant_id, incident_id).await {
-        Ok(Some(incident)) => markdown_download_response(
-            &format!("iscy-incident-{}-nis2.md", incident.id),
-            incident_nis2_markdown(&incident),
-        ),
+        Ok(Some(incident)) => {
+            let evidence_items =
+                incident_linked_evidence(&state, context.tenant_id, incident.id).await;
+            incident_export_download_response(&incident, &evidence_items, export_format)
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiErrorResponse {
@@ -4038,6 +4066,7 @@ async fn evidence_upload(
         domain_id: optional_i64_form_field(&form.fields, "domain_id"),
         measure_id: optional_i64_form_field(&form.fields, "measure_id"),
         requirement_id: optional_i64_form_field(&form.fields, "requirement_id"),
+        incident_id: optional_i64_form_field(&form.fields, "incident_id"),
         title: form.fields.get("title").cloned().unwrap_or_default(),
         description: form.fields.get("description").cloned().unwrap_or_default(),
         linked_requirement: form
@@ -5459,13 +5488,14 @@ async fn web_incidents(
                 .iter()
                 .map(|incident| {
                     format!(
-                        r#"<tr><td><a href="{}">{}</a><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        r#"<tr><td><a href="{}">{}</a><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                         web_path_with_context(
                             &format!("/incidents/{}", incident.id),
                             Some(&context)
                         ),
                         html_escape(&incident.title),
                         html_escape(&incident.summary),
+                        html_escape(&incident.incident_type_label),
                         html_escape(&incident.severity_label),
                         html_escape(&incident.status_label),
                         html_escape(&incident.nis2_reportability_label),
@@ -5484,6 +5514,7 @@ async fn web_incidents(
                       <form method="post" action="{}">
                         <div class="form-grid">
                           <label>Titel<input name="title" type="text" required></label>
+                          <label>Typ<select name="incident_type">{}</select></label>
                           <label>Severity<select name="severity">{}</select></label>
                           <label>Status<select name="status">{}</select></label>
                           <label>Owner-ID<input name="owner_id" type="number" min="1"></label>
@@ -5502,6 +5533,7 @@ async fn web_incidents(
                     </article>
                     "#,
                     web_path_with_context("/incidents/", Some(&context)),
+                    incident_type_options_for("GENERAL"),
                     incident_severity_options_for("HIGH"),
                     incident_status_options_for("TRIAGE"),
                 )
@@ -5519,7 +5551,7 @@ async fn web_incidents(
                 <section class="grid">
                   <article class="panel wide">
                     <table>
-                      <thead><tr><th>Incident</th><th>Severity</th><th>Status</th><th>NIS2</th><th>24h</th><th>72h</th><th>Owner</th></tr></thead>
+                      <thead><tr><th>Incident</th><th>Typ</th><th>Severity</th><th>Status</th><th>NIS2</th><th>24h</th><th>72h</th><th>Owner</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                   </article>
@@ -5530,7 +5562,7 @@ async fn web_incidents(
                 metric_card("NIS2", reportable_count),
                 metric_card("Ueberfaellig", overdue_count),
                 if rows.is_empty() {
-                    web_empty_row(7, "Keine Incidents vorhanden.")
+                    web_empty_row(8, "Keine Incidents vorhanden.")
                 } else {
                     rows
                 },
@@ -5606,8 +5638,19 @@ async fn web_incident_detail(
             let related_process = incident.related_process_name.as_deref().unwrap_or("-");
             let owner = incident.owner_display.as_deref().unwrap_or("-");
             let reporter = incident.reporter_display.as_deref().unwrap_or("-");
-            let export_href = web_path_with_context(
+            let evidence_items =
+                incident_linked_evidence(&state, context.tenant_id, incident.id).await;
+            let evidence_rows = incident_evidence_rows(&evidence_items);
+            let markdown_export_href = web_path_with_context(
                 &format!("/incidents/{}/nis2-export", incident.id),
+                Some(&context),
+            );
+            let html_export_href = web_path_with_context(
+                &format!("/incidents/{}/nis2-export.html", incident.id),
+                Some(&context),
+            );
+            let pdf_export_href = web_path_with_context(
+                &format!("/incidents/{}/nis2-export.pdf", incident.id),
                 Some(&context),
             );
             let api_export_href = web_path_with_context(
@@ -5628,6 +5671,7 @@ async fn web_incident_detail(
                     <table>
                       <tbody>
                         <tr><th>Status</th><td>{}</td><th>Severity</th><td>{}</td></tr>
+                        <tr><th>Typ</th><td>{}</td><th>Runbook</th><td>{} Schritte</td></tr>
                         <tr><th>NIS2</th><td>{}</td><th>Owner</th><td>{}</td></tr>
                         <tr><th>Reporter</th><td>{}</td><th>Behoerdenreferenz</th><td>{}</td></tr>
                         <tr><th>Risiko</th><td>{}</td><th>Asset</th><td>{}</td></tr>
@@ -5646,8 +5690,21 @@ async fn web_incident_detail(
                     <p>{}</p>
                   </article>
                   <article class="panel wide">
+                    <h2>Runbook</h2>
+                    <pre>{}</pre>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Evidence</h2>
+                    <table>
+                      <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
                     <h2>Meldepaket</h2>
                     <p><a href="{}">Markdown herunterladen</a></p>
+                    <p><a href="{}">HTML herunterladen</a></p>
+                    <p><a href="{}">PDF herunterladen</a></p>
                     <p><a href="{}">API-Export oeffnen</a></p>
                   </article>
                   {}
@@ -5656,6 +5713,8 @@ async fn web_incident_detail(
                 html_escape(&incident.title),
                 html_escape(&incident.status_label),
                 html_escape(&incident.severity_label),
+                html_escape(&incident.incident_type_label),
+                incident_runbook_step_count(&incident.runbook_template),
                 html_escape(&incident.nis2_reportability_label),
                 html_escape(owner),
                 html_escape(reporter),
@@ -5674,7 +5733,11 @@ async fn web_incident_detail(
                 html_escape(&incident.summary),
                 html_escape(&incident.stakeholder_summary),
                 html_escape(&incident.lessons_learned),
-                html_escape(&export_href),
+                html_escape(&incident.runbook_template),
+                evidence_rows,
+                html_escape(&markdown_export_href),
+                html_escape(&html_export_href),
+                html_escape(&pdf_export_href),
                 html_escape(&api_export_href),
                 edit_panel,
             );
@@ -5751,17 +5814,67 @@ async fn web_incident_nis2_export(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Response {
+    web_incident_nis2_export_format(
+        incident_id,
+        state,
+        headers,
+        query,
+        IncidentExportFormat::Markdown,
+    )
+    .await
+}
+
+async fn web_incident_nis2_export_html(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_incident_nis2_export_format(
+        incident_id,
+        state,
+        headers,
+        query,
+        IncidentExportFormat::Html,
+    )
+    .await
+}
+
+async fn web_incident_nis2_export_pdf(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_incident_nis2_export_format(
+        incident_id,
+        state,
+        headers,
+        query,
+        IncidentExportFormat::Pdf,
+    )
+    .await
+}
+
+async fn web_incident_nis2_export_format(
+    incident_id: i64,
+    state: AppState,
+    headers: HeaderMap,
+    query: WebContextQuery,
+    export_format: IncidentExportFormat,
+) -> Response {
     let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Incidents", "/incidents/").into_response();
     };
-    let Some(store) = state.incident_store else {
+    let Some(store) = state.incident_store.clone() else {
         return web_store_missing("Incidents", "/incidents/", &context, "Incident").into_response();
     };
     match store.incident_detail(context.tenant_id, incident_id).await {
-        Ok(Some(incident)) => markdown_download_response(
-            &format!("iscy-incident-{}-nis2.md", incident.id),
-            incident_nis2_markdown(&incident),
-        ),
+        Ok(Some(incident)) => {
+            let evidence_items =
+                incident_linked_evidence(&state, context.tenant_id, incident.id).await;
+            incident_export_download_response(&incident, &evidence_items, export_format)
+        }
         Ok(None) => web_error_page(
             "Incidents",
             "/incidents/",
@@ -5796,11 +5909,12 @@ async fn web_evidence(
                 .iter()
                 .map(|item| {
                     format!(
-                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                         html_escape(&item.title),
                         html_escape(&item.status_label),
                         html_escape(item.owner_display.as_deref().unwrap_or("-")),
                         html_escape(item.requirement_code.as_deref().unwrap_or("-")),
+                        html_escape(item.incident_title.as_deref().unwrap_or("-")),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -5816,7 +5930,7 @@ async fn web_evidence(
                 <section class="grid">
                   <article class="panel wide">
                     <table>
-                      <thead><tr><th>Titel</th><th>Status</th><th>Owner</th><th>Requirement</th></tr></thead>
+                      <thead><tr><th>Titel</th><th>Status</th><th>Owner</th><th>Requirement</th><th>Incident</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                   </article>
@@ -5828,6 +5942,7 @@ async fn web_evidence(
                         <label>Status<select name="status">{}</select></label>
                         <label>Session-ID<input name="session_id" type="number" min="1"></label>
                         <label>Requirement-ID<input name="requirement_id" type="number" min="1"></label>
+                        <label>Incident-ID<input name="incident_id" type="number" min="1"></label>
                       </div>
                       <label>Linked Requirement<input name="linked_requirement" type="text"></label>
                       <label>Beschreibung<textarea name="description" rows="4"></textarea></label>
@@ -5843,7 +5958,7 @@ async fn web_evidence(
                 metric_card("Teilweise", overview.need_summary.partial),
                 metric_card("Abgedeckt", overview.need_summary.covered),
                 if rows.is_empty() {
-                    r#"<tr><td colspan="4">Keine Evidenzen vorhanden.</td></tr>"#.to_string()
+                    r#"<tr><td colspan="5">Keine Evidenzen vorhanden.</td></tr>"#.to_string()
                 } else {
                     rows
                 },
@@ -5904,6 +6019,7 @@ async fn web_evidence_upload(
         domain_id: optional_i64_form_field(&form.fields, "domain_id"),
         measure_id: optional_i64_form_field(&form.fields, "measure_id"),
         requirement_id: optional_i64_form_field(&form.fields, "requirement_id"),
+        incident_id: optional_i64_form_field(&form.fields, "incident_id"),
         title: form.fields.get("title").cloned().unwrap_or_default(),
         description: form.fields.get("description").cloned().unwrap_or_default(),
         linked_requirement: form
@@ -7251,6 +7367,8 @@ fn web_incident_form_request(
         related_process_id: Some(optional_form_i64(form.related_process_id, "Prozess")?),
         title: Some(form.title),
         summary: form.summary,
+        incident_type: form.incident_type,
+        runbook_template: form.runbook_template,
         severity: form.severity,
         status: form.status,
         detected_at: optional_form_text_for_write(form.detected_at),
@@ -7306,6 +7424,7 @@ fn incident_edit_form_panel(
           <form method="post" action="{}">
             <div class="form-grid">
               <label>Titel<input name="title" type="text" required value="{}"></label>
+              <label>Typ<select name="incident_type">{}</select></label>
               <label>Severity<select name="severity">{}</select></label>
               <label>Status<select name="status">{}</select></label>
               <label>Owner-ID<input name="owner_id" type="number" min="1" value="{}"></label>
@@ -7324,6 +7443,7 @@ fn incident_edit_form_panel(
             </div>
             <label class="checkbox-row"><input name="nis2_reportable" type="checkbox" value="1"{}> NIS2-meldepflichtig behandeln</label>
             <label>Kurzbeschreibung<textarea name="summary" rows="4">{}</textarea></label>
+            <label>Runbook<textarea name="runbook_template" rows="7">{}</textarea></label>
             <label>Stakeholder-Zusammenfassung<textarea name="stakeholder_summary" rows="3">{}</textarea></label>
             <label>Lessons Learned<textarea name="lessons_learned" rows="3">{}</textarea></label>
             <button type="submit">Fallakte speichern</button>
@@ -7332,6 +7452,7 @@ fn incident_edit_form_panel(
         "#,
         html_escape(&action),
         html_escape(&incident.title),
+        incident_type_options_for(&incident.incident_type),
         incident_severity_options_for(&incident.severity),
         incident_status_options_for(&incident.status),
         html_escape(&owner_id),
@@ -7349,12 +7470,17 @@ fn incident_edit_form_panel(
         html_escape(&incident.authority_reference),
         checked_attr(incident.nis2_reportable),
         html_escape(&incident.summary),
+        html_escape(&incident.runbook_template),
         html_escape(&incident.stakeholder_summary),
         html_escape(&incident.lessons_learned),
     )
 }
 
-fn incident_nis2_markdown(incident: &incident_store::IncidentSummary) -> String {
+fn incident_nis2_markdown(
+    incident: &incident_store::IncidentSummary,
+    evidence_items: &[evidence_store::EvidenceItemSummary],
+) -> String {
+    let evidence_rows = incident_evidence_markdown_rows(evidence_items);
     format!(
         r#"# ISCY NIS2-Meldepaket: {}
 
@@ -7365,6 +7491,7 @@ fn incident_nis2_markdown(incident: &incident_store::IncidentSummary) -> String 
 | Incident-ID | {} |
 | Tenant-ID | {} |
 | Titel | {} |
+| Incident-Typ | {} |
 | Severity | {} |
 | Status | {} |
 | NIS2-Einstufung | {} |
@@ -7400,6 +7527,16 @@ fn incident_nis2_markdown(incident: &incident_store::IncidentSummary) -> String 
 
 {}
 
+## Runbook
+
+{}
+
+## Evidence
+
+| Titel | Status | Requirement | Datei |
+| --- | --- | --- | --- |
+{}
+
 ## Zeitlinie
 
 | Ereignis | Zeitpunkt |
@@ -7415,6 +7552,7 @@ fn incident_nis2_markdown(incident: &incident_store::IncidentSummary) -> String 
         incident.id,
         incident.tenant_id,
         md_value(&incident.title),
+        md_value(&incident.incident_type_label),
         md_value(&incident.severity_label),
         md_value(&incident.status_label),
         md_value(&incident.nis2_reportability_label),
@@ -7436,6 +7574,8 @@ fn incident_nis2_markdown(incident: &incident_store::IncidentSummary) -> String 
         md_block(&incident.summary),
         md_block(&incident.stakeholder_summary),
         md_block(&incident.lessons_learned),
+        md_block(&incident.runbook_template),
+        evidence_rows,
         md_optional(incident.detected_at.as_deref()),
         md_optional(incident.confirmed_at.as_deref()),
         md_optional(incident.contained_at.as_deref()),
@@ -7443,6 +7583,278 @@ fn incident_nis2_markdown(incident: &incident_store::IncidentSummary) -> String 
         md_value(&incident.created_at),
         md_value(&incident.updated_at),
     )
+}
+
+#[derive(Debug, Clone, Copy)]
+enum IncidentExportFormat {
+    Markdown,
+    Html,
+    Pdf,
+}
+
+fn incident_export_download_response(
+    incident: &incident_store::IncidentSummary,
+    evidence_items: &[evidence_store::EvidenceItemSummary],
+    export_format: IncidentExportFormat,
+) -> Response {
+    match export_format {
+        IncidentExportFormat::Markdown => markdown_download_response(
+            &format!("iscy-incident-{}-nis2.md", incident.id),
+            incident_nis2_markdown(incident, evidence_items),
+        ),
+        IncidentExportFormat::Html => html_download_response(
+            &format!("iscy-incident-{}-nis2.html", incident.id),
+            incident_nis2_html(incident, evidence_items),
+        ),
+        IncidentExportFormat::Pdf => binary_download_response(
+            &format!("iscy-incident-{}-nis2.pdf", incident.id),
+            "application/pdf",
+            incident_nis2_pdf(incident, evidence_items),
+        ),
+    }
+}
+
+fn incident_nis2_html(
+    incident: &incident_store::IncidentSummary,
+    evidence_items: &[evidence_store::EvidenceItemSummary],
+) -> String {
+    let evidence_rows = incident_evidence_rows(evidence_items);
+    format!(
+        r#"<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>ISCY NIS2-Meldepaket {}</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; margin: 32px; color: #172026; }}
+    h1, h2 {{ color: #0f3d3e; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 12px 0 24px; }}
+    th, td {{ border: 1px solid #ccd6d8; padding: 8px; text-align: left; vertical-align: top; }}
+    th {{ background: #eef5f4; }}
+    pre {{ white-space: pre-wrap; background: #f6f8f8; padding: 12px; border: 1px solid #d9e1e3; }}
+  </style>
+</head>
+<body>
+  <h1>ISCY NIS2-Meldepaket: {}</h1>
+  <h2>Fallakte</h2>
+  <table>
+    <tbody>
+      <tr><th>Incident-ID</th><td>{}</td><th>Tenant-ID</th><td>{}</td></tr>
+      <tr><th>Titel</th><td>{}</td><th>Typ</th><td>{}</td></tr>
+      <tr><th>Severity</th><td>{}</td><th>Status</th><td>{}</td></tr>
+      <tr><th>NIS2</th><td>{}</td><th>Behoerden-/Case-Referenz</th><td>{}</td></tr>
+      <tr><th>24h-Fruehwarnung</th><td>{} ({})</td><th>72h-Meldung</th><td>{} ({})</td></tr>
+      <tr><th>30-Tage-Bericht</th><td>{} ({})</td><th>Final gesendet</th><td>{}</td></tr>
+    </tbody>
+  </table>
+  <h2>Beschreibung</h2>
+  <p>{}</p>
+  <h2>Stakeholder</h2>
+  <p>{}</p>
+  <h2>Runbook</h2>
+  <pre>{}</pre>
+  <h2>Evidence</h2>
+  <table>
+    <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
+    <tbody>{}</tbody>
+  </table>
+  <h2>Lessons Learned</h2>
+  <p>{}</p>
+</body>
+</html>
+"#,
+        incident.id,
+        html_escape(&incident.title),
+        incident.id,
+        incident.tenant_id,
+        html_escape(&incident.title),
+        html_escape(&incident.incident_type_label),
+        html_escape(&incident.severity_label),
+        html_escape(&incident.status_label),
+        html_escape(&incident.nis2_reportability_label),
+        html_escape(&incident.authority_reference),
+        html_escape(incident.early_warning_due_at.as_deref().unwrap_or("-")),
+        html_escape(&incident.early_warning_state_label),
+        html_escape(incident.notification_due_at.as_deref().unwrap_or("-")),
+        html_escape(&incident.notification_state_label),
+        html_escape(incident.final_report_due_at.as_deref().unwrap_or("-")),
+        html_escape(&incident.final_report_state_label),
+        html_escape(incident.final_report_sent_at.as_deref().unwrap_or("-")),
+        html_escape(&incident.summary),
+        html_escape(&incident.stakeholder_summary),
+        html_escape(&incident.runbook_template),
+        evidence_rows,
+        html_escape(&incident.lessons_learned),
+    )
+}
+
+fn incident_nis2_pdf(
+    incident: &incident_store::IncidentSummary,
+    evidence_items: &[evidence_store::EvidenceItemSummary],
+) -> Vec<u8> {
+    let mut lines = vec![
+        format!("ISCY NIS2-Meldepaket: {}", incident.title),
+        format!("Incident-ID: {}", incident.id),
+        format!("Tenant-ID: {}", incident.tenant_id),
+        format!("Typ: {}", incident.incident_type_label),
+        format!("Severity: {}", incident.severity_label),
+        format!("Status: {}", incident.status_label),
+        format!("NIS2: {}", incident.nis2_reportability_label),
+        format!("Behoerden-/Case-Referenz: {}", incident.authority_reference),
+        format!(
+            "24h-Fruehwarnung: {} ({})",
+            incident.early_warning_due_at.as_deref().unwrap_or("-"),
+            incident.early_warning_state_label
+        ),
+        format!(
+            "72h-Meldung: {} ({})",
+            incident.notification_due_at.as_deref().unwrap_or("-"),
+            incident.notification_state_label
+        ),
+        format!(
+            "30-Tage-Bericht: {} ({})",
+            incident.final_report_due_at.as_deref().unwrap_or("-"),
+            incident.final_report_state_label
+        ),
+        String::new(),
+        "Beschreibung:".to_string(),
+    ];
+    lines.extend(wrap_pdf_text(&incident.summary, 92));
+    lines.push(String::new());
+    lines.push("Runbook:".to_string());
+    for line in incident.runbook_template.lines() {
+        lines.extend(wrap_pdf_text(line, 92));
+    }
+    lines.push(String::new());
+    lines.push("Evidence:".to_string());
+    if evidence_items.is_empty() {
+        lines.push("-".to_string());
+    } else {
+        for item in evidence_items {
+            lines.extend(wrap_pdf_text(
+                &format!(
+                    "{} | {} | {} | {}",
+                    item.title,
+                    item.status_label,
+                    item.requirement_code.as_deref().unwrap_or("-"),
+                    item.file_name.as_deref().unwrap_or("-")
+                ),
+                92,
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push("Lessons Learned:".to_string());
+    lines.extend(wrap_pdf_text(&incident.lessons_learned, 92));
+    simple_pdf_document(&lines)
+}
+
+fn simple_pdf_document(lines: &[String]) -> Vec<u8> {
+    let mut content = String::from("BT\n/F1 10 Tf\n50 800 Td\n13 TL\n");
+    for line in lines.iter().take(58) {
+        content.push_str(&format!("({}) Tj\nT*\n", pdf_escape(line)));
+    }
+    content.push_str("ET\n");
+
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{}endstream", content.len(), content),
+    ];
+    let mut pdf = String::from("%PDF-1.4\n");
+    let mut offsets = Vec::with_capacity(objects.len());
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.push_str(&format!("{} 0 obj\n{}\nendobj\n", index + 1, object));
+    }
+    let xref_start = pdf.len();
+    pdf.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
+    pdf.push_str("0000000000 65535 f \n");
+    for offset in offsets {
+        pdf.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    pdf.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+        objects.len() + 1,
+        xref_start
+    ));
+    pdf.into_bytes()
+}
+
+fn wrap_pdf_text(value: &str, max_len: usize) -> Vec<String> {
+    let sanitized = pdf_plain_text(value);
+    if sanitized.trim().is_empty() {
+        return vec!["-".to_string()];
+    }
+    let mut lines = Vec::new();
+    for raw_line in sanitized.lines() {
+        let mut current = String::new();
+        for word in raw_line.split_whitespace() {
+            if current.len() + word.len() + 1 > max_len && !current.is_empty() {
+                lines.push(current);
+                current = String::new();
+            }
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+    }
+    if lines.is_empty() {
+        vec!["-".to_string()]
+    } else {
+        lines
+    }
+}
+
+fn pdf_plain_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            '\n' | '\r' => '\n',
+            ch if ch.is_ascii() && !ch.is_control() => ch,
+            _ => '?',
+        })
+        .collect()
+}
+
+fn pdf_escape(value: &str) -> String {
+    pdf_plain_text(value)
+        .replace('\\', "\\\\")
+        .replace('(', "\\(")
+        .replace(')', "\\)")
+}
+
+fn html_download_response(file_name: &str, body: String) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    let disposition = format!("attachment; filename=\"{}\"", file_name);
+    if let Ok(value) = HeaderValue::from_str(&disposition) {
+        headers.insert(CONTENT_DISPOSITION, value);
+    }
+    (StatusCode::OK, headers, body).into_response()
+}
+
+fn binary_download_response(
+    file_name: &str,
+    content_type: &'static str,
+    body: Vec<u8>,
+) -> Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+    let disposition = format!("attachment; filename=\"{}\"", file_name);
+    if let Ok(value) = HeaderValue::from_str(&disposition) {
+        headers.insert(CONTENT_DISPOSITION, value);
+    }
+    (StatusCode::OK, headers, body).into_response()
 }
 
 fn markdown_download_response(file_name: &str, body: String) -> Response {
@@ -7478,6 +7890,90 @@ fn md_block(value: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+async fn incident_linked_evidence(
+    state: &AppState,
+    tenant_id: i64,
+    incident_id: i64,
+) -> Vec<evidence_store::EvidenceItemSummary> {
+    let Some(store) = state.evidence_store.clone() else {
+        return Vec::new();
+    };
+    store
+        .list_evidence_for_incident(tenant_id, incident_id, 50)
+        .await
+        .unwrap_or_default()
+}
+
+fn incident_evidence_rows(evidence_items: &[evidence_store::EvidenceItemSummary]) -> String {
+    if evidence_items.is_empty() {
+        return web_empty_row(4, "Keine Evidence mit diesem Incident verknuepft.");
+    }
+    evidence_items
+        .iter()
+        .map(|item| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&item.title),
+                html_escape(&item.status_label),
+                html_escape(item.requirement_code.as_deref().unwrap_or("-")),
+                html_escape(item.file_name.as_deref().unwrap_or("-")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn incident_evidence_markdown_rows(
+    evidence_items: &[evidence_store::EvidenceItemSummary],
+) -> String {
+    if evidence_items.is_empty() {
+        return "| - | - | - | - |".to_string();
+    }
+    evidence_items
+        .iter()
+        .map(|item| {
+            format!(
+                "| {} | {} | {} | {} |",
+                md_value(&item.title),
+                md_value(&item.status_label),
+                md_optional(item.requirement_code.as_deref()),
+                md_optional(item.file_name.as_deref()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn incident_runbook_step_count(runbook_template: &str) -> usize {
+    runbook_template
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+}
+
+fn incident_type_options_for(selected_type: &str) -> String {
+    [
+        ("GENERAL", "Allgemein"),
+        ("PHISHING", "Phishing"),
+        ("MALWARE", "Malware"),
+        ("DATA_BREACH", "Datenabfluss"),
+        ("OUTAGE", "Ausfall"),
+        ("SUPPLIER", "Lieferant"),
+        ("VULNERABILITY", "Schwachstelle"),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            value,
+            selected_attr(value == &selected_type),
+            label
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
 }
 
 fn incident_severity_options_for(selected_status: &str) -> String {
@@ -10692,6 +11188,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/incidents/{incident_id}/nis2-export",
             get(incident_nis2_export),
         )
+        .route(
+            "/api/v1/incidents/{incident_id}/nis2-export.html",
+            get(incident_nis2_export_html),
+        )
+        .route(
+            "/api/v1/incidents/{incident_id}/nis2-export.pdf",
+            get(incident_nis2_export_pdf),
+        )
         .route("/api/v1/evidence", get(evidence_overview))
         .route("/api/v1/evidence/uploads", post(evidence_upload))
         .route(
@@ -10747,6 +11251,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/incidents/{incident_id}/nis2-export",
             get(web_incident_nis2_export),
+        )
+        .route(
+            "/incidents/{incident_id}/nis2-export.html",
+            get(web_incident_nis2_export_html),
+        )
+        .route(
+            "/incidents/{incident_id}/nis2-export.pdf",
+            get(web_incident_nis2_export_pdf),
         )
         .route("/catalog/", get(web_catalog))
         .route("/reports/", get(web_reports))

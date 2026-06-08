@@ -304,6 +304,7 @@ async fn rust_auth_session_creates_cookie_and_drives_web_context() {
     );
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/dashboard/")
@@ -2594,6 +2595,7 @@ async fn incident_nis2_export_returns_markdown_package() {
     );
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/incidents/1/nis2-export")
@@ -2617,8 +2619,54 @@ async fn incident_nis2_export_returns_markdown_package() {
     let markdown = String::from_utf8(body.to_vec()).unwrap();
     assert!(markdown.contains("# ISCY NIS2-Meldepaket"));
     assert!(markdown.contains("Credential phishing campaign"));
+    assert!(markdown.contains("Phishing"));
+    assert!(markdown.contains("Eindaemmung durchfuehren"));
     assert!(markdown.contains("24h-Fruehwarnung"));
     assert!(markdown.contains("BSI-CASE-1"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/nis2-export.html")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/html"));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("ISCY NIS2-Meldepaket"));
+    assert!(html.contains("Runbook"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/nis2-export.pdf")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/pdf"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(body.starts_with(b"%PDF-1.4"));
 }
 
 #[tokio::test]
@@ -2707,6 +2755,11 @@ async fn evidence_overview_returns_tenant_evidence_from_database() {
         "ISO27001"
     );
     assert_eq!(payload["evidence_items"][0]["mapping_program_name"], "ISCY");
+    assert_eq!(payload["evidence_items"][0]["incident_id"], 1);
+    assert_eq!(
+        payload["evidence_items"][0]["incident_title"],
+        "Credential phishing campaign"
+    );
     assert_eq!(payload["evidence_needs"].as_array().unwrap().len(), 3);
     assert_eq!(payload["need_summary"]["open"], 1);
     assert_eq!(payload["need_summary"]["partial"], 1);
@@ -2915,6 +2968,7 @@ async fn evidence_upload_creates_item_writes_file_and_syncs_needs() {
             ("description", "Uploaded from Rust API"),
             ("session_id", "100"),
             ("requirement_id", "2"),
+            ("incident_id", "1"),
             ("status", "SUBMITTED"),
         ],
         Some((
@@ -2949,6 +3003,11 @@ async fn evidence_upload_creates_item_writes_file_and_syncs_needs() {
     assert_eq!(payload["accepted"], true);
     assert_eq!(payload["item"]["title"], "Uploaded Rust Evidence");
     assert_eq!(payload["item"]["owner_id"], 7);
+    assert_eq!(payload["item"]["incident_id"], 1);
+    assert_eq!(
+        payload["item"]["incident_title"],
+        "Credential phishing campaign"
+    );
     assert_eq!(payload["item"]["linked_requirement"], "NIS2 21.2");
     assert_eq!(payload["need_sync"]["session_id"], 100);
     let relative_file = payload["item"]["file_name"].as_str().unwrap();
@@ -2999,6 +3058,7 @@ async fn rust_web_evidence_accepts_file_upload_from_form() {
             ("description", "Uploaded from Rust web form"),
             ("session_id", "100"),
             ("requirement_id", "1"),
+            ("incident_id", "1"),
             ("status", "SUBMITTED"),
         ],
         Some(("file", "browser.csv", "text/csv", b"name,value\nmfa,done\n")),
@@ -4566,6 +4626,10 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Fallakte bearbeiten"));
     assert!(html.contains("Markdown herunterladen"));
+    assert!(html.contains("HTML herunterladen"));
+    assert!(html.contains("PDF herunterladen"));
+    assert!(html.contains("Phishing"));
+    assert!(html.contains("Eindaemmung durchfuehren"));
     assert!(html.contains("Customer portal support users affected."));
 
     let response = app
@@ -4623,7 +4687,7 @@ async fn rust_web_incidents_renders_and_creates_incident() {
                 .header("x-iscy-user-id", "7")
                 .header("x-iscy-roles", "ADMIN")
                 .body(Body::from(
-                    "title=Web+Incident&severity=HIGH&status=TRIAGE&owner_id=7&reporter_id=7&related_risk_id=10&related_asset_id=1&related_process_id=1&detected_at=2026-06-08&nis2_reportable=on&summary=Created+from+web",
+                    "title=Web+Incident&incident_type=VULNERABILITY&severity=HIGH&status=TRIAGE&owner_id=7&reporter_id=7&related_risk_id=10&related_asset_id=1&related_process_id=1&detected_at=2026-06-08&nis2_reportable=on&summary=Created+from+web",
                 ))
                 .unwrap(),
         )
@@ -4638,6 +4702,13 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     .await
     .unwrap();
     assert_eq!(stored_count, 1);
+    let incident_type: String = sqlx::query_scalar(
+        "SELECT incident_type FROM incidents_incident WHERE tenant_id = 42 AND title = 'Web Incident'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(incident_type, "VULNERABILITY");
 }
 
 #[tokio::test]
@@ -5496,7 +5567,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0006_rust_auth_group_permission_core",
             "0007_rust_zero_trust_agent_core",
             "0008_rust_agent_enrollment_hardening",
-            "0009_rust_incident_core"
+            "0009_rust_incident_core",
+            "0010_rust_incident_runbooks_evidence_exports"
         ]
     );
     assert!(
@@ -8332,6 +8404,8 @@ async fn create_incident_table(pool: &SqlitePool) {
             related_process_id INTEGER NULL,
             title varchar(255) NOT NULL,
             summary TEXT NOT NULL DEFAULT '',
+            incident_type varchar(32) NOT NULL DEFAULT 'GENERAL',
+            runbook_template TEXT NOT NULL DEFAULT '',
             severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
             status varchar(32) NOT NULL DEFAULT 'TRIAGE',
             detected_at TEXT NULL,
@@ -8371,6 +8445,8 @@ async fn insert_incident_fixture(pool: &SqlitePool) {
             related_process_id,
             title,
             summary,
+            incident_type,
+            runbook_template,
             severity,
             status,
             detected_at,
@@ -8401,6 +8477,10 @@ async fn insert_incident_fixture(pool: &SqlitePool) {
                 1,
                 'Credential phishing campaign',
                 'SOC detected active credential phishing against support users.',
+                'PHISHING',
+                '1. Scope erfassen
+2. Eindaemmung durchfuehren
+3. Meldung bewerten',
                 'HIGH',
                 'CONFIRMED',
                 '2026-04-20T10:00:00Z',
@@ -8430,6 +8510,8 @@ async fn insert_incident_fixture(pool: &SqlitePool) {
                 2,
                 'Foreign incident',
                 'Other tenant incident',
+                'GENERAL',
+                '1. Scope erfassen',
                 'CRITICAL',
                 'TRIAGE',
                 '2026-04-20T10:00:00Z',
@@ -8557,6 +8639,18 @@ async fn create_evidence_tables(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
+        CREATE TABLE incidents_incident (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
         CREATE TABLE evidence_evidenceitem (
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
@@ -8564,6 +8658,7 @@ async fn create_evidence_tables(pool: &SqlitePool) {
             domain_id INTEGER NULL,
             measure_id INTEGER NULL,
             requirement_id INTEGER NULL,
+            incident_id INTEGER NULL,
             title varchar(255) NOT NULL,
             description TEXT NOT NULL,
             linked_requirement varchar(128) NOT NULL,
@@ -8722,6 +8817,17 @@ async fn insert_evidence_fixture(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
+        INSERT INTO incidents_incident (id, tenant_id, title)
+        VALUES
+            (1, 42, 'Credential phishing campaign'),
+            (2, 99, 'Foreign incident')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
         INSERT INTO evidence_evidenceitem (
             id,
             tenant_id,
@@ -8729,6 +8835,7 @@ async fn insert_evidence_fixture(pool: &SqlitePool) {
             domain_id,
             measure_id,
             requirement_id,
+            incident_id,
             title,
             description,
             linked_requirement,
@@ -8747,6 +8854,7 @@ async fn insert_evidence_fixture(pool: &SqlitePool) {
                 42,
                 100,
                 NULL,
+                1,
                 1,
                 1,
                 'MFA Rollout Screenshot',
@@ -8768,6 +8876,7 @@ async fn insert_evidence_fixture(pool: &SqlitePool) {
                 NULL,
                 NULL,
                 2,
+                1,
                 'Incident Playbook',
                 'SOC incident handling playbook',
                 'NIS2 21.2',
@@ -8787,6 +8896,7 @@ async fn insert_evidence_fixture(pool: &SqlitePool) {
                 NULL,
                 NULL,
                 1,
+                2,
                 'Foreign Evidence',
                 'Foreign tenant evidence',
                 'ISO27001 A.5.17',

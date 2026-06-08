@@ -77,6 +77,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_INCIDENT_SCHEMA,
         postgres_sql: POSTGRES_INCIDENT_SCHEMA,
     },
+    Migration {
+        version: "0010_rust_incident_runbooks_evidence_exports",
+        sqlite_sql: SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA,
+        postgres_sql: POSTGRES_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -397,6 +402,34 @@ CREATE INDEX IF NOT EXISTS idx_incidents_tenant_nis2 ON incidents_incident(tenan
 CREATE INDEX IF NOT EXISTS idx_incidents_related_risk ON incidents_incident(tenant_id, related_risk_id);
 CREATE INDEX IF NOT EXISTS idx_incidents_related_asset ON incidents_incident(tenant_id, related_asset_id);
 CREATE INDEX IF NOT EXISTS idx_incidents_related_process ON incidents_incident(tenant_id, related_process_id);
+"#;
+
+const SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"
+ALTER TABLE incidents_incident ADD COLUMN incident_type varchar(32) NOT NULL DEFAULT 'GENERAL';
+ALTER TABLE incidents_incident ADD COLUMN runbook_template TEXT NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN incident_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_evidence_items_incident ON evidence_evidenceitem(tenant_id, incident_id);
+UPDATE incidents_incident
+SET incident_type = 'PHISHING',
+    runbook_template = '1. Scope erfassen; 2. Eindaemmung durchfuehren; 3. Meldung bewerten'
+WHERE runbook_template = '' AND LOWER(title) LIKE '%phishing%';
+UPDATE incidents_incident
+SET runbook_template = '1. Scope erfassen; 2. Eindaemmung durchfuehren; 3. Kommunikation abstimmen; 4. Lessons Learned dokumentieren'
+WHERE runbook_template = '';
+"#;
+
+const POSTGRES_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS incident_type varchar(32) NOT NULL DEFAULT 'GENERAL';
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS runbook_template TEXT NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS incident_id BIGINT NULL;
+CREATE INDEX IF NOT EXISTS idx_evidence_items_incident ON evidence_evidenceitem(tenant_id, incident_id);
+UPDATE incidents_incident
+SET incident_type = 'PHISHING',
+    runbook_template = '1. Scope erfassen; 2. Eindaemmung durchfuehren; 3. Meldung bewerten'
+WHERE runbook_template = '' AND LOWER(title) LIKE '%phishing%';
+UPDATE incidents_incident
+SET runbook_template = '1. Scope erfassen; 2. Eindaemmung durchfuehren; 3. Kommunikation abstimmen; 4. Lessons Learned dokumentieren'
+WHERE runbook_template = '';
 "#;
 
 const SQLITE_AUTH_RBAC_SCHEMA: &str = r#"
@@ -2218,13 +2251,14 @@ INSERT OR IGNORE INTO risks_risk (
 );
 INSERT OR IGNORE INTO incidents_incident (
     id, tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id, related_process_id,
-    title, summary, severity, status, detected_at, confirmed_at, contained_at, resolved_at,
+    title, summary, incident_type, runbook_template, severity, status, detected_at, confirmed_at, contained_at, resolved_at,
     nis2_reportable, early_warning_due_at, early_warning_sent_at, notification_due_at,
     notification_sent_at, final_report_due_at, final_report_sent_at, authority_reference,
     stakeholder_summary, lessons_learned, created_at, updated_at
 ) VALUES (
     1, 1, 1, 1, 1, 1, 1,
     'Credential phishing campaign', 'Demo incident with NIS2 notification tracking.',
+    'PHISHING', '1. Scope erfassen; 2. Eindaemmung durchfuehren; 3. Meldung bewerten',
     'HIGH', 'CONFIRMED', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z', NULL, NULL,
     1, '2026-04-23T10:00:00Z', NULL, '2026-04-25T10:00:00Z',
     NULL, '2026-05-22T10:00:00Z', NULL, '',
@@ -2265,9 +2299,9 @@ INSERT OR IGNORE INTO requirements_app_requirement (
 );
 INSERT OR IGNORE INTO evidence_evidenceitem (
     id, tenant_id, session_id, domain_id, measure_id, requirement_id, title, description,
-    linked_requirement, file, status, owner_id, review_notes, reviewed_by_id, reviewed_at, created_at, updated_at
+    incident_id, linked_requirement, file, status, owner_id, review_notes, reviewed_by_id, reviewed_at, created_at, updated_at
 ) VALUES (
-    1, 1, 1, NULL, NULL, 1, 'MFA rollout evidence', 'Initial MFA rollout evidence.',
+    1, 1, 1, NULL, NULL, 1, 'MFA rollout evidence', 'Initial MFA rollout evidence.', 1,
     'NIS2-21-MFA', NULL, 'APPROVED', 1, 'Looks ready for demo.', 1, '2026-04-22T10:00:00Z',
     '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
 );
@@ -2539,13 +2573,14 @@ INSERT INTO risks_risk (
 ) ON CONFLICT (id) DO NOTHING;
 INSERT INTO incidents_incident (
     id, tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id, related_process_id,
-    title, summary, severity, status, detected_at, confirmed_at, contained_at, resolved_at,
+    title, summary, incident_type, runbook_template, severity, status, detected_at, confirmed_at, contained_at, resolved_at,
     nis2_reportable, early_warning_due_at, early_warning_sent_at, notification_due_at,
     notification_sent_at, final_report_due_at, final_report_sent_at, authority_reference,
     stakeholder_summary, lessons_learned, created_at, updated_at
 ) VALUES (
     1, 1, 1, 1, 1, 1, 1,
     'Credential phishing campaign', 'Demo incident with NIS2 notification tracking.',
+    'PHISHING', '1. Scope erfassen; 2. Eindaemmung durchfuehren; 3. Meldung bewerten',
     'HIGH', 'CONFIRMED', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z', NULL, NULL,
     TRUE, '2026-04-23T10:00:00Z', NULL, '2026-04-25T10:00:00Z',
     NULL, '2026-05-22T10:00:00Z', NULL, '',
@@ -2586,9 +2621,9 @@ INSERT INTO requirements_app_requirement (
 ) ON CONFLICT (id) DO NOTHING;
 INSERT INTO evidence_evidenceitem (
     id, tenant_id, session_id, domain_id, measure_id, requirement_id, title, description,
-    linked_requirement, file, status, owner_id, review_notes, reviewed_by_id, reviewed_at, created_at, updated_at
+    incident_id, linked_requirement, file, status, owner_id, review_notes, reviewed_by_id, reviewed_at, created_at, updated_at
 ) VALUES (
-    1, 1, 1, NULL, NULL, 1, 'MFA rollout evidence', 'Initial MFA rollout evidence.',
+    1, 1, 1, NULL, NULL, 1, 'MFA rollout evidence', 'Initial MFA rollout evidence.', 1,
     'NIS2-21-MFA', NULL, 'APPROVED', 1, 'Looks ready for demo.', 1, '2026-04-22T10:00:00Z',
     '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
 ) ON CONFLICT (id) DO NOTHING;

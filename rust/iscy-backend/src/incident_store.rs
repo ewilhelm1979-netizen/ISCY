@@ -31,6 +31,9 @@ pub struct IncidentSummary {
     pub related_process_name: Option<String>,
     pub title: String,
     pub summary: String,
+    pub incident_type: String,
+    pub incident_type_label: String,
+    pub runbook_template: String,
     pub severity: String,
     pub severity_label: String,
     pub status: String,
@@ -74,6 +77,8 @@ pub struct IncidentWriteRequest {
     pub related_process_id: Option<Option<i64>>,
     pub title: Option<String>,
     pub summary: Option<String>,
+    pub incident_type: Option<String>,
+    pub runbook_template: Option<String>,
     pub severity: Option<String>,
     pub status: Option<String>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -274,7 +279,7 @@ async fn create_incident_postgres(
         r#"
         INSERT INTO incidents_incident (
             tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id,
-            related_process_id, title, summary, severity, status, detected_at,
+            related_process_id, title, summary, incident_type, runbook_template, severity, status, detected_at,
             confirmed_at, contained_at, resolved_at, nis2_reportable,
             early_warning_due_at, early_warning_sent_at, notification_due_at,
             notification_sent_at, final_report_due_at, final_report_sent_at,
@@ -282,7 +287,7 @@ async fn create_incident_postgres(
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-            $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
+            $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
         )
         RETURNING id
         "#,
@@ -295,6 +300,8 @@ async fn create_incident_postgres(
     .bind(write.related_process_id)
     .bind(&write.title)
     .bind(&write.summary)
+    .bind(&write.incident_type)
+    .bind(&write.runbook_template)
     .bind(&write.severity)
     .bind(&write.status)
     .bind(write.detected_at.as_deref())
@@ -334,7 +341,7 @@ async fn create_incident_sqlite(
         r#"
         INSERT INTO incidents_incident (
             tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id,
-            related_process_id, title, summary, severity, status, detected_at,
+            related_process_id, title, summary, incident_type, runbook_template, severity, status, detected_at,
             confirmed_at, contained_at, resolved_at, nis2_reportable,
             early_warning_due_at, early_warning_sent_at, notification_due_at,
             notification_sent_at, final_report_due_at, final_report_sent_at,
@@ -342,7 +349,7 @@ async fn create_incident_sqlite(
         )
         VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
         )
         "#,
     )
@@ -354,6 +361,8 @@ async fn create_incident_sqlite(
     .bind(write.related_process_id)
     .bind(&write.title)
     .bind(&write.summary)
+    .bind(&write.incident_type)
+    .bind(&write.runbook_template)
     .bind(&write.severity)
     .bind(&write.status)
     .bind(write.detected_at.as_deref())
@@ -397,12 +406,13 @@ async fn update_incident_postgres(
         r#"
         UPDATE incidents_incident
         SET reporter_id = $3, owner_id = $4, related_risk_id = $5, related_asset_id = $6,
-            related_process_id = $7, title = $8, summary = $9, severity = $10, status = $11,
-            detected_at = $12, confirmed_at = $13, contained_at = $14, resolved_at = $15,
-            nis2_reportable = $16, early_warning_due_at = $17, early_warning_sent_at = $18,
-            notification_due_at = $19, notification_sent_at = $20, final_report_due_at = $21,
-            final_report_sent_at = $22, authority_reference = $23,
-            stakeholder_summary = $24, lessons_learned = $25, updated_at = $26
+            related_process_id = $7, title = $8, summary = $9, incident_type = $10,
+            runbook_template = $11, severity = $12, status = $13, detected_at = $14,
+            confirmed_at = $15, contained_at = $16, resolved_at = $17, nis2_reportable = $18,
+            early_warning_due_at = $19, early_warning_sent_at = $20,
+            notification_due_at = $21, notification_sent_at = $22, final_report_due_at = $23,
+            final_report_sent_at = $24, authority_reference = $25,
+            stakeholder_summary = $26, lessons_learned = $27, updated_at = $28
         WHERE tenant_id = $1 AND id = $2
         "#,
     )
@@ -415,6 +425,8 @@ async fn update_incident_postgres(
     .bind(write.related_process_id)
     .bind(&write.title)
     .bind(&write.summary)
+    .bind(&write.incident_type)
+    .bind(&write.runbook_template)
     .bind(&write.severity)
     .bind(&write.status)
     .bind(write.detected_at.as_deref())
@@ -457,12 +469,13 @@ async fn update_incident_sqlite(
         r#"
         UPDATE incidents_incident
         SET reporter_id = ?3, owner_id = ?4, related_risk_id = ?5, related_asset_id = ?6,
-            related_process_id = ?7, title = ?8, summary = ?9, severity = ?10, status = ?11,
-            detected_at = ?12, confirmed_at = ?13, contained_at = ?14, resolved_at = ?15,
-            nis2_reportable = ?16, early_warning_due_at = ?17, early_warning_sent_at = ?18,
-            notification_due_at = ?19, notification_sent_at = ?20, final_report_due_at = ?21,
-            final_report_sent_at = ?22, authority_reference = ?23,
-            stakeholder_summary = ?24, lessons_learned = ?25, updated_at = ?26
+            related_process_id = ?7, title = ?8, summary = ?9, incident_type = ?10,
+            runbook_template = ?11, severity = ?12, status = ?13, detected_at = ?14,
+            confirmed_at = ?15, contained_at = ?16, resolved_at = ?17, nis2_reportable = ?18,
+            early_warning_due_at = ?19, early_warning_sent_at = ?20,
+            notification_due_at = ?21, notification_sent_at = ?22, final_report_due_at = ?23,
+            final_report_sent_at = ?24, authority_reference = ?25,
+            stakeholder_summary = ?26, lessons_learned = ?27, updated_at = ?28
         WHERE tenant_id = ?1 AND id = ?2
         "#,
     )
@@ -475,6 +488,8 @@ async fn update_incident_sqlite(
     .bind(write.related_process_id)
     .bind(&write.title)
     .bind(&write.summary)
+    .bind(&write.incident_type)
+    .bind(&write.runbook_template)
     .bind(&write.severity)
     .bind(&write.status)
     .bind(write.detected_at.as_deref())
@@ -511,6 +526,8 @@ struct NewIncident {
     related_process_id: Option<i64>,
     title: String,
     summary: String,
+    incident_type: String,
+    runbook_template: String,
     severity: String,
     status: String,
     detected_at: Option<String>,
@@ -539,6 +556,8 @@ struct ExistingIncident {
     related_process_id: Option<i64>,
     title: String,
     summary: String,
+    incident_type: String,
+    runbook_template: String,
     severity: String,
     status: String,
     detected_at: Option<String>,
@@ -563,6 +582,9 @@ impl NewIncident {
         let now = Utc::now().to_rfc3339();
         let title = normalize_required_text(payload.title.as_deref(), "Incident-Titel")?;
         let summary = normalize_optional_text(payload.summary.as_deref());
+        let incident_type = normalize_incident_type(payload.incident_type.as_deref());
+        let runbook_template =
+            normalize_runbook_template(payload.runbook_template.as_deref(), &incident_type);
         let severity = normalize_severity(payload.severity.as_deref());
         let status = normalize_status(payload.status.as_deref());
         let detected_at = normalize_optional_datetime(payload.detected_at.flatten().as_deref())?
@@ -580,6 +602,8 @@ impl NewIncident {
             related_process_id: payload.related_process_id.flatten(),
             title,
             summary,
+            incident_type,
+            runbook_template,
             severity,
             status,
             detected_at,
@@ -621,6 +645,14 @@ impl ExistingIncident {
             .summary
             .map(|value| normalize_optional_text(Some(&value)))
             .unwrap_or(current.summary);
+        let incident_type = payload
+            .incident_type
+            .map(|value| normalize_incident_type(Some(&value)))
+            .unwrap_or(current.incident_type);
+        let runbook_template = payload
+            .runbook_template
+            .map(|value| normalize_runbook_template(Some(&value), &incident_type))
+            .unwrap_or(current.runbook_template);
         let severity = payload
             .severity
             .map(|value| normalize_severity(Some(&value)))
@@ -657,6 +689,8 @@ impl ExistingIncident {
                 .unwrap_or(current.related_process_id),
             title,
             summary,
+            incident_type,
+            runbook_template,
             severity,
             status,
             detected_at,
@@ -704,6 +738,8 @@ impl ExistingIncident {
             related_process_id: self.related_process_id,
             title: self.title.clone(),
             summary: self.summary.clone(),
+            incident_type: self.incident_type.clone(),
+            runbook_template: self.runbook_template.clone(),
             severity: self.severity.clone(),
             status: self.status.clone(),
             detected_at: self.detected_at.clone(),
@@ -899,6 +935,8 @@ fn incident_select_postgres_sql(where_clause: &str, limit_placeholder: &str) -> 
             proc.name AS related_process_name,
             incident.title,
             incident.summary,
+            incident.incident_type,
+            incident.runbook_template,
             incident.severity,
             incident.status,
             incident.detected_at::text AS detected_at,
@@ -961,6 +999,8 @@ fn incident_select_sqlite_sql(where_clause: &str, limit_placeholder: &str) -> St
             proc.name AS related_process_name,
             incident.title,
             incident.summary,
+            incident.incident_type,
+            incident.runbook_template,
             incident.severity,
             incident.status,
             CAST(incident.detected_at AS TEXT) AS detected_at,
@@ -1004,6 +1044,7 @@ fn incident_select_sqlite_sql(where_clause: &str, limit_placeholder: &str) -> St
 fn summary_from_pg_row(row: PgRow) -> Result<IncidentSummary, sqlx::Error> {
     let severity: String = row.try_get("severity")?;
     let status: String = row.try_get("status")?;
+    let incident_type: String = row.try_get("incident_type")?;
     let nis2_reportable: bool = row.try_get("nis2_reportable")?;
     let early_warning_due_at: Option<String> = row.try_get("early_warning_due_at")?;
     let early_warning_sent_at: Option<String> = row.try_get("early_warning_sent_at")?;
@@ -1037,6 +1078,9 @@ fn summary_from_pg_row(row: PgRow) -> Result<IncidentSummary, sqlx::Error> {
         related_process_name: row.try_get("related_process_name")?,
         title: row.try_get("title")?,
         summary: row.try_get("summary")?,
+        incident_type_label: incident_type_label(&incident_type).to_string(),
+        incident_type,
+        runbook_template: row.try_get("runbook_template")?,
         severity_label: severity_label(&severity).to_string(),
         severity,
         status_label: status_label(&status).to_string(),
@@ -1070,6 +1114,7 @@ fn summary_from_pg_row(row: PgRow) -> Result<IncidentSummary, sqlx::Error> {
 fn summary_from_sqlite_row(row: SqliteRow) -> Result<IncidentSummary, sqlx::Error> {
     let severity: String = row.try_get("severity")?;
     let status: String = row.try_get("status")?;
+    let incident_type: String = row.try_get("incident_type")?;
     let nis2_reportable: bool = row.try_get("nis2_reportable")?;
     let early_warning_due_at: Option<String> = row.try_get("early_warning_due_at")?;
     let early_warning_sent_at: Option<String> = row.try_get("early_warning_sent_at")?;
@@ -1103,6 +1148,9 @@ fn summary_from_sqlite_row(row: SqliteRow) -> Result<IncidentSummary, sqlx::Erro
         related_process_name: row.try_get("related_process_name")?,
         title: row.try_get("title")?,
         summary: row.try_get("summary")?,
+        incident_type_label: incident_type_label(&incident_type).to_string(),
+        incident_type,
+        runbook_template: row.try_get("runbook_template")?,
         severity_label: severity_label(&severity).to_string(),
         severity,
         status_label: status_label(&status).to_string(),
@@ -1143,6 +1191,64 @@ fn normalize_required_text(value: Option<&str>, label: &str) -> anyhow::Result<S
 
 fn normalize_optional_text(value: Option<&str>) -> String {
     value.unwrap_or("").trim().to_string()
+}
+
+fn normalize_incident_type(value: Option<&str>) -> String {
+    match value.unwrap_or("GENERAL").trim().to_uppercase().as_str() {
+        "PHISHING" => "PHISHING".to_string(),
+        "MALWARE" => "MALWARE".to_string(),
+        "DATA_BREACH" => "DATA_BREACH".to_string(),
+        "OUTAGE" => "OUTAGE".to_string(),
+        "SUPPLIER" => "SUPPLIER".to_string(),
+        "VULNERABILITY" => "VULNERABILITY".to_string(),
+        _ => "GENERAL".to_string(),
+    }
+}
+
+fn normalize_runbook_template(value: Option<&str>, incident_type: &str) -> String {
+    let normalized = normalize_optional_text(value);
+    if normalized.is_empty() {
+        return runbook_template_for(incident_type).to_string();
+    }
+    normalized
+}
+
+fn runbook_template_for(incident_type: &str) -> &'static str {
+    match incident_type {
+        "PHISHING" => {
+            "1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.\n2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.\n3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.\n4. Meldung: Betroffenheit, Datenarten und NIS2-Fristen bewerten.\n5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren."
+        }
+        "MALWARE" => {
+            "1. Scope: betroffene Hosts, Hashes, Prozesse und C2-Indikatoren sichern.\n2. Eindaemmung: Hosts isolieren, IOC-Blocklisten verteilen und Backups schuetzen.\n3. Analyse: Entry Point, Persistenz, Lateralmovement und Datenabfluss pruefen.\n4. Wiederherstellung: Systeme neu aufsetzen oder bereinigen, Monitoring erhoehen.\n5. Abschluss: Controls, EDR-Regeln und Patch-Status aktualisieren."
+        }
+        "DATA_BREACH" => {
+            "1. Scope: Datenarten, betroffene Personen/Systeme und Zeitraum bestimmen.\n2. Eindaemmung: Zugriff stoppen, Berechtigungen entziehen und Logs sichern.\n3. Bewertung: Meldepflichten nach NIS2/DSGVO und Kundenpflichten entscheiden.\n4. Kommunikation: Legal, Datenschutz, Management und Kunden abgestimmt informieren.\n5. Abschluss: Root Cause, Control-Gaps und Nachweise dokumentieren."
+        }
+        "OUTAGE" => {
+            "1. Scope: betroffene Services, SLAs, kritische Prozesse und Nutzerkreis erfassen.\n2. Stabilisierung: Workarounds, Failover und Wiederanlauf priorisieren.\n3. Ursache: Infrastruktur, Changes, Abhaengigkeiten und Kapazitaeten pruefen.\n4. Kommunikation: Status, ETA und Auswirkungen fuer Stakeholder aktualisieren.\n5. Abschluss: Resilienz-, Monitoring- und Recovery-Massnahmen nachziehen."
+        }
+        "SUPPLIER" => {
+            "1. Scope: betroffene Lieferanten, Services, Datenfluesse und Vertraege erfassen.\n2. Eindaemmung: Schnittstellen, Zugriffe und Abhaengigkeiten kontrollieren.\n3. Nachweise: Lieferantenstatement, IOCs, SLA-Auswirkung und Audit-Trails sichern.\n4. Bewertung: NIS2/KRITIS-Auswirkung und Kundenkommunikation festlegen.\n5. Abschluss: Third-Party-Risiko, Vertragscontrols und Exit-Optionen aktualisieren."
+        }
+        "VULNERABILITY" => {
+            "1. Scope: betroffene Produkte, Versionen, Assets und Exposure erfassen.\n2. Priorisierung: CVSS, EPSS, KEV, Exploit-Reife und Business-Kontext bewerten.\n3. Eindaemmung: Workarounds, WAF/EDR-Regeln und Netzwerkbegrenzung setzen.\n4. Behebung: Patch, Upgrade oder Konfigurationsfix mit Evidence verknuepfen.\n5. Abschluss: Risiko, SBOM/Product-Security und Detection-Content aktualisieren."
+        }
+        _ => {
+            "1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.\n2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.\n3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.\n4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.\n5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren."
+        }
+    }
+}
+
+fn incident_type_label(incident_type: &str) -> &'static str {
+    match incident_type {
+        "PHISHING" => "Phishing",
+        "MALWARE" => "Malware",
+        "DATA_BREACH" => "Datenabfluss",
+        "OUTAGE" => "Ausfall",
+        "SUPPLIER" => "Lieferant",
+        "VULNERABILITY" => "Schwachstelle",
+        _ => "Allgemein",
+    }
 }
 
 fn normalize_severity(value: Option<&str>) -> String {
