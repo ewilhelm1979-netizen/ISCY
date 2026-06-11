@@ -19,6 +19,8 @@ use std::{
 };
 use tower::util::ServiceExt;
 
+type IncidentTimelineRow = (String, Option<String>, Option<String>, Option<i64>);
+
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
     let response = app_router()
@@ -2461,6 +2463,12 @@ async fn incident_create_persists_nis2_deadlines_and_links() {
         payload["incident"]["final_report_due_at"],
         "2026-07-08T10:00:00+00:00"
     );
+    assert_eq!(payload["events"][0]["event_type"], "CREATED");
+    assert_eq!(payload["events"][0]["actor_display"], "Ada Lovelace");
+    assert!(payload["events"][0]["summary"]
+        .as_str()
+        .unwrap()
+        .contains("NIS2 reportable outage"));
 }
 
 #[tokio::test]
@@ -2576,6 +2584,15 @@ async fn incident_update_updates_status_and_sent_marker() {
     assert_eq!(payload["incident"]["status"], "CONTAINED");
     assert_eq!(payload["incident"]["notification_state"], "SENT");
     assert_eq!(payload["incident"]["authority_reference"], "BSI-CASE-2");
+    assert_eq!(payload["events"][0]["event_type"], "STATUS_CHANGED");
+    assert_eq!(payload["events"][0]["from_status"], "CONFIRMED");
+    assert_eq!(payload["events"][0]["to_status"], "CONTAINED");
+    let event_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM incidents_incidentevent WHERE incident_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(event_count, 1);
 }
 
 #[tokio::test]
@@ -4636,6 +4653,8 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     assert!(html.contains("Eindaemmung durchfuehren"));
     assert!(html.contains("Evidence zum Incident hochladen"));
     assert!(html.contains("Customer portal support users affected."));
+    assert!(html.contains("Timeline"));
+    assert!(html.contains("Noch keine Timeline-Events vorhanden."));
 
     let boundary = "iscy-incident-evidence-upload-boundary";
     let body = multipart_body(
@@ -4703,6 +4722,7 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Incident Evidence from Detail"));
+    assert!(html.contains("Evidence &#39;Incident Evidence from Detail&#39; hinzugefuegt."));
 
     let response = app
         .clone()
@@ -4730,6 +4750,23 @@ async fn rust_web_incidents_renders_and_creates_incident() {
             .unwrap();
     assert_eq!(stored.0, "CONTAINED");
     assert_eq!(stored.1, "BSI-CASE-3");
+    let timeline: Vec<IncidentTimelineRow> = sqlx::query_as(
+        r#"
+        SELECT event_type, from_status, to_status, evidence_item_id
+        FROM incidents_incidentevent
+        WHERE tenant_id = 42 AND incident_id = 1
+        ORDER BY id
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(timeline.len(), 2);
+    assert_eq!(timeline[0].0, "EVIDENCE_UPLOADED");
+    assert_eq!(timeline[0].3, Some(1));
+    assert_eq!(timeline[1].0, "STATUS_CHANGED");
+    assert_eq!(timeline[1].1.as_deref(), Some("CONFIRMED"));
+    assert_eq!(timeline[1].2.as_deref(), Some("CONTAINED"));
 
     let response = app
         .clone()
@@ -5641,7 +5678,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0007_rust_zero_trust_agent_core",
             "0008_rust_agent_enrollment_hardening",
             "0009_rust_incident_core",
-            "0010_rust_incident_runbooks_evidence_exports"
+            "0010_rust_incident_runbooks_evidence_exports",
+            "0011_rust_incident_timeline"
         ]
     );
     assert!(
@@ -5668,6 +5706,11 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     assert!(db_admin::sqlite_table_exists(&pool, "incidents_incident")
         .await
         .unwrap());
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "incidents_incidentevent")
+            .await
+            .unwrap()
+    );
     assert!(db_admin::sqlite_table_exists(&pool, "auth_permission")
         .await
         .unwrap());
@@ -8497,6 +8540,30 @@ async fn create_incident_table(pool: &SqlitePool) {
             lessons_learned TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    create_incident_event_table(pool).await;
+}
+
+async fn create_incident_event_table(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE incidents_incidentevent (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL,
+            incident_id INTEGER NOT NULL,
+            actor_id INTEGER NULL,
+            event_type varchar(32) NOT NULL,
+            summary varchar(255) NOT NULL,
+            detail TEXT NOT NULL DEFAULT '',
+            from_status varchar(32) NULL,
+            to_status varchar(32) NULL,
+            evidence_item_id INTEGER NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         "#,
     )

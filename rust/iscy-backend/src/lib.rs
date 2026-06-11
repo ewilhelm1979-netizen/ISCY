@@ -697,6 +697,7 @@ pub struct IncidentRegisterResponse {
 pub struct IncidentDetailResponse {
     pub api_version: &'static str,
     pub incident: incident_store::IncidentSummary,
+    pub events: Vec<incident_store::IncidentEventSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3600,14 +3601,30 @@ async fn incident_detail(
     };
 
     match store.incident_detail(context.tenant_id, incident_id).await {
-        Ok(Some(incident)) => (
-            StatusCode::OK,
-            Json(IncidentDetailResponse {
-                api_version: "v1",
-                incident,
-            }),
-        )
-            .into_response(),
+        Ok(Some(incident)) => match store
+            .list_incident_events(context.tenant_id, incident_id, 50)
+            .await
+        {
+            Ok(events) => (
+                StatusCode::OK,
+                Json(IncidentDetailResponse {
+                    api_version: "v1",
+                    incident,
+                    events,
+                }),
+            )
+                .into_response(),
+            Err(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "database_error",
+                    message: format!("Incident-Timeline konnte nicht gelesen werden: {err}"),
+                }),
+            )
+                .into_response(),
+        },
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiErrorResponse {
@@ -3668,7 +3685,10 @@ async fn incident_create(
             .into_response();
     };
 
-    match store.create_incident(context.tenant_id, payload).await {
+    match store
+        .create_incident(context.tenant_id, Some(context.user_id), payload)
+        .await
+    {
         Ok(result) => (
             StatusCode::CREATED,
             Json(IncidentWriteResponse {
@@ -3729,7 +3749,12 @@ async fn incident_update(
     };
 
     match store
-        .update_incident(context.tenant_id, incident_id, payload)
+        .update_incident(
+            context.tenant_id,
+            incident_id,
+            Some(context.user_id),
+            payload,
+        )
         .await
     {
         Ok(Some(result)) => (
@@ -4084,6 +4109,7 @@ async fn evidence_upload(
         .await
     {
         Ok(item) => {
+            record_incident_evidence_event(&state, context.tenant_id, context.user_id, &item).await;
             let need_sync = if let Some(session_id) = item.session_id {
                 store
                     .sync_evidence_needs(
@@ -5606,7 +5632,10 @@ async fn web_incidents_submit(
             return web_error_page("Incidents", "/incidents/", &context, &message).into_response()
         }
     };
-    match store.create_incident(auth_context.tenant_id, payload).await {
+    match store
+        .create_incident(auth_context.tenant_id, Some(auth_context.user_id), payload)
+        .await
+    {
         Ok(_) => {
             Redirect::to(&web_path_with_context("/incidents/", Some(&context))).into_response()
         }
@@ -5641,6 +5670,11 @@ async fn web_incident_detail(
             let evidence_items =
                 incident_linked_evidence(&state, context.tenant_id, incident.id).await;
             let evidence_rows = incident_evidence_rows(&evidence_items);
+            let timeline_events = store
+                .list_incident_events(context.tenant_id, incident.id, 30)
+                .await
+                .unwrap_or_default();
+            let timeline_rows = incident_event_rows(&timeline_events);
             let evidence_upload_panel = incident_evidence_upload_panel(
                 &context,
                 incident.id,
@@ -5700,6 +5734,13 @@ async fn web_incident_detail(
                     <pre>{}</pre>
                   </article>
                   <article class="panel wide">
+                    <h2>Timeline</h2>
+                    <table>
+                      <thead><tr><th>Zeitpunkt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Actor</th><th>Detail</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
                     <h2>Evidence</h2>
                     <table>
                       <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
@@ -5741,6 +5782,7 @@ async fn web_incident_detail(
                 html_escape(&incident.stakeholder_summary),
                 html_escape(&incident.lessons_learned),
                 html_escape(&incident.runbook_template),
+                timeline_rows,
                 evidence_rows,
                 evidence_upload_panel,
                 html_escape(&markdown_export_href),
@@ -5795,7 +5837,12 @@ async fn web_incident_detail_submit(
         }
     };
     match store
-        .update_incident(auth_context.tenant_id, incident_id, payload)
+        .update_incident(
+            auth_context.tenant_id,
+            incident_id,
+            Some(auth_context.user_id),
+            payload,
+        )
         .await
     {
         Ok(Some(_)) => Redirect::to(&web_path_with_context(
@@ -6044,6 +6091,13 @@ async fn web_evidence_upload(
         .await
     {
         Ok(item) => {
+            record_incident_evidence_event(
+                &state,
+                auth_context.tenant_id,
+                auth_context.user_id,
+                &item,
+            )
+            .await;
             if let Some(session_id) = item.session_id {
                 let _ = store
                     .sync_evidence_needs(
@@ -7917,6 +7971,25 @@ async fn incident_linked_evidence(
         .unwrap_or_default()
 }
 
+async fn record_incident_evidence_event(
+    state: &AppState,
+    tenant_id: i64,
+    actor_id: i64,
+    item: &evidence_store::EvidenceItemSummary,
+) {
+    let (Some(incident_id), Some(store)) = (item.incident_id, state.incident_store.clone()) else {
+        return;
+    };
+    let _ = store
+        .append_incident_event(
+            tenant_id,
+            incident_id,
+            Some(actor_id),
+            incident_store::IncidentEventWriteRequest::evidence_uploaded(item.id, &item.title),
+        )
+        .await;
+}
+
 fn incident_evidence_rows(evidence_items: &[evidence_store::EvidenceItemSummary]) -> String {
     if evidence_items.is_empty() {
         return web_empty_row(4, "Keine Evidence mit diesem Incident verknuepft.");
@@ -7930,6 +8003,26 @@ fn incident_evidence_rows(evidence_items: &[evidence_store::EvidenceItemSummary]
                 html_escape(&item.status_label),
                 html_escape(item.requirement_code.as_deref().unwrap_or("-")),
                 html_escape(item.file_name.as_deref().unwrap_or("-")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn incident_event_rows(events: &[incident_store::IncidentEventSummary]) -> String {
+    if events.is_empty() {
+        return web_empty_row(5, "Noch keine Timeline-Events vorhanden.");
+    }
+    events
+        .iter()
+        .map(|event| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&event.created_at),
+                html_escape(&event.event_type_label),
+                html_escape(&event.summary),
+                html_escape(event.actor_display.as_deref().unwrap_or("-")),
+                html_escape(&event.detail),
             )
         })
         .collect::<Vec<_>>()

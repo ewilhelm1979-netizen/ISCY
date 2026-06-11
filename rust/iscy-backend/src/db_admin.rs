@@ -82,6 +82,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA,
         postgres_sql: POSTGRES_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA,
     },
+    Migration {
+        version: "0011_rust_incident_timeline",
+        sqlite_sql: SQLITE_INCIDENT_TIMELINE_SCHEMA,
+        postgres_sql: POSTGRES_INCIDENT_TIMELINE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -430,6 +435,42 @@ WHERE runbook_template = '' AND LOWER(title) LIKE '%phishing%';
 UPDATE incidents_incident
 SET runbook_template = '1. Scope erfassen; 2. Eindaemmung durchfuehren; 3. Kommunikation abstimmen; 4. Lessons Learned dokumentieren'
 WHERE runbook_template = '';
+"#;
+
+const SQLITE_INCIDENT_TIMELINE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS incidents_incidentevent (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    incident_id INTEGER NOT NULL,
+    actor_id INTEGER NULL,
+    event_type varchar(32) NOT NULL,
+    summary varchar(255) NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    from_status varchar(32) NULL,
+    to_status varchar(32) NULL,
+    evidence_item_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_incident_events_incident ON incidents_incidentevent(tenant_id, incident_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_incident_events_actor ON incidents_incidentevent(tenant_id, actor_id);
+"#;
+
+const POSTGRES_INCIDENT_TIMELINE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS incidents_incidentevent (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    incident_id BIGINT NOT NULL,
+    actor_id BIGINT NULL,
+    event_type varchar(32) NOT NULL,
+    summary varchar(255) NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    from_status varchar(32) NULL,
+    to_status varchar(32) NULL,
+    evidence_item_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text
+);
+CREATE INDEX IF NOT EXISTS idx_incident_events_incident ON incidents_incidentevent(tenant_id, incident_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_incident_events_actor ON incidents_incidentevent(tenant_id, actor_id);
 "#;
 
 const SQLITE_AUTH_RBAC_SCHEMA: &str = r#"

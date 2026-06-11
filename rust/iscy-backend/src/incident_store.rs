@@ -63,6 +63,25 @@ pub struct IncidentSummary {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct IncidentEventSummary {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub incident_id: i64,
+    pub actor_id: Option<i64>,
+    pub actor_display: Option<String>,
+    pub event_type: String,
+    pub event_type_label: String,
+    pub summary: String,
+    pub detail: String,
+    pub from_status: Option<String>,
+    pub from_status_label: Option<String>,
+    pub to_status: Option<String>,
+    pub to_status_label: Option<String>,
+    pub evidence_item_id: Option<i64>,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct IncidentWriteRequest {
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -104,6 +123,58 @@ pub struct IncidentWriteRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct IncidentWriteResult {
     pub incident: IncidentSummary,
+    pub events: Vec<IncidentEventSummary>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IncidentEventWriteRequest {
+    pub event_type: String,
+    pub summary: String,
+    pub detail: String,
+    pub from_status: Option<String>,
+    pub to_status: Option<String>,
+    pub evidence_item_id: Option<i64>,
+}
+
+impl IncidentEventWriteRequest {
+    pub fn created(title: &str) -> Self {
+        Self {
+            event_type: "CREATED".to_string(),
+            summary: format!("Fallakte '{}' angelegt.", limit_chars(title, 180)),
+            detail: "Incident wurde als neue ISCY-Fallakte erfasst.".to_string(),
+            from_status: None,
+            to_status: None,
+            evidence_item_id: None,
+        }
+    }
+
+    pub fn status_changed(
+        from_status: &str,
+        to_status: &str,
+        from_label: &str,
+        to_label: &str,
+    ) -> Self {
+        Self {
+            event_type: "STATUS_CHANGED".to_string(),
+            summary: format!("Status von {} auf {} geaendert.", from_label, to_label),
+            detail: "Statuswechsel wurde ueber den Rust-Incident-Workflow dokumentiert."
+                .to_string(),
+            from_status: Some(from_status.to_string()),
+            to_status: Some(to_status.to_string()),
+            evidence_item_id: None,
+        }
+    }
+
+    pub fn evidence_uploaded(evidence_item_id: i64, title: &str) -> Self {
+        Self {
+            event_type: "EVIDENCE_UPLOADED".to_string(),
+            summary: format!("Evidence '{}' hinzugefuegt.", limit_chars(title, 180)),
+            detail: "Evidence wurde direkt mit dieser Fallakte verknuepft.".to_string(),
+            from_status: None,
+            to_status: None,
+            evidence_item_id: Some(evidence_item_id),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -171,14 +242,51 @@ impl IncidentStore {
         }
     }
 
+    pub async fn list_incident_events(
+        &self,
+        tenant_id: i64,
+        incident_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<IncidentEventSummary>> {
+        match self {
+            Self::Postgres(pool) => {
+                list_incident_events_postgres(pool, tenant_id, incident_id, limit).await
+            }
+            Self::Sqlite(pool) => {
+                list_incident_events_sqlite(pool, tenant_id, incident_id, limit).await
+            }
+        }
+    }
+
+    pub async fn append_incident_event(
+        &self,
+        tenant_id: i64,
+        incident_id: i64,
+        actor_id: Option<i64>,
+        payload: IncidentEventWriteRequest,
+    ) -> anyhow::Result<IncidentEventSummary> {
+        match self {
+            Self::Postgres(pool) => {
+                append_incident_event_postgres(pool, tenant_id, incident_id, actor_id, payload)
+                    .await
+            }
+            Self::Sqlite(pool) => {
+                append_incident_event_sqlite(pool, tenant_id, incident_id, actor_id, payload).await
+            }
+        }
+    }
+
     pub async fn create_incident(
         &self,
         tenant_id: i64,
+        actor_id: Option<i64>,
         payload: IncidentWriteRequest,
     ) -> anyhow::Result<IncidentWriteResult> {
         match self {
-            Self::Postgres(pool) => create_incident_postgres(pool, tenant_id, payload).await,
-            Self::Sqlite(pool) => create_incident_sqlite(pool, tenant_id, payload).await,
+            Self::Postgres(pool) => {
+                create_incident_postgres(pool, tenant_id, actor_id, payload).await
+            }
+            Self::Sqlite(pool) => create_incident_sqlite(pool, tenant_id, actor_id, payload).await,
         }
     }
 
@@ -186,14 +294,15 @@ impl IncidentStore {
         &self,
         tenant_id: i64,
         incident_id: i64,
+        actor_id: Option<i64>,
         payload: IncidentWriteRequest,
     ) -> anyhow::Result<Option<IncidentWriteResult>> {
         match self {
             Self::Postgres(pool) => {
-                update_incident_postgres(pool, tenant_id, incident_id, payload).await
+                update_incident_postgres(pool, tenant_id, incident_id, actor_id, payload).await
             }
             Self::Sqlite(pool) => {
-                update_incident_sqlite(pool, tenant_id, incident_id, payload).await
+                update_incident_sqlite(pool, tenant_id, incident_id, actor_id, payload).await
             }
         }
     }
@@ -268,9 +377,285 @@ async fn incident_detail_sqlite(
         .map_err(Into::into)
 }
 
+async fn list_incident_events_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<IncidentEventSummary>> {
+    ensure_incident_exists_postgres(pool, tenant_id, incident_id).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            event.id,
+            event.tenant_id,
+            event.incident_id,
+            event.actor_id,
+            actor.username AS actor_username,
+            actor.first_name AS actor_first_name,
+            actor.last_name AS actor_last_name,
+            event.event_type,
+            event.summary,
+            event.detail,
+            event.from_status,
+            event.to_status,
+            event.evidence_item_id,
+            event.created_at::text AS created_at
+        FROM incidents_incidentevent event
+        LEFT JOIN accounts_user actor
+            ON actor.id = event.actor_id AND actor.tenant_id = event.tenant_id
+        WHERE event.tenant_id = $1 AND event.incident_id = $2
+        ORDER BY event.created_at DESC, event.id DESC
+        LIMIT $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-Incident-Timeline konnte nicht gelesen werden")?;
+    rows.into_iter()
+        .map(event_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn list_incident_events_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<IncidentEventSummary>> {
+    ensure_incident_exists_sqlite(pool, tenant_id, incident_id).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            event.id,
+            event.tenant_id,
+            event.incident_id,
+            event.actor_id,
+            actor.username AS actor_username,
+            actor.first_name AS actor_first_name,
+            actor.last_name AS actor_last_name,
+            event.event_type,
+            event.summary,
+            event.detail,
+            event.from_status,
+            event.to_status,
+            event.evidence_item_id,
+            CAST(event.created_at AS TEXT) AS created_at
+        FROM incidents_incidentevent event
+        LEFT JOIN accounts_user actor
+            ON actor.id = event.actor_id AND actor.tenant_id = event.tenant_id
+        WHERE event.tenant_id = ?1 AND event.incident_id = ?2
+        ORDER BY event.created_at DESC, event.id DESC
+        LIMIT ?3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-Incident-Timeline konnte nicht gelesen werden")?;
+    rows.into_iter()
+        .map(event_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn append_incident_event_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    actor_id: Option<i64>,
+    payload: IncidentEventWriteRequest,
+) -> anyhow::Result<IncidentEventSummary> {
+    ensure_incident_exists_postgres(pool, tenant_id, incident_id).await?;
+    let event = NormalizedIncidentEvent::from_payload(actor_id, payload);
+    let row = sqlx::query(
+        r#"
+        INSERT INTO incidents_incidentevent (
+            tenant_id, incident_id, actor_id, event_type, summary, detail,
+            from_status, to_status, evidence_item_id, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(event.actor_id)
+    .bind(&event.event_type)
+    .bind(&event.summary)
+    .bind(&event.detail)
+    .bind(event.from_status.as_deref())
+    .bind(event.to_status.as_deref())
+    .bind(event.evidence_item_id)
+    .bind(&event.created_at)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Incident-Event konnte nicht gespeichert werden")?;
+    let id: i64 = row.try_get("id")?;
+    incident_event_detail_postgres(pool, tenant_id, incident_id, id)
+        .await?
+        .context("Neu angelegtes Incident-Event konnte nicht gelesen werden")
+}
+
+async fn append_incident_event_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    actor_id: Option<i64>,
+    payload: IncidentEventWriteRequest,
+) -> anyhow::Result<IncidentEventSummary> {
+    ensure_incident_exists_sqlite(pool, tenant_id, incident_id).await?;
+    let event = NormalizedIncidentEvent::from_payload(actor_id, payload);
+    let result = sqlx::query(
+        r#"
+        INSERT INTO incidents_incidentevent (
+            tenant_id, incident_id, actor_id, event_type, summary, detail,
+            from_status, to_status, evidence_item_id, created_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(event.actor_id)
+    .bind(&event.event_type)
+    .bind(&event.summary)
+    .bind(&event.detail)
+    .bind(event.from_status.as_deref())
+    .bind(event.to_status.as_deref())
+    .bind(event.evidence_item_id)
+    .bind(&event.created_at)
+    .execute(pool)
+    .await
+    .context("SQLite-Incident-Event konnte nicht gespeichert werden")?;
+    let id = result.last_insert_rowid();
+    incident_event_detail_sqlite(pool, tenant_id, incident_id, id)
+        .await?
+        .context("Neu angelegtes Incident-Event konnte nicht gelesen werden")
+}
+
+async fn incident_event_detail_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    event_id: i64,
+) -> anyhow::Result<Option<IncidentEventSummary>> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            event.id,
+            event.tenant_id,
+            event.incident_id,
+            event.actor_id,
+            actor.username AS actor_username,
+            actor.first_name AS actor_first_name,
+            actor.last_name AS actor_last_name,
+            event.event_type,
+            event.summary,
+            event.detail,
+            event.from_status,
+            event.to_status,
+            event.evidence_item_id,
+            event.created_at::text AS created_at
+        FROM incidents_incidentevent event
+        LEFT JOIN accounts_user actor
+            ON actor.id = event.actor_id AND actor.tenant_id = event.tenant_id
+        WHERE event.tenant_id = $1 AND event.incident_id = $2 AND event.id = $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(event_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Incident-Event konnte nicht gelesen werden")?;
+    row.map(event_from_pg_row).transpose().map_err(Into::into)
+}
+
+async fn incident_event_detail_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    event_id: i64,
+) -> anyhow::Result<Option<IncidentEventSummary>> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            event.id,
+            event.tenant_id,
+            event.incident_id,
+            event.actor_id,
+            actor.username AS actor_username,
+            actor.first_name AS actor_first_name,
+            actor.last_name AS actor_last_name,
+            event.event_type,
+            event.summary,
+            event.detail,
+            event.from_status,
+            event.to_status,
+            event.evidence_item_id,
+            CAST(event.created_at AS TEXT) AS created_at
+        FROM incidents_incidentevent event
+        LEFT JOIN accounts_user actor
+            ON actor.id = event.actor_id AND actor.tenant_id = event.tenant_id
+        WHERE event.tenant_id = ?1 AND event.incident_id = ?2 AND event.id = ?3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(event_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Incident-Event konnte nicht gelesen werden")?;
+    row.map(event_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn ensure_incident_exists_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+) -> anyhow::Result<()> {
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM incidents_incident WHERE tenant_id = $1 AND id = $2")
+            .bind(tenant_id)
+            .bind(incident_id)
+            .fetch_optional(pool)
+            .await?;
+    if exists.is_none() {
+        bail!("Incident {} wurde nicht gefunden.", incident_id);
+    }
+    Ok(())
+}
+
+async fn ensure_incident_exists_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+) -> anyhow::Result<()> {
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM incidents_incident WHERE tenant_id = ?1 AND id = ?2")
+            .bind(tenant_id)
+            .bind(incident_id)
+            .fetch_optional(pool)
+            .await?;
+    if exists.is_none() {
+        bail!("Incident {} wurde nicht gefunden.", incident_id);
+    }
+    Ok(())
+}
+
 async fn create_incident_postgres(
     pool: &PgPool,
     tenant_id: i64,
+    actor_id: Option<i64>,
     payload: IncidentWriteRequest,
 ) -> anyhow::Result<IncidentWriteResult> {
     let write = NewIncident::from_create_payload(payload)?;
@@ -324,15 +709,27 @@ async fn create_incident_postgres(
     .await
     .context("PostgreSQL-Incident konnte nicht angelegt werden")?;
     let id: i64 = row.try_get("id")?;
-    incident_detail_postgres(pool, tenant_id, id)
+    let incident = incident_detail_postgres(pool, tenant_id, id)
         .await?
-        .map(|incident| IncidentWriteResult { incident })
-        .context("Neu angelegter Incident konnte nicht gelesen werden")
+        .context("Neu angelegter Incident konnte nicht gelesen werden")?;
+    let event = append_incident_event_postgres(
+        pool,
+        tenant_id,
+        id,
+        actor_id,
+        IncidentEventWriteRequest::created(&incident.title),
+    )
+    .await?;
+    Ok(IncidentWriteResult {
+        incident,
+        events: vec![event],
+    })
 }
 
 async fn create_incident_sqlite(
     pool: &SqlitePool,
     tenant_id: i64,
+    actor_id: Option<i64>,
     payload: IncidentWriteRequest,
 ) -> anyhow::Result<IncidentWriteResult> {
     let write = NewIncident::from_create_payload(payload)?;
@@ -385,22 +782,34 @@ async fn create_incident_sqlite(
     .await
     .context("SQLite-Incident konnte nicht angelegt werden")?;
     let id = result.last_insert_rowid();
-    incident_detail_sqlite(pool, tenant_id, id)
+    let incident = incident_detail_sqlite(pool, tenant_id, id)
         .await?
-        .map(|incident| IncidentWriteResult { incident })
-        .context("Neu angelegter Incident konnte nicht gelesen werden")
+        .context("Neu angelegter Incident konnte nicht gelesen werden")?;
+    let event = append_incident_event_sqlite(
+        pool,
+        tenant_id,
+        id,
+        actor_id,
+        IncidentEventWriteRequest::created(&incident.title),
+    )
+    .await?;
+    Ok(IncidentWriteResult {
+        incident,
+        events: vec![event],
+    })
 }
 
 async fn update_incident_postgres(
     pool: &PgPool,
     tenant_id: i64,
     incident_id: i64,
+    actor_id: Option<i64>,
     payload: IncidentWriteRequest,
 ) -> anyhow::Result<Option<IncidentWriteResult>> {
     let Some(current) = incident_detail_postgres(pool, tenant_id, incident_id).await? else {
         return Ok(None);
     };
-    let write = ExistingIncident::from_update_payload(current, payload)?;
+    let write = ExistingIncident::from_update_payload(current.clone(), payload)?;
     validate_relations_postgres(pool, tenant_id, &write.as_new_incident()).await?;
     sqlx::query(
         r#"
@@ -447,23 +856,32 @@ async fn update_incident_postgres(
     .execute(pool)
     .await
     .context("PostgreSQL-Incident konnte nicht aktualisiert werden")?;
-    incident_detail_postgres(pool, tenant_id, incident_id)
+    let incident = incident_detail_postgres(pool, tenant_id, incident_id)
         .await?
-        .map(|incident| IncidentWriteResult { incident })
-        .context("Aktualisierter Incident konnte nicht gelesen werden")
-        .map(Some)
+        .context("Aktualisierter Incident konnte nicht gelesen werden")?;
+    let events = incident_update_events_postgres(
+        pool,
+        tenant_id,
+        incident_id,
+        actor_id,
+        &current,
+        &incident,
+    )
+    .await?;
+    Ok(Some(IncidentWriteResult { incident, events }))
 }
 
 async fn update_incident_sqlite(
     pool: &SqlitePool,
     tenant_id: i64,
     incident_id: i64,
+    actor_id: Option<i64>,
     payload: IncidentWriteRequest,
 ) -> anyhow::Result<Option<IncidentWriteResult>> {
     let Some(current) = incident_detail_sqlite(pool, tenant_id, incident_id).await? else {
         return Ok(None);
     };
-    let write = ExistingIncident::from_update_payload(current, payload)?;
+    let write = ExistingIncident::from_update_payload(current.clone(), payload)?;
     validate_relations_sqlite(pool, tenant_id, &write.as_new_incident()).await?;
     sqlx::query(
         r#"
@@ -510,11 +928,13 @@ async fn update_incident_sqlite(
     .execute(pool)
     .await
     .context("SQLite-Incident konnte nicht aktualisiert werden")?;
-    incident_detail_sqlite(pool, tenant_id, incident_id)
+    let incident = incident_detail_sqlite(pool, tenant_id, incident_id)
         .await?
-        .map(|incident| IncidentWriteResult { incident })
-        .context("Aktualisierter Incident konnte nicht gelesen werden")
-        .map(Some)
+        .context("Aktualisierter Incident konnte nicht gelesen werden")?;
+    let events =
+        incident_update_events_sqlite(pool, tenant_id, incident_id, actor_id, &current, &incident)
+            .await?;
+    Ok(Some(IncidentWriteResult { incident, events }))
 }
 
 #[derive(Debug, Clone)]
@@ -575,6 +995,97 @@ struct ExistingIncident {
     stakeholder_summary: String,
     lessons_learned: String,
     now: String,
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedIncidentEvent {
+    actor_id: Option<i64>,
+    event_type: String,
+    summary: String,
+    detail: String,
+    from_status: Option<String>,
+    to_status: Option<String>,
+    evidence_item_id: Option<i64>,
+    created_at: String,
+}
+
+impl NormalizedIncidentEvent {
+    fn from_payload(actor_id: Option<i64>, payload: IncidentEventWriteRequest) -> Self {
+        Self {
+            actor_id,
+            event_type: normalize_event_type(&payload.event_type),
+            summary: normalize_event_summary(&payload.summary),
+            detail: normalize_optional_text(Some(&payload.detail)),
+            from_status: payload
+                .from_status
+                .as_deref()
+                .map(|value| normalize_status(Some(value))),
+            to_status: payload
+                .to_status
+                .as_deref()
+                .map(|value| normalize_status(Some(value))),
+            evidence_item_id: payload.evidence_item_id,
+            created_at: Utc::now().to_rfc3339(),
+        }
+    }
+}
+
+async fn incident_update_events_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    actor_id: Option<i64>,
+    current: &IncidentSummary,
+    updated: &IncidentSummary,
+) -> anyhow::Result<Vec<IncidentEventSummary>> {
+    let mut events = Vec::new();
+    if current.status != updated.status {
+        events.push(
+            append_incident_event_postgres(
+                pool,
+                tenant_id,
+                incident_id,
+                actor_id,
+                IncidentEventWriteRequest::status_changed(
+                    &current.status,
+                    &updated.status,
+                    &current.status_label,
+                    &updated.status_label,
+                ),
+            )
+            .await?,
+        );
+    }
+    Ok(events)
+}
+
+async fn incident_update_events_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    actor_id: Option<i64>,
+    current: &IncidentSummary,
+    updated: &IncidentSummary,
+) -> anyhow::Result<Vec<IncidentEventSummary>> {
+    let mut events = Vec::new();
+    if current.status != updated.status {
+        events.push(
+            append_incident_event_sqlite(
+                pool,
+                tenant_id,
+                incident_id,
+                actor_id,
+                IncidentEventWriteRequest::status_changed(
+                    &current.status,
+                    &updated.status,
+                    &current.status_label,
+                    &updated.status_label,
+                ),
+            )
+            .await?,
+        );
+    }
+    Ok(events)
 }
 
 impl NewIncident {
@@ -1181,6 +1692,60 @@ fn summary_from_sqlite_row(row: SqliteRow) -> Result<IncidentSummary, sqlx::Erro
     })
 }
 
+fn event_from_pg_row(row: PgRow) -> Result<IncidentEventSummary, sqlx::Error> {
+    let event_type: String = row.try_get("event_type")?;
+    let from_status: Option<String> = row.try_get("from_status")?;
+    let to_status: Option<String> = row.try_get("to_status")?;
+    Ok(IncidentEventSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        incident_id: row.try_get("incident_id")?,
+        actor_id: row.try_get("actor_id")?,
+        actor_display: user_display(
+            row.try_get("actor_username")?,
+            row.try_get("actor_first_name")?,
+            row.try_get("actor_last_name")?,
+        ),
+        event_type_label: event_type_label(&event_type).to_string(),
+        event_type,
+        summary: row.try_get("summary")?,
+        detail: row.try_get("detail")?,
+        from_status_label: from_status.as_deref().map(status_label).map(str::to_string),
+        from_status,
+        to_status_label: to_status.as_deref().map(status_label).map(str::to_string),
+        to_status,
+        evidence_item_id: row.try_get("evidence_item_id")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn event_from_sqlite_row(row: SqliteRow) -> Result<IncidentEventSummary, sqlx::Error> {
+    let event_type: String = row.try_get("event_type")?;
+    let from_status: Option<String> = row.try_get("from_status")?;
+    let to_status: Option<String> = row.try_get("to_status")?;
+    Ok(IncidentEventSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        incident_id: row.try_get("incident_id")?,
+        actor_id: row.try_get("actor_id")?,
+        actor_display: user_display(
+            row.try_get("actor_username")?,
+            row.try_get("actor_first_name")?,
+            row.try_get("actor_last_name")?,
+        ),
+        event_type_label: event_type_label(&event_type).to_string(),
+        event_type,
+        summary: row.try_get("summary")?,
+        detail: row.try_get("detail")?,
+        from_status_label: from_status.as_deref().map(status_label).map(str::to_string),
+        from_status,
+        to_status_label: to_status.as_deref().map(status_label).map(str::to_string),
+        to_status,
+        evidence_item_id: row.try_get("evidence_item_id")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
 fn normalize_required_text(value: Option<&str>, label: &str) -> anyhow::Result<String> {
     let normalized = normalize_optional_text(value);
     if normalized.is_empty() {
@@ -1191,6 +1756,28 @@ fn normalize_required_text(value: Option<&str>, label: &str) -> anyhow::Result<S
 
 fn normalize_optional_text(value: Option<&str>) -> String {
     value.unwrap_or("").trim().to_string()
+}
+
+fn normalize_event_type(value: &str) -> String {
+    match value.trim().to_uppercase().as_str() {
+        "CREATED" => "CREATED".to_string(),
+        "STATUS_CHANGED" => "STATUS_CHANGED".to_string(),
+        "EVIDENCE_UPLOADED" => "EVIDENCE_UPLOADED".to_string(),
+        "TIMELINE_NOTE" => "TIMELINE_NOTE".to_string(),
+        _ => "TIMELINE_NOTE".to_string(),
+    }
+}
+
+fn normalize_event_summary(value: &str) -> String {
+    let normalized = normalize_optional_text(Some(value));
+    if normalized.is_empty() {
+        return "Incident-Ereignis dokumentiert.".to_string();
+    }
+    limit_chars(&normalized, 255)
+}
+
+fn limit_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 fn normalize_incident_type(value: Option<&str>) -> String {
@@ -1329,6 +1916,16 @@ fn status_label(value: &str) -> &'static str {
         "RESOLVED" => "Behoben",
         "CLOSED" => "Geschlossen",
         _ => "Triage",
+    }
+}
+
+fn event_type_label(value: &str) -> &'static str {
+    match value {
+        "CREATED" => "Angelegt",
+        "STATUS_CHANGED" => "Statuswechsel",
+        "EVIDENCE_UPLOADED" => "Evidence",
+        "TIMELINE_NOTE" => "Notiz",
+        _ => "Timeline",
     }
 }
 
