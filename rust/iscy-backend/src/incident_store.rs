@@ -82,6 +82,24 @@ pub struct IncidentEventSummary {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct IncidentRunbookTemplateSummary {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub slug: String,
+    pub title: String,
+    pub description: String,
+    pub incident_type: String,
+    pub incident_type_label: String,
+    pub severity: String,
+    pub severity_label: String,
+    pub body: String,
+    pub is_active: bool,
+    pub sort_order: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct IncidentWriteRequest {
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -258,6 +276,17 @@ impl IncidentStore {
         }
     }
 
+    pub async fn list_runbook_templates(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<IncidentRunbookTemplateSummary>> {
+        match self {
+            Self::Postgres(pool) => list_runbook_templates_postgres(pool, tenant_id, limit).await,
+            Self::Sqlite(pool) => list_runbook_templates_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
     pub async fn append_incident_event(
         &self,
         tenant_id: i64,
@@ -306,6 +335,80 @@ impl IncidentStore {
             }
         }
     }
+}
+
+async fn list_runbook_templates_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<IncidentRunbookTemplateSummary>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            id,
+            tenant_id,
+            slug,
+            title,
+            description,
+            incident_type,
+            severity,
+            body,
+            is_active,
+            sort_order::bigint AS sort_order,
+            created_at::text AS created_at,
+            updated_at::text AS updated_at
+        FROM incidents_runbooktemplate
+        WHERE tenant_id = $1 AND is_active = TRUE
+        ORDER BY sort_order ASC, title ASC, id ASC
+        LIMIT $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-Incident-Runbook-Templates konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(runbook_template_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn list_runbook_templates_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<IncidentRunbookTemplateSummary>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            id,
+            tenant_id,
+            slug,
+            title,
+            description,
+            incident_type,
+            severity,
+            body,
+            is_active,
+            sort_order,
+            CAST(created_at AS TEXT) AS created_at,
+            CAST(updated_at AS TEXT) AS updated_at
+        FROM incidents_runbooktemplate
+        WHERE tenant_id = ?1 AND is_active = 1
+        ORDER BY sort_order ASC, title ASC, id ASC
+        LIMIT ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-Incident-Runbook-Templates konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(runbook_template_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 async fn list_incidents_postgres(
@@ -1687,6 +1790,50 @@ fn summary_from_sqlite_row(row: SqliteRow) -> Result<IncidentSummary, sqlx::Erro
         authority_reference: row.try_get("authority_reference")?,
         stakeholder_summary: row.try_get("stakeholder_summary")?,
         lessons_learned: row.try_get("lessons_learned")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn runbook_template_from_pg_row(row: PgRow) -> Result<IncidentRunbookTemplateSummary, sqlx::Error> {
+    let incident_type: String = row.try_get("incident_type")?;
+    let severity: String = row.try_get("severity")?;
+    Ok(IncidentRunbookTemplateSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        slug: row.try_get("slug")?,
+        title: row.try_get("title")?,
+        description: row.try_get("description")?,
+        incident_type_label: incident_type_label(&incident_type).to_string(),
+        incident_type,
+        severity_label: severity_label(&severity).to_string(),
+        severity,
+        body: row.try_get("body")?,
+        is_active: row.try_get("is_active")?,
+        sort_order: row.try_get("sort_order")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn runbook_template_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<IncidentRunbookTemplateSummary, sqlx::Error> {
+    let incident_type: String = row.try_get("incident_type")?;
+    let severity: String = row.try_get("severity")?;
+    Ok(IncidentRunbookTemplateSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        slug: row.try_get("slug")?,
+        title: row.try_get("title")?,
+        description: row.try_get("description")?,
+        incident_type_label: incident_type_label(&incident_type).to_string(),
+        incident_type,
+        severity_label: severity_label(&severity).to_string(),
+        severity,
+        body: row.try_get("body")?,
+        is_active: row.try_get("is_active")?,
+        sort_order: row.try_get("sort_order")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

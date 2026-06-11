@@ -694,6 +694,13 @@ pub struct IncidentRegisterResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct IncidentRunbookTemplateListResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub templates: Vec<incident_store::IncidentRunbookTemplateSummary>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct IncidentDetailResponse {
     pub api_version: &'static str,
     pub incident: incident_store::IncidentSummary,
@@ -3566,6 +3573,59 @@ async fn incident_register(State(state): State<AppState>, headers: HeaderMap) ->
     }
 }
 
+async fn incident_runbook_templates(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.incident_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Incident-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.list_runbook_templates(context.tenant_id, 100).await {
+        Ok(templates) => (
+            StatusCode::OK,
+            Json(IncidentRunbookTemplateListResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                templates,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Runbook-Templates konnten nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn incident_detail(
     Path(incident_id): Path<i64>,
     State(state): State<AppState>,
@@ -5514,6 +5574,10 @@ async fn web_incidents(
         .is_ok_and(|auth_context| auth_context.can_write());
     match store.list_incidents(context.tenant_id, 50).await {
         Ok(incidents) => {
+            let runbook_templates = store
+                .list_runbook_templates(context.tenant_id, 25)
+                .await
+                .unwrap_or_default();
             let reportable_count = incidents
                 .iter()
                 .filter(|incident| incident.nis2_reportable)
@@ -5563,6 +5627,7 @@ async fn web_incidents(
                           <label>Typ<select name="incident_type">{}</select></label>
                           <label>Severity<select name="severity">{}</select></label>
                           <label>Status<select name="status">{}</select></label>
+                          <label>Runbook-Vorlage<select name="runbook_template">{}</select></label>
                           <label>Owner-ID<input name="owner_id" type="number" min="1"></label>
                           <label>Reporter-ID<input name="reporter_id" type="number" min="1"></label>
                           <label>Risk-ID<input name="related_risk_id" type="number" min="1"></label>
@@ -5582,6 +5647,7 @@ async fn web_incidents(
                     incident_type_options_for("GENERAL"),
                     incident_severity_options_for("HIGH"),
                     incident_status_options_for("TRIAGE"),
+                    incident_runbook_template_options(&runbook_templates, None),
                 )
             } else {
                 r#"<article class="panel wide"><h2>Incident erfassen</h2><p>Fuer neue Incidents ist eine schreibende ISCY-Rolle notwendig.</p></article>"#.to_string()
@@ -5695,6 +5761,11 @@ async fn web_incident_detail(
                 .await
                 .unwrap_or_default();
             let timeline_rows = incident_event_rows(&timeline_events);
+            let runbook_templates = store
+                .list_runbook_templates(context.tenant_id, 25)
+                .await
+                .unwrap_or_default();
+            let runbook_template_rows = incident_runbook_template_rows(&runbook_templates);
             let evidence_upload_panel = incident_evidence_upload_panel(
                 &context,
                 incident.id,
@@ -5718,7 +5789,7 @@ async fn web_incident_detail(
                 Some(&context),
             );
             let edit_panel = if can_write {
-                incident_edit_form_panel(&context, &incident)
+                incident_edit_form_panel(&context, &incident, &runbook_templates)
             } else {
                 r#"<article class="panel wide"><h2>Bearbeiten</h2><p>Fuer Aenderungen ist eine schreibende ISCY-Rolle notwendig.</p></article>"#.to_string()
             };
@@ -5752,6 +5823,13 @@ async fn web_incident_detail(
                   <article class="panel wide">
                     <h2>Runbook</h2>
                     <pre>{}</pre>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Runbook-Bibliothek</h2>
+                    <table>
+                      <thead><tr><th>Vorlage</th><th>Typ</th><th>Severity</th><th>Beschreibung</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
                   </article>
                   <article class="panel wide">
                     <h2>Timeline</h2>
@@ -5802,6 +5880,7 @@ async fn web_incident_detail(
                 html_escape(&incident.stakeholder_summary),
                 html_escape(&incident.lessons_learned),
                 html_escape(&incident.runbook_template),
+                runbook_template_rows,
                 timeline_rows,
                 evidence_rows,
                 evidence_upload_panel,
@@ -7492,6 +7571,7 @@ fn optional_form_text_for_write(value: Option<String>) -> Option<Option<String>>
 fn incident_edit_form_panel(
     context: &WebContext,
     incident: &incident_store::IncidentSummary,
+    runbook_templates: &[incident_store::IncidentRunbookTemplateSummary],
 ) -> String {
     let action = web_path_with_context(&format!("/incidents/{}", incident.id), Some(context));
     let owner_id = incident
@@ -7514,6 +7594,7 @@ fn incident_edit_form_panel(
         .related_process_id
         .map(|value| value.to_string())
         .unwrap_or_default();
+    let template_rows = incident_runbook_template_rows(runbook_templates);
     format!(
         r#"
         <article class="panel wide">
@@ -7545,6 +7626,11 @@ fn incident_edit_form_panel(
             <label>Lessons Learned<textarea name="lessons_learned" rows="3">{}</textarea></label>
             <button type="submit">Fallakte speichern</button>
           </form>
+          <h3>Verfuegbare Runbook-Vorlagen</h3>
+          <table>
+            <thead><tr><th>Vorlage</th><th>Typ</th><th>Severity</th><th>Beschreibung</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
         </article>
         "#,
         html_escape(&action),
@@ -7570,6 +7656,7 @@ fn incident_edit_form_panel(
         html_escape(&incident.runbook_template),
         html_escape(&incident.stakeholder_summary),
         html_escape(&incident.lessons_learned),
+        template_rows,
     )
 }
 
@@ -8079,6 +8166,61 @@ fn incident_evidence_rows(evidence_items: &[evidence_store::EvidenceItemSummary]
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+fn incident_runbook_template_options(
+    templates: &[incident_store::IncidentRunbookTemplateSummary],
+    selected_slug: Option<&str>,
+) -> String {
+    if templates.is_empty() {
+        return format!(
+            r#"<option value="{}">Standard-Runbook</option>"#,
+            html_escape(incident_store_default_runbook())
+        );
+    }
+    templates
+        .iter()
+        .enumerate()
+        .map(|(index, template)| {
+            let selected = selected_slug
+                .map(|slug| slug == template.slug)
+                .unwrap_or(index == 0);
+            format!(
+                r#"<option value="{}"{}>{} · {} · {}</option>"#,
+                html_escape(&template.body),
+                selected_attr(selected),
+                html_escape(&template.title),
+                html_escape(&template.incident_type_label),
+                html_escape(&template.severity_label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn incident_runbook_template_rows(
+    templates: &[incident_store::IncidentRunbookTemplateSummary],
+) -> String {
+    if templates.is_empty() {
+        return web_empty_row(4, "Keine Runbook-Vorlagen fuer diesen Tenant vorhanden.");
+    }
+    templates
+        .iter()
+        .map(|template| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&template.title),
+                html_escape(&template.incident_type_label),
+                html_escape(&template.severity_label),
+                html_escape(&template.description),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn incident_store_default_runbook() -> &'static str {
+    "1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.\n2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.\n3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.\n4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.\n5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren."
 }
 
 fn incident_event_rows(events: &[incident_store::IncidentEventSummary]) -> String {
@@ -11426,6 +11568,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/incidents",
             get(incident_register).post(incident_create),
+        )
+        .route(
+            "/api/v1/incidents/runbook-templates",
+            get(incident_runbook_templates),
         )
         .route(
             "/api/v1/incidents/{incident_id}",

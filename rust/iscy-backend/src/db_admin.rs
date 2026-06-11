@@ -87,6 +87,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_INCIDENT_TIMELINE_SCHEMA,
         postgres_sql: POSTGRES_INCIDENT_TIMELINE_SCHEMA,
     },
+    Migration {
+        version: "0012_rust_incident_runbook_template_library",
+        sqlite_sql: SQLITE_INCIDENT_RUNBOOK_TEMPLATE_SCHEMA,
+        postgres_sql: POSTGRES_INCIDENT_RUNBOOK_TEMPLATE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -471,6 +476,167 @@ CREATE TABLE IF NOT EXISTS incidents_incidentevent (
 );
 CREATE INDEX IF NOT EXISTS idx_incident_events_incident ON incidents_incidentevent(tenant_id, incident_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_incident_events_actor ON incidents_incidentevent(tenant_id, actor_id);
+"#;
+
+const SQLITE_INCIDENT_RUNBOOK_TEMPLATE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS incidents_runbooktemplate (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    slug varchar(80) NOT NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    incident_type varchar(32) NOT NULL DEFAULT 'GENERAL',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    body TEXT NOT NULL,
+    is_active bool NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_incident_runbook_templates_tenant ON incidents_runbooktemplate(tenant_id, is_active, sort_order);
+INSERT OR IGNORE INTO incidents_runbooktemplate (
+    tenant_id, slug, title, description, incident_type, severity, body, is_active, sort_order, created_at, updated_at
+)
+SELECT
+    tenant.id,
+    'general-response',
+    'Allgemeine Incident Response',
+    'Baseline-Runbook fuer neue oder noch unklare Sicherheitsvorfaelle.',
+    'GENERAL',
+    'MEDIUM',
+    '1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.
+2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.
+3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.
+4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.
+5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren.',
+    1,
+    10,
+    CURRENT_TIMESTAMP,
+    CURRENT_TIMESTAMP
+FROM organizations_tenant tenant;
+INSERT OR IGNORE INTO incidents_runbooktemplate (
+    tenant_id, slug, title, description, incident_type, severity, body, is_active, sort_order, created_at, updated_at
+)
+SELECT
+    tenant.id,
+    'phishing-response',
+    'Phishing Response',
+    'SOC-Runbook fuer Credential-Phishing und verdachtige Mailkampagnen.',
+    'PHISHING',
+    'HIGH',
+    '1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.
+2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.
+3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.
+4. Meldung: Betroffenheit, Datenarten und NIS2-Fristen bewerten.
+5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren.',
+    1,
+    20,
+    CURRENT_TIMESTAMP,
+    CURRENT_TIMESTAMP
+FROM organizations_tenant tenant;
+INSERT OR IGNORE INTO incidents_runbooktemplate (
+    tenant_id, slug, title, description, incident_type, severity, body, is_active, sort_order, created_at, updated_at
+)
+SELECT
+    tenant.id,
+    'vulnerability-response',
+    'Vulnerability Response',
+    'Runbook fuer CVE-getriebene Notfallbewertung und Eindaemmung.',
+    'VULNERABILITY',
+    'HIGH',
+    '1. Scope: betroffene Produkte, Versionen, Assets und Exposure erfassen.
+2. Priorisierung: CVSS, EPSS, KEV, Exploit-Reife und Business-Kontext bewerten.
+3. Eindaemmung: Workarounds, WAF/EDR-Regeln und Netzwerkbegrenzung setzen.
+4. Behebung: Patch, Upgrade oder Konfigurationsfix mit Evidence verknuepfen.
+5. Abschluss: Risiko, SBOM/Product-Security und Detection-Content aktualisieren.',
+    1,
+    30,
+    CURRENT_TIMESTAMP,
+    CURRENT_TIMESTAMP
+FROM organizations_tenant tenant;
+"#;
+
+const POSTGRES_INCIDENT_RUNBOOK_TEMPLATE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS incidents_runbooktemplate (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    slug varchar(80) NOT NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    incident_type varchar(32) NOT NULL DEFAULT 'GENERAL',
+    severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    body TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, slug)
+);
+CREATE INDEX IF NOT EXISTS idx_incident_runbook_templates_tenant ON incidents_runbooktemplate(tenant_id, is_active, sort_order);
+INSERT INTO incidents_runbooktemplate (
+    tenant_id, slug, title, description, incident_type, severity, body, is_active, sort_order, created_at, updated_at
+)
+SELECT
+    tenant.id,
+    'general-response',
+    'Allgemeine Incident Response',
+    'Baseline-Runbook fuer neue oder noch unklare Sicherheitsvorfaelle.',
+    'GENERAL',
+    'MEDIUM',
+    '1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.
+2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.
+3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.
+4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.
+5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren.',
+    TRUE,
+    10,
+    (CURRENT_TIMESTAMP)::text,
+    (CURRENT_TIMESTAMP)::text
+FROM organizations_tenant tenant
+ON CONFLICT (tenant_id, slug) DO NOTHING;
+INSERT INTO incidents_runbooktemplate (
+    tenant_id, slug, title, description, incident_type, severity, body, is_active, sort_order, created_at, updated_at
+)
+SELECT
+    tenant.id,
+    'phishing-response',
+    'Phishing Response',
+    'SOC-Runbook fuer Credential-Phishing und verdachtige Mailkampagnen.',
+    'PHISHING',
+    'HIGH',
+    '1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.
+2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.
+3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.
+4. Meldung: Betroffenheit, Datenarten und NIS2-Fristen bewerten.
+5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren.',
+    TRUE,
+    20,
+    (CURRENT_TIMESTAMP)::text,
+    (CURRENT_TIMESTAMP)::text
+FROM organizations_tenant tenant
+ON CONFLICT (tenant_id, slug) DO NOTHING;
+INSERT INTO incidents_runbooktemplate (
+    tenant_id, slug, title, description, incident_type, severity, body, is_active, sort_order, created_at, updated_at
+)
+SELECT
+    tenant.id,
+    'vulnerability-response',
+    'Vulnerability Response',
+    'Runbook fuer CVE-getriebene Notfallbewertung und Eindaemmung.',
+    'VULNERABILITY',
+    'HIGH',
+    '1. Scope: betroffene Produkte, Versionen, Assets und Exposure erfassen.
+2. Priorisierung: CVSS, EPSS, KEV, Exploit-Reife und Business-Kontext bewerten.
+3. Eindaemmung: Workarounds, WAF/EDR-Regeln und Netzwerkbegrenzung setzen.
+4. Behebung: Patch, Upgrade oder Konfigurationsfix mit Evidence verknuepfen.
+5. Abschluss: Risiko, SBOM/Product-Security und Detection-Content aktualisieren.',
+    TRUE,
+    30,
+    (CURRENT_TIMESTAMP)::text,
+    (CURRENT_TIMESTAMP)::text
+FROM organizations_tenant tenant
+ON CONFLICT (tenant_id, slug) DO NOTHING;
 "#;
 
 const SQLITE_AUTH_RBAC_SCHEMA: &str = r#"
@@ -2306,6 +2472,42 @@ INSERT OR IGNORE INTO incidents_incident (
     'Credential phishing affects the customer portal operating process.',
     '', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z'
 );
+INSERT OR IGNORE INTO incidents_runbooktemplate (
+    tenant_id, slug, title, description, incident_type, severity, body, is_active, sort_order, created_at, updated_at
+) VALUES
+    (
+        1, 'general-response', 'Allgemeine Incident Response',
+        'Baseline-Runbook fuer neue oder noch unklare Sicherheitsvorfaelle.',
+        'GENERAL', 'MEDIUM',
+        '1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.
+2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.
+3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.
+4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.
+5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren.',
+        1, 10, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+    ),
+    (
+        1, 'phishing-response', 'Phishing Response',
+        'SOC-Runbook fuer Credential-Phishing und verdachtige Mailkampagnen.',
+        'PHISHING', 'HIGH',
+        '1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.
+2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.
+3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.
+4. Meldung: Betroffenheit, Datenarten und NIS2-Fristen bewerten.
+5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren.',
+        1, 20, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+    ),
+    (
+        1, 'vulnerability-response', 'Vulnerability Response',
+        'Runbook fuer CVE-getriebene Notfallbewertung und Eindaemmung.',
+        'VULNERABILITY', 'HIGH',
+        '1. Scope: betroffene Produkte, Versionen, Assets und Exposure erfassen.
+2. Priorisierung: CVSS, EPSS, KEV, Exploit-Reife und Business-Kontext bewerten.
+3. Eindaemmung: Workarounds, WAF/EDR-Regeln und Netzwerkbegrenzung setzen.
+4. Behebung: Patch, Upgrade oder Konfigurationsfix mit Evidence verknuepfen.
+5. Abschluss: Risiko, SBOM/Product-Security und Detection-Content aktualisieren.',
+        1, 30, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+    );
 INSERT OR IGNORE INTO wizard_assessmentsession (
     id, tenant_id, started_by_id, assessment_type, status, current_step, applicability_result,
     applicability_reasoning, executive_summary, progress_percent, completed_at, created_at, updated_at
@@ -2628,6 +2830,43 @@ INSERT INTO incidents_incident (
     'Credential phishing affects the customer portal operating process.',
     '', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z'
 ) ON CONFLICT (id) DO NOTHING;
+INSERT INTO incidents_runbooktemplate (
+    tenant_id, slug, title, description, incident_type, severity, body, is_active, sort_order, created_at, updated_at
+) VALUES
+    (
+        1, 'general-response', 'Allgemeine Incident Response',
+        'Baseline-Runbook fuer neue oder noch unklare Sicherheitsvorfaelle.',
+        'GENERAL', 'MEDIUM',
+        '1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.
+2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.
+3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.
+4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.
+5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren.',
+        TRUE, 10, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+    ),
+    (
+        1, 'phishing-response', 'Phishing Response',
+        'SOC-Runbook fuer Credential-Phishing und verdachtige Mailkampagnen.',
+        'PHISHING', 'HIGH',
+        '1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.
+2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.
+3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.
+4. Meldung: Betroffenheit, Datenarten und NIS2-Fristen bewerten.
+5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren.',
+        TRUE, 20, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+    ),
+    (
+        1, 'vulnerability-response', 'Vulnerability Response',
+        'Runbook fuer CVE-getriebene Notfallbewertung und Eindaemmung.',
+        'VULNERABILITY', 'HIGH',
+        '1. Scope: betroffene Produkte, Versionen, Assets und Exposure erfassen.
+2. Priorisierung: CVSS, EPSS, KEV, Exploit-Reife und Business-Kontext bewerten.
+3. Eindaemmung: Workarounds, WAF/EDR-Regeln und Netzwerkbegrenzung setzen.
+4. Behebung: Patch, Upgrade oder Konfigurationsfix mit Evidence verknuepfen.
+5. Abschluss: Risiko, SBOM/Product-Security und Detection-Content aktualisieren.',
+        TRUE, 30, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+    )
+ON CONFLICT (tenant_id, slug) DO NOTHING;
 INSERT INTO wizard_assessmentsession (
     id, tenant_id, started_by_id, assessment_type, status, current_step, applicability_result,
     applicability_reasoning, executive_summary, progress_percent, completed_at, created_at, updated_at

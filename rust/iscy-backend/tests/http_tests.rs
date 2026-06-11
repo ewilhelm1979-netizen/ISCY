@@ -2508,6 +2508,49 @@ async fn incident_create_rejects_read_only_role() {
 }
 
 #[tokio::test]
+async fn incident_runbook_templates_are_tenant_scoped() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_incident_runbook_template_table(&pool).await;
+    insert_incident_runbook_template_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/runbook-templates")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["templates"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["templates"][0]["slug"], "general-response");
+    assert_eq!(payload["templates"][0]["incident_type_label"], "Allgemein");
+    assert_eq!(payload["templates"][1]["slug"], "phishing-response");
+    assert_eq!(payload["templates"][1]["severity_label"], "Hoch");
+    assert!(payload["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|template| template["tenant_id"] == 42));
+}
+
+#[tokio::test]
 async fn incident_detail_blocks_foreign_tenant_incident() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -4607,6 +4650,7 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     create_risk_tables(&pool).await;
     insert_risk_fixture(&pool).await;
     create_incident_table(&pool).await;
+    insert_incident_runbook_template_fixture(&pool).await;
     insert_incident_fixture(&pool).await;
     create_incident_evidence_support_tables(&pool).await;
     let media_root = test_media_root("incident-evidence-upload");
@@ -4622,6 +4666,9 @@ async fn rust_web_incidents_renders_and_creates_incident() {
         .oneshot(
             Request::builder()
                 .uri("/incidents/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -4635,6 +4682,8 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     assert!(html.contains("/incidents/1?tenant_id=42"));
     assert!(html.contains("NIS2 meldepflichtig"));
     assert!(html.contains("Ueberfaellig"));
+    assert!(html.contains("Runbook-Vorlage"));
+    assert!(html.contains("Phishing Response"));
     assert!(!html.contains("Rust-Web-Migrationsroute"));
 
     let response = app
@@ -4661,6 +4710,8 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     assert!(html.contains("Phishing"));
     assert!(html.contains("Eindaemmung durchfuehren"));
     assert!(html.contains("Evidence zum Incident hochladen"));
+    assert!(html.contains("Runbook-Bibliothek"));
+    assert!(html.contains("SOC-Runbook fuer Credential-Phishing."));
     assert!(html.contains("Customer portal support users affected."));
     assert!(html.contains("Timeline"));
     assert!(html.contains("Noch keine Timeline-Events vorhanden."));
@@ -5688,7 +5739,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0008_rust_agent_enrollment_hardening",
             "0009_rust_incident_core",
             "0010_rust_incident_runbooks_evidence_exports",
-            "0011_rust_incident_timeline"
+            "0011_rust_incident_timeline",
+            "0012_rust_incident_runbook_template_library"
         ]
     );
     assert!(
@@ -5717,6 +5769,11 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
         .unwrap());
     assert!(
         db_admin::sqlite_table_exists(&pool, "incidents_incidentevent")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "incidents_runbooktemplate")
             .await
             .unwrap()
     );
@@ -8556,6 +8613,7 @@ async fn create_incident_table(pool: &SqlitePool) {
     .await
     .unwrap();
     create_incident_event_table(pool).await;
+    create_incident_runbook_template_table(pool).await;
 }
 
 async fn create_incident_event_table(pool: &SqlitePool) {
@@ -8574,6 +8632,111 @@ async fn create_incident_event_table(pool: &SqlitePool) {
             evidence_item_id INTEGER NULL,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_incident_runbook_template_table(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE incidents_runbooktemplate (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL,
+            slug varchar(80) NOT NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            incident_type varchar(32) NOT NULL DEFAULT 'GENERAL',
+            severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+            body TEXT NOT NULL,
+            is_active bool NOT NULL DEFAULT 1,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (tenant_id, slug)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_incident_runbook_template_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO incidents_runbooktemplate (
+            tenant_id,
+            slug,
+            title,
+            description,
+            incident_type,
+            severity,
+            body,
+            is_active,
+            sort_order,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                42,
+                'general-response',
+                'Allgemeine Incident Response',
+                'Baseline fuer unklare Sicherheitsvorfaelle.',
+                'GENERAL',
+                'MEDIUM',
+                '1. Scope erfassen
+2. Eindaemmung festlegen
+3. Lessons Learned dokumentieren',
+                1,
+                10,
+                '2026-04-20T10:00:00Z',
+                '2026-04-20T10:00:00Z'
+            ),
+            (
+                42,
+                'phishing-response',
+                'Phishing Response',
+                'SOC-Runbook fuer Credential-Phishing.',
+                'PHISHING',
+                'HIGH',
+                '1. Mail-Scope pruefen
+2. URLs blockieren
+3. Konten absichern',
+                1,
+                20,
+                '2026-04-20T10:00:00Z',
+                '2026-04-20T10:00:00Z'
+            ),
+            (
+                42,
+                'inactive-response',
+                'Inaktiv',
+                'Nicht fuer aktive Auswahl.',
+                'GENERAL',
+                'LOW',
+                '1. Nicht anzeigen',
+                0,
+                30,
+                '2026-04-20T10:00:00Z',
+                '2026-04-20T10:00:00Z'
+            ),
+            (
+                99,
+                'foreign-response',
+                'Fremder Tenant',
+                'Darf nicht sichtbar sein.',
+                'GENERAL',
+                'MEDIUM',
+                '1. Fremder Tenant',
+                1,
+                10,
+                '2026-04-20T10:00:00Z',
+                '2026-04-20T10:00:00Z'
+            )
         "#,
     )
     .execute(pool)
