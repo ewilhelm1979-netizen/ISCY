@@ -522,6 +522,12 @@ struct WebIncidentForm {
     lessons_learned: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebIncidentTimelineNoteForm {
+    summary: Option<String>,
+    detail: String,
+}
+
 fn deserialize_optional_form_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -700,11 +706,23 @@ pub struct IncidentRunbookTemplateListResponse {
     pub templates: Vec<incident_store::IncidentRunbookTemplateSummary>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct IncidentTimelineNoteRequest {
+    pub summary: Option<String>,
+    pub detail: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct IncidentDetailResponse {
     pub api_version: &'static str,
     pub incident: incident_store::IncidentSummary,
     pub events: Vec<incident_store::IncidentEventSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IncidentEventWriteResponse {
+    pub api_version: &'static str,
+    pub event: incident_store::IncidentEventSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -3848,6 +3866,111 @@ async fn incident_update(
     }
 }
 
+async fn incident_timeline_note_create(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<IncidentTimelineNoteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let payload = match incident_timeline_note_payload(payload.summary, payload.detail) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_timeline_note",
+                    message,
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.incident_store.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Incident-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.incident_detail(context.tenant_id, incident_id).await {
+        Ok(Some(_)) => match store
+            .append_incident_event(
+                context.tenant_id,
+                incident_id,
+                Some(context.user_id),
+                payload,
+            )
+            .await
+        {
+            Ok(event) => (
+                StatusCode::CREATED,
+                Json(IncidentEventWriteResponse {
+                    api_version: "v1",
+                    event,
+                }),
+            )
+                .into_response(),
+            Err(err) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "database_error",
+                    message: format!("Timeline-Notiz konnte nicht gespeichert werden: {err}"),
+                }),
+            )
+                .into_response(),
+        },
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "incident_not_found",
+                message: format!("Incident {} wurde nicht gefunden.", incident_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Incidentdetail konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn incident_nis2_export(
     Path(incident_id): Path<i64>,
     State(state): State<AppState>,
@@ -5761,6 +5884,8 @@ async fn web_incident_detail(
                 .await
                 .unwrap_or_default();
             let timeline_rows = incident_event_rows(&timeline_events);
+            let timeline_note_panel =
+                incident_timeline_note_panel(&context, incident.id, can_write);
             let runbook_templates = store
                 .list_runbook_templates(context.tenant_id, 25)
                 .await
@@ -5837,6 +5962,7 @@ async fn web_incident_detail(
                       <thead><tr><th>Zeitpunkt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Actor</th><th>Detail</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
+                    {}
                   </article>
                   <article class="panel wide">
                     <h2>Evidence</h2>
@@ -5882,6 +6008,7 @@ async fn web_incident_detail(
                 html_escape(&incident.runbook_template),
                 runbook_template_rows,
                 timeline_rows,
+                timeline_note_panel,
                 evidence_rows,
                 evidence_upload_panel,
                 html_escape(&markdown_export_href),
@@ -5955,6 +6082,59 @@ async fn web_incident_detail_submit(
             &context,
             &format!("Incident {} wurde nicht gefunden.", incident_id),
         )
+        .into_response(),
+        Err(err) => {
+            web_error_page("Incidents", "/incidents/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
+async fn web_incident_timeline_note_submit(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebIncidentTimelineNoteForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Incidents", "/incidents/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Incidents",
+            "/incidents/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let payload = match incident_timeline_note_payload(form.summary, form.detail) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return web_error_page("Incidents", "/incidents/", &context, &message).into_response()
+        }
+    };
+    let Some(store) = state.incident_store else {
+        return web_store_missing("Incidents", "/incidents/", &context, "Incident").into_response();
+    };
+    match store
+        .append_incident_event(
+            auth_context.tenant_id,
+            incident_id,
+            Some(auth_context.user_id),
+            payload,
+        )
+        .await
+    {
+        Ok(_) => Redirect::to(&web_path_with_context(
+            &format!("/incidents/{}", incident_id),
+            Some(&context),
+        ))
         .into_response(),
         Err(err) => {
             web_error_page("Incidents", "/incidents/", &context, &err.to_string()).into_response()
@@ -7561,6 +7741,23 @@ fn web_incident_form_request(
     })
 }
 
+fn incident_timeline_note_payload(
+    summary: Option<String>,
+    detail: String,
+) -> Result<incident_store::IncidentEventWriteRequest, String> {
+    let detail = detail.trim().to_string();
+    if detail.is_empty() {
+        return Err("Timeline-Notiz darf nicht leer sein.".to_string());
+    }
+    let summary = summary
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    Ok(incident_store::IncidentEventWriteRequest::timeline_note(
+        summary.as_deref(),
+        &detail,
+    ))
+}
+
 fn optional_form_text_for_write(value: Option<String>) -> Option<Option<String>> {
     value
         .map(|value| value.trim().to_string())
@@ -8241,6 +8438,28 @@ fn incident_event_rows(events: &[incident_store::IncidentEventSummary]) -> Strin
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+fn incident_timeline_note_panel(context: &WebContext, incident_id: i64, can_write: bool) -> String {
+    if !can_write {
+        return "<p>Fuer Timeline-Notizen ist eine schreibende ISCY-Rolle notwendig.</p>"
+            .to_string();
+    }
+    let action = web_path_with_context(
+        &format!("/incidents/{incident_id}/timeline-notes"),
+        Some(context),
+    );
+    format!(
+        r#"
+        <form method="post" action="{}">
+          <h3>Timeline-Notiz</h3>
+          <label>Kurzfassung<input name="summary" type="text" maxlength="255"></label>
+          <label>Notiz<textarea name="detail" rows="4" required></textarea></label>
+          <button type="submit">Notiz speichern</button>
+        </form>
+        "#,
+        html_escape(&action),
+    )
 }
 
 fn incident_event_markdown_rows(events: &[incident_store::IncidentEventSummary]) -> String {
@@ -11578,6 +11797,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(incident_detail).patch(incident_update),
         )
         .route(
+            "/api/v1/incidents/{incident_id}/timeline-notes",
+            post(incident_timeline_note_create),
+        )
+        .route(
             "/api/v1/incidents/{incident_id}/nis2-export",
             get(incident_nis2_export),
         )
@@ -11640,6 +11863,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/incidents/{incident_id}",
             get(web_incident_detail).post(web_incident_detail_submit),
+        )
+        .route(
+            "/incidents/{incident_id}/timeline-notes",
+            post(web_incident_timeline_note_submit),
         )
         .route(
             "/incidents/{incident_id}/nis2-export",

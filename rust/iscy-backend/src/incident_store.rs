@@ -193,6 +193,30 @@ impl IncidentEventWriteRequest {
             evidence_item_id: Some(evidence_item_id),
         }
     }
+
+    pub fn timeline_note(summary: Option<&str>, detail: &str) -> Self {
+        let detail = detail.trim();
+        let summary = summary
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                let preview = limit_chars(detail, 120);
+                if preview.is_empty() {
+                    "Notiz zur Fallakte dokumentiert.".to_string()
+                } else {
+                    format!("Notiz: {preview}")
+                }
+            });
+        Self {
+            event_type: "TIMELINE_NOTE".to_string(),
+            summary,
+            detail: detail.to_string(),
+            from_status: None,
+            to_status: None,
+            evidence_item_id: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

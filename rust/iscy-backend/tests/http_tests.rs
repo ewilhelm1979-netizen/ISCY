@@ -2639,6 +2639,77 @@ async fn incident_update_updates_status_and_sent_marker() {
 }
 
 #[tokio::test]
+async fn incident_timeline_note_create_appends_manual_event() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents/1/timeline-notes")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "summary":"Containment decision",
+                        "detail":"SOC und Prozess-Owner haben die Eindaemmung fuer 18:00 Uhr bestaetigt."
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["event"]["event_type"], "TIMELINE_NOTE");
+    assert_eq!(payload["event"]["event_type_label"], "Notiz");
+    assert_eq!(payload["event"]["summary"], "Containment decision");
+    assert_eq!(payload["event"]["actor_display"], "Ada Lovelace");
+    assert!(payload["event"]["detail"]
+        .as_str()
+        .unwrap()
+        .contains("Eindaemmung"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents/1/timeline-notes")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"detail":"   "}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_timeline_note");
+}
+
+#[tokio::test]
 async fn incident_nis2_export_returns_markdown_package() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -4714,6 +4785,7 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     assert!(html.contains("SOC-Runbook fuer Credential-Phishing."));
     assert!(html.contains("Customer portal support users affected."));
     assert!(html.contains("Timeline"));
+    assert!(html.contains("Timeline-Notiz"));
     assert!(html.contains("Noch keine Timeline-Events vorhanden."));
 
     let boundary = "iscy-incident-evidence-upload-boundary";
@@ -4789,6 +4861,49 @@ async fn rust_web_incidents_renders_and_creates_incident() {
         .oneshot(
             Request::builder()
                 .method("POST")
+                .uri("/incidents/1/timeline-notes")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "summary=Management+informiert&detail=Management+und+Legal+wurden+ueber+den+Containment-Plan+informiert.",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/incidents/1?tenant_id=42&user_id=7"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Management informiert"));
+    assert!(html.contains("Management und Legal wurden ueber den Containment-Plan informiert."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
                 .uri("/incidents/1")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("x-iscy-tenant-id", "42")
@@ -4821,12 +4936,13 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(timeline.len(), 2);
+    assert_eq!(timeline.len(), 3);
     assert_eq!(timeline[0].0, "EVIDENCE_UPLOADED");
     assert_eq!(timeline[0].3, Some(1));
-    assert_eq!(timeline[1].0, "STATUS_CHANGED");
-    assert_eq!(timeline[1].1.as_deref(), Some("CONFIRMED"));
-    assert_eq!(timeline[1].2.as_deref(), Some("CONTAINED"));
+    assert_eq!(timeline[1].0, "TIMELINE_NOTE");
+    assert_eq!(timeline[2].0, "STATUS_CHANGED");
+    assert_eq!(timeline[2].1.as_deref(), Some("CONFIRMED"));
+    assert_eq!(timeline[2].2.as_deref(), Some("CONTAINED"));
 
     let response = app
         .clone()
