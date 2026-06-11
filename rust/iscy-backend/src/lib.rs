@@ -3851,7 +3851,27 @@ async fn incident_nis2_export_format(
         Ok(Some(incident)) => {
             let evidence_items =
                 incident_linked_evidence(&state, context.tenant_id, incident.id).await;
-            incident_export_download_response(&incident, &evidence_items, export_format)
+            match store
+                .list_incident_events(context.tenant_id, incident.id, 50)
+                .await
+            {
+                Ok(events) => incident_export_download_response(
+                    &incident,
+                    &evidence_items,
+                    &events,
+                    export_format,
+                ),
+                Err(err) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: "database_error",
+                        message: format!("Incident-Timeline konnte nicht exportiert werden: {err}"),
+                    }),
+                )
+                    .into_response(),
+            }
         }
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -5928,7 +5948,19 @@ async fn web_incident_nis2_export_format(
         Ok(Some(incident)) => {
             let evidence_items =
                 incident_linked_evidence(&state, context.tenant_id, incident.id).await;
-            incident_export_download_response(&incident, &evidence_items, export_format)
+            match store
+                .list_incident_events(context.tenant_id, incident.id, 50)
+                .await
+            {
+                Ok(events) => incident_export_download_response(
+                    &incident,
+                    &evidence_items,
+                    &events,
+                    export_format,
+                ),
+                Err(err) => web_error_page("Incidents", "/incidents/", &context, &err.to_string())
+                    .into_response(),
+            }
         }
         Ok(None) => web_error_page(
             "Incidents",
@@ -7544,8 +7576,10 @@ fn incident_edit_form_panel(
 fn incident_nis2_markdown(
     incident: &incident_store::IncidentSummary,
     evidence_items: &[evidence_store::EvidenceItemSummary],
+    events: &[incident_store::IncidentEventSummary],
 ) -> String {
     let evidence_rows = incident_evidence_markdown_rows(evidence_items);
+    let event_rows = incident_event_markdown_rows(events);
     format!(
         r#"# ISCY NIS2-Meldepaket: {}
 
@@ -7602,6 +7636,12 @@ fn incident_nis2_markdown(
 | --- | --- | --- | --- |
 {}
 
+## Audit-Timeline
+
+| Zeitpunkt | Ereignis | Zusammenfassung | Actor | Detail |
+| --- | --- | --- | --- | --- |
+{}
+
 ## Zeitlinie
 
 | Ereignis | Zeitpunkt |
@@ -7641,6 +7681,7 @@ fn incident_nis2_markdown(
         md_block(&incident.lessons_learned),
         md_block(&incident.runbook_template),
         evidence_rows,
+        event_rows,
         md_optional(incident.detected_at.as_deref()),
         md_optional(incident.confirmed_at.as_deref()),
         md_optional(incident.contained_at.as_deref()),
@@ -7660,21 +7701,22 @@ enum IncidentExportFormat {
 fn incident_export_download_response(
     incident: &incident_store::IncidentSummary,
     evidence_items: &[evidence_store::EvidenceItemSummary],
+    events: &[incident_store::IncidentEventSummary],
     export_format: IncidentExportFormat,
 ) -> Response {
     match export_format {
         IncidentExportFormat::Markdown => markdown_download_response(
             &format!("iscy-incident-{}-nis2.md", incident.id),
-            incident_nis2_markdown(incident, evidence_items),
+            incident_nis2_markdown(incident, evidence_items, events),
         ),
         IncidentExportFormat::Html => html_download_response(
             &format!("iscy-incident-{}-nis2.html", incident.id),
-            incident_nis2_html(incident, evidence_items),
+            incident_nis2_html(incident, evidence_items, events),
         ),
         IncidentExportFormat::Pdf => binary_download_response(
             &format!("iscy-incident-{}-nis2.pdf", incident.id),
             "application/pdf",
-            incident_nis2_pdf(incident, evidence_items),
+            incident_nis2_pdf(incident, evidence_items, events),
         ),
     }
 }
@@ -7682,8 +7724,10 @@ fn incident_export_download_response(
 fn incident_nis2_html(
     incident: &incident_store::IncidentSummary,
     evidence_items: &[evidence_store::EvidenceItemSummary],
+    events: &[incident_store::IncidentEventSummary],
 ) -> String {
     let evidence_rows = incident_evidence_rows(evidence_items);
+    let event_rows = incident_event_rows(events);
     format!(
         r#"<!doctype html>
 <html lang="de">
@@ -7723,6 +7767,11 @@ fn incident_nis2_html(
     <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
     <tbody>{}</tbody>
   </table>
+  <h2>Audit-Timeline</h2>
+  <table>
+    <thead><tr><th>Zeitpunkt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Actor</th><th>Detail</th></tr></thead>
+    <tbody>{}</tbody>
+  </table>
   <h2>Lessons Learned</h2>
   <p>{}</p>
 </body>
@@ -7749,6 +7798,7 @@ fn incident_nis2_html(
         html_escape(&incident.stakeholder_summary),
         html_escape(&incident.runbook_template),
         evidence_rows,
+        event_rows,
         html_escape(&incident.lessons_learned),
     )
 }
@@ -7756,6 +7806,7 @@ fn incident_nis2_html(
 fn incident_nis2_pdf(
     incident: &incident_store::IncidentSummary,
     evidence_items: &[evidence_store::EvidenceItemSummary],
+    events: &[incident_store::IncidentEventSummary],
 ) -> Vec<u8> {
     let mut lines = vec![
         format!("ISCY NIS2-Meldepaket: {}", incident.title),
@@ -7806,6 +7857,27 @@ fn incident_nis2_pdf(
                 ),
                 92,
             ));
+        }
+    }
+    lines.push(String::new());
+    lines.push("Audit-Timeline:".to_string());
+    if events.is_empty() {
+        lines.push("-".to_string());
+    } else {
+        for event in events {
+            lines.extend(wrap_pdf_text(
+                &format!(
+                    "{} | {} | {} | {}",
+                    event.created_at,
+                    event.event_type_label,
+                    event.summary,
+                    event.actor_display.as_deref().unwrap_or("-")
+                ),
+                92,
+            ));
+            if !event.detail.trim().is_empty() {
+                lines.extend(wrap_pdf_text(&format!("Detail: {}", event.detail), 92));
+            }
         }
     }
     lines.push(String::new());
@@ -8027,6 +8099,26 @@ fn incident_event_rows(events: &[incident_store::IncidentEventSummary]) -> Strin
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+fn incident_event_markdown_rows(events: &[incident_store::IncidentEventSummary]) -> String {
+    if events.is_empty() {
+        return "| - | - | - | - | - |".to_string();
+    }
+    events
+        .iter()
+        .map(|event| {
+            format!(
+                "| {} | {} | {} | {} | {} |",
+                md_value(&event.created_at),
+                md_value(&event.event_type_label),
+                md_value(&event.summary),
+                md_optional(event.actor_display.as_deref()),
+                md_value(&event.detail),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn incident_evidence_upload_panel(

@@ -2606,6 +2606,7 @@ async fn incident_nis2_export_returns_markdown_package() {
     insert_risk_fixture(&pool).await;
     create_incident_table(&pool).await;
     insert_incident_fixture(&pool).await;
+    insert_incident_event_fixture(&pool).await;
     let app = app_router_with_state(
         AppState::default()
             .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
@@ -2640,6 +2641,9 @@ async fn incident_nis2_export_returns_markdown_package() {
     assert!(markdown.contains("Eindaemmung durchfuehren"));
     assert!(markdown.contains("24h-Fruehwarnung"));
     assert!(markdown.contains("BSI-CASE-1"));
+    assert!(markdown.contains("## Audit-Timeline"));
+    assert!(markdown.contains("Statuswechsel"));
+    assert!(markdown.contains("SOC hat die Fallakte fuer das Meldepaket bestaetigt."));
 
     let response = app
         .clone()
@@ -2665,6 +2669,8 @@ async fn incident_nis2_export_returns_markdown_package() {
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("ISCY NIS2-Meldepaket"));
     assert!(html.contains("Runbook"));
+    assert!(html.contains("Audit-Timeline"));
+    assert!(html.contains("Status von Triage auf Bestaetigt geaendert."));
 
     let response = app
         .oneshot(
@@ -2684,6 +2690,9 @@ async fn incident_nis2_export_returns_markdown_package() {
     );
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert!(body.starts_with(b"%PDF-1.4"));
+    let pdf = String::from_utf8_lossy(&body);
+    assert!(pdf.contains("Audit-Timeline"));
+    assert!(pdf.contains("Statuswechsel"));
 }
 
 #[tokio::test]
@@ -8671,6 +8680,40 @@ async fn insert_incident_fixture(pool: &SqlitePool) {
                 '2026-04-20T10:00:00Z',
                 '2026-04-20T10:00:00Z'
             )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_incident_event_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO incidents_incidentevent (
+            tenant_id,
+            incident_id,
+            actor_id,
+            event_type,
+            summary,
+            detail,
+            from_status,
+            to_status,
+            evidence_item_id,
+            created_at
+        )
+        VALUES (
+            42,
+            1,
+            7,
+            'STATUS_CHANGED',
+            'Status von Triage auf Bestaetigt geaendert.',
+            'SOC hat die Fallakte fuer das Meldepaket bestaetigt.',
+            'TRIAGE',
+            'CONFIRMED',
+            NULL,
+            '2026-04-20T11:00:00Z'
+        )
         "#,
     )
     .execute(pool)
