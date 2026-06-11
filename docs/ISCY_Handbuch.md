@@ -561,7 +561,7 @@ Wenn ein Incident als NIS2-meldepflichtig markiert wird, berechnet ISCY die rele
 
 Die Uebersicht zeigt offene Faelle, NIS2-relevante Faelle und ueberfaellige Meldeschritte. Gesendete Meldungen koennen ueber die API als Zeitstempel gepflegt werden.
 
-Die Detailseite `/incidents/{id}` dient als operative Fallakte. Dort koennen berechtigte Rollen Typ, Runbook, Status, Severity, Behoerdenreferenz, Zeitlinie und Meldezeitpunkte pflegen. Evidence-Uploads koennen ueber `incident_id` direkt an einen Incident gekoppelt werden und erscheinen in der Fallakte. Das Meldepaket unter `/incidents/{id}/nis2-export` buendelt Fallakte, Runbook, verknuepfte Evidence, betroffene Bezuege, 24h-/72h-/30-Tage-Fristen, Stakeholder-Zusammenfassung und Lessons Learned; zusaetzlich stehen HTML und PDF ueber `/incidents/{id}/nis2-export.html` und `/incidents/{id}/nis2-export.pdf` bereit.
+Die Detailseite `/incidents/{id}` dient als operative Fallakte. Dort koennen berechtigte Rollen Typ, Runbook, Status, Severity, Behoerdenreferenz, Zeitlinie und Meldezeitpunkte pflegen. Evidence-Uploads koennen ueber `incident_id` direkt an einen Incident gekoppelt werden und erscheinen in der Fallakte; fuer berechtigte Rollen steht der Upload direkt auf der Incident-Detailseite bereit. Das Meldepaket unter `/incidents/{id}/nis2-export` buendelt Fallakte, Runbook, verknuepfte Evidence, betroffene Bezuege, 24h-/72h-/30-Tage-Fristen, Stakeholder-Zusammenfassung und Lessons Learned; zusaetzlich stehen HTML und PDF ueber `/incidents/{id}/nis2-export.html` und `/incidents/{id}/nis2-export.pdf` bereit.
 
 ### 6.6 SOC-Playbook fuer Phishing- und aehnliche Incident-Faelle
 

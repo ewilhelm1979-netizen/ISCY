@@ -4582,9 +4582,13 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     insert_risk_fixture(&pool).await;
     create_incident_table(&pool).await;
     insert_incident_fixture(&pool).await;
+    create_incident_evidence_support_tables(&pool).await;
+    let media_root = test_media_root("incident-evidence-upload");
     let app = app_router_with_state(
         AppState::default()
-            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
     );
 
     let response = app
@@ -4630,7 +4634,75 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     assert!(html.contains("PDF herunterladen"));
     assert!(html.contains("Phishing"));
     assert!(html.contains("Eindaemmung durchfuehren"));
+    assert!(html.contains("Evidence zum Incident hochladen"));
     assert!(html.contains("Customer portal support users affected."));
+
+    let boundary = "iscy-incident-evidence-upload-boundary";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("title", "Incident Evidence from Detail"),
+            ("description", "Uploaded directly from incident detail"),
+            ("incident_id", "1"),
+            ("return_to", "/incidents/1?tenant_id=42&user_id=7"),
+            ("status", "SUBMITTED"),
+        ],
+        Some((
+            "file",
+            "incident-evidence.txt",
+            "text/plain",
+            b"incident evidence\n",
+        )),
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/evidence/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/incidents/1?tenant_id=42&user_id=7"
+    );
+    let stored_evidence: (i64, String) = sqlx::query_as(
+        "SELECT incident_id, file FROM evidence_evidenceitem WHERE tenant_id = 42 AND title = 'Incident Evidence from Detail'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_evidence.0, 1);
+    assert!(media_root.join(stored_evidence.1).exists());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Incident Evidence from Detail"));
 
     let response = app
         .clone()
@@ -4709,6 +4781,7 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     .await
     .unwrap();
     assert_eq!(incident_type, "VULNERABILITY");
+    let _ = fs::remove_dir_all(media_root);
 }
 
 #[tokio::test]
@@ -8531,6 +8604,96 @@ async fn insert_incident_fixture(pool: &SqlitePool) {
                 '2026-04-20T10:00:00Z',
                 '2026-04-20T10:00:00Z'
             )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_incident_evidence_support_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE wizard_generatedmeasure (
+            id INTEGER PRIMARY KEY,
+            title varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_mappingversion (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            program_name varchar(64) NOT NULL,
+            version varchar(32) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_regulatorysource (
+            id INTEGER PRIMARY KEY,
+            authority varchar(128) NOT NULL,
+            citation varchar(255) NOT NULL,
+            title varchar(255) NOT NULL,
+            url varchar(200) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE requirements_app_requirement (
+            id INTEGER PRIMARY KEY,
+            framework varchar(32) NOT NULL,
+            code varchar(64) NOT NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            is_active bool NOT NULL,
+            evidence_required bool NOT NULL,
+            evidence_guidance TEXT NOT NULL,
+            evidence_examples TEXT NOT NULL,
+            sector_package varchar(64) NOT NULL,
+            legal_reference varchar(128) NOT NULL,
+            mapping_version_id INTEGER NULL,
+            primary_source_id INTEGER NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE evidence_evidenceitem (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            session_id INTEGER NULL,
+            domain_id INTEGER NULL,
+            measure_id INTEGER NULL,
+            requirement_id INTEGER NULL,
+            incident_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL,
+            linked_requirement varchar(128) NOT NULL,
+            file varchar(100) NULL,
+            status varchar(16) NOT NULL,
+            owner_id INTEGER NULL,
+            review_notes TEXT NOT NULL,
+            reviewed_by_id INTEGER NULL,
+            reviewed_at TEXT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
         "#,
     )
     .execute(pool)

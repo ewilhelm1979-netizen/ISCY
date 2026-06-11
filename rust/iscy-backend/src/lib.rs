@@ -5641,6 +5641,12 @@ async fn web_incident_detail(
             let evidence_items =
                 incident_linked_evidence(&state, context.tenant_id, incident.id).await;
             let evidence_rows = incident_evidence_rows(&evidence_items);
+            let evidence_upload_panel = incident_evidence_upload_panel(
+                &context,
+                incident.id,
+                can_write,
+                state.evidence_store.is_some(),
+            );
             let markdown_export_href = web_path_with_context(
                 &format!("/incidents/{}/nis2-export", incident.id),
                 Some(&context),
@@ -5699,6 +5705,7 @@ async fn web_incident_detail(
                       <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
+                    {}
                   </article>
                   <article class="panel wide">
                     <h2>Meldepaket</h2>
@@ -5735,6 +5742,7 @@ async fn web_incident_detail(
                 html_escape(&incident.lessons_learned),
                 html_escape(&incident.runbook_template),
                 evidence_rows,
+                evidence_upload_panel,
                 html_escape(&markdown_export_href),
                 html_escape(&html_export_href),
                 html_escape(&pdf_export_href),
@@ -6047,6 +6055,9 @@ async fn web_evidence_upload(
                         },
                     )
                     .await;
+            }
+            if let Some(return_to) = safe_web_return_path(form.fields.get("return_to")) {
+                return Redirect::to(&return_to).into_response();
             }
             let body = format!(
                 r#"<section class="hero compact"><h1>Evidence gespeichert</h1><p>{}</p></section>
@@ -7923,6 +7934,44 @@ fn incident_evidence_rows(evidence_items: &[evidence_store::EvidenceItemSummary]
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+fn incident_evidence_upload_panel(
+    context: &WebContext,
+    incident_id: i64,
+    can_write: bool,
+    evidence_store_available: bool,
+) -> String {
+    if !evidence_store_available {
+        return "<p>Evidence Store ist fuer diese Fallakte nicht konfiguriert.</p>".to_string();
+    }
+    if !can_write {
+        return "<p>Fuer Evidence-Uploads ist eine schreibende ISCY-Rolle notwendig.</p>"
+            .to_string();
+    }
+    let return_to = web_path_with_context(&format!("/incidents/{}", incident_id), Some(context));
+    format!(
+        r#"
+        <h2>Evidence zum Incident hochladen</h2>
+        <form method="post" action="/evidence/" enctype="multipart/form-data">
+          <input name="incident_id" type="hidden" value="{}">
+          <input name="return_to" type="hidden" value="{}">
+          <div class="form-grid">
+            <label>Titel<input name="title" type="text" required></label>
+            <label>Status<select name="status">{}</select></label>
+            <label>Session-ID<input name="session_id" type="number" min="1"></label>
+            <label>Requirement-ID<input name="requirement_id" type="number" min="1"></label>
+          </div>
+          <label>Linked Requirement<input name="linked_requirement" type="text"></label>
+          <label>Beschreibung<textarea name="description" rows="3"></textarea></label>
+          <label>Datei<input name="file" type="file" accept=".pdf,.docx,.xlsx,.png,.jpg,.jpeg,.csv,.txt"></label>
+          <button type="submit">Evidence an Fallakte haengen</button>
+        </form>
+        "#,
+        incident_id,
+        html_escape(&return_to),
+        evidence_status_options_for("SUBMITTED"),
+    )
 }
 
 fn incident_evidence_markdown_rows(
@@ -10319,6 +10368,19 @@ fn web_path_with_context(path: &str, context: Option<&WebContext>) -> String {
         "{path}{separator}tenant_id={}&user_id={}{}",
         context.tenant_id, context.user_id, email
     )
+}
+
+fn safe_web_return_path(value: Option<&String>) -> Option<String> {
+    let value = value?.trim();
+    if value.starts_with('/')
+        && !value.starts_with("//")
+        && !value.contains('\r')
+        && !value.contains('\n')
+    {
+        Some(value.to_string())
+    } else {
+        None
+    }
 }
 
 fn url_component(value: &str) -> String {
