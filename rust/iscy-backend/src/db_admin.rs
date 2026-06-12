@@ -97,6 +97,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_INCIDENT_RUNBOOK_TASK_TIMELINE_MARKER_SCHEMA,
         postgres_sql: POSTGRES_INCIDENT_RUNBOOK_TASK_TIMELINE_MARKER_SCHEMA,
     },
+    Migration {
+        version: "0014_rust_review_supply_chain_metadata",
+        sqlite_sql: SQLITE_REVIEW_SUPPLY_CHAIN_METADATA_SCHEMA,
+        postgres_sql: POSTGRES_REVIEW_SUPPLY_CHAIN_METADATA_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -692,6 +697,160 @@ CREATE INDEX IF NOT EXISTS idx_incident_runbook_steps_incident
     ON incidents_runbookstep(tenant_id, incident_id, step_number);
 CREATE INDEX IF NOT EXISTS idx_incident_runbook_steps_done
     ON incidents_runbookstep(tenant_id, incident_id, is_done);
+"#;
+
+const SQLITE_REVIEW_SUPPLY_CHAIN_METADATA_SCHEMA: &str = r#"
+ALTER TABLE incidents_incident ADD COLUMN review_state varchar(24) NOT NULL DEFAULT 'DRAFT';
+ALTER TABLE incidents_incident ADD COLUMN reviewed_by_id INTEGER NULL;
+ALTER TABLE incidents_incident ADD COLUMN reviewed_at TEXT NULL;
+ALTER TABLE incidents_incident ADD COLUMN review_notes TEXT NOT NULL DEFAULT '';
+ALTER TABLE incidents_incident ADD COLUMN approved_by_id INTEGER NULL;
+ALTER TABLE incidents_incident ADD COLUMN approved_at TEXT NULL;
+ALTER TABLE incidents_incident ADD COLUMN approval_notes TEXT NOT NULL DEFAULT '';
+ALTER TABLE incidents_incident ADD COLUMN report_package_version varchar(32) NOT NULL DEFAULT '1.0';
+CREATE INDEX IF NOT EXISTS idx_incidents_review_state
+    ON incidents_incident(tenant_id, review_state, updated_at);
+
+ALTER TABLE assets_app_informationasset ADD COLUMN cpe23_uri TEXT NOT NULL DEFAULT '';
+ALTER TABLE assets_app_informationasset ADD COLUMN package_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE assets_app_informationasset ADD COLUMN sbom_document_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE assets_app_informationasset ADD COLUMN software_inventory_ref TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_assets_cpe
+    ON assets_app_informationasset(tenant_id, cpe23_uri);
+
+ALTER TABLE product_security_component ADD COLUMN cpe23_uri varchar(255) NOT NULL DEFAULT '';
+ALTER TABLE product_security_component ADD COLUMN package_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE product_security_component ADD COLUMN sbom_format varchar(32) NOT NULL DEFAULT '';
+ALTER TABLE product_security_component ADD COLUMN sbom_document_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE product_security_component ADD COLUMN sbom_digest varchar(128) NOT NULL DEFAULT '';
+ALTER TABLE product_security_component ADD COLUMN sbom_generated_at TEXT NULL;
+CREATE INDEX IF NOT EXISTS idx_product_security_component_cpe
+    ON product_security_component(tenant_id, cpe23_uri);
+CREATE INDEX IF NOT EXISTS idx_product_security_component_purl
+    ON product_security_component(tenant_id, package_url);
+
+ALTER TABLE product_security_vulnerability ADD COLUMN cpe23_uri varchar(255) NOT NULL DEFAULT '';
+ALTER TABLE product_security_vulnerability ADD COLUMN advisory_ids_json TEXT NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS idx_product_security_vulnerability_cpe
+    ON product_security_vulnerability(tenant_id, cpe23_uri);
+
+ALTER TABLE product_security_securityadvisory ADD COLUMN csaf_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE product_security_securityadvisory ADD COLUMN csaf_document_id varchar(128) NOT NULL DEFAULT '';
+ALTER TABLE product_security_securityadvisory ADD COLUMN csaf_profile varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE product_security_securityadvisory ADD COLUMN csaf_tracking_status varchar(32) NOT NULL DEFAULT '';
+ALTER TABLE product_security_securityadvisory ADD COLUMN csaf_revision varchar(32) NOT NULL DEFAULT '';
+ALTER TABLE product_security_securityadvisory ADD COLUMN cve_list_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE product_security_securityadvisory ADD COLUMN product_status_json TEXT NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_product_security_advisory_csaf
+    ON product_security_securityadvisory(tenant_id, csaf_document_id);
+
+UPDATE assets_app_informationasset
+SET
+    cpe23_uri = CASE WHEN name = 'Customer Portal' THEN 'cpe:2.3:a:iscy:customer_portal:1.0:*:*:*:*:*:*:*' ELSE cpe23_uri END,
+    package_url = CASE WHEN name = 'Customer Portal' THEN 'pkg:generic/iscy/customer-portal@1.0' ELSE package_url END,
+    sbom_document_url = CASE WHEN name = 'Customer Portal' THEN 'file://evidence/sbom/customer-portal.cdx.json' ELSE sbom_document_url END,
+    software_inventory_ref = CASE WHEN name = 'Customer Portal' THEN 'ISCY-ASSET-PORTAL-1' ELSE software_inventory_ref END;
+
+UPDATE product_security_component
+SET
+    cpe23_uri = CASE WHEN name = 'Gateway Firmware' THEN 'cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*' ELSE cpe23_uri END,
+    package_url = CASE WHEN name = 'Gateway Firmware' THEN 'pkg:generic/iscy/sensor-gateway-firmware@1.0.3' ELSE package_url END,
+    sbom_format = CASE WHEN name = 'Gateway Firmware' THEN 'CycloneDX' ELSE sbom_format END,
+    sbom_document_url = CASE WHEN name = 'Gateway Firmware' THEN 'file://evidence/sbom/sensor-gateway-1.0.3.cdx.json' ELSE sbom_document_url END,
+    sbom_digest = CASE WHEN name = 'Gateway Firmware' THEN 'sha256:demo-sbom-digest' ELSE sbom_digest END,
+    sbom_generated_at = CASE WHEN name = 'Gateway Firmware' THEN '2026-04-18T10:30:00Z' ELSE sbom_generated_at END;
+
+UPDATE product_security_vulnerability
+SET
+    cpe23_uri = CASE WHEN cve = 'CVE-2026-0001' THEN 'cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*' ELSE cpe23_uri END,
+    advisory_ids_json = CASE WHEN cve = 'CVE-2026-0001' THEN '["ADV-1"]' ELSE advisory_ids_json END;
+
+UPDATE product_security_securityadvisory
+SET
+    csaf_url = CASE WHEN advisory_id = 'ADV-1' THEN 'https://example.invalid/.well-known/csaf/iscy-2026-adv-1.json' ELSE csaf_url END,
+    csaf_document_id = CASE WHEN advisory_id = 'ADV-1' THEN 'ISCY-2026-ADV-1' ELSE csaf_document_id END,
+    csaf_profile = CASE WHEN advisory_id = 'ADV-1' THEN 'Security Advisory' ELSE csaf_profile END,
+    csaf_tracking_status = CASE WHEN advisory_id = 'ADV-1' THEN 'final' ELSE csaf_tracking_status END,
+    csaf_revision = CASE WHEN advisory_id = 'ADV-1' THEN '1' ELSE csaf_revision END,
+    cve_list_json = CASE WHEN advisory_id = 'ADV-1' THEN '["CVE-2026-0001"]' ELSE cve_list_json END,
+    product_status_json = CASE WHEN advisory_id = 'ADV-1' THEN '{"known_affected":["sensor-gateway-firmware-1.0.3"],"fixed":["sensor-gateway-firmware-1.0.4"]}' ELSE product_status_json END;
+"#;
+
+const POSTGRES_REVIEW_SUPPLY_CHAIN_METADATA_SCHEMA: &str = r#"
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS review_state varchar(24) NOT NULL DEFAULT 'DRAFT';
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS reviewed_by_id BIGINT NULL;
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS reviewed_at TEXT NULL;
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS review_notes TEXT NOT NULL DEFAULT '';
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS approved_by_id BIGINT NULL;
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS approved_at TEXT NULL;
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS approval_notes TEXT NOT NULL DEFAULT '';
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS report_package_version varchar(32) NOT NULL DEFAULT '1.0';
+CREATE INDEX IF NOT EXISTS idx_incidents_review_state
+    ON incidents_incident(tenant_id, review_state, updated_at);
+
+ALTER TABLE assets_app_informationasset ADD COLUMN IF NOT EXISTS cpe23_uri TEXT NOT NULL DEFAULT '';
+ALTER TABLE assets_app_informationasset ADD COLUMN IF NOT EXISTS package_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE assets_app_informationasset ADD COLUMN IF NOT EXISTS sbom_document_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE assets_app_informationasset ADD COLUMN IF NOT EXISTS software_inventory_ref TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_assets_cpe
+    ON assets_app_informationasset(tenant_id, cpe23_uri);
+
+ALTER TABLE product_security_component ADD COLUMN IF NOT EXISTS cpe23_uri varchar(255) NOT NULL DEFAULT '';
+ALTER TABLE product_security_component ADD COLUMN IF NOT EXISTS package_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE product_security_component ADD COLUMN IF NOT EXISTS sbom_format varchar(32) NOT NULL DEFAULT '';
+ALTER TABLE product_security_component ADD COLUMN IF NOT EXISTS sbom_document_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE product_security_component ADD COLUMN IF NOT EXISTS sbom_digest varchar(128) NOT NULL DEFAULT '';
+ALTER TABLE product_security_component ADD COLUMN IF NOT EXISTS sbom_generated_at TEXT NULL;
+CREATE INDEX IF NOT EXISTS idx_product_security_component_cpe
+    ON product_security_component(tenant_id, cpe23_uri);
+CREATE INDEX IF NOT EXISTS idx_product_security_component_purl
+    ON product_security_component(tenant_id, package_url);
+
+ALTER TABLE product_security_vulnerability ADD COLUMN IF NOT EXISTS cpe23_uri varchar(255) NOT NULL DEFAULT '';
+ALTER TABLE product_security_vulnerability ADD COLUMN IF NOT EXISTS advisory_ids_json TEXT NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS idx_product_security_vulnerability_cpe
+    ON product_security_vulnerability(tenant_id, cpe23_uri);
+
+ALTER TABLE product_security_securityadvisory ADD COLUMN IF NOT EXISTS csaf_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE product_security_securityadvisory ADD COLUMN IF NOT EXISTS csaf_document_id varchar(128) NOT NULL DEFAULT '';
+ALTER TABLE product_security_securityadvisory ADD COLUMN IF NOT EXISTS csaf_profile varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE product_security_securityadvisory ADD COLUMN IF NOT EXISTS csaf_tracking_status varchar(32) NOT NULL DEFAULT '';
+ALTER TABLE product_security_securityadvisory ADD COLUMN IF NOT EXISTS csaf_revision varchar(32) NOT NULL DEFAULT '';
+ALTER TABLE product_security_securityadvisory ADD COLUMN IF NOT EXISTS cve_list_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE product_security_securityadvisory ADD COLUMN IF NOT EXISTS product_status_json TEXT NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_product_security_advisory_csaf
+    ON product_security_securityadvisory(tenant_id, csaf_document_id);
+
+UPDATE assets_app_informationasset
+SET
+    cpe23_uri = CASE WHEN name = 'Customer Portal' THEN 'cpe:2.3:a:iscy:customer_portal:1.0:*:*:*:*:*:*:*' ELSE cpe23_uri END,
+    package_url = CASE WHEN name = 'Customer Portal' THEN 'pkg:generic/iscy/customer-portal@1.0' ELSE package_url END,
+    sbom_document_url = CASE WHEN name = 'Customer Portal' THEN 'file://evidence/sbom/customer-portal.cdx.json' ELSE sbom_document_url END,
+    software_inventory_ref = CASE WHEN name = 'Customer Portal' THEN 'ISCY-ASSET-PORTAL-1' ELSE software_inventory_ref END;
+
+UPDATE product_security_component
+SET
+    cpe23_uri = CASE WHEN name = 'Gateway Firmware' THEN 'cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*' ELSE cpe23_uri END,
+    package_url = CASE WHEN name = 'Gateway Firmware' THEN 'pkg:generic/iscy/sensor-gateway-firmware@1.0.3' ELSE package_url END,
+    sbom_format = CASE WHEN name = 'Gateway Firmware' THEN 'CycloneDX' ELSE sbom_format END,
+    sbom_document_url = CASE WHEN name = 'Gateway Firmware' THEN 'file://evidence/sbom/sensor-gateway-1.0.3.cdx.json' ELSE sbom_document_url END,
+    sbom_digest = CASE WHEN name = 'Gateway Firmware' THEN 'sha256:demo-sbom-digest' ELSE sbom_digest END,
+    sbom_generated_at = CASE WHEN name = 'Gateway Firmware' THEN '2026-04-18T10:30:00Z' ELSE sbom_generated_at END;
+
+UPDATE product_security_vulnerability
+SET
+    cpe23_uri = CASE WHEN cve = 'CVE-2026-0001' THEN 'cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*' ELSE cpe23_uri END,
+    advisory_ids_json = CASE WHEN cve = 'CVE-2026-0001' THEN '["ADV-1"]' ELSE advisory_ids_json END;
+
+UPDATE product_security_securityadvisory
+SET
+    csaf_url = CASE WHEN advisory_id = 'ADV-1' THEN 'https://example.invalid/.well-known/csaf/iscy-2026-adv-1.json' ELSE csaf_url END,
+    csaf_document_id = CASE WHEN advisory_id = 'ADV-1' THEN 'ISCY-2026-ADV-1' ELSE csaf_document_id END,
+    csaf_profile = CASE WHEN advisory_id = 'ADV-1' THEN 'Security Advisory' ELSE csaf_profile END,
+    csaf_tracking_status = CASE WHEN advisory_id = 'ADV-1' THEN 'final' ELSE csaf_tracking_status END,
+    csaf_revision = CASE WHEN advisory_id = 'ADV-1' THEN '1' ELSE csaf_revision END,
+    cve_list_json = CASE WHEN advisory_id = 'ADV-1' THEN '["CVE-2026-0001"]' ELSE cve_list_json END,
+    product_status_json = CASE WHEN advisory_id = 'ADV-1' THEN '{"known_affected":["sensor-gateway-firmware-1.0.3"],"fixed":["sensor-gateway-firmware-1.0.4"]}' ELSE product_status_json END;
 "#;
 
 const SQLITE_AUTH_RBAC_SCHEMA: &str = r#"

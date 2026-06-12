@@ -1,5 +1,6 @@
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -59,9 +60,13 @@ pub struct ProductListItem {
     pub automotive_context: bool,
     pub support_window_months: i64,
     pub release_count: i64,
+    pub component_count: i64,
+    pub sbom_component_count: i64,
+    pub csaf_advisory_count: i64,
     pub threat_model_count: i64,
     pub tara_count: i64,
     pub vulnerability_count: i64,
+    pub cve_count: i64,
     pub psirt_case_count: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -126,6 +131,12 @@ pub struct ProductComponentSummary {
     pub version: String,
     pub is_open_source: bool,
     pub has_sbom: bool,
+    pub cpe23_uri: String,
+    pub package_url: String,
+    pub sbom_format: String,
+    pub sbom_document_url: String,
+    pub sbom_digest: String,
+    pub sbom_generated_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -185,6 +196,8 @@ pub struct VulnerabilitySummary {
     pub status_label: String,
     pub remediation_due: Option<String>,
     pub summary: String,
+    pub cpe23_uri: String,
+    pub advisory_ids: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -241,6 +254,13 @@ pub struct SecurityAdvisorySummary {
     pub status_label: String,
     pub published_on: Option<String>,
     pub summary: String,
+    pub csaf_url: String,
+    pub csaf_document_id: String,
+    pub csaf_profile: String,
+    pub csaf_tracking_status: String,
+    pub csaf_revision: String,
+    pub cve_list: Vec<String>,
+    pub product_status: Value,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -1405,9 +1425,13 @@ fn product_list_postgres_sql() -> &'static str {
         product.automotive_context,
         product.support_window_months,
         (SELECT COUNT(*) FROM product_security_productrelease rel WHERE rel.product_id = product.id AND rel.tenant_id = product.tenant_id) AS release_count,
+        (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id) AS component_count,
+        (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id AND component.has_sbom = TRUE) AS sbom_component_count,
+        (SELECT COUNT(*) FROM product_security_securityadvisory advisory WHERE advisory.product_id = product.id AND advisory.tenant_id = product.tenant_id AND advisory.csaf_document_id <> '') AS csaf_advisory_count,
         (SELECT COUNT(*) FROM product_security_threatmodel tm WHERE tm.product_id = product.id AND tm.tenant_id = product.tenant_id) AS threat_model_count,
         (SELECT COUNT(*) FROM product_security_tara tara WHERE tara.product_id = product.id AND tara.tenant_id = product.tenant_id) AS tara_count,
         (SELECT COUNT(*) FROM product_security_vulnerability vuln WHERE vuln.product_id = product.id AND vuln.tenant_id = product.tenant_id) AS vulnerability_count,
+        (SELECT COUNT(*) FROM product_security_vulnerability vuln WHERE vuln.product_id = product.id AND vuln.tenant_id = product.tenant_id AND vuln.cve <> '') AS cve_count,
         (SELECT COUNT(*) FROM product_security_psirtcase psirt WHERE psirt.product_id = product.id AND psirt.tenant_id = product.tenant_id) AS psirt_case_count,
         product.created_at::text AS created_at,
         product.updated_at::text AS updated_at
@@ -1436,9 +1460,13 @@ fn product_list_sqlite_sql() -> &'static str {
         product.automotive_context,
         product.support_window_months,
         (SELECT COUNT(*) FROM product_security_productrelease rel WHERE rel.product_id = product.id AND rel.tenant_id = product.tenant_id) AS release_count,
+        (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id) AS component_count,
+        (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id AND component.has_sbom = 1) AS sbom_component_count,
+        (SELECT COUNT(*) FROM product_security_securityadvisory advisory WHERE advisory.product_id = product.id AND advisory.tenant_id = product.tenant_id AND advisory.csaf_document_id <> '') AS csaf_advisory_count,
         (SELECT COUNT(*) FROM product_security_threatmodel tm WHERE tm.product_id = product.id AND tm.tenant_id = product.tenant_id) AS threat_model_count,
         (SELECT COUNT(*) FROM product_security_tara tara WHERE tara.product_id = product.id AND tara.tenant_id = product.tenant_id) AS tara_count,
         (SELECT COUNT(*) FROM product_security_vulnerability vuln WHERE vuln.product_id = product.id AND vuln.tenant_id = product.tenant_id) AS vulnerability_count,
+        (SELECT COUNT(*) FROM product_security_vulnerability vuln WHERE vuln.product_id = product.id AND vuln.tenant_id = product.tenant_id AND vuln.cve <> '') AS cve_count,
         (SELECT COUNT(*) FROM product_security_psirtcase psirt WHERE psirt.product_id = product.id AND psirt.tenant_id = product.tenant_id) AS psirt_case_count,
         CAST(product.created_at AS TEXT) AS created_at,
         CAST(product.updated_at AS TEXT) AS updated_at
@@ -1467,9 +1495,13 @@ fn product_detail_postgres_sql() -> &'static str {
         product.automotive_context,
         product.support_window_months,
         (SELECT COUNT(*) FROM product_security_productrelease rel WHERE rel.product_id = product.id AND rel.tenant_id = product.tenant_id) AS release_count,
+        (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id) AS component_count,
+        (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id AND component.has_sbom = TRUE) AS sbom_component_count,
+        (SELECT COUNT(*) FROM product_security_securityadvisory advisory WHERE advisory.product_id = product.id AND advisory.tenant_id = product.tenant_id AND advisory.csaf_document_id <> '') AS csaf_advisory_count,
         (SELECT COUNT(*) FROM product_security_threatmodel tm WHERE tm.product_id = product.id AND tm.tenant_id = product.tenant_id) AS threat_model_count,
         (SELECT COUNT(*) FROM product_security_tara tara WHERE tara.product_id = product.id AND tara.tenant_id = product.tenant_id) AS tara_count,
         (SELECT COUNT(*) FROM product_security_vulnerability vuln WHERE vuln.product_id = product.id AND vuln.tenant_id = product.tenant_id) AS vulnerability_count,
+        (SELECT COUNT(*) FROM product_security_vulnerability vuln WHERE vuln.product_id = product.id AND vuln.tenant_id = product.tenant_id AND vuln.cve <> '') AS cve_count,
         (SELECT COUNT(*) FROM product_security_psirtcase psirt WHERE psirt.product_id = product.id AND psirt.tenant_id = product.tenant_id) AS psirt_case_count,
         product.created_at::text AS created_at,
         product.updated_at::text AS updated_at
@@ -1496,9 +1528,13 @@ fn product_detail_sqlite_sql() -> &'static str {
         product.automotive_context,
         product.support_window_months,
         (SELECT COUNT(*) FROM product_security_productrelease rel WHERE rel.product_id = product.id AND rel.tenant_id = product.tenant_id) AS release_count,
+        (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id) AS component_count,
+        (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id AND component.has_sbom = 1) AS sbom_component_count,
+        (SELECT COUNT(*) FROM product_security_securityadvisory advisory WHERE advisory.product_id = product.id AND advisory.tenant_id = product.tenant_id AND advisory.csaf_document_id <> '') AS csaf_advisory_count,
         (SELECT COUNT(*) FROM product_security_threatmodel tm WHERE tm.product_id = product.id AND tm.tenant_id = product.tenant_id) AS threat_model_count,
         (SELECT COUNT(*) FROM product_security_tara tara WHERE tara.product_id = product.id AND tara.tenant_id = product.tenant_id) AS tara_count,
         (SELECT COUNT(*) FROM product_security_vulnerability vuln WHERE vuln.product_id = product.id AND vuln.tenant_id = product.tenant_id) AS vulnerability_count,
+        (SELECT COUNT(*) FROM product_security_vulnerability vuln WHERE vuln.product_id = product.id AND vuln.tenant_id = product.tenant_id AND vuln.cve <> '') AS cve_count,
         (SELECT COUNT(*) FROM product_security_psirtcase psirt WHERE psirt.product_id = product.id AND psirt.tenant_id = product.tenant_id) AS psirt_case_count,
         CAST(product.created_at AS TEXT) AS created_at,
         CAST(product.updated_at AS TEXT) AS updated_at
@@ -1558,6 +1594,12 @@ fn components_postgres_sql() -> &'static str {
         component.version,
         component.is_open_source,
         component.has_sbom,
+        component.cpe23_uri,
+        component.package_url,
+        component.sbom_format,
+        component.sbom_document_url,
+        component.sbom_digest,
+        component.sbom_generated_at::text AS sbom_generated_at,
         component.created_at::text AS created_at,
         component.updated_at::text AS updated_at
     FROM product_security_component component
@@ -1581,6 +1623,12 @@ fn components_sqlite_sql() -> &'static str {
         component.version,
         component.is_open_source,
         component.has_sbom,
+        component.cpe23_uri,
+        component.package_url,
+        component.sbom_format,
+        component.sbom_document_url,
+        component.sbom_digest,
+        CAST(component.sbom_generated_at AS TEXT) AS sbom_generated_at,
         CAST(component.created_at AS TEXT) AS created_at,
         CAST(component.updated_at AS TEXT) AS updated_at
     FROM product_security_component component
@@ -1711,6 +1759,8 @@ fn vulnerabilities_postgres_sql() -> &'static str {
         vuln.status,
         vuln.remediation_due::text AS remediation_due,
         vuln.summary,
+        vuln.cpe23_uri,
+        vuln.advisory_ids_json,
         vuln.created_at::text AS created_at,
         vuln.updated_at::text AS updated_at
     FROM product_security_vulnerability vuln
@@ -1739,6 +1789,8 @@ fn vulnerabilities_sqlite_sql() -> &'static str {
         vuln.status,
         CAST(vuln.remediation_due AS TEXT) AS remediation_due,
         vuln.summary,
+        vuln.cpe23_uri,
+        vuln.advisory_ids_json,
         CAST(vuln.created_at AS TEXT) AS created_at,
         CAST(vuln.updated_at AS TEXT) AS updated_at
     FROM product_security_vulnerability vuln
@@ -1767,6 +1819,8 @@ fn vulnerability_by_id_postgres_sql() -> &'static str {
         vuln.status,
         vuln.remediation_due::text AS remediation_due,
         vuln.summary,
+        vuln.cpe23_uri,
+        vuln.advisory_ids_json,
         vuln.created_at::text AS created_at,
         vuln.updated_at::text AS updated_at
     FROM product_security_vulnerability vuln
@@ -1794,6 +1848,8 @@ fn vulnerability_by_id_sqlite_sql() -> &'static str {
         vuln.status,
         CAST(vuln.remediation_due AS TEXT) AS remediation_due,
         vuln.summary,
+        vuln.cpe23_uri,
+        vuln.advisory_ids_json,
         CAST(vuln.created_at AS TEXT) AS created_at,
         CAST(vuln.updated_at AS TEXT) AS updated_at
     FROM product_security_vulnerability vuln
@@ -1920,6 +1976,13 @@ fn advisories_postgres_sql() -> &'static str {
         advisory.status,
         advisory.published_on::text AS published_on,
         advisory.summary,
+        advisory.csaf_url,
+        advisory.csaf_document_id,
+        advisory.csaf_profile,
+        advisory.csaf_tracking_status,
+        advisory.csaf_revision,
+        advisory.cve_list_json,
+        advisory.product_status_json,
         advisory.created_at::text AS created_at,
         advisory.updated_at::text AS updated_at
     FROM product_security_securityadvisory advisory
@@ -1947,6 +2010,13 @@ fn advisories_sqlite_sql() -> &'static str {
         advisory.status,
         CAST(advisory.published_on AS TEXT) AS published_on,
         advisory.summary,
+        advisory.csaf_url,
+        advisory.csaf_document_id,
+        advisory.csaf_profile,
+        advisory.csaf_tracking_status,
+        advisory.csaf_revision,
+        advisory.cve_list_json,
+        advisory.product_status_json,
         CAST(advisory.created_at AS TEXT) AS created_at,
         CAST(advisory.updated_at AS TEXT) AS updated_at
     FROM product_security_securityadvisory advisory
@@ -2306,9 +2376,13 @@ fn product_from_pg_row(row: PgRow) -> Result<ProductListItem, sqlx::Error> {
         automotive_context: row.try_get("automotive_context")?,
         support_window_months: row.try_get("support_window_months")?,
         release_count: row.try_get("release_count")?,
+        component_count: row.try_get("component_count")?,
+        sbom_component_count: row.try_get("sbom_component_count")?,
+        csaf_advisory_count: row.try_get("csaf_advisory_count")?,
         threat_model_count: row.try_get("threat_model_count")?,
         tara_count: row.try_get("tara_count")?,
         vulnerability_count: row.try_get("vulnerability_count")?,
+        cve_count: row.try_get("cve_count")?,
         psirt_case_count: row.try_get("psirt_case_count")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -2330,9 +2404,13 @@ fn product_from_sqlite_row(row: SqliteRow) -> Result<ProductListItem, sqlx::Erro
         automotive_context: row.try_get("automotive_context")?,
         support_window_months: row.try_get("support_window_months")?,
         release_count: row.try_get("release_count")?,
+        component_count: row.try_get("component_count")?,
+        sbom_component_count: row.try_get("sbom_component_count")?,
+        csaf_advisory_count: row.try_get("csaf_advisory_count")?,
         threat_model_count: row.try_get("threat_model_count")?,
         tara_count: row.try_get("tara_count")?,
         vulnerability_count: row.try_get("vulnerability_count")?,
+        cve_count: row.try_get("cve_count")?,
         psirt_case_count: row.try_get("psirt_case_count")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -2433,6 +2511,12 @@ fn component_from_pg_row(row: PgRow) -> Result<ProductComponentSummary, sqlx::Er
         version: row.try_get("version")?,
         is_open_source: row.try_get("is_open_source")?,
         has_sbom: row.try_get("has_sbom")?,
+        cpe23_uri: row.try_get("cpe23_uri")?,
+        package_url: row.try_get("package_url")?,
+        sbom_format: row.try_get("sbom_format")?,
+        sbom_document_url: row.try_get("sbom_document_url")?,
+        sbom_digest: row.try_get("sbom_digest")?,
+        sbom_generated_at: row.try_get("sbom_generated_at")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -2452,6 +2536,12 @@ fn component_from_sqlite_row(row: SqliteRow) -> Result<ProductComponentSummary, 
         version: row.try_get("version")?,
         is_open_source: row.try_get("is_open_source")?,
         has_sbom: row.try_get("has_sbom")?,
+        cpe23_uri: row.try_get("cpe23_uri")?,
+        package_url: row.try_get("package_url")?,
+        sbom_format: row.try_get("sbom_format")?,
+        sbom_document_url: row.try_get("sbom_document_url")?,
+        sbom_digest: row.try_get("sbom_digest")?,
+        sbom_generated_at: row.try_get("sbom_generated_at")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -2560,6 +2650,8 @@ fn vulnerability_from_pg_row(row: PgRow) -> Result<VulnerabilitySummary, sqlx::E
         status,
         remediation_due: row.try_get("remediation_due")?,
         summary: row.try_get("summary")?,
+        cpe23_uri: row.try_get("cpe23_uri")?,
+        advisory_ids: parse_json_string_array(row.try_get("advisory_ids_json")?),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -2584,6 +2676,8 @@ fn vulnerability_from_sqlite_row(row: SqliteRow) -> Result<VulnerabilitySummary,
         status,
         remediation_due: row.try_get("remediation_due")?,
         summary: row.try_get("summary")?,
+        cpe23_uri: row.try_get("cpe23_uri")?,
+        advisory_ids: parse_json_string_array(row.try_get("advisory_ids_json")?),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -2689,6 +2783,13 @@ fn advisory_from_pg_row(row: PgRow) -> Result<SecurityAdvisorySummary, sqlx::Err
         status,
         published_on: row.try_get("published_on")?,
         summary: row.try_get("summary")?,
+        csaf_url: row.try_get("csaf_url")?,
+        csaf_document_id: row.try_get("csaf_document_id")?,
+        csaf_profile: row.try_get("csaf_profile")?,
+        csaf_tracking_status: row.try_get("csaf_tracking_status")?,
+        csaf_revision: row.try_get("csaf_revision")?,
+        cve_list: parse_json_string_array(row.try_get("cve_list_json")?),
+        product_status: parse_json_value(row.try_get("product_status_json")?),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -2710,6 +2811,13 @@ fn advisory_from_sqlite_row(row: SqliteRow) -> Result<SecurityAdvisorySummary, s
         status,
         published_on: row.try_get("published_on")?,
         summary: row.try_get("summary")?,
+        csaf_url: row.try_get("csaf_url")?,
+        csaf_document_id: row.try_get("csaf_document_id")?,
+        csaf_profile: row.try_get("csaf_profile")?,
+        csaf_tracking_status: row.try_get("csaf_tracking_status")?,
+        csaf_revision: row.try_get("csaf_revision")?,
+        cve_list: parse_json_string_array(row.try_get("cve_list_json")?),
+        product_status: parse_json_value(row.try_get("product_status_json")?),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -3131,4 +3239,12 @@ fn normalize_optional_date_text(value: &str) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn parse_json_string_array(value: String) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(&value).unwrap_or_default()
+}
+
+fn parse_json_value(value: String) -> Value {
+    serde_json::from_str::<Value>(&value).unwrap_or(Value::Object(Default::default()))
 }

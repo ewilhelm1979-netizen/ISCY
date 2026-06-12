@@ -59,6 +59,17 @@ pub struct IncidentSummary {
     pub authority_reference: String,
     pub stakeholder_summary: String,
     pub lessons_learned: String,
+    pub review_state: String,
+    pub review_state_label: String,
+    pub reviewed_by_id: Option<i64>,
+    pub reviewed_by_display: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub review_notes: String,
+    pub approved_by_id: Option<i64>,
+    pub approved_by_display: Option<String>,
+    pub approved_at: Option<String>,
+    pub approval_notes: String,
+    pub report_package_version: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -133,6 +144,12 @@ pub struct IncidentRunbookTemplateWriteRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct IncidentRunbookStepUpdateResult {
     pub step: IncidentRunbookStepSummary,
+    pub event: IncidentEventSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IncidentReviewUpdateResult {
+    pub incident: IncidentSummary,
     pub event: IncidentEventSummary,
 }
 
@@ -268,6 +285,45 @@ impl IncidentEventWriteRequest {
                 limit_chars(title, 220),
                 action
             ),
+            from_status: None,
+            to_status: None,
+            evidence_item_id: None,
+        }
+    }
+
+    pub fn runbook_step_reordered(title: &str, direction_label: &str) -> Self {
+        Self {
+            event_type: "RUNBOOK_STEP_UPDATED".to_string(),
+            summary: format!(
+                "Runbook-Schritt verschoben ({}): {}",
+                direction_label,
+                limit_chars(title, 150)
+            ),
+            detail: format!(
+                "Runbook-Schritt '{}' wurde in der Bearbeitungsreihenfolge verschoben.",
+                limit_chars(title, 220)
+            ),
+            from_status: None,
+            to_status: None,
+            evidence_item_id: None,
+        }
+    }
+
+    pub fn review_state_changed(state_label: &str, notes: &str) -> Self {
+        let normalized_notes = normalize_optional_text(Some(notes));
+        let detail = if normalized_notes.is_empty() {
+            format!("Meldepaket-Review wurde auf '{}' gesetzt.", state_label)
+        } else {
+            format!(
+                "Meldepaket-Review wurde auf '{}' gesetzt. Notiz: {}",
+                state_label,
+                limit_chars(&normalized_notes, 700)
+            )
+        };
+        Self {
+            event_type: "INCIDENT_REVIEW_UPDATED".to_string(),
+            summary: format!("Meldepaket-Review: {state_label}"),
+            detail,
             from_status: None,
             to_status: None,
             evidence_item_id: None,
@@ -463,6 +519,67 @@ impl IncidentStore {
                     step_id,
                     actor_id,
                     is_done,
+                )
+                .await
+            }
+        }
+    }
+
+    pub async fn move_runbook_step(
+        &self,
+        tenant_id: i64,
+        incident_id: i64,
+        step_id: i64,
+        actor_id: Option<i64>,
+        direction: &str,
+    ) -> anyhow::Result<Option<IncidentRunbookStepUpdateResult>> {
+        match self {
+            Self::Postgres(pool) => {
+                move_runbook_step_postgres(
+                    pool,
+                    tenant_id,
+                    incident_id,
+                    step_id,
+                    actor_id,
+                    direction,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                move_runbook_step_sqlite(pool, tenant_id, incident_id, step_id, actor_id, direction)
+                    .await
+            }
+        }
+    }
+
+    pub async fn update_incident_review_state(
+        &self,
+        tenant_id: i64,
+        incident_id: i64,
+        actor_id: i64,
+        action: &str,
+        notes: Option<&str>,
+    ) -> anyhow::Result<Option<IncidentReviewUpdateResult>> {
+        match self {
+            Self::Postgres(pool) => {
+                update_incident_review_state_postgres(
+                    pool,
+                    tenant_id,
+                    incident_id,
+                    actor_id,
+                    action,
+                    notes,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                update_incident_review_state_sqlite(
+                    pool,
+                    tenant_id,
+                    incident_id,
+                    actor_id,
+                    action,
+                    notes,
                 )
                 .await
             }
@@ -1648,6 +1765,186 @@ async fn set_runbook_step_done_sqlite(
     Ok(Some(IncidentRunbookStepUpdateResult { step, event }))
 }
 
+async fn move_runbook_step_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    step_id: i64,
+    actor_id: Option<i64>,
+    direction: &str,
+) -> anyhow::Result<Option<IncidentRunbookStepUpdateResult>> {
+    let incident = incident_detail_postgres(pool, tenant_id, incident_id)
+        .await?
+        .with_context(|| format!("Incident {} wurde nicht gefunden.", incident_id))?;
+    ensure_runbook_steps_postgres(pool, tenant_id, incident_id, &incident.runbook_template).await?;
+    let Some(current) = runbook_step_detail_postgres(pool, tenant_id, incident_id, step_id).await?
+    else {
+        return Ok(None);
+    };
+    let direction = RunbookMoveDirection::from_value(direction);
+    let neighbor_row = sqlx::query(direction.postgres_neighbor_sql())
+        .bind(tenant_id)
+        .bind(incident_id)
+        .bind(current.step_number)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-benachbarter Runbook-Schritt konnte nicht gelesen werden")?;
+    let Some(neighbor_row) = neighbor_row else {
+        return Ok(None);
+    };
+    let neighbor_id: i64 = neighbor_row.try_get("id")?;
+    let neighbor_number: i64 = neighbor_row.try_get("step_number")?;
+    let now = Utc::now().to_rfc3339();
+    let temporary_number = -step_id.abs();
+    sqlx::query(
+        r#"
+        UPDATE incidents_runbookstep
+        SET step_number = $4, updated_at = $5
+        WHERE tenant_id = $1 AND incident_id = $2 AND id = $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(step_id)
+    .bind(temporary_number)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Runbook-Schritt konnte nicht temporaer verschoben werden")?;
+    sqlx::query(
+        r#"
+        UPDATE incidents_runbookstep
+        SET step_number = $4, updated_at = $5
+        WHERE tenant_id = $1 AND incident_id = $2 AND id = $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(neighbor_id)
+    .bind(current.step_number)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-benachbarter Runbook-Schritt konnte nicht verschoben werden")?;
+    sqlx::query(
+        r#"
+        UPDATE incidents_runbookstep
+        SET step_number = $4, updated_at = $5
+        WHERE tenant_id = $1 AND incident_id = $2 AND id = $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(step_id)
+    .bind(neighbor_number)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Runbook-Schritt konnte nicht final verschoben werden")?;
+    let step = runbook_step_detail_postgres(pool, tenant_id, incident_id, step_id)
+        .await?
+        .context("Verschobener Runbook-Schritt konnte nicht gelesen werden")?;
+    let event = append_incident_event_postgres(
+        pool,
+        tenant_id,
+        incident_id,
+        actor_id,
+        IncidentEventWriteRequest::runbook_step_reordered(&step.title, direction.label()),
+    )
+    .await?;
+    Ok(Some(IncidentRunbookStepUpdateResult { step, event }))
+}
+
+async fn move_runbook_step_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    step_id: i64,
+    actor_id: Option<i64>,
+    direction: &str,
+) -> anyhow::Result<Option<IncidentRunbookStepUpdateResult>> {
+    let incident = incident_detail_sqlite(pool, tenant_id, incident_id)
+        .await?
+        .with_context(|| format!("Incident {} wurde nicht gefunden.", incident_id))?;
+    ensure_runbook_steps_sqlite(pool, tenant_id, incident_id, &incident.runbook_template).await?;
+    let Some(current) = runbook_step_detail_sqlite(pool, tenant_id, incident_id, step_id).await?
+    else {
+        return Ok(None);
+    };
+    let direction = RunbookMoveDirection::from_value(direction);
+    let neighbor_row = sqlx::query(direction.sqlite_neighbor_sql())
+        .bind(tenant_id)
+        .bind(incident_id)
+        .bind(current.step_number)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-benachbarter Runbook-Schritt konnte nicht gelesen werden")?;
+    let Some(neighbor_row) = neighbor_row else {
+        return Ok(None);
+    };
+    let neighbor_id: i64 = neighbor_row.try_get("id")?;
+    let neighbor_number: i64 = neighbor_row.try_get("step_number")?;
+    let now = Utc::now().to_rfc3339();
+    let temporary_number = -step_id.abs();
+    sqlx::query(
+        r#"
+        UPDATE incidents_runbookstep
+        SET step_number = ?4, updated_at = ?5
+        WHERE tenant_id = ?1 AND incident_id = ?2 AND id = ?3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(step_id)
+    .bind(temporary_number)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("SQLite-Runbook-Schritt konnte nicht temporaer verschoben werden")?;
+    sqlx::query(
+        r#"
+        UPDATE incidents_runbookstep
+        SET step_number = ?4, updated_at = ?5
+        WHERE tenant_id = ?1 AND incident_id = ?2 AND id = ?3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(neighbor_id)
+    .bind(current.step_number)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("SQLite-benachbarter Runbook-Schritt konnte nicht verschoben werden")?;
+    sqlx::query(
+        r#"
+        UPDATE incidents_runbookstep
+        SET step_number = ?4, updated_at = ?5
+        WHERE tenant_id = ?1 AND incident_id = ?2 AND id = ?3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(step_id)
+    .bind(neighbor_number)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("SQLite-Runbook-Schritt konnte nicht final verschoben werden")?;
+    let step = runbook_step_detail_sqlite(pool, tenant_id, incident_id, step_id)
+        .await?
+        .context("Verschobener Runbook-Schritt konnte nicht gelesen werden")?;
+    let event = append_incident_event_sqlite(
+        pool,
+        tenant_id,
+        incident_id,
+        actor_id,
+        IncidentEventWriteRequest::runbook_step_reordered(&step.title, direction.label()),
+    )
+    .await?;
+    Ok(Some(IncidentRunbookStepUpdateResult { step, event }))
+}
+
 async fn runbook_step_detail_postgres(
     pool: &PgPool,
     tenant_id: i64,
@@ -2085,6 +2382,147 @@ struct NormalizedIncidentEvent {
     created_at: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RunbookMoveDirection {
+    Up,
+    Down,
+}
+
+impl RunbookMoveDirection {
+    fn from_value(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "up" | "move_up" => Self::Up,
+            _ => Self::Down,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Up => "nach oben",
+            Self::Down => "nach unten",
+        }
+    }
+
+    fn postgres_neighbor_sql(self) -> &'static str {
+        match self {
+            Self::Up => {
+                r#"
+                SELECT id, step_number::bigint AS step_number
+                FROM incidents_runbookstep
+                WHERE tenant_id = $1 AND incident_id = $2 AND step_number < $3
+                ORDER BY step_number DESC, id DESC
+                LIMIT 1
+                "#
+            }
+            Self::Down => {
+                r#"
+                SELECT id, step_number::bigint AS step_number
+                FROM incidents_runbookstep
+                WHERE tenant_id = $1 AND incident_id = $2 AND step_number > $3
+                ORDER BY step_number ASC, id ASC
+                LIMIT 1
+                "#
+            }
+        }
+    }
+
+    fn sqlite_neighbor_sql(self) -> &'static str {
+        match self {
+            Self::Up => {
+                r#"
+                SELECT id, step_number
+                FROM incidents_runbookstep
+                WHERE tenant_id = ?1 AND incident_id = ?2 AND step_number < ?3
+                ORDER BY step_number DESC, id DESC
+                LIMIT 1
+                "#
+            }
+            Self::Down => {
+                r#"
+                SELECT id, step_number
+                FROM incidents_runbookstep
+                WHERE tenant_id = ?1 AND incident_id = ?2 AND step_number > ?3
+                ORDER BY step_number ASC, id ASC
+                LIMIT 1
+                "#
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ReviewTransition {
+    state: String,
+    notes: String,
+    set_review_actor: bool,
+    set_review_notes: bool,
+    set_approval_actor: bool,
+    set_approval_notes: bool,
+    clear_review: bool,
+}
+
+impl ReviewTransition {
+    fn from_action(action: &str, notes: Option<&str>) -> Self {
+        let notes = limit_chars(&normalize_optional_text(notes), 2000);
+        match action.trim().to_ascii_lowercase().as_str() {
+            "request_review" | "submit" | "in_review" => Self {
+                state: "IN_REVIEW".to_string(),
+                notes,
+                set_review_actor: false,
+                set_review_notes: true,
+                set_approval_actor: false,
+                set_approval_notes: false,
+                clear_review: false,
+            },
+            "review" | "reviewed" | "mark_reviewed" => Self {
+                state: "REVIEWED".to_string(),
+                notes,
+                set_review_actor: true,
+                set_review_notes: true,
+                set_approval_actor: false,
+                set_approval_notes: false,
+                clear_review: false,
+            },
+            "approve" | "approved" => Self {
+                state: "APPROVED".to_string(),
+                notes,
+                set_review_actor: false,
+                set_review_notes: false,
+                set_approval_actor: true,
+                set_approval_notes: true,
+                clear_review: false,
+            },
+            "changes_requested" | "request_changes" | "reject" => Self {
+                state: "CHANGES_REQUESTED".to_string(),
+                notes,
+                set_review_actor: true,
+                set_review_notes: true,
+                set_approval_actor: false,
+                set_approval_notes: false,
+                clear_review: true,
+            },
+            "reopen" | "draft" | "reset" => Self {
+                state: "DRAFT".to_string(),
+                notes,
+                set_review_actor: false,
+                set_review_notes: true,
+                set_approval_actor: false,
+                set_approval_notes: false,
+                clear_review: true,
+            },
+            _ => Self {
+                state: "IN_REVIEW".to_string(),
+                notes,
+                set_review_actor: false,
+                set_review_notes: true,
+                set_approval_actor: false,
+                set_approval_notes: false,
+                clear_review: false,
+            },
+        }
+    }
+}
+
 impl NormalizedIncidentEvent {
     fn from_payload(actor_id: Option<i64>, payload: IncidentEventWriteRequest) -> Self {
         Self {
@@ -2162,6 +2600,134 @@ async fn incident_update_events_sqlite(
         );
     }
     Ok(events)
+}
+
+async fn update_incident_review_state_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    actor_id: i64,
+    action: &str,
+    notes: Option<&str>,
+) -> anyhow::Result<Option<IncidentReviewUpdateResult>> {
+    if incident_detail_postgres(pool, tenant_id, incident_id)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let transition = ReviewTransition::from_action(action, notes);
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        UPDATE incidents_incident
+        SET review_state = $3,
+            reviewed_by_id = CASE WHEN $4 THEN $9 WHEN $8 THEN NULL ELSE reviewed_by_id END,
+            reviewed_at = CASE WHEN $4 THEN $10 WHEN $8 THEN NULL ELSE reviewed_at END,
+            review_notes = CASE WHEN $5 THEN $11 ELSE review_notes END,
+            approved_by_id = CASE WHEN $6 THEN $9 WHEN $8 THEN NULL ELSE approved_by_id END,
+            approved_at = CASE WHEN $6 THEN $10 WHEN $8 THEN NULL ELSE approved_at END,
+            approval_notes = CASE WHEN $7 THEN $11 WHEN $8 THEN '' ELSE approval_notes END,
+            updated_at = $10
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(&transition.state)
+    .bind(transition.set_review_actor)
+    .bind(transition.set_review_notes)
+    .bind(transition.set_approval_actor)
+    .bind(transition.set_approval_notes)
+    .bind(transition.clear_review)
+    .bind(actor_id)
+    .bind(&now)
+    .bind(&transition.notes)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Incident-Review konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    let incident = incident_detail_postgres(pool, tenant_id, incident_id)
+        .await?
+        .context("Aktualisierter Incident-Review konnte nicht gelesen werden")?;
+    let event = append_incident_event_postgres(
+        pool,
+        tenant_id,
+        incident_id,
+        Some(actor_id),
+        IncidentEventWriteRequest::review_state_changed(
+            &incident.review_state_label,
+            &transition.notes,
+        ),
+    )
+    .await?;
+    Ok(Some(IncidentReviewUpdateResult { incident, event }))
+}
+
+async fn update_incident_review_state_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    actor_id: i64,
+    action: &str,
+    notes: Option<&str>,
+) -> anyhow::Result<Option<IncidentReviewUpdateResult>> {
+    if incident_detail_sqlite(pool, tenant_id, incident_id)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let transition = ReviewTransition::from_action(action, notes);
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        UPDATE incidents_incident
+        SET review_state = ?3,
+            reviewed_by_id = CASE WHEN ?4 THEN ?9 WHEN ?8 THEN NULL ELSE reviewed_by_id END,
+            reviewed_at = CASE WHEN ?4 THEN ?10 WHEN ?8 THEN NULL ELSE reviewed_at END,
+            review_notes = CASE WHEN ?5 THEN ?11 ELSE review_notes END,
+            approved_by_id = CASE WHEN ?6 THEN ?9 WHEN ?8 THEN NULL ELSE approved_by_id END,
+            approved_at = CASE WHEN ?6 THEN ?10 WHEN ?8 THEN NULL ELSE approved_at END,
+            approval_notes = CASE WHEN ?7 THEN ?11 WHEN ?8 THEN '' ELSE approval_notes END,
+            updated_at = ?10
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(&transition.state)
+    .bind(transition.set_review_actor)
+    .bind(transition.set_review_notes)
+    .bind(transition.set_approval_actor)
+    .bind(transition.set_approval_notes)
+    .bind(transition.clear_review)
+    .bind(actor_id)
+    .bind(&now)
+    .bind(&transition.notes)
+    .execute(pool)
+    .await
+    .context("SQLite-Incident-Review konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    let incident = incident_detail_sqlite(pool, tenant_id, incident_id)
+        .await?
+        .context("Aktualisierter Incident-Review konnte nicht gelesen werden")?;
+    let event = append_incident_event_sqlite(
+        pool,
+        tenant_id,
+        incident_id,
+        Some(actor_id),
+        IncidentEventWriteRequest::review_state_changed(
+            &incident.review_state_label,
+            &transition.notes,
+        ),
+    )
+    .await?;
+    Ok(Some(IncidentReviewUpdateResult { incident, event }))
 }
 
 impl NewIncident {
@@ -2540,11 +3106,27 @@ fn incident_select_postgres_sql(where_clause: &str, limit_placeholder: &str) -> 
             incident.authority_reference,
             incident.stakeholder_summary,
             incident.lessons_learned,
+            incident.review_state,
+            incident.reviewed_by_id,
+            reviewer.username AS reviewer_username,
+            reviewer.first_name AS reviewer_first_name,
+            reviewer.last_name AS reviewer_last_name,
+            incident.reviewed_at::text AS reviewed_at,
+            incident.review_notes,
+            incident.approved_by_id,
+            approver.username AS approver_username,
+            approver.first_name AS approver_first_name,
+            approver.last_name AS approver_last_name,
+            incident.approved_at::text AS approved_at,
+            incident.approval_notes,
+            incident.report_package_version,
             incident.created_at::text AS created_at,
             incident.updated_at::text AS updated_at
         FROM incidents_incident incident
         LEFT JOIN accounts_user reporter ON reporter.id = incident.reporter_id AND reporter.tenant_id = incident.tenant_id
         LEFT JOIN accounts_user owner ON owner.id = incident.owner_id AND owner.tenant_id = incident.tenant_id
+        LEFT JOIN accounts_user reviewer ON reviewer.id = incident.reviewed_by_id AND reviewer.tenant_id = incident.tenant_id
+        LEFT JOIN accounts_user approver ON approver.id = incident.approved_by_id AND approver.tenant_id = incident.tenant_id
         LEFT JOIN risks_risk risk ON risk.id = incident.related_risk_id AND risk.tenant_id = incident.tenant_id
         LEFT JOIN assets_app_informationasset asset ON asset.id = incident.related_asset_id AND asset.tenant_id = incident.tenant_id
         LEFT JOIN processes_process proc ON proc.id = incident.related_process_id AND proc.tenant_id = incident.tenant_id
@@ -2604,11 +3186,27 @@ fn incident_select_sqlite_sql(where_clause: &str, limit_placeholder: &str) -> St
             incident.authority_reference,
             incident.stakeholder_summary,
             incident.lessons_learned,
+            incident.review_state,
+            incident.reviewed_by_id,
+            reviewer.username AS reviewer_username,
+            reviewer.first_name AS reviewer_first_name,
+            reviewer.last_name AS reviewer_last_name,
+            CAST(incident.reviewed_at AS TEXT) AS reviewed_at,
+            incident.review_notes,
+            incident.approved_by_id,
+            approver.username AS approver_username,
+            approver.first_name AS approver_first_name,
+            approver.last_name AS approver_last_name,
+            CAST(incident.approved_at AS TEXT) AS approved_at,
+            incident.approval_notes,
+            incident.report_package_version,
             CAST(incident.created_at AS TEXT) AS created_at,
             CAST(incident.updated_at AS TEXT) AS updated_at
         FROM incidents_incident incident
         LEFT JOIN accounts_user reporter ON reporter.id = incident.reporter_id AND reporter.tenant_id = incident.tenant_id
         LEFT JOIN accounts_user owner ON owner.id = incident.owner_id AND owner.tenant_id = incident.tenant_id
+        LEFT JOIN accounts_user reviewer ON reviewer.id = incident.reviewed_by_id AND reviewer.tenant_id = incident.tenant_id
+        LEFT JOIN accounts_user approver ON approver.id = incident.approved_by_id AND approver.tenant_id = incident.tenant_id
         LEFT JOIN risks_risk risk ON risk.id = incident.related_risk_id AND risk.tenant_id = incident.tenant_id
         LEFT JOIN assets_app_informationasset asset ON asset.id = incident.related_asset_id AND asset.tenant_id = incident.tenant_id
         LEFT JOIN processes_process proc ON proc.id = incident.related_process_id AND proc.tenant_id = incident.tenant_id
@@ -2632,6 +3230,7 @@ fn summary_from_pg_row(row: PgRow) -> Result<IncidentSummary, sqlx::Error> {
     let severity: String = row.try_get("severity")?;
     let status: String = row.try_get("status")?;
     let incident_type: String = row.try_get("incident_type")?;
+    let review_state: String = row.try_get("review_state")?;
     let nis2_reportable: bool = row.try_get("nis2_reportable")?;
     let early_warning_due_at: Option<String> = row.try_get("early_warning_due_at")?;
     let early_warning_sent_at: Option<String> = row.try_get("early_warning_sent_at")?;
@@ -2693,6 +3292,25 @@ fn summary_from_pg_row(row: PgRow) -> Result<IncidentSummary, sqlx::Error> {
         authority_reference: row.try_get("authority_reference")?,
         stakeholder_summary: row.try_get("stakeholder_summary")?,
         lessons_learned: row.try_get("lessons_learned")?,
+        review_state_label: review_state_label(&review_state).to_string(),
+        review_state,
+        reviewed_by_id: row.try_get("reviewed_by_id")?,
+        reviewed_by_display: user_display(
+            row.try_get("reviewer_username")?,
+            row.try_get("reviewer_first_name")?,
+            row.try_get("reviewer_last_name")?,
+        ),
+        reviewed_at: row.try_get("reviewed_at")?,
+        review_notes: row.try_get("review_notes")?,
+        approved_by_id: row.try_get("approved_by_id")?,
+        approved_by_display: user_display(
+            row.try_get("approver_username")?,
+            row.try_get("approver_first_name")?,
+            row.try_get("approver_last_name")?,
+        ),
+        approved_at: row.try_get("approved_at")?,
+        approval_notes: row.try_get("approval_notes")?,
+        report_package_version: row.try_get("report_package_version")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -2702,6 +3320,7 @@ fn summary_from_sqlite_row(row: SqliteRow) -> Result<IncidentSummary, sqlx::Erro
     let severity: String = row.try_get("severity")?;
     let status: String = row.try_get("status")?;
     let incident_type: String = row.try_get("incident_type")?;
+    let review_state: String = row.try_get("review_state")?;
     let nis2_reportable: bool = row.try_get("nis2_reportable")?;
     let early_warning_due_at: Option<String> = row.try_get("early_warning_due_at")?;
     let early_warning_sent_at: Option<String> = row.try_get("early_warning_sent_at")?;
@@ -2763,6 +3382,25 @@ fn summary_from_sqlite_row(row: SqliteRow) -> Result<IncidentSummary, sqlx::Erro
         authority_reference: row.try_get("authority_reference")?,
         stakeholder_summary: row.try_get("stakeholder_summary")?,
         lessons_learned: row.try_get("lessons_learned")?,
+        review_state_label: review_state_label(&review_state).to_string(),
+        review_state,
+        reviewed_by_id: row.try_get("reviewed_by_id")?,
+        reviewed_by_display: user_display(
+            row.try_get("reviewer_username")?,
+            row.try_get("reviewer_first_name")?,
+            row.try_get("reviewer_last_name")?,
+        ),
+        reviewed_at: row.try_get("reviewed_at")?,
+        review_notes: row.try_get("review_notes")?,
+        approved_by_id: row.try_get("approved_by_id")?,
+        approved_by_display: user_display(
+            row.try_get("approver_username")?,
+            row.try_get("approver_first_name")?,
+            row.try_get("approver_last_name")?,
+        ),
+        approved_at: row.try_get("approved_at")?,
+        approval_notes: row.try_get("approval_notes")?,
+        report_package_version: row.try_get("report_package_version")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -2966,6 +3604,7 @@ fn normalize_event_type(value: &str) -> String {
         "STATUS_CHANGED" => "STATUS_CHANGED".to_string(),
         "EVIDENCE_UPLOADED" => "EVIDENCE_UPLOADED".to_string(),
         "RUNBOOK_STEP_UPDATED" => "RUNBOOK_STEP_UPDATED".to_string(),
+        "INCIDENT_REVIEW_UPDATED" => "INCIDENT_REVIEW_UPDATED".to_string(),
         "TIMELINE_NOTE" => "TIMELINE_NOTE".to_string(),
         _ => "TIMELINE_NOTE".to_string(),
     }
@@ -3222,12 +3861,24 @@ fn status_label(value: &str) -> &'static str {
     }
 }
 
+fn review_state_label(value: &str) -> &'static str {
+    match value {
+        "DRAFT" => "Entwurf",
+        "IN_REVIEW" => "In Review",
+        "REVIEWED" => "Geprueft",
+        "APPROVED" => "Freigegeben",
+        "CHANGES_REQUESTED" => "Aenderungen angefordert",
+        _ => "Entwurf",
+    }
+}
+
 fn event_type_label(value: &str) -> &'static str {
     match value {
         "CREATED" => "Angelegt",
         "STATUS_CHANGED" => "Statuswechsel",
         "EVIDENCE_UPLOADED" => "Evidence",
         "RUNBOOK_STEP_UPDATED" => "Runbook",
+        "INCIDENT_REVIEW_UPDATED" => "Review",
         "TIMELINE_NOTE" => "Notiz",
         _ => "Timeline",
     }

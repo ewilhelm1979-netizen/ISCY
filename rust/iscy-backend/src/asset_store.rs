@@ -33,6 +33,10 @@ pub struct InformationAssetSummary {
     pub availability: String,
     pub lifecycle_status: String,
     pub is_in_scope: bool,
+    pub cpe23_uri: String,
+    pub package_url: String,
+    pub sbom_document_url: String,
+    pub software_inventory_ref: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -102,6 +106,10 @@ async fn list_information_assets_postgres(
             asset.availability,
             asset.lifecycle_status,
             asset.is_in_scope,
+            asset.cpe23_uri,
+            asset.package_url,
+            asset.sbom_document_url,
+            asset.software_inventory_ref,
             asset.created_at::text AS created_at,
             asset.updated_at::text AS updated_at
         FROM assets_app_informationasset asset
@@ -152,6 +160,10 @@ async fn list_information_assets_sqlite(
             asset.availability,
             asset.lifecycle_status,
             asset.is_in_scope,
+            asset.cpe23_uri,
+            asset.package_url,
+            asset.sbom_document_url,
+            asset.software_inventory_ref,
             CAST(asset.created_at AS TEXT) AS created_at,
             CAST(asset.updated_at AS TEXT) AS updated_at
         FROM assets_app_informationasset asset
@@ -197,6 +209,10 @@ fn summary_from_pg_row(row: PgRow) -> Result<InformationAssetSummary, sqlx::Erro
         availability: row.try_get("availability")?,
         lifecycle_status: row.try_get("lifecycle_status")?,
         is_in_scope: row.try_get("is_in_scope")?,
+        cpe23_uri: row.try_get("cpe23_uri")?,
+        package_url: row.try_get("package_url")?,
+        sbom_document_url: row.try_get("sbom_document_url")?,
+        software_inventory_ref: row.try_get("software_inventory_ref")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -223,6 +239,10 @@ fn summary_from_sqlite_row(row: SqliteRow) -> Result<InformationAssetSummary, sq
         availability: row.try_get("availability")?,
         lifecycle_status: row.try_get("lifecycle_status")?,
         is_in_scope: row.try_get("is_in_scope")?,
+        cpe23_uri: row.try_get("cpe23_uri")?,
+        package_url: row.try_get("package_url")?,
+        sbom_document_url: row.try_get("sbom_document_url")?,
+        software_inventory_ref: row.try_get("software_inventory_ref")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

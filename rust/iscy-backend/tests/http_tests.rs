@@ -1361,6 +1361,22 @@ async fn asset_inventory_returns_tenant_assets_from_database() {
     );
     assert_eq!(payload["assets"][0]["owner_display"], "Ada Lovelace");
     assert_eq!(payload["assets"][0]["is_in_scope"], true);
+    assert_eq!(
+        payload["assets"][0]["cpe23_uri"],
+        "cpe:2.3:a:iscy:customer_portal:1.0:*:*:*:*:*:*:*"
+    );
+    assert_eq!(
+        payload["assets"][0]["package_url"],
+        "pkg:generic/iscy/customer-portal@1.0"
+    );
+    assert_eq!(
+        payload["assets"][0]["sbom_document_url"],
+        "file://evidence/sbom/customer-portal.cdx.json"
+    );
+    assert_eq!(
+        payload["assets"][0]["software_inventory_ref"],
+        "ISCY-ASSET-PORTAL-1"
+    );
     assert_eq!(payload["assets"][1]["name"], "Data Lake");
     assert_eq!(
         payload["assets"][1]["business_unit_name"],
@@ -1600,9 +1616,13 @@ async fn product_security_overview_returns_tenant_products_from_database() {
     assert_eq!(payload["products"][0]["name"], "Sensor Gateway");
     assert_eq!(payload["products"][0]["family_name"], "Gateways");
     assert_eq!(payload["products"][0]["release_count"], 2);
+    assert_eq!(payload["products"][0]["component_count"], 1);
+    assert_eq!(payload["products"][0]["sbom_component_count"], 1);
+    assert_eq!(payload["products"][0]["csaf_advisory_count"], 1);
     assert_eq!(payload["products"][0]["threat_model_count"], 1);
     assert_eq!(payload["products"][0]["tara_count"], 1);
     assert_eq!(payload["products"][0]["vulnerability_count"], 3);
+    assert_eq!(payload["products"][0]["cve_count"], 1);
     assert_eq!(payload["products"][0]["psirt_case_count"], 1);
     assert_eq!(payload["snapshots"][0]["product_name"], "Sensor Gateway");
     assert_eq!(payload["snapshots"][0]["cra_readiness_percent"], 72);
@@ -1645,6 +1665,19 @@ async fn product_security_detail_returns_product_tree_from_database() {
     assert_eq!(payload["components"][0]["name"], "Gateway Firmware");
     assert_eq!(payload["components"][0]["supplier_name"], "Secure Supplier");
     assert_eq!(payload["components"][0]["has_sbom"], true);
+    assert_eq!(
+        payload["components"][0]["cpe23_uri"],
+        "cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*"
+    );
+    assert_eq!(
+        payload["components"][0]["package_url"],
+        "pkg:generic/iscy/sensor-gateway-firmware@1.0.3"
+    );
+    assert_eq!(payload["components"][0]["sbom_format"], "CycloneDX");
+    assert_eq!(
+        payload["components"][0]["sbom_document_url"],
+        "file://evidence/sbom/sensor-gateway-1.0.3.cdx.json"
+    );
     assert_eq!(payload["threat_models"][0]["name"], "Gateway Threat Model");
     assert_eq!(payload["threat_models"][0]["scenario_count"], 1);
     assert_eq!(payload["threat_scenarios"], 1);
@@ -1657,9 +1690,23 @@ async fn product_security_detail_returns_product_tree_from_database() {
         payload["vulnerabilities"][0]["component_name"],
         "Gateway Firmware"
     );
+    assert_eq!(
+        payload["vulnerabilities"][0]["cpe23_uri"],
+        "cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*"
+    );
+    assert_eq!(payload["vulnerabilities"][0]["advisory_ids"][0], "ADV-1");
     assert_eq!(payload["ai_systems"][0]["name"], "Gateway Assistant");
     assert_eq!(payload["psirt_cases"][0]["case_id"], "PSIRT-1");
     assert_eq!(payload["advisories"][0]["advisory_id"], "ADV-1");
+    assert_eq!(
+        payload["advisories"][0]["csaf_document_id"],
+        "ISCY-2026-ADV-1"
+    );
+    assert_eq!(payload["advisories"][0]["cve_list"][0], "CVE-2026-0001");
+    assert_eq!(
+        payload["advisories"][0]["product_status"]["fixed"][0],
+        "sensor-gateway-firmware-1.0.4"
+    );
     assert_eq!(payload["snapshot"]["cra_readiness_percent"], 72);
     assert_eq!(payload["roadmap"]["title"], "Gateway Roadmap");
     assert_eq!(payload["roadmap_tasks"].as_array().unwrap().len(), 2);
@@ -5174,6 +5221,64 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     assert!(marker.0);
     assert_eq!(marker.1, "Relevant fuer NIS2-Meldepaket");
 
+    let step_two_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM incidents_runbookstep WHERE tenant_id = 42 AND incident_id = 1 AND step_number = 2",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/incidents/1/runbook-steps/{step_two_id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from("action=move_up"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let moved_step_number: i64 =
+        sqlx::query_scalar("SELECT step_number FROM incidents_runbookstep WHERE id = ?")
+            .bind(step_two_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(moved_step_number, 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/incidents/1/review")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "action=approve&notes=Meldepaket+fachlich+freigegeben",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let review: (String, Option<i64>, String) = sqlx::query_as(
+        "SELECT review_state, approved_by_id, approval_notes FROM incidents_incident WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(review.0, "APPROVED");
+    assert_eq!(review.1, Some(7));
+    assert_eq!(review.2, "Meldepaket fachlich freigegeben");
+
     let response = app
         .clone()
         .oneshot(
@@ -5191,8 +5296,51 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Runbook-Schritt erledigt"));
+    assert!(html.contains("Review und Freigabe"));
+    assert!(html.contains("Freigegeben"));
     assert!(html.contains("Relevant fuer NIS2-Meldepaket"));
     assert!(!html.contains("Management informiert"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1/timeline.csv?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/csv; charset=utf-8"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let csv = String::from_utf8(body.to_vec()).unwrap();
+    assert!(csv.contains("\"INCIDENT_REVIEW_UPDATED\""));
+    assert!(csv.contains("\"RUNBOOK_STEP_UPDATED\""));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1/timeline.json?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let timeline_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(timeline_json["incident_id"], 1);
+    assert_eq!(timeline_json["review_state"], "APPROVED");
+    assert!(timeline_json["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["event_type"] == "INCIDENT_REVIEW_UPDATED"));
 
     let response = app
         .clone()
@@ -5207,6 +5355,7 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(markdown.contains("| Meldepaket-Review | Freigegeben |"));
     assert!(markdown.contains("Exportrelevant: Relevant fuer NIS2-Meldepaket"));
 
     let _ = fs::remove_dir_all(media_root);
@@ -6072,7 +6221,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0010_rust_incident_runbooks_evidence_exports",
             "0011_rust_incident_timeline",
             "0012_rust_incident_runbook_template_library",
-            "0013_rust_incident_runbook_tasks_timeline_markers"
+            "0013_rust_incident_runbook_tasks_timeline_markers",
+            "0014_rust_review_supply_chain_metadata"
         ]
     );
     assert!(
@@ -7348,6 +7498,10 @@ async fn create_import_tables(pool: &SqlitePool) {
             availability varchar(32) NOT NULL,
             lifecycle_status varchar(64) NOT NULL,
             is_in_scope bool NOT NULL,
+            cpe23_uri TEXT NOT NULL DEFAULT '',
+            package_url TEXT NOT NULL DEFAULT '',
+            sbom_document_url TEXT NOT NULL DEFAULT '',
+            software_inventory_ref TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -7511,6 +7665,10 @@ async fn create_asset_tables(pool: &SqlitePool) {
             availability varchar(32) NOT NULL,
             lifecycle_status varchar(64) NOT NULL,
             is_in_scope bool NOT NULL,
+            cpe23_uri TEXT NOT NULL DEFAULT '',
+            package_url TEXT NOT NULL DEFAULT '',
+            sbom_document_url TEXT NOT NULL DEFAULT '',
+            software_inventory_ref TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -7558,6 +7716,10 @@ async fn insert_asset_fixture(pool: &SqlitePool) {
             availability,
             lifecycle_status,
             is_in_scope,
+            cpe23_uri,
+            package_url,
+            sbom_document_url,
+            software_inventory_ref,
             created_at,
             updated_at
         )
@@ -7576,6 +7738,10 @@ async fn insert_asset_fixture(pool: &SqlitePool) {
                 'MEDIUM',
                 'active',
                 1,
+                'cpe:2.3:a:iscy:customer_portal:1.0:*:*:*:*:*:*:*',
+                'pkg:generic/iscy/customer-portal@1.0',
+                'file://evidence/sbom/customer-portal.cdx.json',
+                'ISCY-ASSET-PORTAL-1',
                 '2026-04-01T10:00:00Z',
                 '2026-04-01T11:00:00Z'
             ),
@@ -7593,6 +7759,10 @@ async fn insert_asset_fixture(pool: &SqlitePool) {
                 'HIGH',
                 'active',
                 1,
+                '',
+                '',
+                '',
+                '',
                 '2026-04-02T10:00:00Z',
                 '2026-04-02T11:00:00Z'
             ),
@@ -7610,6 +7780,10 @@ async fn insert_asset_fixture(pool: &SqlitePool) {
                 'LOW',
                 'retired',
                 0,
+                '',
+                '',
+                '',
+                '',
                 '2026-04-03T10:00:00Z',
                 '2026-04-03T11:00:00Z'
             )
@@ -7713,6 +7887,12 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             version varchar(64) NOT NULL,
             is_open_source bool NOT NULL,
             has_sbom bool NOT NULL,
+            cpe23_uri varchar(255) NOT NULL DEFAULT '',
+            package_url TEXT NOT NULL DEFAULT '',
+            sbom_format varchar(32) NOT NULL DEFAULT '',
+            sbom_document_url TEXT NOT NULL DEFAULT '',
+            sbom_digest varchar(128) NOT NULL DEFAULT '',
+            sbom_generated_at TEXT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -7815,6 +7995,8 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             status varchar(16) NOT NULL,
             remediation_due TEXT NULL,
             summary TEXT NOT NULL,
+            cpe23_uri varchar(255) NOT NULL DEFAULT '',
+            advisory_ids_json TEXT NOT NULL DEFAULT '[]',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -7858,6 +8040,13 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             status varchar(16) NOT NULL,
             published_on TEXT NULL,
             summary TEXT NOT NULL,
+            csaf_url TEXT NOT NULL DEFAULT '',
+            csaf_document_id varchar(128) NOT NULL DEFAULT '',
+            csaf_profile varchar(64) NOT NULL DEFAULT '',
+            csaf_tracking_status varchar(32) NOT NULL DEFAULT '',
+            csaf_revision varchar(32) NOT NULL DEFAULT '',
+            cve_list_json TEXT NOT NULL DEFAULT '[]',
+            product_status_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -8085,6 +8274,12 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
             version,
             is_open_source,
             has_sbom,
+            cpe23_uri,
+            package_url,
+            sbom_format,
+            sbom_document_url,
+            sbom_digest,
+            sbom_generated_at,
             created_at,
             updated_at
         )
@@ -8098,6 +8293,12 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
             '1.0.3',
             0,
             1,
+            'cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*',
+            'pkg:generic/iscy/sensor-gateway-firmware@1.0.3',
+            'CycloneDX',
+            'file://evidence/sbom/sensor-gateway-1.0.3.cdx.json',
+            'sha256:demo-sbom-digest',
+            '2026-04-18T10:30:00Z',
             '2026-04-18T10:00:00Z',
             '2026-04-18T11:00:00Z'
         )
@@ -8252,6 +8453,8 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
             status,
             remediation_due,
             summary,
+            cpe23_uri,
+            advisory_ids_json,
             created_at,
             updated_at
         )
@@ -8268,6 +8471,8 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
                 'OPEN',
                 '2026-05-18',
                 'Critical issue in firmware updater',
+                'cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*',
+                '["ADV-1"]',
                 '2026-04-18T10:00:00Z',
                 '2026-04-18T11:00:00Z'
             ),
@@ -8283,6 +8488,8 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
                 'TRIAGED',
                 '2026-06-01',
                 'Dependency needs update',
+                '',
+                '[]',
                 '2026-04-18T10:00:00Z',
                 '2026-04-18T11:00:00Z'
             ),
@@ -8298,6 +8505,8 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
                 'FIXED',
                 NULL,
                 'Already fixed',
+                '',
+                '[]',
                 '2026-04-18T10:00:00Z',
                 '2026-04-18T11:00:00Z'
             )
@@ -8356,6 +8565,13 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
             status,
             published_on,
             summary,
+            csaf_url,
+            csaf_document_id,
+            csaf_profile,
+            csaf_tracking_status,
+            csaf_revision,
+            cve_list_json,
+            product_status_json,
             created_at,
             updated_at
         )
@@ -8370,6 +8586,13 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
             'PUBLISHED',
             '2026-05-21',
             'Advisory for firmware exposure',
+            'https://example.invalid/.well-known/csaf/iscy-2026-adv-1.json',
+            'ISCY-2026-ADV-1',
+            'Security Advisory',
+            'final',
+            '1',
+            '["CVE-2026-0001"]',
+            '{"known_affected":["sensor-gateway-firmware-1.0.3"],"fixed":["sensor-gateway-firmware-1.0.4"]}',
             '2026-04-18T10:00:00Z',
             '2026-04-18T11:00:00Z'
         )
@@ -8941,6 +9164,14 @@ async fn create_incident_table(pool: &SqlitePool) {
             authority_reference varchar(255) NOT NULL DEFAULT '',
             stakeholder_summary TEXT NOT NULL DEFAULT '',
             lessons_learned TEXT NOT NULL DEFAULT '',
+            review_state varchar(24) NOT NULL DEFAULT 'DRAFT',
+            reviewed_by_id INTEGER NULL,
+            reviewed_at TEXT NULL,
+            review_notes TEXT NOT NULL DEFAULT '',
+            approved_by_id INTEGER NULL,
+            approved_at TEXT NULL,
+            approval_notes TEXT NOT NULL DEFAULT '',
+            report_package_version varchar(32) NOT NULL DEFAULT '1.0',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
