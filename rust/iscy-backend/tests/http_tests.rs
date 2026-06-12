@@ -2551,6 +2551,120 @@ async fn incident_runbook_templates_are_tenant_scoped() {
 }
 
 #[tokio::test]
+async fn rust_web_incident_runbook_templates_crud_from_forms() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_incident_runbook_template_table(&pool).await;
+    insert_incident_runbook_template_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/runbook-templates/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Runbook-Templates"));
+    assert!(html.contains("Phishing Response"));
+    assert!(html.contains("Neue Vorlage"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/incidents/runbook-templates/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "slug=tabletop-response&title=Tabletop+Response&incident_type=GENERAL&severity=MEDIUM&sort_order=40&is_active=1&description=Uebung+und+Kommunikation&body=1.+Lage+erfassen%0A2.+Entscheidung+dokumentieren",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let template_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM incidents_runbooktemplate WHERE tenant_id = 42 AND slug = 'tabletop-response'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/incidents/runbook-templates/{template_id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "action=update&slug=tabletop-response&title=Tabletop+Response+Updated&incident_type=SUPPLIER&severity=HIGH&sort_order=45&is_active=1&description=Aktualisierte+Uebung&body=1.+Scope%0A2.+Kommunikation",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let updated: (String, String, String, i64, bool) = sqlx::query_as(
+        "SELECT title, incident_type, severity, sort_order, is_active FROM incidents_runbooktemplate WHERE id = ?",
+    )
+    .bind(template_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(updated.0, "Tabletop Response Updated");
+    assert_eq!(updated.1, "SUPPLIER");
+    assert_eq!(updated.2, "HIGH");
+    assert_eq!(updated.3, 45);
+    assert!(updated.4);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/incidents/runbook-templates/{template_id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from("action=deactivate"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let is_active: bool =
+        sqlx::query_scalar("SELECT is_active FROM incidents_runbooktemplate WHERE id = ?")
+            .bind(template_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!is_active);
+}
+
+#[tokio::test]
 async fn incident_detail_blocks_foreign_tenant_incident() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -4786,7 +4900,7 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     assert!(html.contains("Customer portal support users affected."));
     assert!(html.contains("Timeline"));
     assert!(html.contains("Timeline-Notiz"));
-    assert!(html.contains("Noch keine Timeline-Events vorhanden."));
+    assert!(html.contains("Keine Timeline-Events fuer diesen Filter vorhanden."));
 
     let boundary = "iscy-incident-evidence-upload-boundary";
     let body = multipart_body(
@@ -4994,6 +5108,107 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     .await
     .unwrap();
     assert_eq!(incident_type, "VULNERABILITY");
+
+    let step_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM incidents_runbookstep WHERE tenant_id = 42 AND incident_id = 1 AND step_number = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/incidents/1/runbook-steps/{step_id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from("is_done=1"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let step_state: (bool, Option<i64>) =
+        sqlx::query_as("SELECT is_done, done_by_id FROM incidents_runbookstep WHERE id = ?")
+            .bind(step_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(step_state.0);
+    assert_eq!(step_state.1, Some(7));
+
+    let runbook_event_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM incidents_incidentevent WHERE tenant_id = 42 AND incident_id = 1 AND event_type = 'RUNBOOK_STEP_UPDATED'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/incidents/1/timeline-events/{runbook_event_id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "is_export_highlight=1&export_note=Relevant+fuer+NIS2-Meldepaket",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let marker: (bool, String) = sqlx::query_as(
+        "SELECT is_export_highlight, export_note FROM incidents_incidentevent WHERE id = ?",
+    )
+    .bind(runbook_event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(marker.0);
+    assert_eq!(marker.1, "Relevant fuer NIS2-Meldepaket");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1?tenant_id=42&user_id=7&timeline=highlighted")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Runbook-Schritt erledigt"));
+    assert!(html.contains("Relevant fuer NIS2-Meldepaket"));
+    assert!(!html.contains("Management informiert"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1/nis2-export?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(markdown.contains("Exportrelevant: Relevant fuer NIS2-Meldepaket"));
+
     let _ = fs::remove_dir_all(media_root);
 }
 
@@ -5856,7 +6071,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0009_rust_incident_core",
             "0010_rust_incident_runbooks_evidence_exports",
             "0011_rust_incident_timeline",
-            "0012_rust_incident_runbook_template_library"
+            "0012_rust_incident_runbook_template_library",
+            "0013_rust_incident_runbook_tasks_timeline_markers"
         ]
     );
     assert!(
@@ -5890,6 +6106,11 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     );
     assert!(
         db_admin::sqlite_table_exists(&pool, "incidents_runbooktemplate")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "incidents_runbookstep")
             .await
             .unwrap()
     );
@@ -8730,6 +8951,7 @@ async fn create_incident_table(pool: &SqlitePool) {
     .unwrap();
     create_incident_event_table(pool).await;
     create_incident_runbook_template_table(pool).await;
+    create_incident_runbook_step_table(pool).await;
 }
 
 async fn create_incident_event_table(pool: &SqlitePool) {
@@ -8746,7 +8968,33 @@ async fn create_incident_event_table(pool: &SqlitePool) {
             from_status varchar(32) NULL,
             to_status varchar(32) NULL,
             evidence_item_id INTEGER NULL,
+            is_export_highlight bool NOT NULL DEFAULT 0,
+            export_note TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_incident_runbook_step_table(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE incidents_runbookstep (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tenant_id INTEGER NOT NULL,
+            incident_id INTEGER NOT NULL,
+            step_number INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            detail TEXT NOT NULL DEFAULT '',
+            is_done bool NOT NULL DEFAULT 0,
+            done_at TEXT NULL,
+            done_by_id INTEGER NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (tenant_id, incident_id, step_number)
         )
         "#,
     )

@@ -92,6 +92,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_INCIDENT_RUNBOOK_TEMPLATE_SCHEMA,
         postgres_sql: POSTGRES_INCIDENT_RUNBOOK_TEMPLATE_SCHEMA,
     },
+    Migration {
+        version: "0013_rust_incident_runbook_tasks_timeline_markers",
+        sqlite_sql: SQLITE_INCIDENT_RUNBOOK_TASK_TIMELINE_MARKER_SCHEMA,
+        postgres_sql: POSTGRES_INCIDENT_RUNBOOK_TASK_TIMELINE_MARKER_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -637,6 +642,56 @@ SELECT
     (CURRENT_TIMESTAMP)::text
 FROM organizations_tenant tenant
 ON CONFLICT (tenant_id, slug) DO NOTHING;
+"#;
+
+const SQLITE_INCIDENT_RUNBOOK_TASK_TIMELINE_MARKER_SCHEMA: &str = r#"
+ALTER TABLE incidents_incidentevent ADD COLUMN is_export_highlight bool NOT NULL DEFAULT 0;
+ALTER TABLE incidents_incidentevent ADD COLUMN export_note TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_incident_events_export
+    ON incidents_incidentevent(tenant_id, incident_id, is_export_highlight);
+CREATE TABLE IF NOT EXISTS incidents_runbookstep (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    incident_id INTEGER NOT NULL,
+    step_number INTEGER NOT NULL,
+    title varchar(255) NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    is_done bool NOT NULL DEFAULT 0,
+    done_at TEXT NULL,
+    done_by_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, incident_id, step_number)
+);
+CREATE INDEX IF NOT EXISTS idx_incident_runbook_steps_incident
+    ON incidents_runbookstep(tenant_id, incident_id, step_number);
+CREATE INDEX IF NOT EXISTS idx_incident_runbook_steps_done
+    ON incidents_runbookstep(tenant_id, incident_id, is_done);
+"#;
+
+const POSTGRES_INCIDENT_RUNBOOK_TASK_TIMELINE_MARKER_SCHEMA: &str = r#"
+ALTER TABLE incidents_incidentevent ADD COLUMN IF NOT EXISTS is_export_highlight BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE incidents_incidentevent ADD COLUMN IF NOT EXISTS export_note TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_incident_events_export
+    ON incidents_incidentevent(tenant_id, incident_id, is_export_highlight);
+CREATE TABLE IF NOT EXISTS incidents_runbookstep (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    incident_id BIGINT NOT NULL,
+    step_number INTEGER NOT NULL,
+    title varchar(255) NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    is_done BOOLEAN NOT NULL DEFAULT FALSE,
+    done_at TEXT NULL,
+    done_by_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, incident_id, step_number)
+);
+CREATE INDEX IF NOT EXISTS idx_incident_runbook_steps_incident
+    ON incidents_runbookstep(tenant_id, incident_id, step_number);
+CREATE INDEX IF NOT EXISTS idx_incident_runbook_steps_done
+    ON incidents_runbookstep(tenant_id, incident_id, is_done);
 "#;
 
 const SQLITE_AUTH_RBAC_SCHEMA: &str = r#"

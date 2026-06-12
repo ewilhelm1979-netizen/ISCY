@@ -528,6 +528,30 @@ struct WebIncidentTimelineNoteForm {
     detail: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebIncidentRunbookTemplateForm {
+    action: Option<String>,
+    slug: Option<String>,
+    title: Option<String>,
+    description: Option<String>,
+    incident_type: Option<String>,
+    severity: Option<String>,
+    body: Option<String>,
+    sort_order: Option<String>,
+    is_active: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebIncidentRunbookStepForm {
+    is_done: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebIncidentTimelineEventMarkerForm {
+    is_export_highlight: Option<String>,
+    export_note: Option<String>,
+}
+
 fn deserialize_optional_form_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -743,6 +767,7 @@ pub struct WebContextQuery {
     pub user_id: Option<i64>,
     pub user_email: Option<String>,
     pub session_id: Option<i64>,
+    pub timeline: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -5775,9 +5800,12 @@ async fn web_incidents(
             } else {
                 r#"<article class="panel wide"><h2>Incident erfassen</h2><p>Fuer neue Incidents ist eine schreibende ISCY-Rolle notwendig.</p></article>"#.to_string()
             };
+            let runbook_template_href =
+                web_path_with_context("/incidents/runbook-templates/", Some(&context));
             let body = format!(
                 r#"
                 <section class="hero compact"><h1>Incidents</h1><p>NIS2-Fallakte, Meldefristen und Nachverfolgung</p></section>
+                <p><a href="{}">Runbook-Templates verwalten</a></p>
                 <section class="metrics">
                   {}
                   {}
@@ -5793,6 +5821,7 @@ async fn web_incidents(
                   {}
                 </section>
                 "#,
+                html_escape(&runbook_template_href),
                 metric_card("Offen", open_count),
                 metric_card("NIS2", reportable_count),
                 metric_card("Ueberfaellig", overdue_count),
@@ -5854,6 +5883,212 @@ async fn web_incidents_submit(
     }
 }
 
+async fn web_incident_runbook_templates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Runbook-Templates", "/incidents/runbook-templates/");
+    };
+    let Some(store) = state.incident_store.clone() else {
+        return web_store_missing(
+            "Runbook-Templates",
+            "/incidents/runbook-templates/",
+            &context,
+            "Incident",
+        );
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    match store
+        .list_runbook_templates_admin(context.tenant_id, 200)
+        .await
+    {
+        Ok(templates) => {
+            let rows = incident_runbook_template_admin_rows(&context, &templates, can_write);
+            let create_panel = incident_runbook_template_create_panel(&context, can_write);
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Runbook-Templates</h1><p>Incident-Vorlagen fuer Fallakten und abhakbare Aufgaben</p></section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <h2>Template-Bibliothek</h2>
+                    <table>
+                      <thead><tr><th>Vorlage</th><th>Status</th><th>Typ</th><th>Severity</th><th>Reihenfolge</th><th>Aktion</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  {}
+                </section>
+                "#,
+                rows, create_panel,
+            );
+            web_page("Runbook-Templates", "/incidents/", Some(&context), &body)
+        }
+        Err(err) => web_error_page(
+            "Runbook-Templates",
+            "/incidents/runbook-templates/",
+            &context,
+            &err.to_string(),
+        ),
+    }
+}
+
+async fn web_incident_runbook_templates_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebIncidentRunbookTemplateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Runbook-Templates", "/incidents/runbook-templates/")
+                .into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Runbook-Templates",
+            "/incidents/runbook-templates/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.incident_store else {
+        return web_store_missing(
+            "Runbook-Templates",
+            "/incidents/runbook-templates/",
+            &context,
+            "Incident",
+        )
+        .into_response();
+    };
+    let payload = match web_runbook_template_form_request(form) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return web_error_page(
+                "Runbook-Templates",
+                "/incidents/runbook-templates/",
+                &context,
+                &message,
+            )
+            .into_response()
+        }
+    };
+    match store
+        .create_runbook_template(auth_context.tenant_id, payload)
+        .await
+    {
+        Ok(_) => Redirect::to(&web_path_with_context(
+            "/incidents/runbook-templates/",
+            Some(&context),
+        ))
+        .into_response(),
+        Err(err) => web_error_page(
+            "Runbook-Templates",
+            "/incidents/runbook-templates/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_incident_runbook_template_update(
+    Path(template_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebIncidentRunbookTemplateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Runbook-Templates", "/incidents/runbook-templates/")
+                .into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Runbook-Templates",
+            "/incidents/runbook-templates/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.incident_store else {
+        return web_store_missing(
+            "Runbook-Templates",
+            "/incidents/runbook-templates/",
+            &context,
+            "Incident",
+        )
+        .into_response();
+    };
+    let action = form
+        .action
+        .as_deref()
+        .unwrap_or("update")
+        .trim()
+        .to_ascii_lowercase();
+    let result = if action == "delete" || action == "deactivate" {
+        store
+            .deactivate_runbook_template(auth_context.tenant_id, template_id)
+            .await
+    } else {
+        match web_runbook_template_form_request(form) {
+            Ok(payload) => {
+                store
+                    .update_runbook_template(auth_context.tenant_id, template_id, payload)
+                    .await
+            }
+            Err(message) => {
+                return web_error_page(
+                    "Runbook-Templates",
+                    "/incidents/runbook-templates/",
+                    &context,
+                    &message,
+                )
+                .into_response()
+            }
+        }
+    };
+    match result {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            "/incidents/runbook-templates/",
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Runbook-Templates",
+            "/incidents/runbook-templates/",
+            &context,
+            &format!("Runbook-Template {} wurde nicht gefunden.", template_id),
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Runbook-Templates",
+            "/incidents/runbook-templates/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
 async fn web_incident_detail(
     Path(incident_id): Path<i64>,
     State(state): State<AppState>,
@@ -5883,7 +6118,17 @@ async fn web_incident_detail(
                 .list_incident_events(context.tenant_id, incident.id, 30)
                 .await
                 .unwrap_or_default();
-            let timeline_rows = incident_event_rows(&timeline_events);
+            let timeline_filter = normalize_incident_timeline_filter(query.timeline.as_deref());
+            let filtered_timeline_events =
+                filter_incident_events(&timeline_events, timeline_filter.as_str());
+            let timeline_rows = incident_event_rows_for_web(
+                &filtered_timeline_events,
+                &context,
+                incident.id,
+                can_write,
+            );
+            let timeline_filter_links =
+                incident_timeline_filter_links(&context, incident.id, timeline_filter.as_str());
             let timeline_note_panel =
                 incident_timeline_note_panel(&context, incident.id, can_write);
             let runbook_templates = store
@@ -5891,6 +6136,17 @@ async fn web_incident_detail(
                 .await
                 .unwrap_or_default();
             let runbook_template_rows = incident_runbook_template_rows(&runbook_templates);
+            let runbook_steps = store
+                .list_runbook_steps(context.tenant_id, incident.id)
+                .await
+                .unwrap_or_default();
+            let runbook_step_rows =
+                incident_runbook_step_rows(&context, incident.id, &runbook_steps, can_write);
+            let runbook_step_count = if runbook_steps.is_empty() {
+                incident_runbook_step_count(&incident.runbook_template)
+            } else {
+                runbook_steps.len()
+            };
             let evidence_upload_panel = incident_evidence_upload_panel(
                 &context,
                 incident.id,
@@ -5947,7 +6203,11 @@ async fn web_incident_detail(
                   </article>
                   <article class="panel wide">
                     <h2>Runbook</h2>
-                    <pre>{}</pre>
+                    <table>
+                      <thead><tr><th>Schritt</th><th>Status</th><th>Erledigt von</th><th>Aktion</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                    <details><summary>Vorlagentext</summary><pre>{}</pre></details>
                   </article>
                   <article class="panel wide">
                     <h2>Runbook-Bibliothek</h2>
@@ -5958,8 +6218,9 @@ async fn web_incident_detail(
                   </article>
                   <article class="panel wide">
                     <h2>Timeline</h2>
+                    {}
                     <table>
-                      <thead><tr><th>Zeitpunkt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Actor</th><th>Detail</th></tr></thead>
+                      <thead><tr><th>Zeitpunkt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Actor</th><th>Detail</th><th>Export</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                     {}
@@ -5986,7 +6247,7 @@ async fn web_incident_detail(
                 html_escape(&incident.status_label),
                 html_escape(&incident.severity_label),
                 html_escape(&incident.incident_type_label),
-                incident_runbook_step_count(&incident.runbook_template),
+                runbook_step_count,
                 html_escape(&incident.nis2_reportability_label),
                 html_escape(owner),
                 html_escape(reporter),
@@ -6005,8 +6266,10 @@ async fn web_incident_detail(
                 html_escape(&incident.summary),
                 html_escape(&incident.stakeholder_summary),
                 html_escape(&incident.lessons_learned),
+                runbook_step_rows,
                 html_escape(&incident.runbook_template),
                 runbook_template_rows,
+                timeline_filter_links,
                 timeline_rows,
                 timeline_note_panel,
                 evidence_rows,
@@ -6135,6 +6398,117 @@ async fn web_incident_timeline_note_submit(
             &format!("/incidents/{}", incident_id),
             Some(&context),
         ))
+        .into_response(),
+        Err(err) => {
+            web_error_page("Incidents", "/incidents/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
+async fn web_incident_runbook_step_submit(
+    Path((incident_id, step_id)): Path<(i64, i64)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebIncidentRunbookStepForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Incidents", "/incidents/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Incidents",
+            "/incidents/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.incident_store else {
+        return web_store_missing("Incidents", "/incidents/", &context, "Incident").into_response();
+    };
+    let is_done = form_checkbox_value(form.is_done);
+    match store
+        .set_runbook_step_done(
+            auth_context.tenant_id,
+            incident_id,
+            step_id,
+            Some(auth_context.user_id),
+            is_done,
+        )
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            &format!("/incidents/{}", incident_id),
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Incidents",
+            "/incidents/",
+            &context,
+            &format!("Runbook-Schritt {} wurde nicht gefunden.", step_id),
+        )
+        .into_response(),
+        Err(err) => {
+            web_error_page("Incidents", "/incidents/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
+async fn web_incident_timeline_event_marker_submit(
+    Path((incident_id, event_id)): Path<(i64, i64)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebIncidentTimelineEventMarkerForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Incidents", "/incidents/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Incidents",
+            "/incidents/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.incident_store else {
+        return web_store_missing("Incidents", "/incidents/", &context, "Incident").into_response();
+    };
+    match store
+        .update_incident_event_export_marker(
+            auth_context.tenant_id,
+            incident_id,
+            event_id,
+            form_checkbox_value(form.is_export_highlight),
+            form.export_note.as_deref(),
+        )
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            &format!("/incidents/{}?timeline=highlighted", incident_id),
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Incidents",
+            "/incidents/",
+            &context,
+            &format!("Timeline-Event {} wurde nicht gefunden.", event_id),
+        )
         .into_response(),
         Err(err) => {
             web_error_page("Incidents", "/incidents/", &context, &err.to_string()).into_response()
@@ -7741,6 +8115,60 @@ fn web_incident_form_request(
     })
 }
 
+fn web_runbook_template_form_request(
+    form: WebIncidentRunbookTemplateForm,
+) -> Result<incident_store::IncidentRunbookTemplateWriteRequest, String> {
+    Ok(incident_store::IncidentRunbookTemplateWriteRequest {
+        slug: normalized_optional_form_text(form.slug),
+        title: normalized_required_form_text(form.title, "Runbook-Titel")?,
+        description: normalized_optional_form_text(form.description),
+        incident_type: form.incident_type,
+        severity: form.severity,
+        body: normalized_required_form_text(form.body, "Runbook-Inhalt")?,
+        is_active: Some(form_checkbox_value(form.is_active)),
+        sort_order: optional_form_sort_order(form.sort_order)?,
+    })
+}
+
+fn normalized_required_form_text(
+    value: Option<String>,
+    field_label: &str,
+) -> Result<Option<String>, String> {
+    let value = value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if value.is_none() {
+        return Err(format!("{field_label} darf nicht leer sein."));
+    }
+    Ok(value)
+}
+
+fn normalized_optional_form_text(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn optional_form_sort_order(value: Option<String>) -> Result<Option<i64>, String> {
+    let Some(value) = value.map(|value| value.trim().to_string()) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let parsed = value
+        .parse::<i64>()
+        .map_err(|_| "Reihenfolge muss eine ganze Zahl sein.".to_string())?;
+    Ok(Some(parsed))
+}
+
+fn form_checkbox_value(value: Option<String>) -> bool {
+    value
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| matches!(value, "1" | "true" | "yes" | "ja" | "on"))
+}
+
 fn incident_timeline_note_payload(
     summary: Option<String>,
     detail: String,
@@ -7922,8 +8350,8 @@ fn incident_nis2_markdown(
 
 ## Audit-Timeline
 
-| Zeitpunkt | Ereignis | Zusammenfassung | Actor | Detail |
-| --- | --- | --- | --- | --- |
+| Zeitpunkt | Ereignis | Zusammenfassung | Actor | Detail | Export |
+| --- | --- | --- | --- | --- | --- |
 {}
 
 ## Zeitlinie
@@ -8053,7 +8481,7 @@ fn incident_nis2_html(
   </table>
   <h2>Audit-Timeline</h2>
   <table>
-    <thead><tr><th>Zeitpunkt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Actor</th><th>Detail</th></tr></thead>
+    <thead><tr><th>Zeitpunkt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Actor</th><th>Detail</th><th>Export</th></tr></thead>
     <tbody>{}</tbody>
   </table>
   <h2>Lessons Learned</h2>
@@ -8151,16 +8579,27 @@ fn incident_nis2_pdf(
         for event in events {
             lines.extend(wrap_pdf_text(
                 &format!(
-                    "{} | {} | {} | {}",
+                    "{} | {} | {} | {} | {}",
                     event.created_at,
                     event.event_type_label,
                     event.summary,
-                    event.actor_display.as_deref().unwrap_or("-")
+                    event.actor_display.as_deref().unwrap_or("-"),
+                    if event.is_export_highlight {
+                        "Export"
+                    } else {
+                        "-"
+                    }
                 ),
                 92,
             ));
             if !event.detail.trim().is_empty() {
                 lines.extend(wrap_pdf_text(&format!("Detail: {}", event.detail), 92));
+            }
+            if event.is_export_highlight && !event.export_note.trim().is_empty() {
+                lines.extend(wrap_pdf_text(
+                    &format!("Export-Notiz: {}", event.export_note),
+                    92,
+                ));
             }
         }
     }
@@ -8416,28 +8855,326 @@ fn incident_runbook_template_rows(
         .join("")
 }
 
+fn incident_runbook_template_admin_rows(
+    context: &WebContext,
+    templates: &[incident_store::IncidentRunbookTemplateSummary],
+    can_write: bool,
+) -> String {
+    if templates.is_empty() {
+        return web_empty_row(6, "Keine Runbook-Vorlagen fuer diesen Tenant vorhanden.");
+    }
+    templates
+        .iter()
+        .map(|template| {
+            let status = if template.is_active {
+                "Aktiv"
+            } else {
+                "Deaktiviert"
+            };
+            let action = if can_write {
+                let update_action = web_path_with_context(
+                    &format!("/incidents/runbook-templates/{}", template.id),
+                    Some(context),
+                );
+                format!(
+                    r#"
+                    <details>
+                      <summary>Bearbeiten</summary>
+                      <form method="post" action="{}">
+                        <input name="action" type="hidden" value="update">
+                        <div class="form-grid">
+                          <label>Slug<input name="slug" type="text" value="{}" maxlength="80"></label>
+                          <label>Titel<input name="title" type="text" required value="{}"></label>
+                          <label>Typ<select name="incident_type">{}</select></label>
+                          <label>Severity<select name="severity">{}</select></label>
+                          <label>Reihenfolge<input name="sort_order" type="number" value="{}"></label>
+                        </div>
+                        <label class="checkbox-row"><input name="is_active" type="checkbox" value="1"{}> Aktiv</label>
+                        <label>Beschreibung<textarea name="description" rows="2">{}</textarea></label>
+                        <label>Runbook<textarea name="body" rows="5" required>{}</textarea></label>
+                        <button type="submit">Speichern</button>
+                      </form>
+                      <form method="post" action="{}">
+                        <input name="action" type="hidden" value="deactivate">
+                        <button type="submit">Deaktivieren</button>
+                      </form>
+                    </details>
+                    "#,
+                    html_escape(&update_action),
+                    html_escape(&template.slug),
+                    html_escape(&template.title),
+                    incident_type_options_for(&template.incident_type),
+                    incident_severity_options_for(&template.severity),
+                    template.sort_order,
+                    checked_attr(template.is_active),
+                    html_escape(&template.description),
+                    html_escape(&template.body),
+                    html_escape(&update_action),
+                )
+            } else {
+                "-".to_string()
+            };
+            format!(
+                r#"<tr><td><strong>{}</strong><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&template.title),
+                html_escape(&template.description),
+                html_escape(status),
+                html_escape(&template.incident_type_label),
+                html_escape(&template.severity_label),
+                template.sort_order,
+                action,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn incident_runbook_template_create_panel(context: &WebContext, can_write: bool) -> String {
+    if !can_write {
+        return r#"<article class="panel wide"><h2>Neue Vorlage</h2><p>Fuer Runbook-Template-CRUD ist eine schreibende ISCY-Rolle notwendig.</p></article>"#.to_string();
+    }
+    let action = web_path_with_context("/incidents/runbook-templates/", Some(context));
+    format!(
+        r#"
+        <article class="panel wide">
+          <h2>Neue Vorlage</h2>
+          <form method="post" action="{}">
+            <div class="form-grid">
+              <label>Slug<input name="slug" type="text" maxlength="80"></label>
+              <label>Titel<input name="title" type="text" required></label>
+              <label>Typ<select name="incident_type">{}</select></label>
+              <label>Severity<select name="severity">{}</select></label>
+              <label>Reihenfolge<input name="sort_order" type="number" value="100"></label>
+            </div>
+            <label class="checkbox-row"><input name="is_active" type="checkbox" value="1" checked> Aktiv</label>
+            <label>Beschreibung<textarea name="description" rows="2"></textarea></label>
+            <label>Runbook<textarea name="body" rows="7" required>{}</textarea></label>
+            <button type="submit">Vorlage anlegen</button>
+          </form>
+        </article>
+        "#,
+        html_escape(&action),
+        incident_type_options_for("GENERAL"),
+        incident_severity_options_for("MEDIUM"),
+        html_escape(incident_store_default_runbook()),
+    )
+}
+
 fn incident_store_default_runbook() -> &'static str {
     "1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.\n2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.\n3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.\n4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.\n5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren."
 }
 
+fn incident_runbook_step_rows(
+    context: &WebContext,
+    incident_id: i64,
+    steps: &[incident_store::IncidentRunbookStepSummary],
+    can_write: bool,
+) -> String {
+    if steps.is_empty() {
+        return web_empty_row(4, "Keine Runbook-Schritte fuer diese Fallakte vorhanden.");
+    }
+    steps
+        .iter()
+        .map(|step| {
+            let status = if step.is_done { "Erledigt" } else { "Offen" };
+            let action = if can_write {
+                let form_action = web_path_with_context(
+                    &format!("/incidents/{incident_id}/runbook-steps/{}", step.id),
+                    Some(context),
+                );
+                format!(
+                    r#"
+                    <form method="post" action="{}">
+                      <label class="checkbox-row"><input name="is_done" type="checkbox" value="1"{}> Erledigt</label>
+                      <button type="submit">Speichern</button>
+                    </form>
+                    "#,
+                    html_escape(&form_action),
+                    checked_attr(step.is_done),
+                )
+            } else {
+                "-".to_string()
+            };
+            let detail = if step.detail.trim().is_empty() {
+                String::new()
+            } else {
+                format!("<p>{}</p>", html_escape(&step.detail))
+            };
+            format!(
+                r#"<tr><td><strong>{}. {}</strong>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                step.step_number,
+                html_escape(&step.title),
+                detail,
+                html_escape(status),
+                html_escape(step.done_by_display.as_deref().unwrap_or("-")),
+                action,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn incident_event_rows(events: &[incident_store::IncidentEventSummary]) -> String {
     if events.is_empty() {
-        return web_empty_row(5, "Noch keine Timeline-Events vorhanden.");
+        return web_empty_row(6, "Noch keine Timeline-Events vorhanden.");
     }
     events
         .iter()
         .map(|event| {
+            let export = if event.is_export_highlight {
+                if event.export_note.trim().is_empty() {
+                    "Exportrelevant".to_string()
+                } else {
+                    format!("Exportrelevant: {}", event.export_note)
+                }
+            } else {
+                "-".to_string()
+            };
             format!(
-                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                 html_escape(&event.created_at),
                 html_escape(&event.event_type_label),
                 html_escape(&event.summary),
                 html_escape(event.actor_display.as_deref().unwrap_or("-")),
                 html_escape(&event.detail),
+                html_escape(&export),
             )
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+fn incident_event_rows_for_web(
+    events: &[incident_store::IncidentEventSummary],
+    context: &WebContext,
+    incident_id: i64,
+    can_write: bool,
+) -> String {
+    if events.is_empty() {
+        return web_empty_row(6, "Keine Timeline-Events fuer diesen Filter vorhanden.");
+    }
+    events
+        .iter()
+        .map(|event| {
+            let export_marker =
+                incident_event_export_marker_form(event, context, incident_id, can_write);
+            let detail = if event.export_note.trim().is_empty() {
+                html_escape(&event.detail)
+            } else {
+                format!(
+                    "{}<p><strong>Export-Notiz:</strong> {}</p>",
+                    html_escape(&event.detail),
+                    html_escape(&event.export_note)
+                )
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&event.created_at),
+                html_escape(&event.event_type_label),
+                html_escape(&event.summary),
+                html_escape(event.actor_display.as_deref().unwrap_or("-")),
+                detail,
+                export_marker,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn incident_event_export_marker_form(
+    event: &incident_store::IncidentEventSummary,
+    context: &WebContext,
+    incident_id: i64,
+    can_write: bool,
+) -> String {
+    let label = if event.is_export_highlight {
+        "Exportrelevant"
+    } else {
+        "-"
+    };
+    if !can_write {
+        return html_escape(label);
+    }
+    let action = web_path_with_context(
+        &format!("/incidents/{incident_id}/timeline-events/{}", event.id),
+        Some(context),
+    );
+    format!(
+        r#"
+        <form method="post" action="{}">
+          <label class="checkbox-row"><input name="is_export_highlight" type="checkbox" value="1"{}> Export</label>
+          <input name="export_note" type="text" value="{}" maxlength="1000">
+          <button type="submit">Merken</button>
+        </form>
+        "#,
+        html_escape(&action),
+        checked_attr(event.is_export_highlight),
+        html_escape(&event.export_note),
+    )
+}
+
+fn normalize_incident_timeline_filter(value: Option<&str>) -> String {
+    match value.unwrap_or("all").trim().to_ascii_lowercase().as_str() {
+        "highlighted" | "export" => "highlighted".to_string(),
+        "notes" | "note" => "notes".to_string(),
+        "evidence" => "evidence".to_string(),
+        "status" => "status".to_string(),
+        "runbook" => "runbook".to_string(),
+        _ => "all".to_string(),
+    }
+}
+
+fn filter_incident_events(
+    events: &[incident_store::IncidentEventSummary],
+    timeline_filter: &str,
+) -> Vec<incident_store::IncidentEventSummary> {
+    events
+        .iter()
+        .filter(|event| match timeline_filter {
+            "highlighted" => event.is_export_highlight,
+            "notes" => event.event_type == "TIMELINE_NOTE",
+            "evidence" => event.event_type == "EVIDENCE_UPLOADED",
+            "status" => event.event_type == "STATUS_CHANGED",
+            "runbook" => event.event_type == "RUNBOOK_STEP_UPDATED",
+            _ => true,
+        })
+        .cloned()
+        .collect()
+}
+
+fn incident_timeline_filter_links(
+    context: &WebContext,
+    incident_id: i64,
+    selected_filter: &str,
+) -> String {
+    [
+        ("all", "Alle"),
+        ("highlighted", "Export"),
+        ("notes", "Notizen"),
+        ("evidence", "Evidence"),
+        ("status", "Status"),
+        ("runbook", "Runbook"),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        let href = web_path_with_context(
+            &format!("/incidents/{incident_id}?timeline={value}"),
+            Some(context),
+        );
+        let class_attr = if *value == selected_filter {
+            r#" class="active""#
+        } else {
+            ""
+        };
+        format!(
+            r#"<a{} href="{}">{}</a>"#,
+            class_attr,
+            html_escape(&href),
+            html_escape(label),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 fn incident_timeline_note_panel(context: &WebContext, incident_id: i64, can_write: bool) -> String {
@@ -8464,18 +9201,28 @@ fn incident_timeline_note_panel(context: &WebContext, incident_id: i64, can_writ
 
 fn incident_event_markdown_rows(events: &[incident_store::IncidentEventSummary]) -> String {
     if events.is_empty() {
-        return "| - | - | - | - | - |".to_string();
+        return "| - | - | - | - | - | - |".to_string();
     }
     events
         .iter()
         .map(|event| {
+            let export = if event.is_export_highlight {
+                if event.export_note.trim().is_empty() {
+                    "Exportrelevant".to_string()
+                } else {
+                    format!("Exportrelevant: {}", event.export_note)
+                }
+            } else {
+                "-".to_string()
+            };
             format!(
-                "| {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} |",
                 md_value(&event.created_at),
                 md_value(&event.event_type_label),
                 md_value(&event.summary),
                 md_optional(event.actor_display.as_deref()),
                 md_value(&event.detail),
+                md_value(&export),
             )
         })
         .collect::<Vec<_>>()
@@ -11861,8 +12608,24 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/zero-trust/", get(web_zero_trust))
         .route("/incidents/", get(web_incidents).post(web_incidents_submit))
         .route(
+            "/incidents/runbook-templates/",
+            get(web_incident_runbook_templates).post(web_incident_runbook_templates_submit),
+        )
+        .route(
+            "/incidents/runbook-templates/{template_id}",
+            post(web_incident_runbook_template_update),
+        )
+        .route(
             "/incidents/{incident_id}",
             get(web_incident_detail).post(web_incident_detail_submit),
+        )
+        .route(
+            "/incidents/{incident_id}/runbook-steps/{step_id}",
+            post(web_incident_runbook_step_submit),
+        )
+        .route(
+            "/incidents/{incident_id}/timeline-events/{event_id}",
+            post(web_incident_timeline_event_marker_submit),
         )
         .route(
             "/incidents/{incident_id}/timeline-notes",

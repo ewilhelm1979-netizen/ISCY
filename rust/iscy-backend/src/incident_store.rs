@@ -79,6 +79,8 @@ pub struct IncidentEventSummary {
     pub to_status: Option<String>,
     pub to_status_label: Option<String>,
     pub evidence_item_id: Option<i64>,
+    pub is_export_highlight: bool,
+    pub export_note: String,
     pub created_at: String,
 }
 
@@ -98,6 +100,40 @@ pub struct IncidentRunbookTemplateSummary {
     pub sort_order: i64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IncidentRunbookStepSummary {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub incident_id: i64,
+    pub step_number: i64,
+    pub title: String,
+    pub detail: String,
+    pub is_done: bool,
+    pub done_at: Option<String>,
+    pub done_by_id: Option<i64>,
+    pub done_by_display: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct IncidentRunbookTemplateWriteRequest {
+    pub slug: Option<String>,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub incident_type: Option<String>,
+    pub severity: Option<String>,
+    pub body: Option<String>,
+    pub is_active: Option<bool>,
+    pub sort_order: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IncidentRunbookStepUpdateResult {
+    pub step: IncidentRunbookStepSummary,
+    pub event: IncidentEventSummary,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -217,6 +253,26 @@ impl IncidentEventWriteRequest {
             evidence_item_id: None,
         }
     }
+
+    pub fn runbook_step_changed(title: &str, is_done: bool) -> Self {
+        let action = if is_done {
+            "erledigt"
+        } else {
+            "wieder geoeffnet"
+        };
+        Self {
+            event_type: "RUNBOOK_STEP_UPDATED".to_string(),
+            summary: format!("Runbook-Schritt {}: {}", action, limit_chars(title, 160)),
+            detail: format!(
+                "Runbook-Schritt '{}' wurde {}.",
+                limit_chars(title, 220),
+                action
+            ),
+            from_status: None,
+            to_status: None,
+            evidence_item_id: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -308,6 +364,142 @@ impl IncidentStore {
         match self {
             Self::Postgres(pool) => list_runbook_templates_postgres(pool, tenant_id, limit).await,
             Self::Sqlite(pool) => list_runbook_templates_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
+    pub async fn list_runbook_templates_admin(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<IncidentRunbookTemplateSummary>> {
+        match self {
+            Self::Postgres(pool) => {
+                list_runbook_templates_admin_postgres(pool, tenant_id, limit).await
+            }
+            Self::Sqlite(pool) => list_runbook_templates_admin_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
+    pub async fn create_runbook_template(
+        &self,
+        tenant_id: i64,
+        payload: IncidentRunbookTemplateWriteRequest,
+    ) -> anyhow::Result<IncidentRunbookTemplateSummary> {
+        match self {
+            Self::Postgres(pool) => {
+                create_runbook_template_postgres(pool, tenant_id, payload).await
+            }
+            Self::Sqlite(pool) => create_runbook_template_sqlite(pool, tenant_id, payload).await,
+        }
+    }
+
+    pub async fn update_runbook_template(
+        &self,
+        tenant_id: i64,
+        template_id: i64,
+        payload: IncidentRunbookTemplateWriteRequest,
+    ) -> anyhow::Result<Option<IncidentRunbookTemplateSummary>> {
+        match self {
+            Self::Postgres(pool) => {
+                update_runbook_template_postgres(pool, tenant_id, template_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                update_runbook_template_sqlite(pool, tenant_id, template_id, payload).await
+            }
+        }
+    }
+
+    pub async fn deactivate_runbook_template(
+        &self,
+        tenant_id: i64,
+        template_id: i64,
+    ) -> anyhow::Result<Option<IncidentRunbookTemplateSummary>> {
+        match self {
+            Self::Postgres(pool) => {
+                deactivate_runbook_template_postgres(pool, tenant_id, template_id).await
+            }
+            Self::Sqlite(pool) => {
+                deactivate_runbook_template_sqlite(pool, tenant_id, template_id).await
+            }
+        }
+    }
+
+    pub async fn list_runbook_steps(
+        &self,
+        tenant_id: i64,
+        incident_id: i64,
+    ) -> anyhow::Result<Vec<IncidentRunbookStepSummary>> {
+        match self {
+            Self::Postgres(pool) => list_runbook_steps_postgres(pool, tenant_id, incident_id).await,
+            Self::Sqlite(pool) => list_runbook_steps_sqlite(pool, tenant_id, incident_id).await,
+        }
+    }
+
+    pub async fn set_runbook_step_done(
+        &self,
+        tenant_id: i64,
+        incident_id: i64,
+        step_id: i64,
+        actor_id: Option<i64>,
+        is_done: bool,
+    ) -> anyhow::Result<Option<IncidentRunbookStepUpdateResult>> {
+        match self {
+            Self::Postgres(pool) => {
+                set_runbook_step_done_postgres(
+                    pool,
+                    tenant_id,
+                    incident_id,
+                    step_id,
+                    actor_id,
+                    is_done,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                set_runbook_step_done_sqlite(
+                    pool,
+                    tenant_id,
+                    incident_id,
+                    step_id,
+                    actor_id,
+                    is_done,
+                )
+                .await
+            }
+        }
+    }
+
+    pub async fn update_incident_event_export_marker(
+        &self,
+        tenant_id: i64,
+        incident_id: i64,
+        event_id: i64,
+        is_export_highlight: bool,
+        export_note: Option<&str>,
+    ) -> anyhow::Result<Option<IncidentEventSummary>> {
+        match self {
+            Self::Postgres(pool) => {
+                update_incident_event_export_marker_postgres(
+                    pool,
+                    tenant_id,
+                    incident_id,
+                    event_id,
+                    is_export_highlight,
+                    export_note,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                update_incident_event_export_marker_sqlite(
+                    pool,
+                    tenant_id,
+                    incident_id,
+                    event_id,
+                    is_export_highlight,
+                    export_note,
+                )
+                .await
+            }
         }
     }
 
@@ -435,6 +627,342 @@ async fn list_runbook_templates_sqlite(
         .map_err(Into::into)
 }
 
+async fn list_runbook_templates_admin_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<IncidentRunbookTemplateSummary>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            id,
+            tenant_id,
+            slug,
+            title,
+            description,
+            incident_type,
+            severity,
+            body,
+            is_active,
+            sort_order::bigint AS sort_order,
+            created_at::text AS created_at,
+            updated_at::text AS updated_at
+        FROM incidents_runbooktemplate
+        WHERE tenant_id = $1
+        ORDER BY is_active DESC, sort_order ASC, title ASC, id ASC
+        LIMIT $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-Incident-Runbook-Templates konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(runbook_template_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn list_runbook_templates_admin_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<IncidentRunbookTemplateSummary>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            id,
+            tenant_id,
+            slug,
+            title,
+            description,
+            incident_type,
+            severity,
+            body,
+            is_active,
+            sort_order,
+            CAST(created_at AS TEXT) AS created_at,
+            CAST(updated_at AS TEXT) AS updated_at
+        FROM incidents_runbooktemplate
+        WHERE tenant_id = ?1
+        ORDER BY is_active DESC, sort_order ASC, title ASC, id ASC
+        LIMIT ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-Incident-Runbook-Templates konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(runbook_template_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn create_runbook_template_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    payload: IncidentRunbookTemplateWriteRequest,
+) -> anyhow::Result<IncidentRunbookTemplateSummary> {
+    let write = NormalizedRunbookTemplate::from_payload(payload)?;
+    let now = Utc::now().to_rfc3339();
+    let row = sqlx::query(
+        r#"
+        INSERT INTO incidents_runbooktemplate (
+            tenant_id, slug, title, description, incident_type, severity,
+            body, is_active, sort_order, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(&write.slug)
+    .bind(&write.title)
+    .bind(&write.description)
+    .bind(&write.incident_type)
+    .bind(&write.severity)
+    .bind(&write.body)
+    .bind(write.is_active)
+    .bind(write.sort_order)
+    .bind(&now)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Runbook-Template konnte nicht angelegt werden")?;
+    let id: i64 = row.try_get("id")?;
+    runbook_template_detail_postgres(pool, tenant_id, id)
+        .await?
+        .context("Neu angelegtes Runbook-Template konnte nicht gelesen werden")
+}
+
+async fn create_runbook_template_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    payload: IncidentRunbookTemplateWriteRequest,
+) -> anyhow::Result<IncidentRunbookTemplateSummary> {
+    let write = NormalizedRunbookTemplate::from_payload(payload)?;
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        INSERT INTO incidents_runbooktemplate (
+            tenant_id, slug, title, description, incident_type, severity,
+            body, is_active, sort_order, created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(&write.slug)
+    .bind(&write.title)
+    .bind(&write.description)
+    .bind(&write.incident_type)
+    .bind(&write.severity)
+    .bind(&write.body)
+    .bind(write.is_active)
+    .bind(write.sort_order)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("SQLite-Runbook-Template konnte nicht angelegt werden")?;
+    runbook_template_detail_sqlite(pool, tenant_id, result.last_insert_rowid())
+        .await?
+        .context("Neu angelegtes Runbook-Template konnte nicht gelesen werden")
+}
+
+async fn update_runbook_template_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    template_id: i64,
+    payload: IncidentRunbookTemplateWriteRequest,
+) -> anyhow::Result<Option<IncidentRunbookTemplateSummary>> {
+    let write = NormalizedRunbookTemplate::from_payload(payload)?;
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        UPDATE incidents_runbooktemplate
+        SET slug = $3, title = $4, description = $5, incident_type = $6,
+            severity = $7, body = $8, is_active = $9, sort_order = $10,
+            updated_at = $11
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(template_id)
+    .bind(&write.slug)
+    .bind(&write.title)
+    .bind(&write.description)
+    .bind(&write.incident_type)
+    .bind(&write.severity)
+    .bind(&write.body)
+    .bind(write.is_active)
+    .bind(write.sort_order)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Runbook-Template konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    runbook_template_detail_postgres(pool, tenant_id, template_id).await
+}
+
+async fn update_runbook_template_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    template_id: i64,
+    payload: IncidentRunbookTemplateWriteRequest,
+) -> anyhow::Result<Option<IncidentRunbookTemplateSummary>> {
+    let write = NormalizedRunbookTemplate::from_payload(payload)?;
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        UPDATE incidents_runbooktemplate
+        SET slug = ?3, title = ?4, description = ?5, incident_type = ?6,
+            severity = ?7, body = ?8, is_active = ?9, sort_order = ?10,
+            updated_at = ?11
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(template_id)
+    .bind(&write.slug)
+    .bind(&write.title)
+    .bind(&write.description)
+    .bind(&write.incident_type)
+    .bind(&write.severity)
+    .bind(&write.body)
+    .bind(write.is_active)
+    .bind(write.sort_order)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("SQLite-Runbook-Template konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    runbook_template_detail_sqlite(pool, tenant_id, template_id).await
+}
+
+async fn deactivate_runbook_template_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    template_id: i64,
+) -> anyhow::Result<Option<IncidentRunbookTemplateSummary>> {
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        UPDATE incidents_runbooktemplate
+        SET is_active = FALSE, updated_at = $3
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(template_id)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Runbook-Template konnte nicht deaktiviert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    runbook_template_detail_postgres(pool, tenant_id, template_id).await
+}
+
+async fn deactivate_runbook_template_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    template_id: i64,
+) -> anyhow::Result<Option<IncidentRunbookTemplateSummary>> {
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        UPDATE incidents_runbooktemplate
+        SET is_active = 0, updated_at = ?3
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(template_id)
+    .bind(&now)
+    .execute(pool)
+    .await
+    .context("SQLite-Runbook-Template konnte nicht deaktiviert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    runbook_template_detail_sqlite(pool, tenant_id, template_id).await
+}
+
+async fn runbook_template_detail_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    template_id: i64,
+) -> anyhow::Result<Option<IncidentRunbookTemplateSummary>> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            id,
+            tenant_id,
+            slug,
+            title,
+            description,
+            incident_type,
+            severity,
+            body,
+            is_active,
+            sort_order::bigint AS sort_order,
+            created_at::text AS created_at,
+            updated_at::text AS updated_at
+        FROM incidents_runbooktemplate
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(template_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Runbook-Template konnte nicht gelesen werden")?;
+    row.map(runbook_template_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn runbook_template_detail_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    template_id: i64,
+) -> anyhow::Result<Option<IncidentRunbookTemplateSummary>> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            id,
+            tenant_id,
+            slug,
+            title,
+            description,
+            incident_type,
+            severity,
+            body,
+            is_active,
+            sort_order,
+            CAST(created_at AS TEXT) AS created_at,
+            CAST(updated_at AS TEXT) AS updated_at
+        FROM incidents_runbooktemplate
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(template_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Runbook-Template konnte nicht gelesen werden")?;
+    row.map(runbook_template_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
 async fn list_incidents_postgres(
     pool: &PgPool,
     tenant_id: i64,
@@ -527,6 +1055,8 @@ async fn list_incident_events_postgres(
             event.from_status,
             event.to_status,
             event.evidence_item_id,
+            event.is_export_highlight,
+            event.export_note,
             event.created_at::text AS created_at
         FROM incidents_incidentevent event
         LEFT JOIN accounts_user actor
@@ -571,6 +1101,8 @@ async fn list_incident_events_sqlite(
             event.from_status,
             event.to_status,
             event.evidence_item_id,
+            event.is_export_highlight,
+            event.export_note,
             CAST(event.created_at AS TEXT) AS created_at
         FROM incidents_incidentevent event
         LEFT JOIN accounts_user actor
@@ -689,6 +1221,8 @@ async fn incident_event_detail_postgres(
             event.from_status,
             event.to_status,
             event.evidence_item_id,
+            event.is_export_highlight,
+            event.export_note,
             event.created_at::text AS created_at
         FROM incidents_incidentevent event
         LEFT JOIN accounts_user actor
@@ -727,6 +1261,8 @@ async fn incident_event_detail_sqlite(
             event.from_status,
             event.to_status,
             event.evidence_item_id,
+            event.is_export_highlight,
+            event.export_note,
             CAST(event.created_at AS TEXT) AS created_at
         FROM incidents_incidentevent event
         LEFT JOIN accounts_user actor
@@ -743,6 +1279,66 @@ async fn incident_event_detail_sqlite(
     row.map(event_from_sqlite_row)
         .transpose()
         .map_err(Into::into)
+}
+
+async fn update_incident_event_export_marker_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    event_id: i64,
+    is_export_highlight: bool,
+    export_note: Option<&str>,
+) -> anyhow::Result<Option<IncidentEventSummary>> {
+    let export_note = limit_chars(&normalize_optional_text(export_note), 1000);
+    let result = sqlx::query(
+        r#"
+        UPDATE incidents_incidentevent
+        SET is_export_highlight = $4, export_note = $5
+        WHERE tenant_id = $1 AND incident_id = $2 AND id = $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(event_id)
+    .bind(is_export_highlight)
+    .bind(&export_note)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Incident-Event-Marker konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    incident_event_detail_postgres(pool, tenant_id, incident_id, event_id).await
+}
+
+async fn update_incident_event_export_marker_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    event_id: i64,
+    is_export_highlight: bool,
+    export_note: Option<&str>,
+) -> anyhow::Result<Option<IncidentEventSummary>> {
+    let export_note = limit_chars(&normalize_optional_text(export_note), 1000);
+    let result = sqlx::query(
+        r#"
+        UPDATE incidents_incidentevent
+        SET is_export_highlight = ?4, export_note = ?5
+        WHERE tenant_id = ?1 AND incident_id = ?2 AND id = ?3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(event_id)
+    .bind(is_export_highlight)
+    .bind(&export_note)
+    .execute(pool)
+    .await
+    .context("SQLite-Incident-Event-Marker konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    incident_event_detail_sqlite(pool, tenant_id, incident_id, event_id).await
 }
 
 async fn ensure_incident_exists_postgres(
@@ -777,6 +1373,359 @@ async fn ensure_incident_exists_sqlite(
         bail!("Incident {} wurde nicht gefunden.", incident_id);
     }
     Ok(())
+}
+
+async fn list_runbook_steps_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+) -> anyhow::Result<Vec<IncidentRunbookStepSummary>> {
+    let incident = incident_detail_postgres(pool, tenant_id, incident_id)
+        .await?
+        .with_context(|| format!("Incident {} wurde nicht gefunden.", incident_id))?;
+    ensure_runbook_steps_postgres(pool, tenant_id, incident_id, &incident.runbook_template).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            step.id,
+            step.tenant_id,
+            step.incident_id,
+            step.step_number::bigint AS step_number,
+            step.title,
+            step.detail,
+            step.is_done,
+            step.done_at::text AS done_at,
+            step.done_by_id,
+            actor.username AS done_by_username,
+            actor.first_name AS done_by_first_name,
+            actor.last_name AS done_by_last_name,
+            step.created_at::text AS created_at,
+            step.updated_at::text AS updated_at
+        FROM incidents_runbookstep step
+        LEFT JOIN accounts_user actor
+            ON actor.id = step.done_by_id AND actor.tenant_id = step.tenant_id
+        WHERE step.tenant_id = $1 AND step.incident_id = $2
+        ORDER BY step.step_number ASC, step.id ASC
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-Runbook-Schritte konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(runbook_step_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn list_runbook_steps_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+) -> anyhow::Result<Vec<IncidentRunbookStepSummary>> {
+    let incident = incident_detail_sqlite(pool, tenant_id, incident_id)
+        .await?
+        .with_context(|| format!("Incident {} wurde nicht gefunden.", incident_id))?;
+    ensure_runbook_steps_sqlite(pool, tenant_id, incident_id, &incident.runbook_template).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            step.id,
+            step.tenant_id,
+            step.incident_id,
+            step.step_number,
+            step.title,
+            step.detail,
+            step.is_done,
+            CAST(step.done_at AS TEXT) AS done_at,
+            step.done_by_id,
+            actor.username AS done_by_username,
+            actor.first_name AS done_by_first_name,
+            actor.last_name AS done_by_last_name,
+            CAST(step.created_at AS TEXT) AS created_at,
+            CAST(step.updated_at AS TEXT) AS updated_at
+        FROM incidents_runbookstep step
+        LEFT JOIN accounts_user actor
+            ON actor.id = step.done_by_id AND actor.tenant_id = step.tenant_id
+        WHERE step.tenant_id = ?1 AND step.incident_id = ?2
+        ORDER BY step.step_number ASC, step.id ASC
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-Runbook-Schritte konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(runbook_step_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn ensure_runbook_steps_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    runbook_template: &str,
+) -> anyhow::Result<()> {
+    let existing_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM incidents_runbookstep WHERE tenant_id = $1 AND incident_id = $2",
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .fetch_one(pool)
+    .await?;
+    if existing_count > 0 {
+        return Ok(());
+    }
+    let now = Utc::now().to_rfc3339();
+    for (index, step) in runbook_steps_from_template(runbook_template)
+        .into_iter()
+        .enumerate()
+    {
+        sqlx::query(
+            r#"
+            INSERT INTO incidents_runbookstep (
+                tenant_id, incident_id, step_number, title, detail,
+                is_done, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, FALSE, $6, $6)
+            ON CONFLICT (tenant_id, incident_id, step_number) DO NOTHING
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(incident_id)
+        .bind((index + 1) as i64)
+        .bind(&step.title)
+        .bind(&step.detail)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .context("PostgreSQL-Runbook-Schritt konnte nicht angelegt werden")?;
+    }
+    Ok(())
+}
+
+async fn ensure_runbook_steps_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    runbook_template: &str,
+) -> anyhow::Result<()> {
+    let existing_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM incidents_runbookstep WHERE tenant_id = ?1 AND incident_id = ?2",
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .fetch_one(pool)
+    .await?;
+    if existing_count > 0 {
+        return Ok(());
+    }
+    let now = Utc::now().to_rfc3339();
+    for (index, step) in runbook_steps_from_template(runbook_template)
+        .into_iter()
+        .enumerate()
+    {
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO incidents_runbookstep (
+                tenant_id, incident_id, step_number, title, detail,
+                is_done, created_at, updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, ?6)
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(incident_id)
+        .bind((index + 1) as i64)
+        .bind(&step.title)
+        .bind(&step.detail)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .context("SQLite-Runbook-Schritt konnte nicht angelegt werden")?;
+    }
+    Ok(())
+}
+
+async fn set_runbook_step_done_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    step_id: i64,
+    actor_id: Option<i64>,
+    is_done: bool,
+) -> anyhow::Result<Option<IncidentRunbookStepUpdateResult>> {
+    let incident = incident_detail_postgres(pool, tenant_id, incident_id)
+        .await?
+        .with_context(|| format!("Incident {} wurde nicht gefunden.", incident_id))?;
+    ensure_runbook_steps_postgres(pool, tenant_id, incident_id, &incident.runbook_template).await?;
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        UPDATE incidents_runbookstep
+        SET is_done = $4,
+            done_at = CASE WHEN $4 THEN $5 ELSE NULL END,
+            done_by_id = CASE WHEN $4 THEN $6 ELSE NULL END,
+            updated_at = $5
+        WHERE tenant_id = $1 AND incident_id = $2 AND id = $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(step_id)
+    .bind(is_done)
+    .bind(&now)
+    .bind(actor_id)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Runbook-Schritt konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    let step = runbook_step_detail_postgres(pool, tenant_id, incident_id, step_id)
+        .await?
+        .context("Aktualisierter Runbook-Schritt konnte nicht gelesen werden")?;
+    let event = append_incident_event_postgres(
+        pool,
+        tenant_id,
+        incident_id,
+        actor_id,
+        IncidentEventWriteRequest::runbook_step_changed(&step.title, step.is_done),
+    )
+    .await?;
+    Ok(Some(IncidentRunbookStepUpdateResult { step, event }))
+}
+
+async fn set_runbook_step_done_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    step_id: i64,
+    actor_id: Option<i64>,
+    is_done: bool,
+) -> anyhow::Result<Option<IncidentRunbookStepUpdateResult>> {
+    let incident = incident_detail_sqlite(pool, tenant_id, incident_id)
+        .await?
+        .with_context(|| format!("Incident {} wurde nicht gefunden.", incident_id))?;
+    ensure_runbook_steps_sqlite(pool, tenant_id, incident_id, &incident.runbook_template).await?;
+    let now = Utc::now().to_rfc3339();
+    let result = sqlx::query(
+        r#"
+        UPDATE incidents_runbookstep
+        SET is_done = ?4,
+            done_at = CASE WHEN ?4 THEN ?5 ELSE NULL END,
+            done_by_id = CASE WHEN ?4 THEN ?6 ELSE NULL END,
+            updated_at = ?5
+        WHERE tenant_id = ?1 AND incident_id = ?2 AND id = ?3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(step_id)
+    .bind(is_done)
+    .bind(&now)
+    .bind(actor_id)
+    .execute(pool)
+    .await
+    .context("SQLite-Runbook-Schritt konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    let step = runbook_step_detail_sqlite(pool, tenant_id, incident_id, step_id)
+        .await?
+        .context("Aktualisierter Runbook-Schritt konnte nicht gelesen werden")?;
+    let event = append_incident_event_sqlite(
+        pool,
+        tenant_id,
+        incident_id,
+        actor_id,
+        IncidentEventWriteRequest::runbook_step_changed(&step.title, step.is_done),
+    )
+    .await?;
+    Ok(Some(IncidentRunbookStepUpdateResult { step, event }))
+}
+
+async fn runbook_step_detail_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    incident_id: i64,
+    step_id: i64,
+) -> anyhow::Result<Option<IncidentRunbookStepSummary>> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            step.id,
+            step.tenant_id,
+            step.incident_id,
+            step.step_number::bigint AS step_number,
+            step.title,
+            step.detail,
+            step.is_done,
+            step.done_at::text AS done_at,
+            step.done_by_id,
+            actor.username AS done_by_username,
+            actor.first_name AS done_by_first_name,
+            actor.last_name AS done_by_last_name,
+            step.created_at::text AS created_at,
+            step.updated_at::text AS updated_at
+        FROM incidents_runbookstep step
+        LEFT JOIN accounts_user actor
+            ON actor.id = step.done_by_id AND actor.tenant_id = step.tenant_id
+        WHERE step.tenant_id = $1 AND step.incident_id = $2 AND step.id = $3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(step_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Runbook-Schritt konnte nicht gelesen werden")?;
+    row.map(runbook_step_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn runbook_step_detail_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    incident_id: i64,
+    step_id: i64,
+) -> anyhow::Result<Option<IncidentRunbookStepSummary>> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            step.id,
+            step.tenant_id,
+            step.incident_id,
+            step.step_number,
+            step.title,
+            step.detail,
+            step.is_done,
+            CAST(step.done_at AS TEXT) AS done_at,
+            step.done_by_id,
+            actor.username AS done_by_username,
+            actor.first_name AS done_by_first_name,
+            actor.last_name AS done_by_last_name,
+            CAST(step.created_at AS TEXT) AS created_at,
+            CAST(step.updated_at AS TEXT) AS updated_at
+        FROM incidents_runbookstep step
+        LEFT JOIN accounts_user actor
+            ON actor.id = step.done_by_id AND actor.tenant_id = step.tenant_id
+        WHERE step.tenant_id = ?1 AND step.incident_id = ?2 AND step.id = ?3
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(incident_id)
+    .bind(step_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Runbook-Schritt konnte nicht gelesen werden")?;
+    row.map(runbook_step_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
 }
 
 async fn create_incident_postgres(
@@ -1886,6 +2835,8 @@ fn event_from_pg_row(row: PgRow) -> Result<IncidentEventSummary, sqlx::Error> {
         to_status_label: to_status.as_deref().map(status_label).map(str::to_string),
         to_status,
         evidence_item_id: row.try_get("evidence_item_id")?,
+        is_export_highlight: row.try_get("is_export_highlight")?,
+        export_note: row.try_get("export_note")?,
         created_at: row.try_get("created_at")?,
     })
 }
@@ -1913,8 +2864,88 @@ fn event_from_sqlite_row(row: SqliteRow) -> Result<IncidentEventSummary, sqlx::E
         to_status_label: to_status.as_deref().map(status_label).map(str::to_string),
         to_status,
         evidence_item_id: row.try_get("evidence_item_id")?,
+        is_export_highlight: row.try_get("is_export_highlight")?,
+        export_note: row.try_get("export_note")?,
         created_at: row.try_get("created_at")?,
     })
+}
+
+fn runbook_step_from_pg_row(row: PgRow) -> Result<IncidentRunbookStepSummary, sqlx::Error> {
+    Ok(IncidentRunbookStepSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        incident_id: row.try_get("incident_id")?,
+        step_number: row.try_get("step_number")?,
+        title: row.try_get("title")?,
+        detail: row.try_get("detail")?,
+        is_done: row.try_get("is_done")?,
+        done_at: row.try_get("done_at")?,
+        done_by_id: row.try_get("done_by_id")?,
+        done_by_display: user_display(
+            row.try_get("done_by_username")?,
+            row.try_get("done_by_first_name")?,
+            row.try_get("done_by_last_name")?,
+        ),
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn runbook_step_from_sqlite_row(row: SqliteRow) -> Result<IncidentRunbookStepSummary, sqlx::Error> {
+    Ok(IncidentRunbookStepSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        incident_id: row.try_get("incident_id")?,
+        step_number: row.try_get("step_number")?,
+        title: row.try_get("title")?,
+        detail: row.try_get("detail")?,
+        is_done: row.try_get("is_done")?,
+        done_at: row.try_get("done_at")?,
+        done_by_id: row.try_get("done_by_id")?,
+        done_by_display: user_display(
+            row.try_get("done_by_username")?,
+            row.try_get("done_by_first_name")?,
+            row.try_get("done_by_last_name")?,
+        ),
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedRunbookTemplate {
+    slug: String,
+    title: String,
+    description: String,
+    incident_type: String,
+    severity: String,
+    body: String,
+    is_active: bool,
+    sort_order: i64,
+}
+
+impl NormalizedRunbookTemplate {
+    fn from_payload(payload: IncidentRunbookTemplateWriteRequest) -> anyhow::Result<Self> {
+        let title = normalize_required_text(payload.title.as_deref(), "Runbook-Titel")?;
+        let body = normalize_required_text(payload.body.as_deref(), "Runbook-Inhalt")?;
+        let slug = normalize_runbook_slug(payload.slug.as_deref(), &title)?;
+        Ok(Self {
+            slug,
+            title,
+            description: normalize_optional_text(payload.description.as_deref()),
+            incident_type: normalize_incident_type(payload.incident_type.as_deref()),
+            severity: normalize_severity(payload.severity.as_deref()),
+            body,
+            is_active: payload.is_active.unwrap_or(true),
+            sort_order: payload.sort_order.unwrap_or(100).max(0),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ParsedRunbookStep {
+    title: String,
+    detail: String,
 }
 
 fn normalize_required_text(value: Option<&str>, label: &str) -> anyhow::Result<String> {
@@ -1934,6 +2965,7 @@ fn normalize_event_type(value: &str) -> String {
         "CREATED" => "CREATED".to_string(),
         "STATUS_CHANGED" => "STATUS_CHANGED".to_string(),
         "EVIDENCE_UPLOADED" => "EVIDENCE_UPLOADED".to_string(),
+        "RUNBOOK_STEP_UPDATED" => "RUNBOOK_STEP_UPDATED".to_string(),
         "TIMELINE_NOTE" => "TIMELINE_NOTE".to_string(),
         _ => "TIMELINE_NOTE".to_string(),
     }
@@ -1949,6 +2981,106 @@ fn normalize_event_summary(value: &str) -> String {
 
 fn limit_chars(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
+}
+
+fn normalize_runbook_slug(value: Option<&str>, title: &str) -> anyhow::Result<String> {
+    let source = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(title);
+    let mut slug = String::new();
+    let mut last_was_dash = false;
+    for ch in source.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash && !slug.is_empty() {
+            slug.push('-');
+            last_was_dash = true;
+        }
+        if slug.len() >= 80 {
+            break;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        bail!("Runbook-Slug darf nicht leer sein");
+    }
+    Ok(slug)
+}
+
+fn runbook_steps_from_template(runbook_template: &str) -> Vec<ParsedRunbookStep> {
+    let mut raw_steps = runbook_template
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if raw_steps.len() <= 1 && runbook_template.contains(';') {
+        raw_steps = runbook_template
+            .split(';')
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    let mut steps = raw_steps
+        .into_iter()
+        .map(|line| normalize_runbook_step_line(&line))
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let (title, detail) = split_runbook_step_title_detail(&line);
+            ParsedRunbookStep { title, detail }
+        })
+        .collect::<Vec<_>>();
+    if steps.is_empty() {
+        steps.push(ParsedRunbookStep {
+            title: "Incident bewerten und naechste Massnahme festlegen".to_string(),
+            detail: String::new(),
+        });
+    }
+    steps
+}
+
+fn normalize_runbook_step_line(line: &str) -> String {
+    let mut value = line.trim();
+    value = value.trim_start_matches(|ch: char| ch == '-' || ch == '*' || ch.is_whitespace());
+    let mut chars = value.char_indices().peekable();
+    let mut cut_at = 0;
+    while let Some((idx, ch)) = chars.peek().copied() {
+        if ch.is_ascii_digit() {
+            cut_at = idx + ch.len_utf8();
+            chars.next();
+            continue;
+        }
+        if matches!(ch, '.' | ')' | ':' | '-') {
+            cut_at = idx + ch.len_utf8();
+            chars.next();
+        }
+        break;
+    }
+    if cut_at > 0 {
+        value = &value[cut_at..];
+    }
+    value
+        .trim_start_matches(|ch: char| {
+            ch == '.' || ch == ')' || ch == ':' || ch == '-' || ch.is_whitespace()
+        })
+        .trim()
+        .to_string()
+}
+
+fn split_runbook_step_title_detail(line: &str) -> (String, String) {
+    let mut parts = line.splitn(2, ':');
+    let title = parts.next().unwrap_or("").trim();
+    let detail = parts.next().unwrap_or("").trim();
+    if title.is_empty() {
+        (limit_chars(line.trim(), 255), String::new())
+    } else {
+        (limit_chars(title, 255), detail.to_string())
+    }
 }
 
 fn normalize_incident_type(value: Option<&str>) -> String {
@@ -2095,6 +3227,7 @@ fn event_type_label(value: &str) -> &'static str {
         "CREATED" => "Angelegt",
         "STATUS_CHANGED" => "Statuswechsel",
         "EVIDENCE_UPLOADED" => "Evidence",
+        "RUNBOOK_STEP_UPDATED" => "Runbook",
         "TIMELINE_NOTE" => "Notiz",
         _ => "Timeline",
     }
