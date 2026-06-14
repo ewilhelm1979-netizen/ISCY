@@ -686,6 +686,13 @@ pub struct ProductSecurityArtifactImportResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProductSecurityImportHistoryExportResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub artifacts: Vec<product_security_store::ProductSecurityImportArtifactSummary>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ProductSecurityCveCorrelationResponse {
     pub accepted: bool,
     pub api_version: &'static str,
@@ -699,6 +706,14 @@ pub struct ProductSecurityCveCorrelationDecisionResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub result: product_security_store::ProductSecurityCveCorrelationDecisionResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductSecurityAcceptedCorrelationWorkResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: product_security_store::ProductSecurityAcceptedCorrelationWorkResult,
 }
 
 #[derive(Debug, Serialize)]
@@ -3515,6 +3530,75 @@ async fn product_security_sbom_import(
     }
 }
 
+async fn product_security_import_history_export_csv(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    product_security_import_history_export(state, headers, ProductSecurityImportHistoryFormat::Csv)
+        .await
+}
+
+async fn product_security_import_history_export_json(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    product_security_import_history_export(state, headers, ProductSecurityImportHistoryFormat::Json)
+        .await
+}
+
+async fn product_security_import_history_export(
+    state: AppState,
+    headers: HeaderMap,
+    export_format: ProductSecurityImportHistoryFormat,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store.import_history(context.tenant_id, 500).await {
+        Ok(artifacts) => product_security_import_history_download_response(
+            context.tenant_id,
+            &artifacts,
+            export_format,
+        ),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!(
+                    "Product-Security-Import-Historie konnte nicht exportiert werden: {err}"
+                ),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn product_security_cve_correlations(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3569,6 +3653,68 @@ async fn product_security_cve_correlations(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("CVE-Asset-Korrelationen konnten nicht erzeugt werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_cve_correlation_generate_work(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .generate_work_from_accepted_correlations(context.tenant_id)
+        .await
+    {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(ProductSecurityAcceptedCorrelationWorkResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!(
+                    "Risiko-/Roadmap-Vorschlaege aus akzeptierten CVE-Korrelationen konnten nicht erzeugt werden: {err}"
+                ),
             }),
         )
             .into_response(),
@@ -9169,6 +9315,14 @@ async fn web_product_security(
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            let import_export_actions = format!(
+                r#"<div class="inline-actions">
+                    <a href="{}">CSV Export</a>
+                    <a href="{}">JSON Export</a>
+                  </div>"#,
+                web_path_with_context("/product-security/imports.csv", Some(&context)),
+                web_path_with_context("/product-security/imports.json", Some(&context)),
+            );
             let import_panel = if can_write {
                 format!(
                     r#"<article class="panel wide">
@@ -9190,6 +9344,10 @@ async fn web_product_security(
                         <h3>CVE-Korrelation</h3>
                         <button type="submit">CVE-Asset-Vorschlaege erzeugen</button>
                       </form>
+                      <form method="post" action="{}">
+                        <h3>Risiko & Roadmap</h3>
+                        <button type="submit">Akzeptierte CVEs uebernehmen</button>
+                      </form>
                     </div>
                   </article>"#,
                     web_path_with_context("/product-security/import/csaf", Some(&context)),
@@ -9209,6 +9367,10 @@ async fn web_product_security(
                         .collect::<Vec<_>>()
                         .join(""),
                     web_path_with_context("/product-security/cve-correlations", Some(&context)),
+                    web_path_with_context(
+                        "/product-security/cve-correlations/generate-work",
+                        Some(&context),
+                    ),
                 )
             } else {
                 String::new()
@@ -9248,6 +9410,7 @@ async fn web_product_security(
                   {}
                   <article class="panel wide">
                     <h2>Import-Historie</h2>
+                    {}
                     <table>
                       <thead><tr><th>Typ</th><th>Datei</th><th>Produkt</th><th>Format</th><th>Status</th><th>Validierung</th><th>SBOM</th><th>CVEs</th><th>Zeit</th></tr></thead>
                       <tbody>{}</tbody>
@@ -9288,6 +9451,7 @@ async fn web_product_security(
                     snapshot_rows
                 },
                 import_panel,
+                import_export_actions,
                 if import_rows.is_empty() {
                     web_empty_row(9, "Noch keine CSAF-/SBOM-Importe vorhanden.")
                 } else {
@@ -9335,6 +9499,68 @@ async fn web_product_security_import_sbom(
     body: Bytes,
 ) -> Response {
     web_product_security_import(state, headers, body, "SBOM").await
+}
+
+async fn web_product_security_imports_csv(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_product_security_import_history_export(
+        state,
+        headers,
+        query,
+        ProductSecurityImportHistoryFormat::Csv,
+    )
+    .await
+}
+
+async fn web_product_security_imports_json(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_product_security_import_history_export(
+        state,
+        headers,
+        query,
+        ProductSecurityImportHistoryFormat::Json,
+    )
+    .await
+}
+
+async fn web_product_security_import_history_export(
+    state: AppState,
+    headers: HeaderMap,
+    query: WebContextQuery,
+    export_format: ProductSecurityImportHistoryFormat,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Product Security", "/product-security/").into_response();
+    };
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Product Security",
+        )
+        .into_response();
+    };
+    match store.import_history(context.tenant_id, 500).await {
+        Ok(artifacts) => product_security_import_history_download_response(
+            context.tenant_id,
+            &artifacts,
+            export_format,
+        ),
+        Err(err) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
 }
 
 async fn web_product_security_import(
@@ -9396,6 +9622,55 @@ async fn web_product_security_import(
             .await
     };
     match result {
+        Ok(_) => Redirect::to(&web_path_with_context("/product-security/", Some(&context)))
+            .into_response(),
+        Err(err) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_product_security_cve_correlation_generate_work(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Product Security", "/product-security/").into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Product Security",
+        )
+        .into_response();
+    };
+    match store
+        .generate_work_from_accepted_correlations(auth_context.tenant_id)
+        .await
+    {
         Ok(_) => Redirect::to(&web_path_with_context("/product-security/", Some(&context)))
             .into_response(),
         Err(err) => web_error_page(
@@ -9895,6 +10170,12 @@ enum IncidentTimelineExportFormat {
     Json,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ProductSecurityImportHistoryFormat {
+    Csv,
+    Json,
+}
+
 fn incident_export_download_response(
     incident: &incident_store::IncidentSummary,
     evidence_items: &[evidence_store::EvidenceItemSummary],
@@ -9933,6 +10214,25 @@ fn incident_timeline_export_download_response(
             &format!("iscy-incident-{}-timeline.json", incident.id),
             "application/json; charset=utf-8",
             incident_timeline_json(incident, events),
+        ),
+    }
+}
+
+fn product_security_import_history_download_response(
+    tenant_id: i64,
+    artifacts: &[product_security_store::ProductSecurityImportArtifactSummary],
+    export_format: ProductSecurityImportHistoryFormat,
+) -> Response {
+    match export_format {
+        ProductSecurityImportHistoryFormat::Csv => text_download_response(
+            &format!("iscy-product-security-tenant-{tenant_id}-imports.csv"),
+            "text/csv; charset=utf-8",
+            product_security_import_history_csv(artifacts),
+        ),
+        ProductSecurityImportHistoryFormat::Json => text_download_response(
+            &format!("iscy-product-security-tenant-{tenant_id}-imports.json"),
+            "application/json; charset=utf-8",
+            product_security_import_history_json(tenant_id, artifacts),
         ),
     }
 }
@@ -9980,6 +10280,78 @@ fn incident_timeline_csv(events: &[incident_store::IncidentEventSummary]) -> Str
         );
     }
     rows.join("\n")
+}
+
+fn product_security_import_history_csv(
+    artifacts: &[product_security_store::ProductSecurityImportArtifactSummary],
+) -> String {
+    let mut rows = vec![[
+        "id",
+        "tenant_id",
+        "product_id",
+        "product_name",
+        "artifact_type",
+        "file_name",
+        "document_id",
+        "format_name",
+        "format_version",
+        "validation_status",
+        "validation_errors",
+        "component_count",
+        "matched_component_count",
+        "cve_count",
+        "created_by_id",
+        "created_at",
+        "updated_at",
+    ]
+    .join(",")];
+    for artifact in artifacts {
+        rows.push(
+            [
+                csv_value(&artifact.id.to_string()),
+                csv_value(&artifact.tenant_id.to_string()),
+                csv_value(
+                    &artifact
+                        .product_id
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                ),
+                csv_value(artifact.product_name.as_deref().unwrap_or("")),
+                csv_value(&artifact.artifact_type),
+                csv_value(&artifact.file_name),
+                csv_value(&artifact.document_id),
+                csv_value(&artifact.format_name),
+                csv_value(&artifact.format_version),
+                csv_value(&artifact.validation_status),
+                csv_value(&artifact.validation_errors.join(" | ")),
+                csv_value(&artifact.component_count.to_string()),
+                csv_value(&artifact.matched_component_count.to_string()),
+                csv_value(&artifact.cve_count.to_string()),
+                csv_value(
+                    &artifact
+                        .created_by_id
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                ),
+                csv_value(&artifact.created_at),
+                csv_value(&artifact.updated_at),
+            ]
+            .join(","),
+        );
+    }
+    rows.join("\n")
+}
+
+fn product_security_import_history_json(
+    tenant_id: i64,
+    artifacts: &[product_security_store::ProductSecurityImportArtifactSummary],
+) -> String {
+    serde_json::to_string_pretty(&ProductSecurityImportHistoryExportResponse {
+        api_version: "v1",
+        tenant_id,
+        artifacts: artifacts.to_vec(),
+    })
+    .unwrap_or_else(|_| "{}".to_string())
 }
 
 fn incident_timeline_json(
@@ -14305,8 +14677,20 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(product_security_sbom_import),
         )
         .route(
+            "/api/v1/product-security/imports/export.csv",
+            get(product_security_import_history_export_csv),
+        )
+        .route(
+            "/api/v1/product-security/imports/export.json",
+            get(product_security_import_history_export_json),
+        )
+        .route(
             "/api/v1/product-security/cve-correlations",
             post(product_security_cve_correlations),
+        )
+        .route(
+            "/api/v1/product-security/cve-correlations/generate-work",
+            post(product_security_cve_correlation_generate_work),
         )
         .route(
             "/api/v1/product-security/cve-correlations/{correlation_id}",
@@ -14485,8 +14869,20 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(web_product_security_import_sbom),
         )
         .route(
+            "/product-security/imports.csv",
+            get(web_product_security_imports_csv),
+        )
+        .route(
+            "/product-security/imports.json",
+            get(web_product_security_imports_json),
+        )
+        .route(
             "/product-security/cve-correlations",
             post(web_product_security_cve_correlations_submit),
+        )
+        .route(
+            "/product-security/cve-correlations/generate-work",
+            post(web_product_security_cve_correlation_generate_work),
         )
         .route(
             "/product-security/cve-correlations/{correlation_id}",

@@ -2019,6 +2019,7 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
         .await
         .unwrap();
     create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
     insert_product_security_fixture(&pool).await;
     let app =
         app_router_with_state(AppState::default().with_product_security_store(Some(
@@ -2163,6 +2164,7 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
         .unwrap();
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("PATCH")
@@ -2183,6 +2185,83 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["correlation"]["status"], "ACCEPTED");
+
+    let generated_risk_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM risks_risk WHERE tenant_id = 42 AND title LIKE 'CVE-2026-0001%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(generated_risk_count, 1);
+    let generated_task_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_productsecurityroadmaptask WHERE tenant_id = 42 AND title LIKE 'CVE-2026-0001 behandeln%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(generated_task_count, 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/cve-correlations/generate-work")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["accepted_correlations"].as_i64().unwrap(), 1);
+    assert_eq!(payload["existing_risks"].as_i64().unwrap(), 1);
+    assert_eq!(payload["existing_roadmap_tasks"].as_i64().unwrap(), 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/imports/export.json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert!(payload["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["file_name"] == "iscy-2026-import.json"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/imports/export.csv")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let csv = String::from_utf8(body.to_vec()).unwrap();
+    assert!(csv.contains("artifact_type"));
+    assert!(csv.contains("iscy-2026-import.json"));
+    assert!(csv.contains("sensor-gateway-1.0.3.cdx.json"));
 }
 
 #[tokio::test]
@@ -5979,10 +6058,30 @@ async fn rust_web_product_security_renders_overview_from_database() {
     assert!(html.contains("Industrial edge device"));
     assert!(html.contains("OT/IACS"));
     assert!(html.contains("Import-Historie"));
+    assert!(html.contains("CSV Export"));
+    assert!(html.contains("JSON Export"));
     assert!(html.contains("CSAF document.csaf_version fehlt."));
     assert!(html.contains("CVE-Asset-Korrelationen"));
     assert!(html.contains("Akzeptieren"));
+    assert!(html.contains("Akzeptierte CVEs uebernehmen"));
     assert!(!html.contains("Rust-Webroute aktiv."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/product-security/imports.csv?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let csv = String::from_utf8(body.to_vec()).unwrap();
+    assert!(csv.contains("invalid-csaf.json"));
 
     let response = app
         .oneshot(

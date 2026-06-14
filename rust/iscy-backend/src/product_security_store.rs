@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -435,6 +435,15 @@ pub struct ProductSecurityCveCorrelationDecisionResult {
     pub correlation: ProductSecurityCveCorrelationSummary,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityAcceptedCorrelationWorkResult {
+    pub accepted_correlations: i64,
+    pub created_risks: i64,
+    pub existing_risks: i64,
+    pub created_roadmap_tasks: i64,
+    pub existing_roadmap_tasks: i64,
+}
+
 #[derive(Debug, Clone)]
 struct TenantProductSecurityContext {
     sector: String,
@@ -593,6 +602,17 @@ impl ProductSecurityStore {
         }
     }
 
+    pub async fn import_history(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<ProductSecurityImportArtifactSummary>> {
+        match self {
+            Self::Postgres(pool) => load_import_artifacts_postgres(pool, tenant_id, limit).await,
+            Self::Sqlite(pool) => load_import_artifacts_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
     pub async fn update_cve_correlation(
         &self,
         tenant_id: i64,
@@ -605,6 +625,20 @@ impl ProductSecurityStore {
             }
             Self::Sqlite(pool) => {
                 update_cve_correlation_sqlite(pool, tenant_id, correlation_id, payload).await
+            }
+        }
+    }
+
+    pub async fn generate_work_from_accepted_correlations(
+        &self,
+        tenant_id: i64,
+    ) -> anyhow::Result<ProductSecurityAcceptedCorrelationWorkResult> {
+        match self {
+            Self::Postgres(pool) => {
+                generate_work_from_accepted_correlations_postgres(pool, tenant_id).await
+            }
+            Self::Sqlite(pool) => {
+                generate_work_from_accepted_correlations_sqlite(pool, tenant_id).await
             }
         }
     }
@@ -2537,6 +2571,23 @@ struct CveCorrelationCandidate {
     rationale: String,
 }
 
+#[derive(Debug, Clone)]
+struct AcceptedCorrelationWorkCandidate {
+    correlation_id: i64,
+    cve: String,
+    asset_id: Option<i64>,
+    asset_name: Option<String>,
+    product_id: Option<i64>,
+    product_name: Option<String>,
+    component_id: Option<i64>,
+    component_name: Option<String>,
+    vulnerability_id: Option<i64>,
+    severity: String,
+    match_type: String,
+    match_value: String,
+    confidence: i64,
+}
+
 async fn import_csaf_postgres(
     pool: &PgPool,
     tenant_id: i64,
@@ -3492,6 +3543,9 @@ async fn update_cve_correlation_postgres(
     if result.rows_affected() == 0 {
         return Ok(None);
     }
+    if status == "ACCEPTED" {
+        generate_work_for_accepted_correlation_postgres(pool, tenant_id, correlation_id).await?;
+    }
     let correlation = load_cve_correlation_postgres(pool, tenant_id, correlation_id).await?;
     Ok(correlation.map(|correlation| ProductSecurityCveCorrelationDecisionResult { correlation }))
 }
@@ -3523,8 +3577,671 @@ async fn update_cve_correlation_sqlite(
     if result.rows_affected() == 0 {
         return Ok(None);
     }
+    if status == "ACCEPTED" {
+        generate_work_for_accepted_correlation_sqlite(pool, tenant_id, correlation_id).await?;
+    }
     let correlation = load_cve_correlation_sqlite(pool, tenant_id, correlation_id).await?;
     Ok(correlation.map(|correlation| ProductSecurityCveCorrelationDecisionResult { correlation }))
+}
+
+async fn generate_work_from_accepted_correlations_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<ProductSecurityAcceptedCorrelationWorkResult> {
+    let mut result = ProductSecurityAcceptedCorrelationWorkResult {
+        accepted_correlations: 0,
+        created_risks: 0,
+        existing_risks: 0,
+        created_roadmap_tasks: 0,
+        existing_roadmap_tasks: 0,
+    };
+    for candidate in accepted_correlation_candidates_postgres(pool, tenant_id, None).await? {
+        result.accepted_correlations += 1;
+        let work = generate_work_for_candidate_postgres(pool, tenant_id, &candidate).await?;
+        result.created_risks += work.created_risks;
+        result.existing_risks += work.existing_risks;
+        result.created_roadmap_tasks += work.created_roadmap_tasks;
+        result.existing_roadmap_tasks += work.existing_roadmap_tasks;
+    }
+    Ok(result)
+}
+
+async fn generate_work_from_accepted_correlations_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<ProductSecurityAcceptedCorrelationWorkResult> {
+    let mut result = ProductSecurityAcceptedCorrelationWorkResult {
+        accepted_correlations: 0,
+        created_risks: 0,
+        existing_risks: 0,
+        created_roadmap_tasks: 0,
+        existing_roadmap_tasks: 0,
+    };
+    for candidate in accepted_correlation_candidates_sqlite(pool, tenant_id, None).await? {
+        result.accepted_correlations += 1;
+        let work = generate_work_for_candidate_sqlite(pool, tenant_id, &candidate).await?;
+        result.created_risks += work.created_risks;
+        result.existing_risks += work.existing_risks;
+        result.created_roadmap_tasks += work.created_roadmap_tasks;
+        result.existing_roadmap_tasks += work.existing_roadmap_tasks;
+    }
+    Ok(result)
+}
+
+async fn generate_work_for_accepted_correlation_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    correlation_id: i64,
+) -> anyhow::Result<ProductSecurityAcceptedCorrelationWorkResult> {
+    let Some(candidate) =
+        accepted_correlation_candidates_postgres(pool, tenant_id, Some(correlation_id))
+            .await?
+            .into_iter()
+            .next()
+    else {
+        return Ok(ProductSecurityAcceptedCorrelationWorkResult {
+            accepted_correlations: 0,
+            created_risks: 0,
+            existing_risks: 0,
+            created_roadmap_tasks: 0,
+            existing_roadmap_tasks: 0,
+        });
+    };
+    let mut result = generate_work_for_candidate_postgres(pool, tenant_id, &candidate).await?;
+    result.accepted_correlations = 1;
+    Ok(result)
+}
+
+async fn generate_work_for_accepted_correlation_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    correlation_id: i64,
+) -> anyhow::Result<ProductSecurityAcceptedCorrelationWorkResult> {
+    let Some(candidate) =
+        accepted_correlation_candidates_sqlite(pool, tenant_id, Some(correlation_id))
+            .await?
+            .into_iter()
+            .next()
+    else {
+        return Ok(ProductSecurityAcceptedCorrelationWorkResult {
+            accepted_correlations: 0,
+            created_risks: 0,
+            existing_risks: 0,
+            created_roadmap_tasks: 0,
+            existing_roadmap_tasks: 0,
+        });
+    };
+    let mut result = generate_work_for_candidate_sqlite(pool, tenant_id, &candidate).await?;
+    result.accepted_correlations = 1;
+    Ok(result)
+}
+
+async fn generate_work_for_candidate_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    candidate: &AcceptedCorrelationWorkCandidate,
+) -> anyhow::Result<ProductSecurityAcceptedCorrelationWorkResult> {
+    let mut result = ProductSecurityAcceptedCorrelationWorkResult {
+        accepted_correlations: 0,
+        created_risks: 0,
+        existing_risks: 0,
+        created_roadmap_tasks: 0,
+        existing_roadmap_tasks: 0,
+    };
+    if postgres_table_exists(pool, "public.risks_risk").await? {
+        if insert_correlation_risk_postgres(pool, tenant_id, candidate).await? {
+            result.created_risks += 1;
+        } else {
+            result.existing_risks += 1;
+        }
+    }
+    if candidate.product_id.is_some()
+        && postgres_table_exists(pool, "public.product_security_productsecurityroadmap").await?
+        && postgres_table_exists(pool, "public.product_security_productsecurityroadmaptask").await?
+    {
+        if insert_correlation_roadmap_task_postgres(pool, tenant_id, candidate).await? {
+            result.created_roadmap_tasks += 1;
+        } else {
+            result.existing_roadmap_tasks += 1;
+        }
+    }
+    Ok(result)
+}
+
+async fn generate_work_for_candidate_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    candidate: &AcceptedCorrelationWorkCandidate,
+) -> anyhow::Result<ProductSecurityAcceptedCorrelationWorkResult> {
+    let mut result = ProductSecurityAcceptedCorrelationWorkResult {
+        accepted_correlations: 0,
+        created_risks: 0,
+        existing_risks: 0,
+        created_roadmap_tasks: 0,
+        existing_roadmap_tasks: 0,
+    };
+    if sqlite_table_exists(pool, "risks_risk").await? {
+        if insert_correlation_risk_sqlite(pool, tenant_id, candidate).await? {
+            result.created_risks += 1;
+        } else {
+            result.existing_risks += 1;
+        }
+    }
+    if candidate.product_id.is_some()
+        && sqlite_table_exists(pool, "product_security_productsecurityroadmap").await?
+        && sqlite_table_exists(pool, "product_security_productsecurityroadmaptask").await?
+    {
+        if insert_correlation_roadmap_task_sqlite(pool, tenant_id, candidate).await? {
+            result.created_roadmap_tasks += 1;
+        } else {
+            result.existing_roadmap_tasks += 1;
+        }
+    }
+    Ok(result)
+}
+
+async fn accepted_correlation_candidates_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    correlation_id: Option<i64>,
+) -> anyhow::Result<Vec<AcceptedCorrelationWorkCandidate>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            corr.id AS correlation_id,
+            corr.cve,
+            corr.asset_id,
+            asset.name AS asset_name,
+            corr.product_id,
+            product.name AS product_name,
+            corr.component_id,
+            component.name AS component_name,
+            vuln.id AS vulnerability_id,
+            COALESCE(vuln.severity, 'MEDIUM') AS severity,
+            corr.match_type,
+            corr.match_value,
+            corr.confidence::bigint AS confidence
+        FROM product_security_cvecorrelation corr
+        LEFT JOIN assets_app_informationasset asset
+            ON asset.id = corr.asset_id AND asset.tenant_id = corr.tenant_id
+        LEFT JOIN product_security_product product
+            ON product.id = corr.product_id AND product.tenant_id = corr.tenant_id
+        LEFT JOIN product_security_component component
+            ON component.id = corr.component_id AND component.tenant_id = corr.tenant_id
+        LEFT JOIN product_security_vulnerability vuln
+            ON vuln.tenant_id = corr.tenant_id
+           AND vuln.cve = corr.cve
+           AND (corr.product_id IS NULL OR vuln.product_id = corr.product_id)
+           AND (corr.component_id IS NULL OR vuln.component_id = corr.component_id)
+        WHERE corr.tenant_id = $1
+          AND corr.status = 'ACCEPTED'
+          AND ($2::bigint IS NULL OR corr.id = $2)
+        ORDER BY corr.updated_at DESC, corr.id DESC
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(correlation_id)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-akzeptierte CVE-Korrelationen konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(accepted_correlation_candidate_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn accepted_correlation_candidates_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    correlation_id: Option<i64>,
+) -> anyhow::Result<Vec<AcceptedCorrelationWorkCandidate>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            corr.id AS correlation_id,
+            corr.cve,
+            corr.asset_id,
+            asset.name AS asset_name,
+            corr.product_id,
+            product.name AS product_name,
+            corr.component_id,
+            component.name AS component_name,
+            vuln.id AS vulnerability_id,
+            COALESCE(vuln.severity, 'MEDIUM') AS severity,
+            corr.match_type,
+            corr.match_value,
+            corr.confidence AS confidence
+        FROM product_security_cvecorrelation corr
+        LEFT JOIN assets_app_informationasset asset
+            ON asset.id = corr.asset_id AND asset.tenant_id = corr.tenant_id
+        LEFT JOIN product_security_product product
+            ON product.id = corr.product_id AND product.tenant_id = corr.tenant_id
+        LEFT JOIN product_security_component component
+            ON component.id = corr.component_id AND component.tenant_id = corr.tenant_id
+        LEFT JOIN product_security_vulnerability vuln
+            ON vuln.tenant_id = corr.tenant_id
+           AND vuln.cve = corr.cve
+           AND (corr.product_id IS NULL OR vuln.product_id = corr.product_id)
+           AND (corr.component_id IS NULL OR vuln.component_id = corr.component_id)
+        WHERE corr.tenant_id = ?1
+          AND corr.status = 'ACCEPTED'
+          AND (?2 IS NULL OR corr.id = ?2)
+        ORDER BY corr.updated_at DESC, corr.id DESC
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(correlation_id)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-akzeptierte CVE-Korrelationen konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(accepted_correlation_candidate_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn insert_correlation_risk_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    candidate: &AcceptedCorrelationWorkCandidate,
+) -> anyhow::Result<bool> {
+    let title = correlation_risk_title(candidate);
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM risks_risk WHERE tenant_id = $1 AND title = $2",
+    )
+    .bind(tenant_id)
+    .bind(&title)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-CVE-Korrelationsrisiko konnte nicht gesucht werden")?;
+    if exists > 0 {
+        return Ok(false);
+    }
+    let (impact, likelihood) = correlation_risk_matrix(candidate);
+    sqlx::query(
+        r#"
+        INSERT INTO risks_risk (
+            tenant_id, category_id, process_id, asset_id, owner_id, title,
+            description, threat, vulnerability, impact, likelihood, status,
+            treatment_strategy, treatment_plan, created_at, updated_at
+        )
+        VALUES ($1, NULL, NULL, $2, NULL, $3, $4, $5, $6, $7, $8, 'IDENTIFIED', 'MITIGATE', $9, NOW(), NOW())
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(candidate.asset_id)
+    .bind(&title)
+    .bind(correlation_risk_description(candidate))
+    .bind(format!("Ausnutzung von {} ueber betroffenes Asset.", candidate.cve))
+    .bind(format!(
+        "Akzeptierte {}-Korrelation {} mit {}% Confidence.",
+        candidate.match_type, candidate.match_value, candidate.confidence
+    ))
+    .bind(impact)
+    .bind(likelihood)
+    .bind(correlation_treatment_plan(candidate))
+    .execute(pool)
+    .await
+    .context("PostgreSQL-CVE-Korrelationsrisiko konnte nicht erstellt werden")?;
+    Ok(true)
+}
+
+async fn insert_correlation_risk_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    candidate: &AcceptedCorrelationWorkCandidate,
+) -> anyhow::Result<bool> {
+    let title = correlation_risk_title(candidate);
+    let exists: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM risks_risk WHERE tenant_id = ?1 AND title = ?2")
+            .bind(tenant_id)
+            .bind(&title)
+            .fetch_one(pool)
+            .await
+            .context("SQLite-CVE-Korrelationsrisiko konnte nicht gesucht werden")?;
+    if exists > 0 {
+        return Ok(false);
+    }
+    let (impact, likelihood) = correlation_risk_matrix(candidate);
+    sqlx::query(
+        r#"
+        INSERT INTO risks_risk (
+            tenant_id, category_id, process_id, asset_id, owner_id, title,
+            description, threat, vulnerability, impact, likelihood, status,
+            treatment_strategy, treatment_plan, created_at, updated_at
+        )
+        VALUES (?1, NULL, NULL, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, 'IDENTIFIED', 'MITIGATE', ?9, datetime('now'), datetime('now'))
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(candidate.asset_id)
+    .bind(&title)
+    .bind(correlation_risk_description(candidate))
+    .bind(format!("Ausnutzung von {} ueber betroffenes Asset.", candidate.cve))
+    .bind(format!(
+        "Akzeptierte {}-Korrelation {} mit {}% Confidence.",
+        candidate.match_type, candidate.match_value, candidate.confidence
+    ))
+    .bind(impact)
+    .bind(likelihood)
+    .bind(correlation_treatment_plan(candidate))
+    .execute(pool)
+    .await
+    .context("SQLite-CVE-Korrelationsrisiko konnte nicht erstellt werden")?;
+    Ok(true)
+}
+
+async fn insert_correlation_roadmap_task_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    candidate: &AcceptedCorrelationWorkCandidate,
+) -> anyhow::Result<bool> {
+    let product_id = candidate
+        .product_id
+        .context("Akzeptierte CVE-Korrelation hat keinen Produktbezug")?;
+    let roadmap_id = ensure_correlation_roadmap_postgres(pool, tenant_id, product_id).await?;
+    let title = correlation_roadmap_task_title(candidate);
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM product_security_productsecurityroadmaptask WHERE tenant_id = $1 AND roadmap_id = $2 AND title = $3",
+    )
+    .bind(tenant_id)
+    .bind(roadmap_id)
+    .bind(&title)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-CVE-Korrelations-Roadmaptask konnte nicht gesucht werden")?;
+    if exists > 0 {
+        return Ok(false);
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_productsecurityroadmaptask (
+            tenant_id, roadmap_id, related_release_id, related_vulnerability_id, phase,
+            title, description, priority, owner_role, due_in_days, dependency_text,
+            status, created_at, updated_at
+        )
+        VALUES ($1, $2, NULL, $3, 'RESPONSE', $4, $5, $6, 'PSIRT', $7, $8, 'OPEN', NOW()::text, NOW()::text)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(roadmap_id)
+    .bind(candidate.vulnerability_id)
+    .bind(&title)
+    .bind(correlation_roadmap_description(candidate))
+    .bind(correlation_priority(candidate))
+    .bind(correlation_due_days(candidate))
+    .bind(format!("Akzeptierte Korrelation #{}", candidate.correlation_id))
+    .execute(pool)
+    .await
+    .context("PostgreSQL-CVE-Korrelations-Roadmaptask konnte nicht erstellt werden")?;
+    Ok(true)
+}
+
+async fn insert_correlation_roadmap_task_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    candidate: &AcceptedCorrelationWorkCandidate,
+) -> anyhow::Result<bool> {
+    let product_id = candidate
+        .product_id
+        .context("Akzeptierte CVE-Korrelation hat keinen Produktbezug")?;
+    let roadmap_id = ensure_correlation_roadmap_sqlite(pool, tenant_id, product_id).await?;
+    let title = correlation_roadmap_task_title(candidate);
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_productsecurityroadmaptask WHERE tenant_id = ?1 AND roadmap_id = ?2 AND title = ?3",
+    )
+    .bind(tenant_id)
+    .bind(roadmap_id)
+    .bind(&title)
+    .fetch_one(pool)
+    .await
+    .context("SQLite-CVE-Korrelations-Roadmaptask konnte nicht gesucht werden")?;
+    if exists > 0 {
+        return Ok(false);
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_productsecurityroadmaptask (
+            tenant_id, roadmap_id, related_release_id, related_vulnerability_id, phase,
+            title, description, priority, owner_role, due_in_days, dependency_text,
+            status, created_at, updated_at
+        )
+        VALUES (?1, ?2, NULL, ?3, 'RESPONSE', ?4, ?5, ?6, 'PSIRT', ?7, ?8, 'OPEN', datetime('now'), datetime('now'))
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(roadmap_id)
+    .bind(candidate.vulnerability_id)
+    .bind(&title)
+    .bind(correlation_roadmap_description(candidate))
+    .bind(correlation_priority(candidate))
+    .bind(correlation_due_days(candidate))
+    .bind(format!("Akzeptierte Korrelation #{}", candidate.correlation_id))
+    .execute(pool)
+    .await
+    .context("SQLite-CVE-Korrelations-Roadmaptask konnte nicht erstellt werden")?;
+    Ok(true)
+}
+
+async fn ensure_correlation_roadmap_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    product_id: i64,
+) -> anyhow::Result<i64> {
+    if let Some(id) = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT id
+        FROM product_security_productsecurityroadmap
+        WHERE tenant_id = $1 AND product_id = $2
+        ORDER BY id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(product_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Product-Security-Roadmap konnte nicht gesucht werden")?
+    {
+        return Ok(id);
+    }
+    sqlx::query_scalar(
+        r#"
+        INSERT INTO product_security_productsecurityroadmap (
+            tenant_id, product_id, title, summary, generated_from_snapshot_id, created_at, updated_at
+        )
+        VALUES ($1, $2, 'CVE Correlation Roadmap', 'Automatisch aus akzeptierten CVE-Asset-Korrelationen erzeugt.', NULL, NOW()::text, NOW()::text)
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(product_id)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Product-Security-Roadmap konnte nicht erstellt werden")
+}
+
+async fn ensure_correlation_roadmap_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    product_id: i64,
+) -> anyhow::Result<i64> {
+    if let Some(id) = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT id
+        FROM product_security_productsecurityroadmap
+        WHERE tenant_id = ?1 AND product_id = ?2
+        ORDER BY id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(product_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Product-Security-Roadmap konnte nicht gesucht werden")?
+    {
+        return Ok(id);
+    }
+    let result = sqlx::query(
+        r#"
+        INSERT INTO product_security_productsecurityroadmap (
+            tenant_id, product_id, title, summary, generated_from_snapshot_id, created_at, updated_at
+        )
+        VALUES (?1, ?2, 'CVE Correlation Roadmap', 'Automatisch aus akzeptierten CVE-Asset-Korrelationen erzeugt.', NULL, datetime('now'), datetime('now'))
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(product_id)
+    .execute(pool)
+    .await
+    .context("SQLite-Product-Security-Roadmap konnte nicht erstellt werden")?;
+    Ok(result.last_insert_rowid())
+}
+
+async fn postgres_table_exists(pool: &PgPool, qualified_name: &str) -> anyhow::Result<bool> {
+    sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+        .bind(qualified_name)
+        .fetch_one(pool)
+        .await
+        .context("PostgreSQL-Tabellenexistenz konnte nicht geprueft werden")
+}
+
+async fn sqlite_table_exists(pool: &SqlitePool, table_name: &str) -> anyhow::Result<bool> {
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1")
+            .bind(table_name)
+            .fetch_one(pool)
+            .await
+            .context("SQLite-Tabellenexistenz konnte nicht geprueft werden")?;
+    Ok(count > 0)
+}
+
+fn accepted_correlation_candidate_from_pg_row(
+    row: PgRow,
+) -> Result<AcceptedCorrelationWorkCandidate, sqlx::Error> {
+    Ok(AcceptedCorrelationWorkCandidate {
+        correlation_id: row.try_get("correlation_id")?,
+        cve: row.try_get("cve")?,
+        asset_id: row.try_get("asset_id")?,
+        asset_name: row.try_get("asset_name")?,
+        product_id: row.try_get("product_id")?,
+        product_name: row.try_get("product_name")?,
+        component_id: row.try_get("component_id")?,
+        component_name: row.try_get("component_name")?,
+        vulnerability_id: row.try_get("vulnerability_id")?,
+        severity: row.try_get("severity")?,
+        match_type: row.try_get("match_type")?,
+        match_value: row.try_get("match_value")?,
+        confidence: row.try_get("confidence")?,
+    })
+}
+
+fn accepted_correlation_candidate_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<AcceptedCorrelationWorkCandidate, sqlx::Error> {
+    Ok(AcceptedCorrelationWorkCandidate {
+        correlation_id: row.try_get("correlation_id")?,
+        cve: row.try_get("cve")?,
+        asset_id: row.try_get("asset_id")?,
+        asset_name: row.try_get("asset_name")?,
+        product_id: row.try_get("product_id")?,
+        product_name: row.try_get("product_name")?,
+        component_id: row.try_get("component_id")?,
+        component_name: row.try_get("component_name")?,
+        vulnerability_id: row.try_get("vulnerability_id")?,
+        severity: row.try_get("severity")?,
+        match_type: row.try_get("match_type")?,
+        match_value: row.try_get("match_value")?,
+        confidence: row.try_get("confidence")?,
+    })
+}
+
+fn correlation_risk_title(candidate: &AcceptedCorrelationWorkCandidate) -> String {
+    let asset = candidate
+        .asset_name
+        .as_deref()
+        .or(candidate.component_name.as_deref())
+        .or(candidate.product_name.as_deref())
+        .unwrap_or("unbekanntes Asset");
+    truncate_text(&format!("{} betrifft {}", candidate.cve, asset), 255)
+}
+
+fn correlation_risk_description(candidate: &AcceptedCorrelationWorkCandidate) -> String {
+    format!(
+        "Akzeptierte CVE-Asset-Korrelation aus Product Security: {} matched ueber {} '{}' mit {}% Confidence. Produkt: {}. Komponente: {} (ID: {}).",
+        candidate.cve,
+        candidate.match_type,
+        candidate.match_value,
+        candidate.confidence,
+        candidate.product_name.as_deref().unwrap_or("-"),
+        candidate.component_name.as_deref().unwrap_or("-"),
+        candidate
+            .component_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+    )
+}
+
+fn correlation_treatment_plan(candidate: &AcceptedCorrelationWorkCandidate) -> String {
+    format!(
+        "PSIRT-Triage durchfuehren, betroffene Versionen bestaetigen, Patch/Workaround fuer {} planen und Evidence aus SBOM/CSAF/Asset-Inventar verknuepfen.",
+        candidate.cve
+    )
+}
+
+fn correlation_roadmap_task_title(candidate: &AcceptedCorrelationWorkCandidate) -> String {
+    truncate_text(
+        &format!(
+            "{} behandeln ({})",
+            candidate.cve,
+            candidate
+                .component_name
+                .as_deref()
+                .or(candidate.asset_name.as_deref())
+                .unwrap_or("Asset-Korrelation")
+        ),
+        255,
+    )
+}
+
+fn correlation_roadmap_description(candidate: &AcceptedCorrelationWorkCandidate) -> String {
+    format!(
+        "Akzeptierte {}-Korrelation '{}' fuer {}. Risiko pruefen, Remediation-Owner festlegen, Fix oder Kompensation dokumentieren.",
+        candidate.match_type, candidate.match_value, candidate.cve
+    )
+}
+
+fn correlation_risk_matrix(candidate: &AcceptedCorrelationWorkCandidate) -> (i64, i64) {
+    match candidate.severity.trim().to_ascii_uppercase().as_str() {
+        "CRITICAL" => (5, 4),
+        "HIGH" => (4, 4),
+        "MEDIUM" => (3, 3),
+        "LOW" => (2, 2),
+        _ => (3, 3),
+    }
+}
+
+fn correlation_priority(candidate: &AcceptedCorrelationWorkCandidate) -> &'static str {
+    match candidate.severity.trim().to_ascii_uppercase().as_str() {
+        "CRITICAL" => "CRITICAL",
+        "HIGH" => "HIGH",
+        "LOW" => "LOW",
+        _ => "MEDIUM",
+    }
+}
+
+fn correlation_due_days(candidate: &AcceptedCorrelationWorkCandidate) -> i64 {
+    match candidate.severity.trim().to_ascii_uppercase().as_str() {
+        "CRITICAL" => 7,
+        "HIGH" => 14,
+        "MEDIUM" => 30,
+        _ => 60,
+    }
+}
+
+fn truncate_text(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 async fn cve_correlation_candidates_by_cpe_postgres(
@@ -3973,7 +4690,8 @@ fn spdx_external_refs(package: &Value) -> (String, String) {
 }
 
 fn validate_csaf_schema_core(document: &Value) -> Vec<String> {
-    let mut errors = Vec::new();
+    let mut errors =
+        validate_against_embedded_schema(&embedded_csaf_schema(), document, "CSAF 2.0 JSON Schema");
     if !document.is_object() {
         return vec!["CSAF-Dokument muss ein JSON-Objekt sein.".to_string()];
     }
@@ -4123,7 +4841,11 @@ fn validate_cyclonedx_schema_core(
     document: &Value,
     components: &[SbomImportComponent],
 ) -> Vec<String> {
-    let mut errors = Vec::new();
+    let mut errors = validate_against_embedded_schema(
+        &embedded_cyclonedx_schema(),
+        document,
+        "CycloneDX 1.6 JSON Schema",
+    );
     if !document.is_object() {
         return vec!["CycloneDX-Dokument muss ein JSON-Objekt sein.".to_string()];
     }
@@ -4203,7 +4925,8 @@ fn validate_cyclonedx_schema_core(
 }
 
 fn validate_spdx_schema_core(document: &Value, components: &[SbomImportComponent]) -> Vec<String> {
-    let mut errors = Vec::new();
+    let mut errors =
+        validate_against_embedded_schema(&embedded_spdx_schema(), document, "SPDX 2.3 JSON Schema");
     if !document.is_object() {
         return vec!["SPDX-Dokument muss ein JSON-Objekt sein.".to_string()];
     }
@@ -4330,6 +5053,525 @@ fn validate_spdx_schema_core(document: &Value, components: &[SbomImportComponent
         errors.push("SPDX packages[] fehlt oder ist kein Array.".to_string());
     }
     errors
+}
+
+fn validate_against_embedded_schema(schema: &Value, document: &Value, label: &str) -> Vec<String> {
+    let mut errors = Vec::new();
+    validate_embedded_schema_node(schema, document, "$", label, &mut errors);
+    errors
+}
+
+fn validate_embedded_schema_node(
+    schema: &Value,
+    document: &Value,
+    path: &str,
+    label: &str,
+    errors: &mut Vec<String>,
+) {
+    if errors.len() >= 50 {
+        return;
+    }
+    if let Some(one_of) = schema.get("oneOf").and_then(Value::as_array) {
+        let matches = one_of
+            .iter()
+            .filter(|candidate| {
+                let mut candidate_errors = Vec::new();
+                validate_embedded_schema_node(
+                    candidate,
+                    document,
+                    path,
+                    label,
+                    &mut candidate_errors,
+                );
+                candidate_errors.is_empty()
+            })
+            .count();
+        if matches != 1 {
+            push_schema_error(
+                errors,
+                label,
+                path,
+                "muss genau einem der erlaubten Schemas entsprechen",
+            );
+        }
+        return;
+    }
+    if let Some(expected_type) = schema.get("type").and_then(Value::as_str) {
+        if !embedded_schema_type_matches(expected_type, document) {
+            push_schema_error(
+                errors,
+                label,
+                path,
+                &format!("muss vom Typ {expected_type} sein"),
+            );
+            return;
+        }
+    }
+    if let Some(expected) = schema.get("const") {
+        if document != expected {
+            push_schema_error(
+                errors,
+                label,
+                path,
+                &format!(
+                    "muss konstant {} sein",
+                    embedded_schema_value_label(expected)
+                ),
+            );
+        }
+    }
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        if !values.iter().any(|value| value == document) {
+            let allowed = values
+                .iter()
+                .map(embedded_schema_value_label)
+                .collect::<Vec<_>>()
+                .join(", ");
+            push_schema_error(
+                errors,
+                label,
+                path,
+                &format!("muss einer von {allowed} sein"),
+            );
+        }
+    }
+    if let Some(min_length) = schema.get("minLength").and_then(Value::as_u64) {
+        if document
+            .as_str()
+            .is_some_and(|value| value.chars().count() < min_length as usize)
+        {
+            push_schema_error(
+                errors,
+                label,
+                path,
+                &format!("muss mindestens {min_length} Zeichen haben"),
+            );
+        }
+    }
+    if let Some(minimum) = schema.get("minimum").and_then(Value::as_i64) {
+        if document.as_i64().is_some_and(|value| value < minimum) {
+            push_schema_error(
+                errors,
+                label,
+                path,
+                &format!("muss mindestens {minimum} sein"),
+            );
+        }
+    }
+    if let Some(format) = schema.get("format").and_then(Value::as_str) {
+        if let Some(value) = document.as_str() {
+            if !embedded_schema_format_matches(format, value) {
+                push_schema_error(
+                    errors,
+                    label,
+                    path,
+                    &format!("muss Format {format} erfuellen"),
+                );
+            }
+        }
+    }
+    if let Some(pattern) = schema.get("pattern").and_then(Value::as_str) {
+        if let Some(value) = document.as_str() {
+            if !embedded_schema_pattern_matches(pattern, value) {
+                push_schema_error(
+                    errors,
+                    label,
+                    path,
+                    &format!("muss Pattern {pattern} erfuellen"),
+                );
+            }
+        }
+    }
+    if let Some(min_items) = schema.get("minItems").and_then(Value::as_u64) {
+        if document
+            .as_array()
+            .is_some_and(|values| values.len() < min_items as usize)
+        {
+            push_schema_error(
+                errors,
+                label,
+                path,
+                &format!("muss mindestens {min_items} Eintraege enthalten"),
+            );
+        }
+    }
+    if let Some(object) = document.as_object() {
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            for field in required.iter().filter_map(Value::as_str) {
+                if !object.contains_key(field) {
+                    push_schema_error(
+                        errors,
+                        label,
+                        &format!("{path}.{field}"),
+                        "ist erforderlich",
+                    );
+                }
+            }
+        }
+        if schema
+            .get("additionalProperties")
+            .and_then(Value::as_bool)
+            .is_some_and(|allowed| !allowed)
+        {
+            let allowed = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .map(|properties| properties.keys().cloned().collect::<BTreeSet<_>>())
+                .unwrap_or_default();
+            for key in object.keys() {
+                if !allowed.contains(key) {
+                    push_schema_error(
+                        errors,
+                        label,
+                        &format!("{path}.{key}"),
+                        "ist als zusaetzliche Eigenschaft nicht erlaubt",
+                    );
+                }
+            }
+        }
+        if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+            for (field, field_schema) in properties {
+                if let Some(value) = object.get(field) {
+                    validate_embedded_schema_node(
+                        field_schema,
+                        value,
+                        &format!("{path}.{field}"),
+                        label,
+                        errors,
+                    );
+                }
+            }
+        }
+    }
+    if let (Some(items_schema), Some(values)) = (schema.get("items"), document.as_array()) {
+        for (index, item) in values.iter().enumerate() {
+            validate_embedded_schema_node(
+                items_schema,
+                item,
+                &format!("{path}[{index}]"),
+                label,
+                errors,
+            );
+        }
+    }
+}
+
+fn push_schema_error(errors: &mut Vec<String>, label: &str, path: &str, message: &str) {
+    if errors.len() < 50 {
+        errors.push(format!("{label} {path}: {message}."));
+    }
+}
+
+fn embedded_schema_type_matches(expected_type: &str, value: &Value) -> bool {
+    match expected_type {
+        "array" => value.is_array(),
+        "boolean" => value.is_boolean(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        "object" => value.is_object(),
+        "string" => value.is_string(),
+        _ => true,
+    }
+}
+
+fn embedded_schema_value_label(value: &Value) -> String {
+    value
+        .as_str()
+        .map(|value| format!("'{value}'"))
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn embedded_schema_format_matches(format: &str, value: &str) -> bool {
+    match format {
+        "date-time" => {
+            value.contains('T') && (value.ends_with('Z') || has_rfc3339_timezone_offset(value))
+        }
+        "uri" => {
+            value.starts_with("http://")
+                || value.starts_with("https://")
+                || value.starts_with("urn:")
+        }
+        _ => true,
+    }
+}
+
+fn has_rfc3339_timezone_offset(value: &str) -> bool {
+    let Some(offset) = value.get(value.len().saturating_sub(6)..) else {
+        return false;
+    };
+    let bytes = offset.as_bytes();
+    bytes.len() == 6
+        && matches!(bytes.first(), Some(b'+' | b'-'))
+        && bytes.get(3) == Some(&b':')
+        && bytes[1..3].iter().all(u8::is_ascii_digit)
+        && bytes[4..6].iter().all(u8::is_ascii_digit)
+}
+
+fn embedded_schema_pattern_matches(pattern: &str, value: &str) -> bool {
+    match pattern {
+        "^CVE-[0-9]{4}-[0-9]{4,}$" => {
+            let Some(rest) = value.strip_prefix("CVE-") else {
+                return false;
+            };
+            let mut parts = rest.split('-');
+            let Some(year) = parts.next() else {
+                return false;
+            };
+            let Some(number) = parts.next() else {
+                return false;
+            };
+            parts.next().is_none()
+                && year.len() == 4
+                && year.chars().all(|char| char.is_ascii_digit())
+                && number.len() >= 4
+                && number.chars().all(|char| char.is_ascii_digit())
+        }
+        "^urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" => {
+            let Some(uuid) = value.strip_prefix("urn:uuid:") else {
+                return false;
+            };
+            let groups = uuid.split('-').collect::<Vec<_>>();
+            groups.len() == 5
+                && [8, 4, 4, 4, 12]
+                    .into_iter()
+                    .zip(groups)
+                    .all(|(length, group)| {
+                        group.len() == length && group.chars().all(|char| char.is_ascii_hexdigit())
+                    })
+        }
+        "^pkg:.+/.+" => value.starts_with("pkg:") && value[4..].contains('/'),
+        "^(cpe:2\\.3:|cpe:/).+" => value.starts_with("cpe:2.3:") || value.starts_with("cpe:/"),
+        "^SPDXRef-.+" => value.starts_with("SPDXRef-") && value.len() > "SPDXRef-".len(),
+        _ => true,
+    }
+}
+
+fn embedded_csaf_schema() -> Value {
+    json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ISCY embedded CSAF 2.0 validation profile",
+        "type": "object",
+        "required": ["document", "vulnerabilities"],
+        "additionalProperties": true,
+        "properties": {
+            "document": {
+                "type": "object",
+                "required": ["category", "csaf_version", "publisher", "title", "tracking"],
+                "additionalProperties": true,
+                "properties": {
+                    "category": {"type": "string", "minLength": 1},
+                    "csaf_version": {"const": "2.0"},
+                    "title": {"type": "string", "minLength": 1},
+                    "publisher": {
+                        "type": "object",
+                        "required": ["category", "name", "namespace"],
+                        "additionalProperties": true,
+                        "properties": {
+                            "category": {
+                                "type": "string",
+                                "enum": ["coordinator", "discoverer", "other", "translator", "user", "vendor"]
+                            },
+                            "name": {"type": "string", "minLength": 1},
+                            "namespace": {"type": "string", "format": "uri"}
+                        }
+                    },
+                    "tracking": {
+                        "type": "object",
+                        "required": [
+                            "current_release_date",
+                            "id",
+                            "initial_release_date",
+                            "revision_history",
+                            "status",
+                            "version"
+                        ],
+                        "additionalProperties": true,
+                        "properties": {
+                            "current_release_date": {"type": "string", "format": "date-time"},
+                            "id": {"type": "string", "minLength": 1},
+                            "initial_release_date": {"type": "string", "format": "date-time"},
+                            "revision_history": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                    "type": "object",
+                                    "required": ["date", "number", "summary"],
+                                    "additionalProperties": true,
+                                    "properties": {
+                                        "date": {"type": "string", "format": "date-time"},
+                                        "number": {"type": "string", "minLength": 1},
+                                        "summary": {"type": "string", "minLength": 1}
+                                    }
+                                }
+                            },
+                            "status": {"type": "string", "enum": ["draft", "final", "interim"]},
+                            "version": {"type": "string", "minLength": 1}
+                        }
+                    }
+                }
+            },
+            "vulnerabilities": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "required": ["product_status"],
+                    "additionalProperties": true,
+                    "properties": {
+                        "cve": {"type": "string", "pattern": "^CVE-[0-9]{4}-[0-9]{4,}$"},
+                        "product_status": {"type": "object"}
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn embedded_cyclonedx_schema() -> Value {
+    json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ISCY embedded CycloneDX 1.6 validation profile",
+        "type": "object",
+        "required": ["bomFormat", "specVersion", "components"],
+        "additionalProperties": false,
+        "properties": {
+            "$schema": {"type": "string"},
+            "bomFormat": {"const": "CycloneDX"},
+            "specVersion": {"const": "1.6"},
+            "serialNumber": {
+                "type": "string",
+                "pattern": "^urn:uuid:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            "version": {"type": "integer", "minimum": 1},
+            "metadata": {"type": "object"},
+            "components": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "required": ["type", "name"],
+                    "additionalProperties": true,
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "application",
+                                "framework",
+                                "library",
+                                "container",
+                                "platform",
+                                "operating-system",
+                                "device",
+                                "device-driver",
+                                "firmware",
+                                "file",
+                                "machine-learning-model",
+                                "data",
+                                "cryptographic-asset"
+                            ]
+                        },
+                        "name": {"type": "string", "minLength": 1},
+                        "version": {"type": "string"},
+                        "purl": {"type": "string", "pattern": "^pkg:.+/.+"},
+                        "cpe": {"type": "string", "pattern": "^(cpe:2\\.3:|cpe:/).+"},
+                        "supplier": {
+                            "oneOf": [
+                                {"type": "string"},
+                                {"type": "object", "properties": {"name": {"type": "string"}}}
+                            ]
+                        }
+                    }
+                }
+            },
+            "services": {"type": "array"},
+            "externalReferences": {"type": "array"},
+            "dependencies": {"type": "array"},
+            "compositions": {"type": "array"},
+            "vulnerabilities": {"type": "array"},
+            "annotations": {"type": "array"},
+            "formulation": {"type": "array"},
+            "declarations": {"type": "object"},
+            "definitions": {"type": "object"},
+            "properties": {"type": "array"},
+            "signature": {"type": "object"}
+        }
+    })
+}
+
+fn embedded_spdx_schema() -> Value {
+    json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ISCY embedded SPDX 2.3 validation profile",
+        "type": "object",
+        "required": [
+            "SPDXID",
+            "creationInfo",
+            "dataLicense",
+            "documentNamespace",
+            "name",
+            "packages",
+            "spdxVersion"
+        ],
+        "additionalProperties": false,
+        "properties": {
+            "SPDXID": {"type": "string", "pattern": "^SPDXRef-.+"},
+            "annotations": {"type": "array"},
+            "comment": {"type": "string"},
+            "creationInfo": {
+                "type": "object",
+                "required": ["created", "creators"],
+                "additionalProperties": true,
+                "properties": {
+                    "created": {"type": "string", "format": "date-time"},
+                    "creators": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {"type": "string", "minLength": 1}
+                    }
+                }
+            },
+            "dataLicense": {"type": "string", "minLength": 1},
+            "documentDescribes": {"type": "array"},
+            "documentNamespace": {"type": "string", "format": "uri"},
+            "externalDocumentRefs": {"type": "array"},
+            "files": {"type": "array"},
+            "hasExtractedLicensingInfos": {"type": "array"},
+            "name": {"type": "string", "minLength": 1},
+            "packages": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "required": ["SPDXID", "downloadLocation", "name"],
+                    "additionalProperties": true,
+                    "properties": {
+                        "SPDXID": {"type": "string", "pattern": "^SPDXRef-.+"},
+                        "downloadLocation": {"type": "string", "minLength": 1},
+                        "externalRefs": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["referenceCategory", "referenceType", "referenceLocator"],
+                                "additionalProperties": true,
+                                "properties": {
+                                    "referenceCategory": {"type": "string", "minLength": 1},
+                                    "referenceType": {"type": "string", "minLength": 1},
+                                    "referenceLocator": {"type": "string", "minLength": 1}
+                                }
+                            }
+                        },
+                        "name": {"type": "string", "minLength": 1},
+                        "supplier": {"type": "string"},
+                        "versionInfo": {"type": "string"}
+                    }
+                }
+            },
+            "relationships": {"type": "array"},
+            "revieweds": {"type": "array"},
+            "snippets": {"type": "array"},
+            "spdxVersion": {"const": "SPDX-2.3"}
+        }
+    })
 }
 
 fn validate_allowed_top_level(
