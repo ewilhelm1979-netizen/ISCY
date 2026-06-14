@@ -5,14 +5,11 @@ on:
     branches: ["main", "master"]
   pull_request:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 jobs:
   rust-backend-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -30,7 +27,7 @@ jobs:
   rust-bootstrap-smoke:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
@@ -41,7 +38,7 @@ jobs:
   nix-rust-smoke:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: cachix/install-nix-action@v30
         with:
           extra_nix_config: |
@@ -77,6 +74,7 @@ jobs:
           done
 
           curl -fsS "$RUST_BACKEND_URL/health/live" >/dev/null
+          curl -fsS "$RUST_BACKEND_URL/status/" >/dev/null
           curl -fsS -c "$cookie_file" -H "content-type: application/json" -d '{"tenant_id":1,"username":"admin","password":"Admin123!"}' "$RUST_BACKEND_URL/api/v1/auth/sessions" >/dev/null
           curl -fsS -b "$cookie_file" "$RUST_BACKEND_URL/api/v1/auth/session" >/dev/null
           curl -fsS -b "$cookie_file" "$RUST_BACKEND_URL/dashboard/" >/dev/null
@@ -105,7 +103,7 @@ jobs:
   docker-config:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Validate docker compose files
         run: |
           cp .env.example .env

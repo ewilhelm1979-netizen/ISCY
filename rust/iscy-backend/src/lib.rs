@@ -8534,6 +8534,199 @@ async fn web_imports_preview_submit(
     web_imports_preview_page(&context, &preview.preview, &file, None).into_response()
 }
 
+async fn web_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let context = web_context_from_request(&query, &headers, &state).await;
+    let store_statuses = [
+        (
+            "Auth & Sessions",
+            state.auth_store.is_some(),
+            "Login, RBAC, Rollen",
+        ),
+        (
+            "Accounts",
+            state.account_store.is_some(),
+            "User- und Gruppenverwaltung",
+        ),
+        (
+            "Dashboard",
+            state.dashboard_store.is_some(),
+            "Management-Uebersicht",
+        ),
+        (
+            "ISCY-27",
+            state.control_store.is_some(),
+            "Control-Kern und Mappings",
+        ),
+        (
+            "Product Security",
+            state.product_security_store.is_some(),
+            "CRA, SBOM, CSAF, CVE-Reviews",
+        ),
+        (
+            "Risks",
+            state.risk_store.is_some(),
+            "Risiko-Register und Reviews",
+        ),
+        (
+            "Evidence",
+            state.evidence_store.is_some(),
+            "Nachweise und Uploads",
+        ),
+        (
+            "Incidents",
+            state.incident_store.is_some(),
+            "NIS2- und Runbook-Flows",
+        ),
+        (
+            "Imports",
+            state.import_store.is_some(),
+            "CSV- und Datenimporte",
+        ),
+        (
+            "Assets",
+            state.asset_store.is_some(),
+            "Asset- und CPE/PURL-Bezug",
+        ),
+        (
+            "Roadmap",
+            state.roadmap_store.is_some(),
+            "Massnahmen und Tasks",
+        ),
+        (
+            "Reports",
+            state.report_store.is_some(),
+            "Snapshots und Exporte",
+        ),
+        ("Agents", state.agent_store.is_some(), "Zero-Trust-Posture"),
+    ];
+    let configured_stores = store_statuses
+        .iter()
+        .filter(|(_, configured, _)| *configured)
+        .count() as i64;
+    let store_rows = store_statuses
+        .iter()
+        .map(|(name, configured, scope)| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(name),
+                if *configured {
+                    web_badge("bereit", "ok")
+                } else {
+                    web_badge("nicht verbunden", "warn")
+                },
+                html_escape(scope),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let rust_only = env_flag_enabled("RUST_ONLY_MODE");
+    let strict_mode = env_flag_enabled("RUST_STRICT_MODE");
+    let media_root = state
+        .evidence_media_root
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "nicht gesetzt".to_string());
+    let nvd_base = state
+        .nvd_api_base_url
+        .as_deref()
+        .unwrap_or("NVD-Default")
+        .to_string();
+    let runtime_rows = [
+        (
+            "Rust-only",
+            if rust_only {
+                web_badge("aktiv", "ok")
+            } else {
+                web_badge("nicht gesetzt", "warn")
+            },
+            env_value_or("RUST_ONLY_MODE", "nicht gesetzt"),
+        ),
+        (
+            "Strict Mode",
+            if strict_mode {
+                web_badge("aktiv", "ok")
+            } else {
+                web_badge("nicht gesetzt", "warn")
+            },
+            env_value_or("RUST_STRICT_MODE", "nicht gesetzt"),
+        ),
+        (
+            "Evidence Media",
+            signal_badge(state.evidence_media_root.is_some()),
+            media_root,
+        ),
+        ("NVD API", web_badge("konfiguriert", "info"), nvd_base),
+    ]
+    .iter()
+    .map(|(name, status, detail)| {
+        format!(
+            r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+            html_escape(name),
+            status,
+            html_escape(detail),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("");
+    let body = format!(
+        r#"
+        <section class="hero compact">
+          <h1>Rust-only Status</h1>
+          <p>Betriebsuebersicht fuer Backend, Runtime-Flags und fachliche Kernmodule.</p>
+        </section>
+        <section class="metrics">
+          {}
+          {}
+          {}
+        </section>
+        <section class="grid">
+          <article class="panel wide">
+            <h2>Runtime</h2>
+            <table>
+              <thead><tr><th>Signal</th><th>Status</th><th>Detail</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <h2>Kernmodule</h2>
+            <table>
+              <thead><tr><th>Modul</th><th>Status</th><th>Scope</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+          {}
+          {}
+          {}
+        </section>
+        "#,
+        metric_card("Module bereit", configured_stores),
+        metric_card("Rust-only", if rust_only { 1 } else { 0 }),
+        metric_card("Strict Mode", if strict_mode { 1 } else { 0 }),
+        runtime_rows,
+        store_rows,
+        web_link_card(
+            "Live Health JSON",
+            "/health/live",
+            "Maschinenlesbarer Liveness-Check fuer CI und Betrieb",
+        ),
+        web_link_card(
+            "Product Security",
+            &web_path_with_context("/product-security/", context.as_ref()),
+            "SBOM, CSAF, CVE-Reviews und CRA/AI-Act-Signale",
+        ),
+        web_link_card(
+            "ISCY-27",
+            &web_path_with_context("/controls/", context.as_ref()),
+            "27 Controls, Evidence und Roadmap-Gaps",
+        ),
+    );
+    web_page("Rust-only Status", "/status/", context.as_ref(), &body)
+}
+
 async fn web_processes(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -8702,6 +8895,61 @@ async fn web_controls(
     };
     match store.library(context.tenant_id).await {
         Ok(library) => {
+            let evidence_gap_count = library
+                .controls
+                .iter()
+                .filter(|control| control.evidence_status != "EVIDENCED")
+                .count() as i64;
+            let roadmap_open_count = library
+                .controls
+                .iter()
+                .map(|control| control.roadmap_open_task_count)
+                .sum::<i64>();
+            let effective_count = library
+                .controls
+                .iter()
+                .filter(|control| control.status == "EFFECTIVE")
+                .count() as i64;
+            let framework_mapping_count = library
+                .controls
+                .iter()
+                .map(|control| control.mapping_count)
+                .sum::<i64>();
+            let control_signal_panel = format!(
+                r#"<article class="panel wide">
+                    <h2>Steuerungsindikatoren</h2>
+                    <table>
+                      <thead><tr><th>Signal</th><th>Status</th><th>Naechster Fokus</th></tr></thead>
+                      <tbody>
+                        <tr><td>Control-Gaps</td><td>{}</td><td>{}</td></tr>
+                        <tr><td>Evidence-Luecken</td><td>{}</td><td>{}</td></tr>
+                        <tr><td>Roadmap-Backlog</td><td>{}</td><td>{}</td></tr>
+                        <tr><td>Regulatory Mapping</td><td>{}</td><td>{} Mappings ueber {} Frameworks gepflegt</td></tr>
+                      </tbody>
+                    </table>
+                  </article>"#,
+                signal_badge(library.gap_controls == 0),
+                if library.gap_controls == 0 {
+                    "Alle Controls mindestens teilweise abgedeckt"
+                } else {
+                    "Gap-Tasks erzeugen und Owner pruefen"
+                },
+                signal_badge(evidence_gap_count == 0),
+                if evidence_gap_count == 0 {
+                    "Evidence-Stand stabil halten"
+                } else {
+                    "Nachweise direkt an Controls verknuepfen"
+                },
+                signal_badge(roadmap_open_count == 0),
+                if roadmap_open_count == 0 {
+                    "Keine offenen Control-Tasks"
+                } else {
+                    "Offene Tasks priorisieren und Fristen setzen"
+                },
+                signal_badge(framework_mapping_count > 0 && effective_count > 0),
+                framework_mapping_count,
+                library.framework_count,
+            );
             let group_rows = library
                 .groups
                 .iter()
@@ -8845,6 +9093,7 @@ async fn web_controls(
                   {}
                 </section>
                 <section class="grid">
+                  {}
                   <article class="panel wide">
                     <h2>Control-Gruppen</h2>
                     <table>
@@ -8875,6 +9124,7 @@ async fn web_controls(
                 metric_card("Gaps", library.gap_controls),
                 metric_card("Maturity", library.average_maturity.round() as i64),
                 metric_card("Frameworks", library.framework_count),
+                control_signal_panel,
                 if group_rows.is_empty() {
                     web_empty_row(5, "Keine Control-Gruppen vorhanden.")
                 } else {
@@ -9942,6 +10192,64 @@ async fn web_product_security(
             } else {
                 String::new()
             };
+            let total_components = overview
+                .products
+                .iter()
+                .map(|product| product.component_count)
+                .sum::<i64>();
+            let sbom_components = overview
+                .products
+                .iter()
+                .map(|product| product.sbom_component_count)
+                .sum::<i64>();
+            let products_with_csaf = overview
+                .products
+                .iter()
+                .filter(|product| product.csaf_advisory_count > 0)
+                .count() as i64;
+            let products_with_threat_model = overview
+                .products
+                .iter()
+                .filter(|product| product.threat_model_count > 0 && product.tara_count > 0)
+                .count() as i64;
+            let product_count = overview.products.len() as i64;
+            let sbom_coverage = ratio_percent(sbom_components, total_components);
+            let csaf_coverage = ratio_percent(products_with_csaf, product_count);
+            let threat_coverage = ratio_percent(products_with_threat_model, product_count);
+            let review_backlog = overview.review_metrics.open_cve_reviews
+                + overview.review_metrics.open_risk_reviews
+                + overview.review_metrics.evidence_missing;
+            let product_security_signal_panel = format!(
+                r#"<article class="panel wide">
+                    <h2>Product-Security-Steuerung</h2>
+                    <table>
+                      <thead><tr><th>Signal</th><th>Wert</th><th>Status</th><th>Naechster Fokus</th></tr></thead>
+                      <tbody>
+                        <tr><td>SBOM Coverage</td><td>{}%</td><td>{}</td><td>{}/{} Komponenten mit SBOM</td></tr>
+                        <tr><td>CSAF Coverage</td><td>{}%</td><td>{}</td><td>{}/{} Produkte mit Advisory-Spur</td></tr>
+                        <tr><td>Threat/TARA Coverage</td><td>{}%</td><td>{}</td><td>{}/{} Produkte mit Threat Model und TARA</td></tr>
+                        <tr><td>Review-Backlog</td><td>{}</td><td>{}</td><td>CVE-, Risiko- und Evidence-Reviews buendeln</td></tr>
+                        <tr><td>Kritische Schwachstellen</td><td>{}</td><td>{}</td><td>PSIRT, Roadmap und Evidence zusammenfuehren</td></tr>
+                      </tbody>
+                    </table>
+                  </article>"#,
+                sbom_coverage,
+                signal_badge(total_components == 0 || sbom_coverage >= 80),
+                sbom_components,
+                total_components,
+                csaf_coverage,
+                signal_badge(product_count == 0 || csaf_coverage >= 80),
+                products_with_csaf,
+                product_count,
+                threat_coverage,
+                signal_badge(product_count == 0 || threat_coverage >= 80),
+                products_with_threat_model,
+                product_count,
+                review_backlog,
+                signal_badge(review_backlog == 0),
+                overview.posture.critical_open_vulnerabilities,
+                signal_badge(overview.posture.critical_open_vulnerabilities == 0),
+            );
             let body = format!(
                 r#"
                 <section class="hero compact"><h1>Product Security</h1><p>Tenant {} · {}</p></section>
@@ -9954,6 +10262,7 @@ async fn web_product_security(
                   {}
                 </section>
                 <section class="grid">
+                  {}
                   <article class="panel wide">
                     <h2>Regulatorische Matrix</h2>
                     <p>{}</p>
@@ -10017,6 +10326,7 @@ async fn web_product_security(
                     overview.review_metrics.open_cve_reviews
                 ),
                 metric_card("Evidence fehlt", overview.review_metrics.evidence_missing),
+                product_security_signal_panel,
                 html_escape(&overview.matrix.summary),
                 if matrix_rows.is_empty() {
                     web_empty_row(4, "Keine Matrixdaten vorhanden.")
@@ -13637,6 +13947,7 @@ fn web_page(
 ) -> Html<String> {
     let nav_items = [
         ("/dashboard/", "Dashboard"),
+        ("/status/", "Status"),
         ("/navigator/", "Navigator"),
         ("/controls/", "ISCY-27"),
         ("/zero-trust/", "Zero Trust"),
@@ -13775,6 +14086,42 @@ fn metric_card(label: &str, value: i64) -> String {
         html_escape(label),
         value,
     )
+}
+
+fn ratio_percent(part: i64, total: i64) -> i64 {
+    if total <= 0 {
+        0
+    } else {
+        ((part as f64 / total as f64) * 100.0).round() as i64
+    }
+}
+
+fn signal_badge(ok: bool) -> String {
+    if ok {
+        web_badge("stabil", "ok")
+    } else {
+        web_badge("handeln", "warn")
+    }
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn env_value_or(name: &str, fallback: &str) -> String {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn web_empty_row(colspan: usize, message: &str) -> String {
@@ -15782,6 +16129,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/login/", get(web_login).post(web_login_submit))
         .route("/navigator/", get(web_navigator))
         .route("/dashboard/", get(web_dashboard))
+        .route("/status/", get(web_status))
         .route("/zero-trust/", get(web_zero_trust))
         .route("/incidents/", get(web_incidents).post(web_incidents_submit))
         .route(

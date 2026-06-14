@@ -53,6 +53,28 @@ async fn health_alias_endpoint_returns_ok() {
 }
 
 #[tokio::test]
+async fn rust_status_page_renders_runtime_and_module_overview() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/status/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Rust-only Status"));
+    assert!(html.contains("Runtime"));
+    assert!(html.contains("Kernmodule"));
+    assert!(html.contains("Product Security"));
+    assert!(html.contains("/health/live"));
+}
+
+#[tokio::test]
 async fn context_whoami_returns_anonymous_context_without_headers() {
     let response = app_router()
         .oneshot(
@@ -6270,6 +6292,11 @@ async fn rust_web_product_security_renders_overview_from_database() {
     assert!(html.contains("Import-Historie"));
     assert!(html.contains("CSV Export"));
     assert!(html.contains("JSON Export"));
+    assert!(html.contains("Product-Security-Steuerung"));
+    assert!(html.contains("SBOM Coverage"));
+    assert!(html.contains("CSAF Coverage"));
+    assert!(html.contains("Threat/TARA Coverage"));
+    assert!(html.contains("Review-Backlog"));
     assert!(html.contains("CSAF document.csaf_version fehlt."));
     assert!(html.contains("CVE-Reviews offen"));
     assert!(html.contains("Evidence fehlt"));
@@ -7163,6 +7190,10 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     assert!(html.contains("DORA"));
     assert!(html.contains("M&amp;A-Governance"));
     assert!(html.contains("Control-Arbeit"));
+    assert!(html.contains("Steuerungsindikatoren"));
+    assert!(html.contains("Control-Gaps"));
+    assert!(html.contains("Evidence-Luecken"));
+    assert!(html.contains("Roadmap-Backlog"));
 
     let response = app
         .clone()
