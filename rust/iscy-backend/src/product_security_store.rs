@@ -104,6 +104,8 @@ pub struct ProductSecurityOverview {
     pub posture: ProductSecurityPosture,
     pub products: Vec<ProductListItem>,
     pub snapshots: Vec<ProductSecuritySnapshotSummary>,
+    pub import_artifacts: Vec<ProductSecurityImportArtifactSummary>,
+    pub cve_correlations: Vec<ProductSecurityCveCorrelationSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -376,6 +378,27 @@ pub struct ProductSecurityArtifactImportResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityImportArtifactSummary {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub product_id: Option<i64>,
+    pub product_name: Option<String>,
+    pub artifact_type: String,
+    pub file_name: String,
+    pub document_id: String,
+    pub format_name: String,
+    pub format_version: String,
+    pub validation_status: String,
+    pub validation_errors: Vec<String>,
+    pub component_count: i64,
+    pub matched_component_count: i64,
+    pub cve_count: i64,
+    pub created_by_id: Option<i64>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ProductSecurityCveCorrelationSummary {
     pub id: i64,
     pub cve: String,
@@ -399,6 +422,17 @@ pub struct ProductSecurityCveCorrelationResult {
     pub created_suggestions: i64,
     pub existing_suggestions: i64,
     pub suggestions: Vec<ProductSecurityCveCorrelationSummary>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProductSecurityCveCorrelationDecisionRequest {
+    pub status: String,
+    pub rationale: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityCveCorrelationDecisionResult {
+    pub correlation: ProductSecurityCveCorrelationSummary,
 }
 
 #[derive(Debug, Clone)]
@@ -558,6 +592,22 @@ impl ProductSecurityStore {
             Self::Sqlite(pool) => suggest_cve_asset_correlations_sqlite(pool, tenant_id).await,
         }
     }
+
+    pub async fn update_cve_correlation(
+        &self,
+        tenant_id: i64,
+        correlation_id: i64,
+        payload: ProductSecurityCveCorrelationDecisionRequest,
+    ) -> anyhow::Result<Option<ProductSecurityCveCorrelationDecisionResult>> {
+        match self {
+            Self::Postgres(pool) => {
+                update_cve_correlation_postgres(pool, tenant_id, correlation_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                update_cve_correlation_sqlite(pool, tenant_id, correlation_id, payload).await
+            }
+        }
+    }
 }
 
 async fn overview_postgres(
@@ -609,6 +659,8 @@ async fn overview_postgres(
         .await
         .context("PostgreSQL-Product-Security-Posture konnte nicht gelesen werden")
         .and_then(posture_from_pg_row)?;
+    let import_artifacts = load_import_artifacts_postgres(pool, tenant_id, 20).await?;
+    let cve_correlations = load_cve_correlations_postgres(pool, tenant_id, 50).await?;
 
     Ok(Some(ProductSecurityOverview {
         tenant_id,
@@ -616,6 +668,8 @@ async fn overview_postgres(
         posture,
         products,
         snapshots,
+        import_artifacts,
+        cve_correlations,
     }))
 }
 
@@ -677,6 +731,8 @@ async fn overview_sqlite(
         .await
         .context("SQLite-Product-Security-Posture konnte nicht gelesen werden")
         .and_then(posture_from_sqlite_row)?;
+    let import_artifacts = load_import_artifacts_sqlite(pool, tenant_id, 20).await?;
+    let cve_correlations = load_cve_correlations_sqlite(pool, tenant_id, 50).await?;
 
     Ok(Some(ProductSecurityOverview {
         tenant_id,
@@ -684,6 +740,8 @@ async fn overview_sqlite(
         posture,
         products,
         snapshots,
+        import_artifacts,
+        cve_correlations,
     }))
 }
 
@@ -2581,19 +2639,22 @@ async fn import_sbom_postgres(
     let document = parse_sbom_document(&payload.document);
     let validation_status = validation_status(&document.validation_errors);
     let mut matched_components = Vec::new();
-    for component in &document.components {
-        let (component_id, match_reason) =
-            find_component_match_postgres(pool, tenant_id, payload.product_id, component).await?;
-        matched_components.push(MatchedSbomImportComponent {
-            component: component.clone(),
-            component_id,
-            match_status: if component_id.is_some() {
-                "MATCHED".to_string()
-            } else {
-                "UNMATCHED".to_string()
-            },
-            match_reason,
-        });
+    if validation_status != "INVALID" {
+        for component in &document.components {
+            let (component_id, match_reason) =
+                find_component_match_postgres(pool, tenant_id, payload.product_id, component)
+                    .await?;
+            matched_components.push(MatchedSbomImportComponent {
+                component: component.clone(),
+                component_id,
+                match_status: if component_id.is_some() {
+                    "MATCHED".to_string()
+                } else {
+                    "UNMATCHED".to_string()
+                },
+                match_reason,
+            });
+        }
     }
     let matched_count = matched_components
         .iter()
@@ -2658,19 +2719,21 @@ async fn import_sbom_sqlite(
     let document = parse_sbom_document(&payload.document);
     let validation_status = validation_status(&document.validation_errors);
     let mut matched_components = Vec::new();
-    for component in &document.components {
-        let (component_id, match_reason) =
-            find_component_match_sqlite(pool, tenant_id, payload.product_id, component).await?;
-        matched_components.push(MatchedSbomImportComponent {
-            component: component.clone(),
-            component_id,
-            match_status: if component_id.is_some() {
-                "MATCHED".to_string()
-            } else {
-                "UNMATCHED".to_string()
-            },
-            match_reason,
-        });
+    if validation_status != "INVALID" {
+        for component in &document.components {
+            let (component_id, match_reason) =
+                find_component_match_sqlite(pool, tenant_id, payload.product_id, component).await?;
+            matched_components.push(MatchedSbomImportComponent {
+                component: component.clone(),
+                component_id,
+                match_status: if component_id.is_some() {
+                    "MATCHED".to_string()
+                } else {
+                    "UNMATCHED".to_string()
+                },
+                match_reason,
+            });
+        }
     }
     let matched_count = matched_components
         .iter()
@@ -3402,6 +3465,68 @@ async fn suggest_cve_asset_correlations_sqlite(
     })
 }
 
+async fn update_cve_correlation_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    correlation_id: i64,
+    payload: ProductSecurityCveCorrelationDecisionRequest,
+) -> anyhow::Result<Option<ProductSecurityCveCorrelationDecisionResult>> {
+    let status = normalize_cve_correlation_status(&payload.status)?;
+    let rationale = payload.rationale.unwrap_or_default();
+    let result = sqlx::query(
+        r#"
+        UPDATE product_security_cvecorrelation
+        SET status = $3,
+            rationale = CASE WHEN $4 = '' THEN rationale ELSE $4 END,
+            updated_at = NOW()::text
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(correlation_id)
+    .bind(&status)
+    .bind(rationale.trim())
+    .execute(pool)
+    .await
+    .context("PostgreSQL-CVE-Asset-Korrelation konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    let correlation = load_cve_correlation_postgres(pool, tenant_id, correlation_id).await?;
+    Ok(correlation.map(|correlation| ProductSecurityCveCorrelationDecisionResult { correlation }))
+}
+
+async fn update_cve_correlation_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    correlation_id: i64,
+    payload: ProductSecurityCveCorrelationDecisionRequest,
+) -> anyhow::Result<Option<ProductSecurityCveCorrelationDecisionResult>> {
+    let status = normalize_cve_correlation_status(&payload.status)?;
+    let rationale = payload.rationale.unwrap_or_default();
+    let result = sqlx::query(
+        r#"
+        UPDATE product_security_cvecorrelation
+        SET status = ?3,
+            rationale = CASE WHEN ?4 = '' THEN rationale ELSE ?4 END,
+            updated_at = datetime('now')
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(correlation_id)
+    .bind(&status)
+    .bind(rationale.trim())
+    .execute(pool)
+    .await
+    .context("SQLite-CVE-Asset-Korrelation konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    let correlation = load_cve_correlation_sqlite(pool, tenant_id, correlation_id).await?;
+    Ok(correlation.map(|correlation| ProductSecurityCveCorrelationDecisionResult { correlation }))
+}
+
 async fn cve_correlation_candidates_by_cpe_postgres(
     pool: &PgPool,
     tenant_id: i64,
@@ -3601,6 +3726,40 @@ async fn load_cve_correlations_postgres(
         .map_err(Into::into)
 }
 
+async fn load_import_artifacts_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<ProductSecurityImportArtifactSummary>> {
+    let rows = sqlx::query(import_artifact_list_postgres_sql())
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-Product-Security-Importhistorie konnte nicht gelesen werden")?;
+    rows.into_iter()
+        .map(import_artifact_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn load_import_artifacts_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<ProductSecurityImportArtifactSummary>> {
+    let rows = sqlx::query(import_artifact_list_sqlite_sql())
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("SQLite-Product-Security-Importhistorie konnte nicht gelesen werden")?;
+    rows.into_iter()
+        .map(import_artifact_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
 async fn load_cve_correlations_sqlite(
     pool: &SqlitePool,
     tenant_id: i64,
@@ -3615,6 +3774,38 @@ async fn load_cve_correlations_sqlite(
     rows.into_iter()
         .map(cve_correlation_from_sqlite_row)
         .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn load_cve_correlation_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    correlation_id: i64,
+) -> anyhow::Result<Option<ProductSecurityCveCorrelationSummary>> {
+    sqlx::query(cve_correlation_detail_postgres_sql())
+        .bind(tenant_id)
+        .bind(correlation_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-CVE-Asset-Korrelation konnte nicht gelesen werden")?
+        .map(cve_correlation_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn load_cve_correlation_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    correlation_id: i64,
+) -> anyhow::Result<Option<ProductSecurityCveCorrelationSummary>> {
+    sqlx::query(cve_correlation_detail_sqlite_sql())
+        .bind(tenant_id)
+        .bind(correlation_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-CVE-Asset-Korrelation konnte nicht gelesen werden")?
+        .map(cve_correlation_from_sqlite_row)
+        .transpose()
         .map_err(Into::into)
 }
 
@@ -3652,19 +3843,7 @@ fn parse_csaf_document(document: &Value) -> CsafImportDocument {
             }
         }
     }
-    let mut validation_errors = Vec::new();
-    if document_id.is_empty() {
-        validation_errors.push("CSAF document.tracking.id fehlt.".to_string());
-    }
-    if tracking_status.is_empty() {
-        validation_errors.push("CSAF document.tracking.status fehlt.".to_string());
-    }
-    if !document
-        .get("vulnerabilities")
-        .is_some_and(|value| value.is_array())
-    {
-        validation_errors.push("CSAF vulnerabilities[] fehlt oder ist kein Array.".to_string());
-    }
+    let validation_errors = validate_csaf_schema_core(document);
     CsafImportDocument {
         document_id,
         title,
@@ -3730,10 +3909,7 @@ fn parse_cyclonedx_document(document: &Value) -> SbomImportDocument {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let mut validation_errors = Vec::new();
-    if components.is_empty() {
-        validation_errors.push("CycloneDX components[] enthaelt keine Komponenten.".to_string());
-    }
+    let validation_errors = validate_cyclonedx_schema_core(document, &components);
     SbomImportDocument {
         format_name: "CycloneDX".to_string(),
         format_version: json_field_string(document, "specVersion").unwrap_or_default(),
@@ -3765,10 +3941,7 @@ fn parse_spdx_document(document: &Value) -> SbomImportDocument {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let mut validation_errors = Vec::new();
-    if components.is_empty() {
-        validation_errors.push("SPDX packages[] enthaelt keine Komponenten.".to_string());
-    }
+    let validation_errors = validate_spdx_schema_core(document, &components);
     SbomImportDocument {
         format_name: "SPDX".to_string(),
         format_version: json_field_string(document, "spdxVersion").unwrap_or_default(),
@@ -3797,6 +3970,482 @@ fn spdx_external_refs(package: &Value) -> (String, String) {
         }
     }
     (package_url, cpe23_uri)
+}
+
+fn validate_csaf_schema_core(document: &Value) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !document.is_object() {
+        return vec!["CSAF-Dokument muss ein JSON-Objekt sein.".to_string()];
+    }
+    let Some(meta) = document.get("document") else {
+        return vec!["CSAF document fehlt.".to_string()];
+    };
+    if !meta.is_object() {
+        errors.push("CSAF document muss ein Objekt sein.".to_string());
+        return errors;
+    }
+    require_string(meta, "category", "CSAF document.category", &mut errors);
+    match json_field_string(meta, "csaf_version").as_deref() {
+        Some("2.0") => {}
+        Some(_) => errors.push("CSAF document.csaf_version muss '2.0' sein.".to_string()),
+        None => errors.push("CSAF document.csaf_version fehlt.".to_string()),
+    }
+    require_string(meta, "title", "CSAF document.title", &mut errors);
+    let publisher = meta.get("publisher");
+    if let Some(publisher) = publisher.and_then(Value::as_object) {
+        match publisher
+            .get("category")
+            .and_then(Value::as_str)
+            .map(str::trim)
+        {
+            Some("coordinator" | "discoverer" | "other" | "translator" | "user" | "vendor") => {}
+            Some(_) => errors
+                .push("CSAF document.publisher.category ist kein erlaubter CSAF-Wert.".to_string()),
+            None => errors.push("CSAF document.publisher.category fehlt.".to_string()),
+        }
+        require_string(
+            meta.pointer("/publisher").unwrap_or(&Value::Null),
+            "name",
+            "CSAF document.publisher.name",
+            &mut errors,
+        );
+        require_uri_string(
+            meta.pointer("/publisher").unwrap_or(&Value::Null),
+            "namespace",
+            "CSAF document.publisher.namespace",
+            &mut errors,
+        );
+    } else {
+        errors.push("CSAF document.publisher fehlt oder ist kein Objekt.".to_string());
+    }
+    if let Some(tracking) = meta.get("tracking").and_then(Value::as_object) {
+        for (field, label) in [
+            ("id", "CSAF document.tracking.id"),
+            ("version", "CSAF document.tracking.version"),
+            (
+                "initial_release_date",
+                "CSAF document.tracking.initial_release_date",
+            ),
+            (
+                "current_release_date",
+                "CSAF document.tracking.current_release_date",
+            ),
+        ] {
+            require_string(
+                meta.pointer("/tracking").unwrap_or(&Value::Null),
+                field,
+                label,
+                &mut errors,
+            );
+        }
+        for field in ["initial_release_date", "current_release_date"] {
+            if let Some(value) = tracking.get(field).and_then(Value::as_str) {
+                validate_rfc3339_like(
+                    value,
+                    &format!("CSAF document.tracking.{field}"),
+                    &mut errors,
+                );
+            }
+        }
+        match tracking
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::trim)
+        {
+            Some("draft" | "final" | "interim") => {}
+            Some(_) => errors
+                .push("CSAF document.tracking.status ist kein erlaubter CSAF-Wert.".to_string()),
+            None => errors.push("CSAF document.tracking.status fehlt.".to_string()),
+        }
+        match tracking.get("revision_history").and_then(Value::as_array) {
+            Some(items) if !items.is_empty() => {
+                for (index, item) in items.iter().enumerate() {
+                    require_string(
+                        item,
+                        "number",
+                        &format!("CSAF document.tracking.revision_history[{index}].number"),
+                        &mut errors,
+                    );
+                    require_string(
+                        item,
+                        "date",
+                        &format!("CSAF document.tracking.revision_history[{index}].date"),
+                        &mut errors,
+                    );
+                    if let Some(value) = item.get("date").and_then(Value::as_str) {
+                        validate_rfc3339_like(
+                            value,
+                            &format!("CSAF document.tracking.revision_history[{index}].date"),
+                            &mut errors,
+                        );
+                    }
+                    require_string(
+                        item,
+                        "summary",
+                        &format!("CSAF document.tracking.revision_history[{index}].summary"),
+                        &mut errors,
+                    );
+                }
+            }
+            _ => errors
+                .push("CSAF document.tracking.revision_history fehlt oder ist leer.".to_string()),
+        }
+    } else {
+        errors.push("CSAF document.tracking fehlt oder ist kein Objekt.".to_string());
+    }
+    match document.get("vulnerabilities").and_then(Value::as_array) {
+        Some(vulnerabilities) if !vulnerabilities.is_empty() => {
+            for (index, vulnerability) in vulnerabilities.iter().enumerate() {
+                if let Some(cve) = vulnerability.get("cve").and_then(Value::as_str) {
+                    validate_cve_like(
+                        cve,
+                        &format!("CSAF vulnerabilities[{index}].cve"),
+                        &mut errors,
+                    );
+                }
+                if !vulnerability
+                    .get("product_status")
+                    .is_some_and(|status| status.is_object())
+                {
+                    errors.push(format!(
+                        "CSAF vulnerabilities[{index}].product_status fehlt oder ist kein Objekt."
+                    ));
+                }
+            }
+        }
+        Some(_) => errors.push("CSAF vulnerabilities[] ist leer.".to_string()),
+        None => errors.push("CSAF vulnerabilities[] fehlt oder ist kein Array.".to_string()),
+    }
+    errors
+}
+
+fn validate_cyclonedx_schema_core(
+    document: &Value,
+    components: &[SbomImportComponent],
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !document.is_object() {
+        return vec!["CycloneDX-Dokument muss ein JSON-Objekt sein.".to_string()];
+    }
+    let allowed_top_level = [
+        "$schema",
+        "bomFormat",
+        "specVersion",
+        "serialNumber",
+        "version",
+        "metadata",
+        "components",
+        "services",
+        "externalReferences",
+        "dependencies",
+        "compositions",
+        "vulnerabilities",
+        "annotations",
+        "formulation",
+        "declarations",
+        "definitions",
+        "properties",
+    ];
+    validate_allowed_top_level(document, &allowed_top_level, "CycloneDX", &mut errors);
+    match json_field_string(document, "bomFormat").as_deref() {
+        Some("CycloneDX") => {}
+        Some(_) => errors.push("CycloneDX bomFormat muss 'CycloneDX' sein.".to_string()),
+        None => errors.push("CycloneDX bomFormat fehlt.".to_string()),
+    }
+    match json_field_string(document, "specVersion").as_deref() {
+        Some("1.6") => {}
+        Some(_) => errors
+            .push("CycloneDX specVersion muss fuer dieses ISCY-Profil '1.6' sein.".to_string()),
+        None => errors.push("CycloneDX specVersion fehlt.".to_string()),
+    }
+    if let Some(serial) = json_field_string(document, "serialNumber") {
+        validate_urn_uuid(&serial, "CycloneDX serialNumber", &mut errors);
+    }
+    if components.is_empty() {
+        errors.push("CycloneDX components[] enthaelt keine Komponenten.".to_string());
+    }
+    if let Some(items) = document.get("components").and_then(Value::as_array) {
+        for (index, item) in items.iter().enumerate() {
+            require_string(
+                item,
+                "type",
+                &format!("CycloneDX components[{index}].type"),
+                &mut errors,
+            );
+            if let Some(component_type) = item.get("type").and_then(Value::as_str) {
+                validate_cyclonedx_component_type(component_type, index, &mut errors);
+            }
+            require_string(
+                item,
+                "name",
+                &format!("CycloneDX components[{index}].name"),
+                &mut errors,
+            );
+            if let Some(purl) = item.get("purl").and_then(Value::as_str) {
+                validate_purl(
+                    purl,
+                    &format!("CycloneDX components[{index}].purl"),
+                    &mut errors,
+                );
+            }
+            if let Some(cpe) = item.get("cpe").and_then(Value::as_str) {
+                validate_cpe(
+                    cpe,
+                    &format!("CycloneDX components[{index}].cpe"),
+                    &mut errors,
+                );
+            }
+        }
+    } else {
+        errors.push("CycloneDX components[] fehlt oder ist kein Array.".to_string());
+    }
+    errors
+}
+
+fn validate_spdx_schema_core(document: &Value, components: &[SbomImportComponent]) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !document.is_object() {
+        return vec!["SPDX-Dokument muss ein JSON-Objekt sein.".to_string()];
+    }
+    let allowed_top_level = [
+        "SPDXID",
+        "annotations",
+        "comment",
+        "creationInfo",
+        "dataLicense",
+        "documentDescribes",
+        "documentNamespace",
+        "externalDocumentRefs",
+        "files",
+        "hasExtractedLicensingInfos",
+        "name",
+        "packages",
+        "relationships",
+        "revieweds",
+        "snippets",
+        "spdxVersion",
+    ];
+    validate_allowed_top_level(document, &allowed_top_level, "SPDX", &mut errors);
+    require_string(document, "SPDXID", "SPDX SPDXID", &mut errors);
+    require_string(document, "dataLicense", "SPDX dataLicense", &mut errors);
+    require_string(document, "name", "SPDX name", &mut errors);
+    match json_field_string(document, "spdxVersion").as_deref() {
+        Some("SPDX-2.3") => {}
+        Some(_) => errors.push("SPDX spdxVersion muss 'SPDX-2.3' sein.".to_string()),
+        None => errors.push("SPDX spdxVersion fehlt.".to_string()),
+    }
+    if let Some(creation_info) = document.get("creationInfo") {
+        require_string(
+            creation_info,
+            "created",
+            "SPDX creationInfo.created",
+            &mut errors,
+        );
+        if let Some(creators) = creation_info.get("creators").and_then(Value::as_array) {
+            if creators.is_empty() {
+                errors.push("SPDX creationInfo.creators ist leer.".to_string());
+            }
+        } else {
+            errors.push("SPDX creationInfo.creators fehlt oder ist kein Array.".to_string());
+        }
+    } else {
+        errors.push("SPDX creationInfo fehlt.".to_string());
+    }
+    if components.is_empty() {
+        errors.push("SPDX packages[] enthaelt keine Komponenten.".to_string());
+    }
+    if let Some(packages) = document.get("packages").and_then(Value::as_array) {
+        for (index, package) in packages.iter().enumerate() {
+            require_string(
+                package,
+                "SPDXID",
+                &format!("SPDX packages[{index}].SPDXID"),
+                &mut errors,
+            );
+            require_string(
+                package,
+                "downloadLocation",
+                &format!("SPDX packages[{index}].downloadLocation"),
+                &mut errors,
+            );
+            require_string(
+                package,
+                "name",
+                &format!("SPDX packages[{index}].name"),
+                &mut errors,
+            );
+            if let Some(refs) = package.get("externalRefs").and_then(Value::as_array) {
+                for (ref_index, reference) in refs.iter().enumerate() {
+                    require_string(
+                        reference,
+                        "referenceCategory",
+                        &format!(
+                            "SPDX packages[{index}].externalRefs[{ref_index}].referenceCategory"
+                        ),
+                        &mut errors,
+                    );
+                    require_string(
+                        reference,
+                        "referenceType",
+                        &format!("SPDX packages[{index}].externalRefs[{ref_index}].referenceType"),
+                        &mut errors,
+                    );
+                    require_string(
+                        reference,
+                        "referenceLocator",
+                        &format!(
+                            "SPDX packages[{index}].externalRefs[{ref_index}].referenceLocator"
+                        ),
+                        &mut errors,
+                    );
+                    if let Some(locator) = reference.get("referenceLocator").and_then(Value::as_str)
+                    {
+                        let reference_type = reference
+                            .get("referenceType")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_ascii_lowercase();
+                        if reference_type.contains("purl") {
+                            validate_purl(
+                                locator,
+                                &format!(
+                                    "SPDX packages[{index}].externalRefs[{ref_index}].referenceLocator"
+                                ),
+                                &mut errors,
+                            );
+                        } else if reference_type.contains("cpe") {
+                            validate_cpe(
+                                locator,
+                                &format!(
+                                    "SPDX packages[{index}].externalRefs[{ref_index}].referenceLocator"
+                                ),
+                                &mut errors,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        errors.push("SPDX packages[] fehlt oder ist kein Array.".to_string());
+    }
+    errors
+}
+
+fn validate_allowed_top_level(
+    document: &Value,
+    allowed: &[&str],
+    label: &str,
+    errors: &mut Vec<String>,
+) {
+    if let Some(object) = document.as_object() {
+        for key in object.keys() {
+            if !allowed.contains(&key.as_str()) {
+                errors.push(format!(
+                    "{label} enthaelt ein nicht durch das ISCY-Schema-Profil erlaubtes Top-Level-Feld: {key}."
+                ));
+            }
+        }
+    }
+}
+
+fn require_string(value: &Value, field: &str, label: &str, errors: &mut Vec<String>) {
+    if value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        errors.push(format!("{label} fehlt oder ist leer."));
+    }
+}
+
+fn require_uri_string(value: &Value, field: &str, label: &str, errors: &mut Vec<String>) {
+    match value.get(field).and_then(Value::as_str).map(str::trim) {
+        Some(uri) if uri.starts_with("https://") || uri.starts_with("http://") => {}
+        Some(_) => errors.push(format!("{label} muss eine HTTP(S)-URI sein.")),
+        None => errors.push(format!("{label} fehlt oder ist leer.")),
+    }
+}
+
+fn validate_rfc3339_like(value: &str, label: &str, errors: &mut Vec<String>) {
+    let trimmed = value.trim();
+    if chrono::DateTime::parse_from_rfc3339(trimmed).is_err() {
+        errors.push(format!(
+            "{label} muss als RFC3339/ISO-8601 Date-Time angegeben sein."
+        ));
+    }
+}
+
+fn validate_cve_like(value: &str, label: &str, errors: &mut Vec<String>) {
+    let parts = value.trim().split('-').collect::<Vec<_>>();
+    let valid = parts.len() == 3
+        && parts[0].eq_ignore_ascii_case("CVE")
+        && parts[1].len() == 4
+        && parts[1].chars().all(|ch| ch.is_ascii_digit())
+        && parts[2].len() >= 4
+        && parts[2].chars().all(|ch| ch.is_ascii_digit());
+    if !valid {
+        errors.push(format!("{label} ist keine gueltige CVE-ID."));
+    }
+}
+
+fn validate_urn_uuid(value: &str, label: &str, errors: &mut Vec<String>) {
+    let uuid = value.trim().strip_prefix("urn:uuid:");
+    let valid = uuid.is_some_and(|uuid| {
+        uuid.len() == 36
+            && uuid.chars().enumerate().all(|(idx, ch)| {
+                if [8, 13, 18, 23].contains(&idx) {
+                    ch == '-'
+                } else {
+                    ch.is_ascii_hexdigit()
+                }
+            })
+    });
+    if !valid {
+        errors.push(format!(
+            "{label} muss dem Muster urn:uuid:<RFC4122-UUID> entsprechen."
+        ));
+    }
+}
+
+fn validate_purl(value: &str, label: &str, errors: &mut Vec<String>) {
+    let trimmed = value.trim();
+    if !(trimmed.starts_with("pkg:") && trimmed.contains('/')) {
+        errors.push(format!(
+            "{label} muss eine Package URL mit Prefix pkg: sein."
+        ));
+    }
+}
+
+fn validate_cpe(value: &str, label: &str, errors: &mut Vec<String>) {
+    let trimmed = value.trim();
+    if !(trimmed.starts_with("cpe:2.3:") || trimmed.starts_with("cpe:/")) {
+        errors.push(format!("{label} muss CPE 2.3 oder Legacy-CPE-URI sein."));
+    }
+}
+
+fn validate_cyclonedx_component_type(component_type: &str, index: usize, errors: &mut Vec<String>) {
+    let allowed = [
+        "application",
+        "framework",
+        "library",
+        "container",
+        "platform",
+        "operating-system",
+        "device",
+        "device-driver",
+        "firmware",
+        "file",
+        "machine-learning-model",
+        "data",
+        "cryptographic-asset",
+    ];
+    if !allowed.contains(&component_type.trim()) {
+        errors.push(format!(
+            "CycloneDX components[{index}].type ist kein erlaubter CycloneDX-1.6-Komponententyp."
+        ));
+    }
 }
 
 fn json_field_string(value: &Value, field: &str) -> Option<String> {
@@ -3833,6 +4482,64 @@ fn csaf_advisory_status(tracking_status: &str) -> &'static str {
     }
 }
 
+fn import_artifact_list_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        artifact.id,
+        artifact.tenant_id,
+        artifact.product_id,
+        product.name AS product_name,
+        artifact.artifact_type,
+        artifact.file_name,
+        artifact.document_id,
+        artifact.format_name,
+        artifact.format_version,
+        artifact.validation_status,
+        artifact.validation_errors_json,
+        artifact.component_count::bigint AS component_count,
+        artifact.matched_component_count::bigint AS matched_component_count,
+        artifact.cve_count::bigint AS cve_count,
+        artifact.created_by_id,
+        artifact.created_at::text AS created_at,
+        artifact.updated_at::text AS updated_at
+    FROM product_security_importartifact artifact
+    LEFT JOIN product_security_product product
+        ON product.id = artifact.product_id AND product.tenant_id = artifact.tenant_id
+    WHERE artifact.tenant_id = $1
+    ORDER BY artifact.created_at DESC, artifact.id DESC
+    LIMIT $2
+    "#
+}
+
+fn import_artifact_list_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        artifact.id,
+        artifact.tenant_id,
+        artifact.product_id,
+        product.name AS product_name,
+        artifact.artifact_type,
+        artifact.file_name,
+        artifact.document_id,
+        artifact.format_name,
+        artifact.format_version,
+        artifact.validation_status,
+        artifact.validation_errors_json,
+        artifact.component_count,
+        artifact.matched_component_count,
+        artifact.cve_count,
+        artifact.created_by_id,
+        CAST(artifact.created_at AS TEXT) AS created_at,
+        CAST(artifact.updated_at AS TEXT) AS updated_at
+    FROM product_security_importartifact artifact
+    LEFT JOIN product_security_product product
+        ON product.id = artifact.product_id AND product.tenant_id = artifact.tenant_id
+    WHERE artifact.tenant_id = ?
+    ORDER BY artifact.created_at DESC, artifact.id DESC
+    LIMIT ?
+    "#
+}
+
 fn cve_correlation_list_postgres_sql() -> &'static str {
     r#"
     SELECT
@@ -3861,6 +4568,35 @@ fn cve_correlation_list_postgres_sql() -> &'static str {
     WHERE corr.tenant_id = $1
     ORDER BY corr.created_at DESC, corr.id DESC
     LIMIT $2
+    "#
+}
+
+fn cve_correlation_detail_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        corr.id,
+        corr.cve,
+        corr.asset_id,
+        asset.name AS asset_name,
+        corr.product_id,
+        product.name AS product_name,
+        corr.component_id,
+        component.name AS component_name,
+        corr.match_type,
+        corr.match_value,
+        corr.confidence::bigint AS confidence,
+        corr.status,
+        corr.rationale,
+        corr.created_at::text AS created_at,
+        corr.updated_at::text AS updated_at
+    FROM product_security_cvecorrelation corr
+    LEFT JOIN assets_app_informationasset asset
+        ON asset.id = corr.asset_id AND asset.tenant_id = corr.tenant_id
+    LEFT JOIN product_security_product product
+        ON product.id = corr.product_id AND product.tenant_id = corr.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = corr.component_id AND component.tenant_id = corr.tenant_id
+    WHERE corr.tenant_id = $1 AND corr.id = $2
     "#
 }
 
@@ -3893,6 +4629,83 @@ fn cve_correlation_list_sqlite_sql() -> &'static str {
     ORDER BY corr.created_at DESC, corr.id DESC
     LIMIT ?
     "#
+}
+
+fn cve_correlation_detail_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        corr.id,
+        corr.cve,
+        corr.asset_id,
+        asset.name AS asset_name,
+        corr.product_id,
+        product.name AS product_name,
+        corr.component_id,
+        component.name AS component_name,
+        corr.match_type,
+        corr.match_value,
+        corr.confidence,
+        corr.status,
+        corr.rationale,
+        CAST(corr.created_at AS TEXT) AS created_at,
+        CAST(corr.updated_at AS TEXT) AS updated_at
+    FROM product_security_cvecorrelation corr
+    LEFT JOIN assets_app_informationasset asset
+        ON asset.id = corr.asset_id AND asset.tenant_id = corr.tenant_id
+    LEFT JOIN product_security_product product
+        ON product.id = corr.product_id AND product.tenant_id = corr.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = corr.component_id AND component.tenant_id = corr.tenant_id
+    WHERE corr.tenant_id = ? AND corr.id = ?
+    "#
+}
+
+fn import_artifact_from_pg_row(
+    row: PgRow,
+) -> Result<ProductSecurityImportArtifactSummary, sqlx::Error> {
+    Ok(ProductSecurityImportArtifactSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        product_id: row.try_get("product_id")?,
+        product_name: row.try_get("product_name")?,
+        artifact_type: row.try_get("artifact_type")?,
+        file_name: row.try_get("file_name")?,
+        document_id: row.try_get("document_id")?,
+        format_name: row.try_get("format_name")?,
+        format_version: row.try_get("format_version")?,
+        validation_status: row.try_get("validation_status")?,
+        validation_errors: parse_json_string_array(row.try_get("validation_errors_json")?),
+        component_count: row.try_get("component_count")?,
+        matched_component_count: row.try_get("matched_component_count")?,
+        cve_count: row.try_get("cve_count")?,
+        created_by_id: row.try_get("created_by_id")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn import_artifact_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<ProductSecurityImportArtifactSummary, sqlx::Error> {
+    Ok(ProductSecurityImportArtifactSummary {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        product_id: row.try_get("product_id")?,
+        product_name: row.try_get("product_name")?,
+        artifact_type: row.try_get("artifact_type")?,
+        file_name: row.try_get("file_name")?,
+        document_id: row.try_get("document_id")?,
+        format_name: row.try_get("format_name")?,
+        format_version: row.try_get("format_version")?,
+        validation_status: row.try_get("validation_status")?,
+        validation_errors: parse_json_string_array(row.try_get("validation_errors_json")?),
+        component_count: row.try_get("component_count")?,
+        matched_component_count: row.try_get("matched_component_count")?,
+        cve_count: row.try_get("cve_count")?,
+        created_by_id: row.try_get("created_by_id")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 fn cve_correlation_from_pg_row(
@@ -4820,6 +5633,17 @@ fn normalize_vulnerability_status(value: &str) -> String {
         _ => "OPEN",
     }
     .to_string()
+}
+
+fn normalize_cve_correlation_status(value: &str) -> anyhow::Result<String> {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "SUGGESTED" => Ok("SUGGESTED".to_string()),
+        "ACCEPTED" => Ok("ACCEPTED".to_string()),
+        "REJECTED" => Ok("REJECTED".to_string()),
+        other => bail!(
+            "CVE-Korrelationsstatus '{other}' ist ungueltig. Erlaubt sind SUGGESTED, ACCEPTED, REJECTED."
+        ),
+    }
 }
 
 fn normalize_optional_date_text(value: &str) -> Option<String> {

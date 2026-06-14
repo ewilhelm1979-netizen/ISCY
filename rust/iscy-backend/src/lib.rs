@@ -484,6 +484,12 @@ struct WebControlStatusForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct WebCveCorrelationDecisionForm {
+    status: String,
+    rationale: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebCveLlmTestForm {
     prompt: Option<String>,
 }
@@ -685,6 +691,14 @@ pub struct ProductSecurityCveCorrelationResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub result: product_security_store::ProductSecurityCveCorrelationResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductSecurityCveCorrelationDecisionResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: product_security_store::ProductSecurityCveCorrelationDecisionResult,
 }
 
 #[derive(Debug, Serialize)]
@@ -3555,6 +3569,78 @@ async fn product_security_cve_correlations(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("CVE-Asset-Korrelationen konnten nicht erzeugt werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_cve_correlation_update(
+    Path(correlation_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<product_security_store::ProductSecurityCveCorrelationDecisionRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .update_cve_correlation(context.tenant_id, correlation_id, payload)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(ProductSecurityCveCorrelationDecisionResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "product_security_cve_correlation_not_found",
+                message: "CVE-Asset-Korrelation wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_product_security_cve_correlation",
+                message: format!("CVE-Asset-Korrelation konnte nicht aktualisiert werden: {err}"),
             }),
         )
             .into_response(),
@@ -8989,6 +9075,87 @@ async fn web_product_security(
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            let import_rows = overview
+                .import_artifacts
+                .iter()
+                .map(|artifact| {
+                    let errors = if artifact.validation_errors.is_empty() {
+                        "Keine".to_string()
+                    } else {
+                        artifact
+                            .validation_errors
+                            .iter()
+                            .map(|error| html_escape(error))
+                            .collect::<Vec<_>>()
+                            .join("<br>")
+                    };
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{} {}</td><td>{}</td><td>{}</td><td>{}/{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&artifact.artifact_type),
+                        html_escape(&artifact.file_name),
+                        html_escape(artifact.product_name.as_deref().unwrap_or("Tenantweit")),
+                        html_escape(&artifact.format_name),
+                        html_escape(&artifact.format_version),
+                        html_escape(&artifact.validation_status),
+                        errors,
+                        artifact.matched_component_count,
+                        artifact.component_count,
+                        artifact.cve_count,
+                        html_escape(&artifact.created_at),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let correlation_rows = overview
+                .cve_correlations
+                .iter()
+                .map(|correlation| {
+                    let actions = if can_write && correlation.status == "SUGGESTED" {
+                        format!(
+                            r#"<form method="post" action="{}" class="inline-form">
+                                <input type="hidden" name="status" value="ACCEPTED">
+                                <input type="hidden" name="rationale" value="Fachlich akzeptiert im Product-Security-Review.">
+                                <button type="submit">Akzeptieren</button>
+                              </form>
+                              <form method="post" action="{}" class="inline-form">
+                                <input type="hidden" name="status" value="REJECTED">
+                                <input type="hidden" name="rationale" value="Fachlich abgelehnt im Product-Security-Review.">
+                                <button type="submit">Ablehnen</button>
+                              </form>"#,
+                            web_path_with_context(
+                                &format!(
+                                    "/product-security/cve-correlations/{}",
+                                    correlation.id
+                                ),
+                                Some(&context),
+                            ),
+                            web_path_with_context(
+                                &format!(
+                                    "/product-security/cve-correlations/{}",
+                                    correlation.id
+                                ),
+                                Some(&context),
+                            ),
+                        )
+                    } else {
+                        "-".to_string()
+                    };
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code><br>{}</td><td>{}%</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&correlation.cve),
+                        html_escape(correlation.asset_name.as_deref().unwrap_or("-")),
+                        html_escape(correlation.product_name.as_deref().unwrap_or("-")),
+                        html_escape(correlation.component_name.as_deref().unwrap_or("-")),
+                        html_escape(&correlation.match_type),
+                        html_escape(&correlation.match_value),
+                        correlation.confidence,
+                        html_escape(&correlation.status),
+                        html_escape(&correlation.rationale),
+                        actions,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
             let product_options = overview
                 .products
                 .iter()
@@ -9079,6 +9246,20 @@ async fn web_product_security(
                     </table>
                   </article>
                   {}
+                  <article class="panel wide">
+                    <h2>Import-Historie</h2>
+                    <table>
+                      <thead><tr><th>Typ</th><th>Datei</th><th>Produkt</th><th>Format</th><th>Status</th><th>Validierung</th><th>SBOM</th><th>CVEs</th><th>Zeit</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>CVE-Asset-Korrelationen</h2>
+                    <table>
+                      <thead><tr><th>CVE</th><th>Asset</th><th>Produkt</th><th>Komponente</th><th>Match</th><th>Confidence</th><th>Status</th><th>Rationale</th><th>Review</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
                 </section>
                 "#,
                 overview.tenant_id,
@@ -9107,6 +9288,16 @@ async fn web_product_security(
                     snapshot_rows
                 },
                 import_panel,
+                if import_rows.is_empty() {
+                    web_empty_row(9, "Noch keine CSAF-/SBOM-Importe vorhanden.")
+                } else {
+                    import_rows
+                },
+                if correlation_rows.is_empty() {
+                    web_empty_row(9, "Noch keine CVE-Asset-Korrelationen vorhanden.")
+                } else {
+                    correlation_rows
+                },
             );
             web_page(
                 "Product Security",
@@ -9256,6 +9447,68 @@ async fn web_product_security_cve_correlations_submit(
     {
         Ok(_) => Redirect::to(&web_path_with_context("/product-security/", Some(&context)))
             .into_response(),
+        Err(err) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_product_security_cve_correlation_update(
+    Path(correlation_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebCveCorrelationDecisionForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Product Security", "/product-security/").into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Product Security",
+        )
+        .into_response();
+    };
+    let payload = product_security_store::ProductSecurityCveCorrelationDecisionRequest {
+        status: form.status,
+        rationale: form.rationale,
+    };
+    match store
+        .update_cve_correlation(auth_context.tenant_id, correlation_id, payload)
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context("/product-security/", Some(&context)))
+            .into_response(),
+        Ok(None) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "CVE-Asset-Korrelation wurde nicht gefunden.",
+        )
+        .into_response(),
         Err(err) => web_error_page(
             "Product Security",
             "/product-security/",
@@ -14055,6 +14308,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/product-security/cve-correlations",
             post(product_security_cve_correlations),
         )
+        .route(
+            "/api/v1/product-security/cve-correlations/{correlation_id}",
+            patch(product_security_cve_correlation_update),
+        )
         .route("/api/v1/risks", get(risk_register).post(risk_create))
         .route(
             "/api/v1/risks/{risk_id}",
@@ -14230,6 +14487,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/product-security/cve-correlations",
             post(web_product_security_cve_correlations_submit),
+        )
+        .route(
+            "/product-security/cve-correlations/{correlation_id}",
+            post(web_product_security_cve_correlation_update),
         )
         .route("/cves/", get(web_cves).post(web_cves_submit))
         .route(

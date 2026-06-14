@@ -2031,11 +2031,24 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
         "document": {
             "document": {
                 "title": "ISCY Import Advisory",
-                "category": "Security Advisory",
+                "category": "csaf_security_advisory",
+                "csaf_version": "2.0",
+                "publisher": {
+                    "category": "vendor",
+                    "name": "ISCY",
+                    "namespace": "https://iscy.local/security"
+                },
                 "tracking": {
+                    "current_release_date": "2026-06-14T08:00:00Z",
                     "id": "ISCY-2026-ADV-IMPORT",
+                    "initial_release_date": "2026-06-14T08:00:00Z",
                     "status": "final",
-                    "revision_history": [{"number": "1"}]
+                    "version": "1.0.0",
+                    "revision_history": [{
+                        "date": "2026-06-14T08:00:00Z",
+                        "number": "1",
+                        "summary": "Initial advisory"
+                    }]
                 }
             },
             "vulnerabilities": [{
@@ -2080,8 +2093,9 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
         "document": {
             "bomFormat": "CycloneDX",
             "specVersion": "1.6",
-            "serialNumber": "urn:uuid:iscy-sbom-import",
+            "serialNumber": "urn:uuid:123e4567-e89b-12d3-a456-426614174000",
             "components": [{
+                "type": "firmware",
                 "name": "Gateway Firmware",
                 "version": "1.0.3",
                 "purl": "pkg:generic/iscy/sensor-gateway-firmware@1.0.3",
@@ -2119,6 +2133,7 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
     assert_eq!(matched_count, 1);
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -2139,6 +2154,101 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
         .unwrap()
         .iter()
         .any(|item| item["asset_id"] == 700 && item["match_type"] == "CPE"));
+    let correlation_id = payload["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["asset_id"] == 700 && item["match_type"] == "CPE")
+        .and_then(|item| item["id"].as_i64())
+        .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/product-security/cve-correlations/{correlation_id}"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(
+                    r#"{"status":"ACCEPTED","rationale":"Reviewed in PSIRT triage"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["correlation"]["status"], "ACCEPTED");
+}
+
+#[tokio::test]
+async fn product_security_imports_keep_schema_validation_errors_in_history() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let invalid_csaf_payload = serde_json::json!({
+        "product_id": 100,
+        "file_name": "invalid-csaf.json",
+        "document": {
+            "document": {
+                "title": "Broken CSAF",
+                "tracking": {"id": "BROKEN", "status": "final"}
+            },
+            "vulnerabilities": [{
+                "cve": "not-a-cve",
+                "product_status": {}
+            }]
+        }
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/import/csaf")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(invalid_csaf_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["validation_status"], "INVALID");
+    assert!(payload["validation_errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item.as_str().unwrap_or("").contains("csaf_version")));
+    let invalid_artifacts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_importartifact WHERE tenant_id = 42 AND file_name = 'invalid-csaf.json' AND validation_status = 'INVALID'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(invalid_artifacts, 1);
+    let advisory_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_securityadvisory WHERE tenant_id = 42 AND csaf_document_id = 'BROKEN'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(advisory_count, 0);
 }
 
 #[tokio::test]
@@ -5808,15 +5918,52 @@ async fn rust_web_product_security_renders_overview_from_database() {
         .unwrap();
     create_product_security_tables(&pool).await;
     insert_product_security_fixture(&pool).await;
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_importartifact (
+            id, tenant_id, product_id, artifact_type, file_name, document_id,
+            format_name, format_version, validation_status, validation_errors_json,
+            component_count, matched_component_count, cve_count, created_by_id,
+            created_at, updated_at
+        )
+        VALUES (
+            900, 42, 100, 'CSAF', 'invalid-csaf.json', 'BROKEN',
+            'CSAF', '2.0', 'INVALID', '["CSAF document.csaf_version fehlt."]',
+            0, 0, 1, 7, '2026-06-14T08:00:00Z', '2026-06-14T08:00:00Z'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_cvecorrelation (
+            id, tenant_id, cve, asset_id, product_id, component_id, match_type,
+            match_value, confidence, status, rationale, created_at, updated_at
+        )
+        VALUES (
+            901, 42, 'CVE-2026-0001', 700, 100, 250, 'CPE',
+            'cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*',
+            95, 'SUGGESTED', 'CPE match', '2026-06-14T08:00:00Z', '2026-06-14T08:00:00Z'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let app =
         app_router_with_state(AppState::default().with_product_security_store(Some(
             ProductSecurityStore::from_sqlite_pool(pool.clone()),
         )));
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/product-security/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -5831,7 +5978,34 @@ async fn rust_web_product_security_renders_overview_from_database() {
     assert!(html.contains("Sensor Gateway"));
     assert!(html.contains("Industrial edge device"));
     assert!(html.contains("OT/IACS"));
+    assert!(html.contains("Import-Historie"));
+    assert!(html.contains("CSAF document.csaf_version fehlt."));
+    assert!(html.contains("CVE-Asset-Korrelationen"));
+    assert!(html.contains("Akzeptieren"));
     assert!(!html.contains("Rust-Webroute aktiv."));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/product-security/cve-correlations/901?tenant_id=42&user_id=7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    "status=ACCEPTED&rationale=Accepted%20from%20web%20review",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM product_security_cvecorrelation WHERE id = 901")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "ACCEPTED");
 }
 
 #[tokio::test]
