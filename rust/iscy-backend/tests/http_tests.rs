@@ -7261,6 +7261,49 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
 }
 
 #[tokio::test]
+async fn rust_db_admin_seed_sets_superuser_for_existing_sqlite_user_table() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE accounts_user (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            password varchar(128) NOT NULL DEFAULT '',
+            last_login TEXT NULL,
+            is_superuser bool NOT NULL,
+            username varchar(150) NOT NULL UNIQUE,
+            first_name varchar(150) NOT NULL DEFAULT '',
+            last_name varchar(150) NOT NULL DEFAULT '',
+            email varchar(254) NOT NULL DEFAULT '',
+            is_staff bool NOT NULL DEFAULT 0,
+            is_active bool NOT NULL DEFAULT 1,
+            date_joined TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            role varchar(32) NOT NULL DEFAULT 'CONTRIBUTOR',
+            job_title varchar(255) NOT NULL DEFAULT '',
+            tenant_id INTEGER NULL
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+
+    let is_superuser: i64 =
+        sqlx::query_scalar("SELECT is_superuser FROM accounts_user WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(is_superuser, 1);
+}
+
+#[tokio::test]
 async fn nvd_import_endpoint_fetches_and_persists_cve_record() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)

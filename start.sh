@@ -13,17 +13,38 @@ if [ ! -f ".env" ] && [ -f ".env.example" ]; then
   info ".env aus .env.example erstellt."
 fi
 
+ENV_FILE_READABLE=0
+ENV_FILE_WRITABLE=0
+if [ -f ".env" ]; then
+  if [ -r ".env" ]; then
+    ENV_FILE_READABLE=1
+  else
+    warn ".env ist vorhanden, aber nicht lesbar; nutze Defaults und exportierte Umgebungsvariablen."
+  fi
+  if [ -w ".env" ]; then
+    ENV_FILE_WRITABLE=1
+  else
+    warn ".env ist vorhanden, aber nicht schreibbar; Startwerte werden nicht in .env aktualisiert."
+  fi
+else
+  ENV_FILE_READABLE=1
+  ENV_FILE_WRITABLE=1
+fi
+
 env_file_value() {
   local key="$1"
-  if [ -f ".env" ]; then
+  if [ -f ".env" ] && [ "$ENV_FILE_READABLE" = "1" ]; then
     awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' .env
   fi
 }
 
 set_env_var() {
   local key="$1" value="$2" tmp
+  if [ "$ENV_FILE_WRITABLE" != "1" ]; then
+    return 0
+  fi
   tmp="$(mktemp)"
-  if [ -f ".env" ]; then
+  if [ -f ".env" ] && [ "$ENV_FILE_READABLE" = "1" ]; then
     awk -v key="$key" -v value="$value" '
       BEGIN { found = 0 }
       $0 ~ "^" key "=" {

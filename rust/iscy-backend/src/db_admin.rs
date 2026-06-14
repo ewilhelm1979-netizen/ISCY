@@ -2835,13 +2835,14 @@ INSERT OR IGNORE INTO organizations_tenant (
     'Product security scope prepared for Rust cutover'
 );
 INSERT INTO accounts_user (
-    id, password, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
+    id, password, is_superuser, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
 ) VALUES (
-    1, 'pbkdf2_sha256$720000$iscy-demo-salt$dHYZBIWxS3abL+0r4Rp7w3kbLXLSAFUrGq/HaPlAVrY=',
+    1, 'pbkdf2_sha256$720000$iscy-demo-salt$dHYZBIWxS3abL+0r4Rp7w3kbLXLSAFUrGq/HaPlAVrY=', 1,
     'admin', 'Demo', 'Admin', 'admin@example.com', 1, 1, '2026-04-22T10:00:00Z',
     'ADMIN', 'Security Lead', 1
 ) ON CONFLICT(id) DO UPDATE SET
     password = excluded.password,
+    is_superuser = excluded.is_superuser,
     username = excluded.username,
     first_name = excluded.first_name,
     last_name = excluded.last_name,
@@ -3177,13 +3178,14 @@ INSERT INTO organizations_tenant (
     'Product security scope prepared for Rust cutover'
 ) ON CONFLICT (id) DO NOTHING;
 INSERT INTO accounts_user (
-    id, password, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
+    id, password, is_superuser, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
 ) VALUES (
-    1, 'pbkdf2_sha256$720000$iscy-demo-salt$dHYZBIWxS3abL+0r4Rp7w3kbLXLSAFUrGq/HaPlAVrY=',
+    1, 'pbkdf2_sha256$720000$iscy-demo-salt$dHYZBIWxS3abL+0r4Rp7w3kbLXLSAFUrGq/HaPlAVrY=', TRUE,
     'admin', 'Demo', 'Admin', 'admin@example.com', TRUE, TRUE, '2026-04-22T10:00:00Z',
     'ADMIN', 'Security Lead', 1
 ) ON CONFLICT (id) DO UPDATE SET
     password = EXCLUDED.password,
+    is_superuser = EXCLUDED.is_superuser,
     username = EXCLUDED.username,
     first_name = EXCLUDED.first_name,
     last_name = EXCLUDED.last_name,
