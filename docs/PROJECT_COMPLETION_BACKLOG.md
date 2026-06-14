@@ -4,7 +4,7 @@
 
 - Rust-only Runtime ist abgeschlossen.
 - Product Security verarbeitet CSAF-/CycloneDX-/SPDX-Importe, CVE-Asset-Korrelationen, automatisch erzeugte CVE-Risiken und Product-Security-Roadmap-Tasks.
-- Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence und eine gebuendelte CVE-Risiko-Review-Queue.
+- Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence und eine gebuendelte CVE-Risiko-Review-Queue mit Filtern und Bulk-Aktionen.
 - Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck.
 
 ## Prioritaet P0 (vor breitem Produktivrollout)

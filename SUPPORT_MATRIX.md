@@ -25,7 +25,7 @@
 | CycloneDX/SPDX SBOM import | JSON upload, component extraction and CPE/PURL matching | Supported |
 | CVE-Asset correlation | Suggested, accepted and rejected correlation workflow | Supported |
 | Generated CVE risk work | Accepted correlations can create risk and roadmap work with Evidence-Key linkage | Supported |
-| Review queue | Product-Security UI shows open CVE reviews and missing Evidence | Supported |
+| Review queue | Product-Security UI shows open CVE reviews, missing Evidence, missing risks, filters and bulk review actions | Supported |
 | Evidence return flow | Evidence uploads started from Product Security, Risk or Roadmap return to the source page | Supported |
 
 ## Zero-Trust Agent Support

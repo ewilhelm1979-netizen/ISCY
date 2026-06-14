@@ -1,8 +1,10 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.3 / Rust 0.3.0)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.4 / Rust 0.3.0)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
+
+ISCY wurde in dieser Codebasis mit Unterstuetzung von OpenAI Codex entwickelt, nach Rust migriert und technisch/fachlich plausibilisiert. Die fachliche Ausrichtung wurde gegen offizielle EU-Quellen zu NIS2, DORA, Cyber Resilience Act und EU AI Act sowie gegen gaengige ISMS-, Product-Security-, CVE-/SBOM-/CSAF-, Evidence- und Incident-Response-Praktiken geprueft. Das ist keine externe Zertifizierung und keine Rechtsberatung, aber eine nachvollziehbare fachliche Arbeitsgrundlage.
 
 ## 1. Was ISCY ist
 
@@ -509,7 +511,9 @@ Aktueller Rust-Funktionsumfang:
 - CVE-Asset-Korrelation ueber CPE oder PURL mit Akzeptieren/Ablehnen-Workflow
 - automatische Erzeugung von CVE-Risiken und Product-Security-Roadmap-Tasks aus akzeptierten Korrelationen
 - Dashboard-Kennzahlen fuer offene CVE-Reviews und fehlende Evidence
-- gebuendelte CVE-Risiko-Review-Queue mit Behandeln, Akzeptieren und Mitigiert markieren
+- gebuendelte CVE-Risiko-Review-Queue mit Filtern fuer offene Reviews, fehlende Evidence und fehlende Risiken
+- Bulk-Aktionen fuer ausgewaehlte CVE-Reviews: Risiko/Roadmap erzeugen, Behandlung freigeben, Restrisiko akzeptieren oder als mitigiert markieren
+- Einzelaktionen fuer Behandeln, Akzeptieren und Mitigiert markieren
 - Evidence-Vorbefuellung und Ruecksprung zur Ausgangsseite nach Upload
 
 ### 5.16 Vulnerability Intelligence
@@ -616,7 +620,7 @@ Empfohlene Kette fuer die operative Bearbeitung:
 
 Merksatz: Erst verstehen, dann bewerten, dann eindaemmen, dann eskalieren - wenn Risiko oder Komplexitaet es verlangen.
 
-### 6.7 ISCY lokal starten
+### 6.7 ISCY lokal auf NixOS starten
 
 Einfachster lokaler Start:
 
@@ -643,6 +647,8 @@ DATABASE_URL=sqlite:///db.sqlite3 RUST_BACKEND_BIND=127.0.0.1:9000 nix run .#isc
 Wichtige lokale Pruefbefehle:
 
 ```bash
+nix develop --command make rust-smoke
+nix develop --command make team-test
 make rust-test
 make rust-smoke
 make team-test

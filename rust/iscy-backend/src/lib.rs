@@ -490,6 +490,14 @@ struct WebCveCorrelationDecisionForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct WebProductSecurityCveReviewBulkForm {
+    action: String,
+    #[serde(default, deserialize_with = "deserialize_form_i64_list")]
+    correlation_id: Vec<i64>,
+    review_filter: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebRiskReviewForm {
     action: String,
     review_notes: Option<String>,
@@ -606,6 +614,33 @@ where
             OneOrMany::Many(values) => values,
         }),
     )
+}
+
+fn deserialize_form_i64_list<'de, D>(deserializer: D) -> Result<Vec<i64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+
+    Option::<OneOrMany>::deserialize(deserializer)?
+        .map(|value| match value {
+            OneOrMany::One(value) => vec![value],
+            OneOrMany::Many(values) => values,
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            value.trim().parse::<i64>().map_err(|_| {
+                serde::de::Error::custom(format!("ungueltige ID in Formularliste: {value}"))
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Serialize)]
@@ -864,6 +899,7 @@ pub struct WebContextQuery {
     pub linked_requirement: Option<String>,
     pub evidence_status: Option<String>,
     pub return_to: Option<String>,
+    pub review_filter: Option<String>,
     pub control_id: Option<i64>,
     pub incident_id: Option<i64>,
     pub requirement_id: Option<i64>,
@@ -9679,11 +9715,50 @@ async fn web_product_security(
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            let active_review_filter =
+                product_security_review_filter(query.review_filter.as_deref());
             let product_security_return =
-                web_path_with_context("/product-security/", Some(&context));
+                product_security_review_filter_path(&context, active_review_filter);
+            let risk_missing_count = overview
+                .cve_risk_review_queue
+                .iter()
+                .filter(|item| item.risk_id.is_none())
+                .count() as i64;
+            let review_filter_links = product_security_review_filter_links(
+                &context,
+                active_review_filter,
+                overview.cve_risk_review_queue.len() as i64,
+                overview.review_metrics.open_risk_reviews,
+                overview.review_metrics.evidence_missing,
+                risk_missing_count,
+            );
+            let review_bulk_controls = if can_write {
+                format!(
+                    r#"<form id="product-security-review-bulk" method="post" action="{}" class="inline-form">
+                        <input type="hidden" name="review_filter" value="{}">
+                        <label>Bulk-Aktion
+                          <select name="action">
+                            <option value="generate_work">Risiko/Roadmap erzeugen</option>
+                            <option value="approve_treatment">Behandlung freigeben</option>
+                            <option value="accept_risk">Restrisiko akzeptieren</option>
+                            <option value="mark_mitigated">Als mitigiert markieren</option>
+                          </select>
+                        </label>
+                        <button type="submit">Auf Auswahl anwenden</button>
+                      </form>"#,
+                    web_path_with_context(
+                        "/product-security/cve-risk-reviews/bulk",
+                        Some(&context),
+                    ),
+                    html_escape(active_review_filter),
+                )
+            } else {
+                String::new()
+            };
             let review_queue_rows = overview
                 .cve_risk_review_queue
                 .iter()
+                .filter(|item| product_security_review_filter_matches(item, active_review_filter))
                 .map(|item| {
                     let target = [
                         item.asset_name.as_deref(),
@@ -9729,6 +9804,15 @@ async fn web_product_security(
                     } else {
                         "Abgeschlossen"
                     };
+                    let selection = if can_write {
+                        format!(
+                            r#"<input form="product-security-review-bulk" type="checkbox" name="correlation_id" value="{}" aria-label="{} auswaehlen">"#,
+                            item.correlation_id,
+                            html_escape(&item.cve),
+                        )
+                    } else {
+                        "-".to_string()
+                    };
                     let actions = if can_write {
                         if let Some(risk_id) = item.risk_id {
                             let action = web_path_with_context(
@@ -9768,7 +9852,8 @@ async fn web_product_security(
                         "-".to_string()
                     };
                     format!(
-                        r#"<tr><td>{}<br><small>{}% Confidence</small></td><td>{}</td><td>{}<br><small>{} · {}</small></td><td>{}<br><small>{}</small></td><td>{}</td><td><a href="{}">Evidence</a></td><td>{}</td></tr>"#,
+                        r#"<tr><td>{}</td><td>{}<br><small>{}% Confidence</small></td><td>{}</td><td>{}<br><small>{} · {}</small></td><td>{}<br><small>{}</small></td><td>{}</td><td><a href="{}">Evidence</a></td><td>{}</td></tr>"#,
+                        selection,
                         html_escape(&item.cve),
                         item.confidence,
                         html_escape(if target.is_empty() { "-" } else { target.as_str() }),
@@ -9902,8 +9987,10 @@ async fn web_product_security(
                   </article>
                   <article class="panel wide">
                     <h2>CVE-Risiko-Review-Queue</h2>
+                    {}
+                    {}
                     <table>
-                      <thead><tr><th>CVE</th><th>Ziel</th><th>Risiko</th><th>Roadmap</th><th>Evidence</th><th>Verknuepfen</th><th>Review</th></tr></thead>
+                      <thead><tr><th>Auswahl</th><th>CVE</th><th>Ziel</th><th>Risiko</th><th>Roadmap</th><th>Evidence</th><th>Verknuepfen</th><th>Review</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                   </article>
@@ -9953,8 +10040,16 @@ async fn web_product_security(
                 } else {
                     import_rows
                 },
+                review_filter_links,
+                review_bulk_controls,
                 if review_queue_rows.is_empty() {
-                    web_empty_row(7, "Keine akzeptierten CVE-Risiken in Review.")
+                    web_empty_row(
+                        8,
+                        &format!(
+                            "Keine CVE-Risiken fuer Filter {}.",
+                            product_security_review_filter_label(active_review_filter)
+                        ),
+                    )
                 } else {
                     review_queue_rows
                 },
@@ -10320,6 +10415,146 @@ async fn web_product_security_cve_correlation_generate_work(
     }
 }
 
+async fn web_product_security_cve_reviews_bulk(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebProductSecurityCveReviewBulkForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Product Security", "/product-security/").into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let redirect_path = product_security_review_filter_path(
+        &context,
+        product_security_review_filter(form.review_filter.as_deref()),
+    );
+    let selected_correlation_ids = form
+        .correlation_id
+        .iter()
+        .copied()
+        .filter(|value| *value > 0)
+        .collect::<Vec<_>>();
+    if selected_correlation_ids.is_empty() {
+        return Redirect::to(&redirect_path).into_response();
+    }
+    let Some(store) = state.product_security_store.clone() else {
+        return web_store_missing(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Product Security",
+        )
+        .into_response();
+    };
+    match form.action.trim() {
+        "generate_work" => {
+            for correlation_id in selected_correlation_ids {
+                if let Err(err) = store
+                    .generate_work_for_accepted_correlation(auth_context.tenant_id, correlation_id)
+                    .await
+                {
+                    return web_error_page(
+                        "Product Security",
+                        "/product-security/",
+                        &context,
+                        &err.to_string(),
+                    )
+                    .into_response();
+                }
+            }
+            Redirect::to(&redirect_path).into_response()
+        }
+        "approve_treatment" | "accept_risk" | "mark_mitigated" => {
+            let Some(risk_store) = state.risk_store.clone() else {
+                return web_store_missing(
+                    "Product Security",
+                    "/product-security/",
+                    &context,
+                    "Risk Review",
+                )
+                .into_response();
+            };
+            let overview = match store.overview(auth_context.tenant_id, 500, 20).await {
+                Ok(Some(overview)) => overview,
+                Ok(None) => {
+                    return web_error_page(
+                        "Product Security",
+                        "/product-security/",
+                        &context,
+                        "Tenant wurde fuer diesen Kontext nicht gefunden.",
+                    )
+                    .into_response();
+                }
+                Err(err) => {
+                    return web_error_page(
+                        "Product Security",
+                        "/product-security/",
+                        &context,
+                        &err.to_string(),
+                    )
+                    .into_response();
+                }
+            };
+            for item in overview
+                .cve_risk_review_queue
+                .iter()
+                .filter(|item| selected_correlation_ids.contains(&item.correlation_id))
+            {
+                let Some(risk_id) = item.risk_id else {
+                    continue;
+                };
+                let payload = risk_store::RiskReviewRequest {
+                    action: form.action.clone(),
+                    review_notes: Some(
+                        product_security_bulk_review_notes(&form.action).to_string(),
+                    ),
+                };
+                if let Err(err) = risk_store
+                    .review_risk(
+                        auth_context.tenant_id,
+                        risk_id,
+                        auth_context.user_id,
+                        payload,
+                    )
+                    .await
+                {
+                    return web_error_page(
+                        "Product Security",
+                        "/product-security/",
+                        &context,
+                        &err.to_string(),
+                    )
+                    .into_response();
+                }
+            }
+            Redirect::to(&redirect_path).into_response()
+        }
+        _ => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Unbekannte Bulk-Aktion fuer CVE-Reviews.",
+        )
+        .into_response(),
+    }
+}
+
 async fn web_product_security_cve_correlations_submit(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -10430,6 +10665,92 @@ async fn web_product_security_cve_correlation_update(
         .into_response(),
     }
 }
+
+fn product_security_review_filter(value: Option<&str>) -> &'static str {
+    match value.unwrap_or_default().trim() {
+        "review_open" => "review_open",
+        "evidence_missing" => "evidence_missing",
+        "risk_missing" => "risk_missing",
+        _ => "all",
+    }
+}
+
+fn product_security_review_filter_label(filter: &str) -> &'static str {
+    match product_security_review_filter(Some(filter)) {
+        "review_open" => "Review offen",
+        "evidence_missing" => "Evidence fehlt",
+        "risk_missing" => "Risiko fehlt",
+        _ => "Alle",
+    }
+}
+
+fn product_security_review_filter_matches(
+    item: &product_security_store::ProductSecurityCveRiskReviewSummary,
+    filter: &str,
+) -> bool {
+    match product_security_review_filter(Some(filter)) {
+        "review_open" => item.needs_review,
+        "evidence_missing" => item.evidence_missing,
+        "risk_missing" => item.risk_id.is_none(),
+        _ => true,
+    }
+}
+
+fn product_security_review_filter_path(context: &WebContext, filter: &str) -> String {
+    match product_security_review_filter(Some(filter)) {
+        "all" => web_path_with_context("/product-security/", Some(context)),
+        normalized => web_path_with_context(
+            &format!(
+                "/product-security/?review_filter={}",
+                url_component(normalized)
+            ),
+            Some(context),
+        ),
+    }
+}
+
+fn product_security_review_filter_links(
+    context: &WebContext,
+    active_filter: &str,
+    all_count: i64,
+    review_open_count: i64,
+    evidence_missing_count: i64,
+    risk_missing_count: i64,
+) -> String {
+    [
+        ("all", "Alle", all_count),
+        ("review_open", "Review offen", review_open_count),
+        ("evidence_missing", "Evidence fehlt", evidence_missing_count),
+        ("risk_missing", "Risiko fehlt", risk_missing_count),
+    ]
+    .iter()
+    .map(|(filter, label, count)| {
+        let active = product_security_review_filter(Some(active_filter)) == *filter;
+        format!(
+            r#"<a href="{}"{}>{} ({})</a>"#,
+            product_security_review_filter_path(context, filter),
+            if active { r#" class="active""# } else { "" },
+            html_escape(label),
+            count,
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn product_security_bulk_review_notes(action: &str) -> &'static str {
+    match action.trim() {
+        "approve_treatment" => {
+            "CVE-Risiken wurden per Product-Security-Bulk-Review zur Behandlung freigegeben."
+        }
+        "accept_risk" => "CVE-Restrisiken wurden per Product-Security-Bulk-Review akzeptiert.",
+        "mark_mitigated" => {
+            "CVE-Massnahmen wurden per Product-Security-Bulk-Review als mitigiert markiert."
+        }
+        _ => "CVE-Risiken wurden per Product-Security-Bulk-Review geprueft.",
+    }
+}
+
 fn selected_attr(selected: bool) -> &'static str {
     if selected {
         " selected"
@@ -15566,6 +15887,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/product-security/cve-correlations/generate-work",
             post(web_product_security_cve_correlation_generate_work),
+        )
+        .route(
+            "/product-security/cve-risk-reviews/bulk",
+            post(web_product_security_cve_reviews_bulk),
         )
         .route(
             "/product-security/cve-correlations/{correlation_id}",

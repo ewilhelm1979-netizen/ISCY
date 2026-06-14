@@ -11,7 +11,7 @@ Der Rust-Webstack ist der produktive Webstack.
 - `db_admin` initialisiert operative Tabellen und Demo-/Katalogdaten.
 - `iscy-canary` uebernimmt NVD-/CVE-Canary- und Importjobs.
 - Nginx ist nur Reverse Proxy fuer Stage/Production.
-- Product Security, Risk, Roadmap und Evidence sind fachlich gekoppelt: akzeptierte CVE-Korrelationen koennen Risiken und Roadmap-Tasks erzeugen, Evidence-Keys halten die Nachweisverknuepfung zusammen.
+- Product Security, Risk, Roadmap und Evidence sind fachlich gekoppelt: akzeptierte CVE-Korrelationen koennen Risiken und Roadmap-Tasks erzeugen, die CVE-Risiko-Review-Queue kann gefiltert und per Bulk-Aktion bearbeitet werden, Evidence-Keys halten die Nachweisverknuepfung zusammen.
 
 ## Abgeloeste Komponenten
 

@@ -1,10 +1,23 @@
-# ISCY V23.7.3 / Rust 0.3.0
+# ISCY V23.7.4 / Rust 0.3.0
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
 Der Runtime-Cutover nach Rust ist abgeschlossen: Die produktive Anwendung laeuft ueber den Rust-Axum-Service in `rust/iscy-backend`. Die fruehere Django/Python-Anwendung, ihre Templates, Settings, Requirements und Startpfade wurden aus dem Repository entfernt.
 
-## Lokaler Start
+## Projekt- und Pruefhinweis
+
+Dieses Projekt wurde mit Unterstuetzung von OpenAI Codex entwickelt, iterativ migriert und technisch/fachlich plausibilisiert. Die fachliche Pruefung orientiert sich an offiziellen Quellen und aktuellen Sicherheitspraktiken zu NIS2, DORA, Cyber Resilience Act, EU AI Act, DSGVO, ISO-27001-ISMS-Arbeit, CVE-/SBOM-/CSAF-Verarbeitung, Evidence-Steuerung, Incident Response und risikobasierter Roadmap-Planung.
+
+Der Stand ist damit fachlich konsistent und nach aktuellem Architekturverstaendnis sinnvoll aufgebaut: ISCY trennt keine Regulierungen in Silos, sondern verbindet Controls, Risiken, Assets, Product Security, Incidents, Evidence und Roadmap-Arbeit in einem nachvollziehbaren Governance-Modell. Das ersetzt keine externe Zertifizierung, Rechtsberatung oder formale Auditfreigabe, schafft aber eine belastbare fachliche Arbeitsbasis.
+
+Fachliche Referenzen:
+
+- NIS2: [Richtlinie (EU) 2022/2555](https://eur-lex.europa.eu/eli/dir/2022/2555/oj), insbesondere Cybersecurity-Risikomanagement und Meldepflichten
+- DORA: [Verordnung (EU) 2022/2554](https://eur-lex.europa.eu/eli/reg/2022/2554/oj), insbesondere IKT-Risikomanagement, Incident Management, Resilienztests und IKT-Drittparteienrisiko
+- Cyber Resilience Act: [Verordnung (EU) 2024/2847](https://eur-lex.europa.eu/eli/reg/2024/2847/oj), insbesondere Product Security, Support-Zeitraeume, Vulnerability Handling und Security Updates
+- EU AI Act: [Verordnung (EU) 2024/1689](https://eur-lex.europa.eu/eli/reg/2024/1689/oj), insbesondere Risk Management, Logging, Transparenz, Robustheit und Cybersecurity fuer Hochrisiko-KI
+
+## ISCY lokal auf NixOS starten
 
 ```bash
 ./start.sh
@@ -29,6 +42,13 @@ Healthcheck:
 
 ```bash
 curl -fsS http://127.0.0.1:9000/health
+```
+
+Kurzpruefung fuer Betrieb und Regression:
+
+```bash
+nix develop --command make rust-smoke
+nix develop --command make team-test
 ```
 
 ## Docker Compose
@@ -97,7 +117,7 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 
 Incidents werden als Rust-Fallakten unter `/incidents/` gefuehrt. Detailseiten unter `/incidents/{id}` erlauben die Bearbeitung von Typ, Runbook, Status, Severity, Meldezeitpunkten und Behoerdenreferenz; Statuswechsel, Anlage, manuelle Timeline-Notizen und incidentbezogene Evidence-Uploads werden als Timeline-/Audit-Events in der Fallakte dokumentiert. Tenantbezogene Runbook-Vorlagen stehen ueber `/api/v1/incidents/runbook-templates` und im Incident-Formular bereit. Verknuepfte Evidence wird direkt in der Fallakte angezeigt und kann dort hochgeladen werden. Das NIS2-Meldepaket inklusive Audit-Timeline kann als Markdown, HTML oder PDF ueber `/incidents/{id}/nis2-export`, `/incidents/{id}/nis2-export.html`, `/incidents/{id}/nis2-export.pdf` sowie die entsprechenden `/api/v1/incidents/{id}/...` Endpunkte exportiert werden.
 
-Product Security wird unter `/product-security/` als Rust-Arbeitsbereich gefuehrt. CSAF-, CycloneDX- und SPDX-Importe werden historisiert, validiert und ueber Detailseiten mit Validierungsfehlern sowie Komponenten-Matches angezeigt. CVE-Asset-Korrelationen koennen vorgeschlagen, akzeptiert oder abgelehnt werden; akzeptierte Korrelationen erzeugen bei Bedarf Risiko- und Roadmap-Arbeit mit stabilem Evidence-Key. Das Dashboard zeigt offene CVE-Reviews und fehlende Evidence, buendelt automatisch erzeugte CVE-Risiken in einer Review-Queue und verlinkt Evidence-Uploads nach dem Speichern zur Ausgangsseite zurueck.
+Product Security wird unter `/product-security/` als Rust-Arbeitsbereich gefuehrt. CSAF-, CycloneDX- und SPDX-Importe werden historisiert, validiert und ueber Detailseiten mit Validierungsfehlern sowie Komponenten-Matches angezeigt. CVE-Asset-Korrelationen koennen vorgeschlagen, akzeptiert oder abgelehnt werden; akzeptierte Korrelationen erzeugen bei Bedarf Risiko- und Roadmap-Arbeit mit stabilem Evidence-Key. Das Dashboard zeigt offene CVE-Reviews und fehlende Evidence, buendelt automatisch erzeugte CVE-Risiken in einer Review-Queue, filtert nach offenen Reviews, fehlender Evidence oder fehlendem Risiko, bietet Bulk-Aktionen fuer ausgewaehlte CVE-Reviews und verlinkt Evidence-Uploads nach dem Speichern zur Ausgangsseite zurueck.
 
 Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel, Beschreibung, Linked Requirement, Status und Ruecksprungziel vor. Dadurch kann ein Nachweis direkt aus dem fachlichen Kontext erstellt werden und landet nach dem Upload wieder dort, wo die Arbeit begonnen hat.
 

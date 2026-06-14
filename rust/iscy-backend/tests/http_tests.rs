@@ -6213,10 +6213,11 @@ async fn rust_web_product_security_renders_overview_from_database() {
     .execute(&pool)
     .await
     .unwrap();
-    let app =
-        app_router_with_state(AppState::default().with_product_security_store(Some(
-            ProductSecurityStore::from_sqlite_pool(pool.clone()),
-        )));
+    let app = app_router_with_state(
+        AppState::default()
+            .with_product_security_store(Some(ProductSecurityStore::from_sqlite_pool(pool.clone())))
+            .with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
 
     let response = app
         .clone()
@@ -6273,6 +6274,11 @@ async fn rust_web_product_security_renders_overview_from_database() {
     assert!(html.contains("CVE-Reviews offen"));
     assert!(html.contains("Evidence fehlt"));
     assert!(html.contains("CVE-Risiko-Review-Queue"));
+    assert!(html.contains("Review offen (1)"));
+    assert!(html.contains("Evidence fehlt (1)"));
+    assert!(html.contains("Risiko fehlt (0)"));
+    assert!(html.contains("Bulk-Aktion"));
+    assert!(html.contains(r#"name="correlation_id" value="902""#));
     assert!(html.contains("CVE-2026-0002 betrifft Customer Portal"));
     assert!(html.contains("CVE-Massnahme umgesetzt und Evidence verknuepft."));
     assert!(html.contains("return_to=%2Fproduct-security%2F%3Ftenant_id%3D42%26user_id%3D7"));
@@ -6280,6 +6286,40 @@ async fn rust_web_product_security_renders_overview_from_database() {
     assert!(html.contains("Akzeptieren"));
     assert!(html.contains("Akzeptierte CVEs uebernehmen"));
     assert!(!html.contains("Rust-Webroute aktiv."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/product-security/cve-risk-reviews/bulk")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "action=mark_mitigated&correlation_id=902&review_filter=evidence_missing",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    if response.status() != StatusCode::SEE_OTHER {
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        panic!("unexpected bulk review response status {status}: {html}");
+    }
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/product-security/?review_filter=evidence_missing&tenant_id=42&user_id=7"
+    );
+    let reviewed_status: String =
+        sqlx::query_scalar("SELECT status FROM risks_risk WHERE tenant_id = 42 AND id = 902")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(reviewed_status, "MITIGATED");
 
     let response = app
         .clone()

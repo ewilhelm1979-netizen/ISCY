@@ -728,6 +728,22 @@ impl ProductSecurityStore {
             }
         }
     }
+
+    pub async fn generate_work_for_accepted_correlation(
+        &self,
+        tenant_id: i64,
+        correlation_id: i64,
+    ) -> anyhow::Result<ProductSecurityAcceptedCorrelationWorkResult> {
+        match self {
+            Self::Postgres(pool) => {
+                generate_work_for_accepted_correlation_postgres(pool, tenant_id, correlation_id)
+                    .await
+            }
+            Self::Sqlite(pool) => {
+                generate_work_for_accepted_correlation_sqlite(pool, tenant_id, correlation_id).await
+            }
+        }
+    }
 }
 
 async fn overview_postgres(
