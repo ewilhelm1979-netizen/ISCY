@@ -102,12 +102,135 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_REVIEW_SUPPLY_CHAIN_METADATA_SCHEMA,
         postgres_sql: POSTGRES_REVIEW_SUPPLY_CHAIN_METADATA_SCHEMA,
     },
+    Migration {
+        version: "0015_rust_iscy27_control_core",
+        sqlite_sql: SQLITE_ISCY27_CONTROL_SCHEMA,
+        postgres_sql: POSTGRES_ISCY27_CONTROL_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
     include_str!("../seeds/catalog_requirements_seed_sqlite.sql");
 const POSTGRES_CATALOG_REQUIREMENTS_SEED: &str =
     include_str!("../seeds/catalog_requirements_seed_postgres.sql");
+
+const SQLITE_ISCY27_CONTROL_SCHEMA: &str = concat!(
+    r#"
+CREATE TABLE IF NOT EXISTS iscy_control_control (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    control_number INTEGER NOT NULL UNIQUE,
+    code varchar(32) NOT NULL UNIQUE,
+    group_code varchar(32) NOT NULL,
+    group_name varchar(128) NOT NULL,
+    title varchar(255) NOT NULL,
+    objective TEXT NOT NULL DEFAULT '',
+    evidence_guidance TEXT NOT NULL DEFAULT '',
+    owner_role varchar(128) NOT NULL DEFAULT '',
+    maturity_target INTEGER NOT NULL DEFAULT 4,
+    is_active bool NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS iscy_control_regulatorymapping (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    control_id INTEGER NOT NULL,
+    framework varchar(32) NOT NULL,
+    source_code varchar(64) NOT NULL DEFAULT '',
+    source_title varchar(255) NOT NULL DEFAULT '',
+    legal_reference varchar(128) NOT NULL DEFAULT '',
+    coverage_level varchar(16) NOT NULL DEFAULT 'SUPPORTING',
+    rationale TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(control_id, framework, source_code, legal_reference)
+);
+CREATE TABLE IF NOT EXISTS iscy_control_tenantstatus (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    control_id INTEGER NOT NULL,
+    status varchar(20) NOT NULL DEFAULT 'GAP',
+    maturity_score INTEGER NOT NULL DEFAULT 0,
+    evidence_status varchar(20) NOT NULL DEFAULT 'MISSING',
+    owner_id INTEGER NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    reviewed_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, control_id)
+);
+CREATE INDEX IF NOT EXISTS idx_iscy_control_group
+    ON iscy_control_control(group_code, sort_order);
+CREATE INDEX IF NOT EXISTS idx_iscy_control_mapping_control
+    ON iscy_control_regulatorymapping(control_id);
+CREATE INDEX IF NOT EXISTS idx_iscy_control_mapping_framework
+    ON iscy_control_regulatorymapping(framework);
+CREATE INDEX IF NOT EXISTS idx_iscy_control_status_tenant
+    ON iscy_control_tenantstatus(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_iscy_control_status_control
+    ON iscy_control_tenantstatus(control_id);
+"#,
+    include_str!("../seeds/iscy27_controls_seed_sqlite.sql")
+);
+
+const POSTGRES_ISCY27_CONTROL_SCHEMA: &str = concat!(
+    r#"
+CREATE TABLE IF NOT EXISTS iscy_control_control (
+    id BIGSERIAL PRIMARY KEY,
+    control_number INTEGER NOT NULL UNIQUE,
+    code varchar(32) NOT NULL UNIQUE,
+    group_code varchar(32) NOT NULL,
+    group_name varchar(128) NOT NULL,
+    title varchar(255) NOT NULL,
+    objective TEXT NOT NULL DEFAULT '',
+    evidence_guidance TEXT NOT NULL DEFAULT '',
+    owner_role varchar(128) NOT NULL DEFAULT '',
+    maturity_target INTEGER NOT NULL DEFAULT 4,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS iscy_control_regulatorymapping (
+    id BIGSERIAL PRIMARY KEY,
+    control_id BIGINT NOT NULL,
+    framework varchar(32) NOT NULL,
+    source_code varchar(64) NOT NULL DEFAULT '',
+    source_title varchar(255) NOT NULL DEFAULT '',
+    legal_reference varchar(128) NOT NULL DEFAULT '',
+    coverage_level varchar(16) NOT NULL DEFAULT 'SUPPORTING',
+    rationale TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(control_id, framework, source_code, legal_reference)
+);
+CREATE TABLE IF NOT EXISTS iscy_control_tenantstatus (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    control_id BIGINT NOT NULL,
+    status varchar(20) NOT NULL DEFAULT 'GAP',
+    maturity_score INTEGER NOT NULL DEFAULT 0,
+    evidence_status varchar(20) NOT NULL DEFAULT 'MISSING',
+    owner_id BIGINT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    reviewed_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, control_id)
+);
+CREATE INDEX IF NOT EXISTS idx_iscy_control_group
+    ON iscy_control_control(group_code, sort_order);
+CREATE INDEX IF NOT EXISTS idx_iscy_control_mapping_control
+    ON iscy_control_regulatorymapping(control_id);
+CREATE INDEX IF NOT EXISTS idx_iscy_control_mapping_framework
+    ON iscy_control_regulatorymapping(framework);
+CREATE INDEX IF NOT EXISTS idx_iscy_control_status_tenant
+    ON iscy_control_tenantstatus(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_iscy_control_status_control
+    ON iscy_control_tenantstatus(control_id);
+"#,
+    include_str!("../seeds/iscy27_controls_seed_postgres.sql")
+);
 
 const SQLITE_AUTH_SESSION_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS iscy_auth_session (

@@ -5,11 +5,12 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use iscy_backend::{
     account_store::AccountStore, agent_store::AgentStore, app_router, app_router_with_state,
     assessment_store::AssessmentStore, asset_store::AssetStore, auth_store::AuthStore,
-    catalog_store::CatalogStore, cve_store::CveStore, dashboard_store::DashboardStore, db_admin,
-    evidence_store::EvidenceStore, import_store::ImportStore, incident_store::IncidentStore,
-    process_store::ProcessStore, product_security_store::ProductSecurityStore,
-    report_store::ReportStore, requirement_store::RequirementStore, risk_store::RiskStore,
-    roadmap_store::RoadmapStore, tenant_store::TenantStore, wizard_store::WizardStore, AppState,
+    catalog_store::CatalogStore, control_store::ControlStore, cve_store::CveStore,
+    dashboard_store::DashboardStore, db_admin, evidence_store::EvidenceStore,
+    import_store::ImportStore, incident_store::IncidentStore, process_store::ProcessStore,
+    product_security_store::ProductSecurityStore, report_store::ReportStore,
+    requirement_store::RequirementStore, risk_store::RiskStore, roadmap_store::RoadmapStore,
+    tenant_store::TenantStore, wizard_store::WizardStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use std::{
@@ -6222,7 +6223,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0011_rust_incident_timeline",
             "0012_rust_incident_runbook_template_library",
             "0013_rust_incident_runbook_tasks_timeline_markers",
-            "0014_rust_review_supply_chain_metadata"
+            "0014_rust_review_supply_chain_metadata",
+            "0015_rust_iscy27_control_core"
         ]
     );
     assert!(
@@ -6291,6 +6293,19 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     assert!(db_admin::sqlite_table_exists(&pool, "iscy_auth_session")
         .await
         .unwrap());
+    assert!(db_admin::sqlite_table_exists(&pool, "iscy_control_control")
+        .await
+        .unwrap());
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "iscy_control_regulatorymapping")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "iscy_control_tenantstatus")
+            .await
+            .unwrap()
+    );
 
     let applied_again = db_admin::run_sqlite_migrations(&pool).await.unwrap();
     assert!(applied_again.is_empty());
@@ -6426,6 +6441,55 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["requirements"].as_array().unwrap().len(), 39);
     assert_eq!(payload["mapping_versions"].as_array().unwrap().len(), 4);
+
+    let app = app_router_with_state(
+        AppState::default().with_control_store(Some(ControlStore::from_sqlite_pool(pool.clone()))),
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/controls")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["total_controls"], 27);
+    assert_eq!(payload["covered_controls"], 7);
+    assert_eq!(payload["gap_controls"], 5);
+    assert_eq!(payload["framework_count"], 7);
+    assert_eq!(payload["groups"].as_array().unwrap().len(), 5);
+    assert_eq!(payload["controls"][3]["code"], "ISCY-04");
+    assert_eq!(payload["controls"][3]["status"], "EFFECTIVE");
+    assert_eq!(payload["controls"][3]["framework_count"], 4);
+    assert!(payload["controls"][3]["mappings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|mapping| mapping["framework"] == "NIS2"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/controls/?tenant_id=1&user_id=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("ISCY-27 Controls"));
+    assert!(html.contains("Incident Response"));
+    assert!(html.contains("DORA"));
+    assert!(html.contains("M&amp;A-Governance"));
 
     let mapping_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM requirements_app_requirementquestionmapping")

@@ -8,6 +8,7 @@ use iscy_backend::{
     asset_store::AssetStore,
     auth_store::AuthStore,
     catalog_store::CatalogStore,
+    control_store::ControlStore,
     cve_store::CveStore,
     dashboard_store::DashboardStore,
     db_admin::{run_db_admin_action, DbAdminAction},
@@ -66,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         requirement_store,
         asset_store,
         catalog_store,
+        control_store,
         process_store,
         risk_store,
         evidence_store,
@@ -87,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
             let requirement_store = RequirementStore::connect(&database_url).await?;
             let asset_store = AssetStore::connect(&database_url).await?;
             let catalog_store = CatalogStore::connect(&database_url).await?;
+            let control_store = ControlStore::connect(&database_url).await?;
             let process_store = ProcessStore::connect(&database_url).await?;
             let risk_store = RiskStore::connect(&database_url).await?;
             let evidence_store = EvidenceStore::connect(&database_url).await?;
@@ -107,6 +110,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(requirement_store),
                 Some(asset_store),
                 Some(catalog_store),
+                Some(control_store),
                 Some(process_store),
                 Some(risk_store),
                 Some(evidence_store),
@@ -120,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => (
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None, None, None, None,
+            None, None, None, None, None, None,
         ),
     };
     let state = AppState::with_stores(cve_store, tenant_store)
@@ -132,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
         .with_requirement_store(requirement_store)
         .with_asset_store(asset_store)
         .with_catalog_store(catalog_store)
+        .with_control_store(control_store)
         .with_process_store(process_store)
         .with_risk_store(risk_store)
         .with_evidence_store(evidence_store)

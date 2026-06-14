@@ -28,6 +28,7 @@ pub mod assessment_store;
 pub mod asset_store;
 pub mod auth_store;
 pub mod catalog_store;
+pub mod control_store;
 pub mod cve_store;
 pub mod dashboard_store;
 pub mod db_admin;
@@ -51,6 +52,7 @@ use assessment_store::AssessmentStore;
 use asset_store::AssetStore;
 use auth_store::AuthStore;
 use catalog_store::CatalogStore;
+use control_store::ControlStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
 use evidence_store::EvidenceStore;
@@ -75,6 +77,7 @@ pub struct AppState {
     pub assessment_store: Option<AssessmentStore>,
     pub auth_store: Option<AuthStore>,
     pub catalog_store: Option<CatalogStore>,
+    pub control_store: Option<ControlStore>,
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
     pub evidence_store: Option<EvidenceStore>,
@@ -101,6 +104,7 @@ impl AppState {
             assessment_store: None,
             auth_store: None,
             catalog_store: None,
+            control_store: None,
             cve_store,
             dashboard_store: None,
             evidence_store: None,
@@ -127,6 +131,7 @@ impl AppState {
             assessment_store: None,
             auth_store: None,
             catalog_store: None,
+            control_store: None,
             cve_store,
             dashboard_store: None,
             evidence_store: None,
@@ -197,6 +202,11 @@ impl AppState {
 
     pub fn with_catalog_store(mut self, catalog_store: Option<CatalogStore>) -> Self {
         self.catalog_store = catalog_store;
+        self
+    }
+
+    pub fn with_control_store(mut self, control_store: Option<ControlStore>) -> Self {
+        self.control_store = control_store;
         self
     }
 
@@ -959,6 +969,13 @@ pub struct RequirementLibraryResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub library: requirement_store::RequirementLibrary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ControlLibraryResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub library: control_store::ControlLibrary,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5420,6 +5437,58 @@ async fn requirement_library(State(state): State<AppState>, headers: HeaderMap) 
     }
 }
 
+async fn control_library(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.control_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Control-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.library(context.tenant_id).await {
+        Ok(library) => (
+            StatusCode::OK,
+            Json(ControlLibraryResponse {
+                api_version: "v1",
+                library,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Control Library konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn web_index(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -5431,6 +5500,11 @@ async fn web_index(
             "Dashboard",
             &web_path_with_context("/dashboard/", context.as_ref()),
             "KPI-Ueberblick",
+        ),
+        web_link_card(
+            "ISCY-27 Controls",
+            &web_path_with_context("/controls/", context.as_ref()),
+            "Steuerungskern und Crosswalk",
         ),
         web_link_card(
             "Risks",
@@ -7636,6 +7710,141 @@ async fn web_requirements(
             web_page("Requirements", "/requirements/", Some(&context), &body)
         }
         Err(err) => web_error_page("Requirements", "/requirements/", &context, &err.to_string()),
+    }
+}
+
+async fn web_controls(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("ISCY-27 Controls", "/controls/");
+    };
+    let Some(store) = state.control_store else {
+        return web_store_missing("ISCY-27 Controls", "/controls/", &context, "Control");
+    };
+    match store.library(context.tenant_id).await {
+        Ok(library) => {
+            let group_rows = library
+                .groups
+                .iter()
+                .map(|group| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{:.2}</td></tr>"#,
+                        html_escape(&group.code),
+                        html_escape(&group.name),
+                        group.control_count,
+                        group.covered_count,
+                        group.average_maturity,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let control_rows = library
+                .controls
+                .iter()
+                .map(|control| {
+                    format!(
+                        r#"<tr><td>{}</td><td><strong>{}</strong><p>{}</p></td><td>{}</td><td>{}</td><td>{}/{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&control.code),
+                        html_escape(&control.title),
+                        html_escape(&control.objective),
+                        html_escape(&control.group_name),
+                        web_badge(&control.status_label, control_status_badge_class(&control.status)),
+                        control.maturity_score,
+                        control.maturity_target,
+                        web_badge(
+                            &control.evidence_status_label,
+                            evidence_status_badge_class(&control.evidence_status),
+                        ),
+                        framework_badges(&control.frameworks),
+                        html_escape(&control.tenant_notes),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let mapping_rows = library
+                .controls
+                .iter()
+                .flat_map(|control| {
+                    control.mappings.iter().map(move |mapping| {
+                        format!(
+                            r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                            html_escape(&control.code),
+                            html_escape(&mapping.framework_label),
+                            html_escape(&mapping.source_code),
+                            html_escape(&mapping.legal_reference),
+                            html_escape(&mapping.coverage_level_label),
+                            html_escape(&mapping.rationale),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact">
+                  <h1>ISCY-27 Controls</h1>
+                  <p>Funktionaler Steuerungskern fuer NIS2, DORA, AI Act, CRA, DSGVO, TISAX und ISO 27001.</p>
+                  <p class="muted">Frameworks: {}</p>
+                </section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <h2>Control-Gruppen</h2>
+                    <table>
+                      <thead><tr><th>Code</th><th>Gruppe</th><th>Controls</th><th>Abgedeckt</th><th>Maturity</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>27-Control Heatmap</h2>
+                    <table>
+                      <thead><tr><th>Control</th><th>Titel</th><th>Gruppe</th><th>Status</th><th>Score</th><th>Nachweis</th><th>Frameworks</th><th>Notiz</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Regulatory Crosswalk</h2>
+                    <table>
+                      <thead><tr><th>Control</th><th>Framework</th><th>Quelle</th><th>Referenz</th><th>Coverage</th><th>Rationale</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                </section>
+                "#,
+                html_escape(&library.frameworks.join(", ")),
+                metric_card("Controls", library.total_controls),
+                metric_card("Abgedeckt", library.covered_controls),
+                metric_card("Gaps", library.gap_controls),
+                metric_card("Maturity", library.average_maturity.round() as i64),
+                metric_card("Frameworks", library.framework_count),
+                if group_rows.is_empty() {
+                    web_empty_row(5, "Keine Control-Gruppen vorhanden.")
+                } else {
+                    group_rows
+                },
+                if control_rows.is_empty() {
+                    web_empty_row(8, "Keine Controls vorhanden.")
+                } else {
+                    control_rows
+                },
+                if mapping_rows.is_empty() {
+                    web_empty_row(6, "Keine Regulatory Mappings vorhanden.")
+                } else {
+                    mapping_rows
+                },
+            );
+            web_page("ISCY-27 Controls", "/controls/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("ISCY-27 Controls", "/controls/", &context, &err.to_string()),
     }
 }
 async fn web_assessments(
@@ -11126,6 +11335,7 @@ fn web_page(
     let nav_items = [
         ("/dashboard/", "Dashboard"),
         ("/navigator/", "Navigator"),
+        ("/controls/", "ISCY-27"),
         ("/zero-trust/", "Zero Trust"),
         ("/incidents/", "Incidents"),
         ("/cves/", "CVEs"),
@@ -11874,6 +12084,36 @@ fn web_badge(label: &str, class_name: &str) -> String {
         class_name,
         html_escape(label),
     )
+}
+
+fn framework_badges(frameworks: &[String]) -> String {
+    if frameworks.is_empty() {
+        return "-".to_string();
+    }
+    frameworks
+        .iter()
+        .map(|framework| web_badge(framework, "info"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn control_status_badge_class(status: &str) -> &'static str {
+    match status.trim().to_ascii_uppercase().as_str() {
+        "EFFECTIVE" | "IMPLEMENTED" => "ok",
+        "PARTIAL" => "warn",
+        "GAP" => "danger",
+        "NOT_APPLICABLE" => "muted-badge",
+        _ => "muted-badge",
+    }
+}
+
+fn evidence_status_badge_class(status: &str) -> &'static str {
+    match status.trim().to_ascii_uppercase().as_str() {
+        "EVIDENCED" => "ok",
+        "PARTIAL" => "warn",
+        "MISSING" => "danger",
+        _ => "muted-badge",
+    }
 }
 
 fn score_band_label(score: i64) -> &'static str {
@@ -12977,6 +13217,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(organization_tenant_profile),
         )
         .route("/api/v1/catalog/domains", get(catalog_domains))
+        .route("/api/v1/controls", get(control_library))
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
         .route("/api/v1/agents/posture", get(agent_posture))
         .route("/api/v1/agents/devices", get(agent_devices))
@@ -13153,6 +13394,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/incidents/{incident_id}/timeline.json",
             get(web_incident_timeline_export_json),
         )
+        .route("/controls/", get(web_controls))
         .route("/catalog/", get(web_catalog))
         .route("/reports/", get(web_reports))
         .route("/roadmap/", get(web_roadmap))
