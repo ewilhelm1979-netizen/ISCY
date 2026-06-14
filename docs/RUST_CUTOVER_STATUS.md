@@ -1,6 +1,6 @@
 # ISCY Rust-Cutover-Status
 
-Stand: 2026-06-08
+Stand: 2026-06-14
 
 ## Kurzfassung
 
@@ -25,13 +25,13 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Organizations
 - Risks
 - Incidents inklusive NIS2-Meldefristen, Fallakten, Detailbearbeitung, tenantbezogener Runbook-Template-Bibliothek, manueller Timeline-Notizen, Timeline-/Audit-Events und Markdown-/HTML-/PDF-Meldepaket mit Audit-Timeline
-- Evidence inklusive Upload, Incident-Verknuepfung, direktem Fallakten-Upload und automatischem Timeline-Ereignis
+- Evidence inklusive Upload, Incident-Verknuepfung, direktem Fallakten-Upload, automatischem Timeline-Ereignis, Context-Prefill und Ruecksprung zur Ausgangsseite
 - Reports
 - Roadmap
 - Assets
 - Imports inklusive CSV/XLSX/XLSM-Preview
 - Processes
-- Product Security
+- Product Security inklusive CSAF-/CycloneDX-/SPDX-Importhistorie, Import-Detailseiten, CVE-Asset-Korrelation, automatischer Risiko-/Roadmap-Ableitung, CVE-Risiko-Review-Queue und Evidence-Lueckenmetriken
 - CVE Feed, CVE Assessments und NVD-Import
 - User-Administration, Rollen, Gruppen und direkte Permissions
 

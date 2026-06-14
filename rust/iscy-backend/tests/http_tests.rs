@@ -3772,7 +3772,7 @@ async fn rust_web_evidence_accepts_file_upload_from_form() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/evidence/?tenant_id=42&user_id=7&evidence_title=CVE-Evidence%3A%20CVE-2026-0001&evidence_description=Patch%20proof&linked_requirement=PRODUCT-SECURITY%3ACVE%3ACVE-2026-0001&evidence_status=SUBMITTED&incident_id=1")
+                .uri("/evidence/?tenant_id=42&user_id=7&evidence_title=CVE-Evidence%3A%20CVE-2026-0001&evidence_description=Patch%20proof&linked_requirement=PRODUCT-SECURITY%3ACVE%3ACVE-2026-0001&evidence_status=SUBMITTED&incident_id=1&return_to=%2Fproduct-security%2F%3Ftenant_id%3D42%26user_id%3D7")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3784,6 +3784,9 @@ async fn rust_web_evidence_accepts_file_upload_from_form() {
     assert!(html.contains("CVE-Evidence: CVE-2026-0001"));
     assert!(html.contains("PRODUCT-SECURITY:CVE:CVE-2026-0001"));
     assert!(html.contains("Patch proof"));
+    assert!(
+        html.contains(r#"name="return_to" value="/product-security/?tenant_id=42&amp;user_id=7""#)
+    );
 
     let boundary = "iscy-web-evidence-upload-boundary";
     let body = multipart_body(
@@ -3795,6 +3798,7 @@ async fn rust_web_evidence_accepts_file_upload_from_form() {
             ("requirement_id", "1"),
             ("incident_id", "1"),
             ("status", "SUBMITTED"),
+            ("return_to", "/product-security/?tenant_id=42&user_id=7"),
         ],
         Some(("file", "browser.csv", "text/csv", b"name,value\nmfa,done\n")),
     );
@@ -3817,11 +3821,11 @@ async fn rust_web_evidence_accepts_file_upload_from_form() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let html = String::from_utf8(body.to_vec()).unwrap();
-    assert!(html.contains("Evidence gespeichert"));
-    assert!(html.contains("Browser Rust Evidence"));
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/product-security/?tenant_id=42&user_id=7"
+    );
 
     let file_name: String = sqlx::query_scalar(
         "SELECT file FROM evidence_evidenceitem WHERE tenant_id = 42 AND title = 'Browser Rust Evidence'",
@@ -6116,6 +6120,8 @@ async fn rust_web_product_security_renders_overview_from_database() {
         .await
         .unwrap();
     create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_incident_evidence_support_tables(&pool).await;
     insert_product_security_fixture(&pool).await;
     sqlx::query(
         r#"
@@ -6151,10 +6157,93 @@ async fn rust_web_product_security_renders_overview_from_database() {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_cvecorrelation (
+            id, tenant_id, cve, asset_id, product_id, component_id, match_type,
+            match_value, confidence, status, rationale, created_at, updated_at
+        )
+        VALUES (
+            902, 42, 'CVE-2026-0002', 700, 100, 250, 'PURL',
+            'pkg:generic/gateway-firmware@1.0.3',
+            92, 'ACCEPTED', 'Accepted CVE queue fixture', '2026-06-14T08:05:00Z', '2026-06-14T08:05:00Z'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO risks_risk (
+            id, tenant_id, category_id, process_id, asset_id, owner_id, title,
+            description, threat, vulnerability, impact, likelihood, residual_impact,
+            residual_likelihood, status, treatment_strategy, treatment_plan,
+            treatment_due_date, accepted_by_id, accepted_at, review_date, created_at, updated_at
+        )
+        VALUES (
+            902, 42, NULL, NULL, 700, NULL, 'CVE-2026-0002 betrifft Customer Portal',
+            'Generated Product Security risk', 'Ausnutzung von CVE-2026-0002',
+            'Accepted PURL correlation', 4, 4, NULL, NULL, 'IDENTIFIED',
+            'MITIGATE',
+            'PSIRT-Triage durchfuehren. Evidence-Key: PRODUCT-SECURITY:CVE:CVE-2026-0002:CORRELATION:902.',
+            NULL, NULL, NULL, NULL, '2026-06-14T08:05:00Z', '2026-06-14T08:05:00Z'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_productsecurityroadmaptask (
+            id, tenant_id, roadmap_id, related_release_id, related_vulnerability_id,
+            phase, title, description, priority, owner_role, due_in_days,
+            dependency_text, status, created_at, updated_at
+        )
+        VALUES (
+            990, 42, 900, NULL, NULL, 'RESPONSE',
+            'CVE-2026-0002 behandeln (Gateway Firmware)',
+            'Remediation planen. Evidence-Key: PRODUCT-SECURITY:CVE:CVE-2026-0002:CORRELATION:902.',
+            'HIGH', 'PSIRT', 14, 'Akzeptierte Korrelation #902', 'OPEN',
+            '2026-06-14T08:05:00Z', '2026-06-14T08:05:00Z'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let app =
         app_router_with_state(AppState::default().with_product_security_store(Some(
             ProductSecurityStore::from_sqlite_pool(pool.clone()),
         )));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/overview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["review_metrics"]["suggested_correlation_reviews"],
+        1
+    );
+    assert_eq!(payload["review_metrics"]["open_risk_reviews"], 1);
+    assert_eq!(payload["review_metrics"]["open_cve_reviews"], 2);
+    assert_eq!(payload["review_metrics"]["evidence_missing"], 1);
+    assert_eq!(
+        payload["cve_risk_review_queue"][0]["evidence_key"],
+        "PRODUCT-SECURITY:CVE:CVE-2026-0002:CORRELATION:902"
+    );
 
     let response = app
         .clone()
@@ -6181,6 +6270,12 @@ async fn rust_web_product_security_renders_overview_from_database() {
     assert!(html.contains("CSV Export"));
     assert!(html.contains("JSON Export"));
     assert!(html.contains("CSAF document.csaf_version fehlt."));
+    assert!(html.contains("CVE-Reviews offen"));
+    assert!(html.contains("Evidence fehlt"));
+    assert!(html.contains("CVE-Risiko-Review-Queue"));
+    assert!(html.contains("CVE-2026-0002 betrifft Customer Portal"));
+    assert!(html.contains("CVE-Massnahme umgesetzt und Evidence verknuepft."));
+    assert!(html.contains("return_to=%2Fproduct-security%2F%3Ftenant_id%3D42%26user_id%3D7"));
     assert!(html.contains("CVE-Asset-Korrelationen"));
     assert!(html.contains("Akzeptieren"));
     assert!(html.contains("Akzeptierte CVEs uebernehmen"));

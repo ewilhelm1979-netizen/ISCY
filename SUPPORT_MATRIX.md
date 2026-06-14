@@ -17,6 +17,17 @@
 | Production | `docker-compose.yml` + `docker-compose.prod.yml` | nginx | db, media | controlled production |
 | Production + local LLM | `docker-compose.yml` + `docker-compose.prod.yml` + `docker-compose.llm.yml` | nginx | db, media | product security / CVE enrichment |
 
+## Product-Security Support
+
+| Capability | Supported baseline | Status |
+|---|---|---|
+| CSAF import | JSON upload with offline profile validation and import history | Supported |
+| CycloneDX/SPDX SBOM import | JSON upload, component extraction and CPE/PURL matching | Supported |
+| CVE-Asset correlation | Suggested, accepted and rejected correlation workflow | Supported |
+| Generated CVE risk work | Accepted correlations can create risk and roadmap work with Evidence-Key linkage | Supported |
+| Review queue | Product-Security UI shows open CVE reviews and missing Evidence | Supported |
+| Evidence return flow | Evidence uploads started from Product Security, Risk or Roadmap return to the source page | Supported |
+
 ## Zero-Trust Agent Support
 
 | Component | Supported baseline | Status |

@@ -102,10 +102,12 @@ pub struct ProductSecurityOverview {
     pub tenant_id: i64,
     pub matrix: ProductSecurityMatrix,
     pub posture: ProductSecurityPosture,
+    pub review_metrics: ProductSecurityReviewMetrics,
     pub products: Vec<ProductListItem>,
     pub snapshots: Vec<ProductSecuritySnapshotSummary>,
     pub import_artifacts: Vec<ProductSecurityImportArtifactSummary>,
     pub cve_correlations: Vec<ProductSecurityCveCorrelationSummary>,
+    pub cve_risk_review_queue: Vec<ProductSecurityCveRiskReviewSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -444,6 +446,41 @@ pub struct ProductSecurityCveCorrelationSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityReviewMetrics {
+    pub open_cve_reviews: i64,
+    pub suggested_correlation_reviews: i64,
+    pub open_risk_reviews: i64,
+    pub evidence_missing: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityCveRiskReviewSummary {
+    pub correlation_id: i64,
+    pub cve: String,
+    pub asset_id: Option<i64>,
+    pub asset_name: Option<String>,
+    pub product_id: Option<i64>,
+    pub product_name: Option<String>,
+    pub component_id: Option<i64>,
+    pub component_name: Option<String>,
+    pub match_type: String,
+    pub match_value: String,
+    pub confidence: i64,
+    pub evidence_key: String,
+    pub risk_id: Option<i64>,
+    pub risk_title: Option<String>,
+    pub risk_status: Option<String>,
+    pub risk_status_label: String,
+    pub roadmap_task_id: Option<i64>,
+    pub roadmap_task_title: Option<String>,
+    pub roadmap_task_status: Option<String>,
+    pub roadmap_task_status_label: String,
+    pub evidence_count: i64,
+    pub needs_review: bool,
+    pub evidence_missing: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ProductSecurityCveCorrelationResult {
     pub created_suggestions: i64,
     pub existing_suggestions: i64,
@@ -495,6 +532,18 @@ struct ProductSecurityVulnerabilityCurrent {
     status: String,
     remediation_due: Option<String>,
     summary: String,
+}
+
+struct ProductSecurityRiskLink {
+    id: i64,
+    title: String,
+    status: String,
+}
+
+struct ProductSecurityRoadmapTaskLink {
+    id: i64,
+    title: String,
+    status: String,
 }
 
 impl ProductSecurityStore {
@@ -732,15 +781,19 @@ async fn overview_postgres(
         .and_then(posture_from_pg_row)?;
     let import_artifacts = load_import_artifacts_postgres(pool, tenant_id, 20).await?;
     let cve_correlations = load_cve_correlations_postgres(pool, tenant_id, 50).await?;
+    let cve_risk_review_queue = load_cve_risk_review_queue_postgres(pool, tenant_id, 50).await?;
+    let review_metrics = build_review_metrics(&cve_correlations, &cve_risk_review_queue);
 
     Ok(Some(ProductSecurityOverview {
         tenant_id,
         matrix: build_matrix(&context),
         posture,
+        review_metrics,
         products,
         snapshots,
         import_artifacts,
         cve_correlations,
+        cve_risk_review_queue,
     }))
 }
 
@@ -804,15 +857,19 @@ async fn overview_sqlite(
         .and_then(posture_from_sqlite_row)?;
     let import_artifacts = load_import_artifacts_sqlite(pool, tenant_id, 20).await?;
     let cve_correlations = load_cve_correlations_sqlite(pool, tenant_id, 50).await?;
+    let cve_risk_review_queue = load_cve_risk_review_queue_sqlite(pool, tenant_id, 50).await?;
+    let review_metrics = build_review_metrics(&cve_correlations, &cve_risk_review_queue);
 
     Ok(Some(ProductSecurityOverview {
         tenant_id,
         matrix: build_matrix(&context),
         posture,
+        review_metrics,
         products,
         snapshots,
         import_artifacts,
         cve_correlations,
+        cve_risk_review_queue,
     }))
 }
 
@@ -4154,6 +4211,144 @@ async fn sqlite_table_exists(pool: &SqlitePool, table_name: &str) -> anyhow::Res
     Ok(count > 0)
 }
 
+async fn load_cve_risk_link_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_key: &str,
+) -> anyhow::Result<Option<ProductSecurityRiskLink>> {
+    let pattern = evidence_key_search_pattern(evidence_key);
+    sqlx::query(
+        r#"
+        SELECT id, title, status
+        FROM risks_risk
+        WHERE tenant_id = $1 AND treatment_plan LIKE $2
+        ORDER BY id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(pattern)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-CVE-Risikolink konnte nicht gelesen werden")?
+    .map(risk_link_from_pg_row)
+    .transpose()
+    .map_err(Into::into)
+}
+
+async fn load_cve_risk_link_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_key: &str,
+) -> anyhow::Result<Option<ProductSecurityRiskLink>> {
+    let pattern = evidence_key_search_pattern(evidence_key);
+    sqlx::query(
+        r#"
+        SELECT id, title, status
+        FROM risks_risk
+        WHERE tenant_id = ?1 AND treatment_plan LIKE ?2
+        ORDER BY id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(pattern)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-CVE-Risikolink konnte nicht gelesen werden")?
+    .map(risk_link_from_sqlite_row)
+    .transpose()
+    .map_err(Into::into)
+}
+
+async fn load_cve_roadmap_task_link_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_key: &str,
+) -> anyhow::Result<Option<ProductSecurityRoadmapTaskLink>> {
+    let pattern = evidence_key_search_pattern(evidence_key);
+    sqlx::query(
+        r#"
+        SELECT id, title, status
+        FROM product_security_productsecurityroadmaptask
+        WHERE tenant_id = $1 AND description LIKE $2
+        ORDER BY id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(pattern)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-CVE-Roadmaptask-Link konnte nicht gelesen werden")?
+    .map(roadmap_task_link_from_pg_row)
+    .transpose()
+    .map_err(Into::into)
+}
+
+async fn load_cve_roadmap_task_link_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_key: &str,
+) -> anyhow::Result<Option<ProductSecurityRoadmapTaskLink>> {
+    let pattern = evidence_key_search_pattern(evidence_key);
+    sqlx::query(
+        r#"
+        SELECT id, title, status
+        FROM product_security_productsecurityroadmaptask
+        WHERE tenant_id = ?1 AND description LIKE ?2
+        ORDER BY id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(pattern)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-CVE-Roadmaptask-Link konnte nicht gelesen werden")?
+    .map(roadmap_task_link_from_sqlite_row)
+    .transpose()
+    .map_err(Into::into)
+}
+
+async fn load_cve_evidence_count_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_key: &str,
+) -> anyhow::Result<i64> {
+    sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM evidence_evidenceitem
+        WHERE tenant_id = $1 AND linked_requirement = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_key)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-CVE-Evidence-Anzahl konnte nicht gelesen werden")
+}
+
+async fn load_cve_evidence_count_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_key: &str,
+) -> anyhow::Result<i64> {
+    sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM evidence_evidenceitem
+        WHERE tenant_id = ?1 AND linked_requirement = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_key)
+    .fetch_one(pool)
+    .await
+    .context("SQLite-CVE-Evidence-Anzahl konnte nicht gelesen werden")
+}
+
 fn accepted_correlation_candidate_from_pg_row(
     row: PgRow,
 ) -> Result<AcceptedCorrelationWorkCandidate, sqlx::Error> {
@@ -4491,6 +4686,45 @@ async fn load_cve_correlations_postgres(
         .map_err(Into::into)
 }
 
+async fn load_cve_risk_review_queue_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<ProductSecurityCveRiskReviewSummary>> {
+    let has_risks = postgres_table_exists(pool, "public.risks_risk").await?;
+    let has_roadmap_tasks =
+        postgres_table_exists(pool, "public.product_security_productsecurityroadmaptask").await?;
+    let has_evidence = postgres_table_exists(pool, "public.evidence_evidenceitem").await?;
+    let candidates = accepted_correlation_candidates_postgres(pool, tenant_id, None).await?;
+    let mut queue = Vec::new();
+    for candidate in candidates.into_iter().take(limit.max(0) as usize) {
+        let evidence_key = correlation_evidence_key(&candidate);
+        let risk = if has_risks {
+            load_cve_risk_link_postgres(pool, tenant_id, &evidence_key).await?
+        } else {
+            None
+        };
+        let roadmap_task = if has_roadmap_tasks {
+            load_cve_roadmap_task_link_postgres(pool, tenant_id, &evidence_key).await?
+        } else {
+            None
+        };
+        let evidence_count = if has_evidence {
+            load_cve_evidence_count_postgres(pool, tenant_id, &evidence_key).await?
+        } else {
+            0
+        };
+        queue.push(cve_risk_review_summary_from_candidate(
+            candidate,
+            evidence_key,
+            risk,
+            roadmap_task,
+            evidence_count,
+        ));
+    }
+    Ok(queue)
+}
+
 async fn load_import_artifacts_postgres(
     pool: &PgPool,
     tenant_id: i64,
@@ -4618,6 +4852,45 @@ async fn load_cve_correlations_sqlite(
         .map(cve_correlation_from_sqlite_row)
         .collect::<Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+async fn load_cve_risk_review_queue_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<ProductSecurityCveRiskReviewSummary>> {
+    let has_risks = sqlite_table_exists(pool, "risks_risk").await?;
+    let has_roadmap_tasks =
+        sqlite_table_exists(pool, "product_security_productsecurityroadmaptask").await?;
+    let has_evidence = sqlite_table_exists(pool, "evidence_evidenceitem").await?;
+    let candidates = accepted_correlation_candidates_sqlite(pool, tenant_id, None).await?;
+    let mut queue = Vec::new();
+    for candidate in candidates.into_iter().take(limit.max(0) as usize) {
+        let evidence_key = correlation_evidence_key(&candidate);
+        let risk = if has_risks {
+            load_cve_risk_link_sqlite(pool, tenant_id, &evidence_key).await?
+        } else {
+            None
+        };
+        let roadmap_task = if has_roadmap_tasks {
+            load_cve_roadmap_task_link_sqlite(pool, tenant_id, &evidence_key).await?
+        } else {
+            None
+        };
+        let evidence_count = if has_evidence {
+            load_cve_evidence_count_sqlite(pool, tenant_id, &evidence_key).await?
+        } else {
+            0
+        };
+        queue.push(cve_risk_review_summary_from_candidate(
+            candidate,
+            evidence_key,
+            risk,
+            roadmap_task,
+            evidence_count,
+        ));
+    }
+    Ok(queue)
 }
 
 async fn load_cve_correlation_postgres(
@@ -6246,6 +6519,130 @@ fn import_component_match_status_label(status: &str) -> &'static str {
         "UNMATCHED" => "Nicht gematcht",
         _ => "Unbekannt",
     }
+}
+
+fn cve_risk_review_summary_from_candidate(
+    candidate: AcceptedCorrelationWorkCandidate,
+    evidence_key: String,
+    risk: Option<ProductSecurityRiskLink>,
+    roadmap_task: Option<ProductSecurityRoadmapTaskLink>,
+    evidence_count: i64,
+) -> ProductSecurityCveRiskReviewSummary {
+    let risk_status = risk.as_ref().map(|item| item.status.clone());
+    let roadmap_task_status = roadmap_task.as_ref().map(|item| item.status.clone());
+    let needs_review = risk_status
+        .as_deref()
+        .map(cve_risk_status_needs_review)
+        .unwrap_or(true);
+    ProductSecurityCveRiskReviewSummary {
+        correlation_id: candidate.correlation_id,
+        cve: candidate.cve,
+        asset_id: candidate.asset_id,
+        asset_name: candidate.asset_name,
+        product_id: candidate.product_id,
+        product_name: candidate.product_name,
+        component_id: candidate.component_id,
+        component_name: candidate.component_name,
+        match_type: candidate.match_type,
+        match_value: candidate.match_value,
+        confidence: candidate.confidence,
+        evidence_key,
+        risk_id: risk.as_ref().map(|item| item.id),
+        risk_title: risk.as_ref().map(|item| item.title.clone()),
+        risk_status_label: risk_status
+            .as_deref()
+            .map(risk_status_label)
+            .unwrap_or("Risiko fehlt")
+            .to_string(),
+        risk_status,
+        roadmap_task_id: roadmap_task.as_ref().map(|item| item.id),
+        roadmap_task_title: roadmap_task.as_ref().map(|item| item.title.clone()),
+        roadmap_task_status_label: roadmap_task_status
+            .as_deref()
+            .map(roadmap_task_status_label)
+            .unwrap_or_else(|| "Task fehlt".to_string()),
+        roadmap_task_status,
+        evidence_count,
+        needs_review,
+        evidence_missing: evidence_count == 0,
+    }
+}
+
+fn build_review_metrics(
+    correlations: &[ProductSecurityCveCorrelationSummary],
+    queue: &[ProductSecurityCveRiskReviewSummary],
+) -> ProductSecurityReviewMetrics {
+    let suggested_correlation_reviews = correlations
+        .iter()
+        .filter(|item| item.status.eq_ignore_ascii_case("SUGGESTED"))
+        .count() as i64;
+    let open_risk_reviews = queue.iter().filter(|item| item.needs_review).count() as i64;
+    let evidence_missing = queue.iter().filter(|item| item.evidence_missing).count() as i64;
+    ProductSecurityReviewMetrics {
+        open_cve_reviews: suggested_correlation_reviews + open_risk_reviews,
+        suggested_correlation_reviews,
+        open_risk_reviews,
+        evidence_missing,
+    }
+}
+
+fn evidence_key_search_pattern(evidence_key: &str) -> String {
+    format!("%Evidence-Key: {evidence_key}%")
+}
+
+fn cve_risk_status_needs_review(status: &str) -> bool {
+    !matches!(
+        status.trim().to_ascii_uppercase().as_str(),
+        "ACCEPTED" | "MITIGATED" | "CLOSED"
+    )
+}
+
+fn risk_status_label(status: &str) -> &'static str {
+    match status.trim().to_ascii_uppercase().as_str() {
+        "IDENTIFIED" => "Identifiziert",
+        "ANALYZING" => "In Analyse",
+        "TREATING" => "In Behandlung",
+        "ACCEPTED" => "Akzeptiert",
+        "MITIGATED" => "Mitigiert",
+        "CLOSED" => "Geschlossen",
+        _ => "Unbekannt",
+    }
+}
+
+fn risk_link_from_pg_row(row: PgRow) -> Result<ProductSecurityRiskLink, sqlx::Error> {
+    Ok(ProductSecurityRiskLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status: row.try_get("status")?,
+    })
+}
+
+fn risk_link_from_sqlite_row(row: SqliteRow) -> Result<ProductSecurityRiskLink, sqlx::Error> {
+    Ok(ProductSecurityRiskLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status: row.try_get("status")?,
+    })
+}
+
+fn roadmap_task_link_from_pg_row(
+    row: PgRow,
+) -> Result<ProductSecurityRoadmapTaskLink, sqlx::Error> {
+    Ok(ProductSecurityRoadmapTaskLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status: row.try_get("status")?,
+    })
+}
+
+fn roadmap_task_link_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<ProductSecurityRoadmapTaskLink, sqlx::Error> {
+    Ok(ProductSecurityRoadmapTaskLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status: row.try_get("status")?,
+    })
 }
 
 fn cve_correlation_from_pg_row(

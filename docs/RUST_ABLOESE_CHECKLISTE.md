@@ -1,6 +1,6 @@
 # Rust-Abloese-Checkliste
 
-Stand: 2026-06-07
+Stand: 2026-06-14
 
 ## Ziel
 
@@ -20,6 +20,7 @@ Komplette Abloesung der produktiven Python/Django-Runtime durch Rust.
 - [x] Python-Dockerfile und Python-Entrypoint wurden entfernt.
 - [x] Makefile-Ziele verweisen nicht mehr auf Django-Checks oder Django-Tests.
 - [x] Env-Beispiele enthalten nur noch Rust-/Compose-relevante Runtime-Schluessel.
+- [x] Neue Product-Security-, CVE-Review-, Evidence- und Roadmap-Erweiterungen laufen direkt im Rust-Service.
 
 ## Abnahmekriterien
 

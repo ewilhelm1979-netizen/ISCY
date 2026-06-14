@@ -1,5 +1,12 @@
 # ISCY – Projekt-Completion-Backlog (Production Readiness)
 
+## Aktueller Produktstand
+
+- Rust-only Runtime ist abgeschlossen.
+- Product Security verarbeitet CSAF-/CycloneDX-/SPDX-Importe, CVE-Asset-Korrelationen, automatisch erzeugte CVE-Risiken und Product-Security-Roadmap-Tasks.
+- Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence und eine gebuendelte CVE-Risiko-Review-Queue.
+- Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck.
+
 ## Prioritaet P0 (vor breitem Produktivrollout)
 
 1. Secrets-Management statt Plain `.env`
@@ -7,6 +14,7 @@
 3. Monitoring/Alerting (Logs, Metriken, Errors)
 4. Regelmaessige Backup- und Restore-Drills
 5. Rollen-/Rechtekonzept und Admin-Hardening
+6. Auditierbare Retention- und Exportregeln fuer Evidence-Dateien
 
 ## Prioritaet P1 (direkt danach)
 
@@ -14,9 +22,11 @@
 2. Security-Scans fuer Dependencies/Container
 3. Betriebshandbuch + Incident-Runbooks
 4. Performance-Baselines und Lasttests
+5. Product-Security-Import-Schemaabdeckung mit offiziellen CSAF/SPDX/CycloneDX-Testkorpora erweitern
 
 ## Prioritaet P2 (Reifegrad / Skalierung)
 
 1. UI-Designsystem modularisieren (CSS aus `base.html` extrahieren)
 2. Visuelle Regressionstests
-3. Optional: Rust-Nebenservice fuer Performance-kritische Teilbereiche
+3. Dedizierte Review-Ansichten fuer groessere PSIRT-/Risk-Teams
+4. Optional: Rust-Nebenservice fuer Performance-kritische Teilbereiche

@@ -863,6 +863,7 @@ pub struct WebContextQuery {
     pub evidence_description: Option<String>,
     pub linked_requirement: Option<String>,
     pub evidence_status: Option<String>,
+    pub return_to: Option<String>,
     pub control_id: Option<i64>,
     pub incident_id: Option<i64>,
     pub requirement_id: Option<i64>,
@@ -6620,6 +6621,7 @@ async fn web_risks(
                         ),
                         &linked_requirement,
                         Some("SUBMITTED"),
+                        Some(&web_path_with_context("/risks/", Some(&context))),
                     );
                     let review_actions = if can_write {
                         let action = web_path_with_context(
@@ -7844,6 +7846,14 @@ async fn web_evidence(
                 .incident_id
                 .map(|value| value.to_string())
                 .unwrap_or_default();
+            let return_to_hidden = safe_web_return_path(query.return_to.as_ref())
+                .map(|return_to| {
+                    format!(
+                        r#"<input type="hidden" name="return_to" value="{}">"#,
+                        html_escape(&return_to)
+                    )
+                })
+                .unwrap_or_default();
             let rows = overview
                 .evidence_items
                 .iter()
@@ -7877,6 +7887,7 @@ async fn web_evidence(
                   <article class="panel wide">
                     <h2>Evidence hochladen</h2>
                     <form method="post" action="{}" enctype="multipart/form-data">
+                      {}
                       <div class="form-grid">
                         <label>Titel<input name="title" type="text" value="{}" required></label>
                         <label>Status<select name="status">{}</select></label>
@@ -7904,6 +7915,7 @@ async fn web_evidence(
                     rows
                 },
                 web_path_with_context("/evidence/", Some(&context)),
+                return_to_hidden,
                 html_escape(prefill_title),
                 evidence_status_options_for(prefill_status),
                 html_escape(&prefill_session_id),
@@ -8185,6 +8197,7 @@ async fn web_roadmap(
                                 ),
                                 &linked_requirement,
                                 Some("SUBMITTED"),
+                                Some(&web_path_with_context("/roadmap/", Some(&context))),
                             );
                             task_rows.push(format!(
                                 r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Evidence</a></td></tr>"#,
@@ -9644,6 +9657,7 @@ async fn web_product_security(
                             ),
                             &format!("PRODUCT-SECURITY:CVE:{}", correlation.cve),
                             Some("SUBMITTED"),
+                            Some(&web_path_with_context("/product-security/", Some(&context))),
                         );
                         format!(r#"<a href="{}">Evidence verknuepfen</a>"#, evidence_href)
                     } else {
@@ -9660,6 +9674,111 @@ async fn web_product_security(
                         correlation.confidence,
                         html_escape(&correlation.status),
                         html_escape(&correlation.rationale),
+                        actions,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let product_security_return =
+                web_path_with_context("/product-security/", Some(&context));
+            let review_queue_rows = overview
+                .cve_risk_review_queue
+                .iter()
+                .map(|item| {
+                    let target = [
+                        item.asset_name.as_deref(),
+                        item.product_name.as_deref(),
+                        item.component_name.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .filter(|value| !value.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" / ");
+                    let evidence_href = evidence_prefill_href(
+                        &context,
+                        &format!("CVE-Evidence: {}", item.cve),
+                        &format!(
+                            "Nachweis zur CVE-Risiko-Review-Queue {}. Ziel: {}. Match: {} {}. Risiko: {}.",
+                            item.cve,
+                            if target.is_empty() { "-" } else { target.as_str() },
+                            item.match_type,
+                            item.match_value,
+                            item.risk_title.as_deref().unwrap_or("noch nicht erzeugt"),
+                        ),
+                        &item.evidence_key,
+                        Some("SUBMITTED"),
+                        Some(&product_security_return),
+                    );
+                    let risk_display = match (item.risk_id, item.risk_title.as_deref()) {
+                        (Some(id), Some(title)) => {
+                            format!("#{} {}", id, html_escape(title))
+                        }
+                        (Some(id), None) => format!("#{}", id),
+                        (None, _) => "Risiko fehlt".to_string(),
+                    };
+                    let roadmap_display =
+                        item.roadmap_task_title.as_deref().unwrap_or("Task fehlt");
+                    let evidence_display = if item.evidence_missing {
+                        "Fehlt".to_string()
+                    } else {
+                        format!("{} Nachweis(e)", item.evidence_count)
+                    };
+                    let review_state = if item.needs_review {
+                        "Review offen"
+                    } else {
+                        "Abgeschlossen"
+                    };
+                    let actions = if can_write {
+                        if let Some(risk_id) = item.risk_id {
+                            let action = web_path_with_context(
+                                &format!("/risks/{}/review", risk_id),
+                                Some(&context),
+                            );
+                            format!(
+                                r#"<form method="post" action="{}" class="inline-form">
+                                    <input type="hidden" name="action" value="approve_treatment">
+                                    <input type="hidden" name="review_notes" value="CVE-Risiko im Product-Security-Review zur Behandlung freigegeben.">
+                                    <button type="submit">Behandlung</button>
+                                  </form>
+                                  <form method="post" action="{}" class="inline-form">
+                                    <input type="hidden" name="action" value="accept_risk">
+                                    <input type="hidden" name="review_notes" value="CVE-Restrisiko nach Product-Security-Review akzeptiert.">
+                                    <button type="submit">Akzeptieren</button>
+                                  </form>
+                                  <form method="post" action="{}" class="inline-form">
+                                    <input type="hidden" name="action" value="mark_mitigated">
+                                    <input type="hidden" name="review_notes" value="CVE-Massnahme umgesetzt und Evidence verknuepft.">
+                                    <button type="submit">Mitigiert</button>
+                                  </form>"#,
+                                action, action, action,
+                            )
+                        } else {
+                            format!(
+                                r#"<form method="post" action="{}" class="inline-form">
+                                    <button type="submit">Risiko erzeugen</button>
+                                  </form>"#,
+                                web_path_with_context(
+                                    "/product-security/cve-correlations/generate-work",
+                                    Some(&context),
+                                ),
+                            )
+                        }
+                    } else {
+                        "-".to_string()
+                    };
+                    format!(
+                        r#"<tr><td>{}<br><small>{}% Confidence</small></td><td>{}</td><td>{}<br><small>{} · {}</small></td><td>{}<br><small>{}</small></td><td>{}</td><td><a href="{}">Evidence</a></td><td>{}</td></tr>"#,
+                        html_escape(&item.cve),
+                        item.confidence,
+                        html_escape(if target.is_empty() { "-" } else { target.as_str() }),
+                        risk_display,
+                        html_escape(&item.risk_status_label),
+                        review_state,
+                        html_escape(roadmap_display),
+                        html_escape(&item.roadmap_task_status_label),
+                        evidence_display,
+                        evidence_href,
                         actions,
                     )
                 })
@@ -9746,6 +9865,8 @@ async fn web_product_security(
                   {}
                   {}
                   {}
+                  {}
+                  {}
                 </section>
                 <section class="grid">
                   <article class="panel wide">
@@ -9780,6 +9901,13 @@ async fn web_product_security(
                     </table>
                   </article>
                   <article class="panel wide">
+                    <h2>CVE-Risiko-Review-Queue</h2>
+                    <table>
+                      <thead><tr><th>CVE</th><th>Ziel</th><th>Risiko</th><th>Roadmap</th><th>Evidence</th><th>Verknuepfen</th><th>Review</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
                     <h2>CVE-Asset-Korrelationen</h2>
                     <table>
                       <thead><tr><th>CVE</th><th>Asset</th><th>Produkt</th><th>Komponente</th><th>Match</th><th>Confidence</th><th>Status</th><th>Rationale</th><th>Review</th></tr></thead>
@@ -9797,6 +9925,11 @@ async fn web_product_security(
                     overview.posture.critical_open_vulnerabilities
                 ),
                 metric_card("PSIRT offen", overview.posture.psirt_cases_open),
+                metric_card(
+                    "CVE-Reviews offen",
+                    overview.review_metrics.open_cve_reviews
+                ),
+                metric_card("Evidence fehlt", overview.review_metrics.evidence_missing),
                 html_escape(&overview.matrix.summary),
                 if matrix_rows.is_empty() {
                     web_empty_row(4, "Keine Matrixdaten vorhanden.")
@@ -9819,6 +9952,11 @@ async fn web_product_security(
                     web_empty_row(9, "Noch keine CSAF-/SBOM-Importe vorhanden.")
                 } else {
                     import_rows
+                },
+                if review_queue_rows.is_empty() {
+                    web_empty_row(7, "Keine akzeptierten CVE-Risiken in Review.")
+                } else {
+                    review_queue_rows
                 },
                 if correlation_rows.is_empty() {
                     web_empty_row(9, "Noch keine CVE-Asset-Korrelationen vorhanden.")
@@ -9902,6 +10040,10 @@ async fn web_product_security_import_detail(
                             artifact.id, component.id
                         ),
                         None,
+                        Some(&web_path_with_context(
+                            &format!("/product-security/imports/{}", artifact.id),
+                            Some(&context),
+                        )),
                     );
                     format!(
                         r#"<tr><td>{}<br><small>{}</small></td><td>{}</td><td>{}</td><td><code>{}</code><br><code>{}</code></td><td>{}</td><td>{}<br><small>{}</small></td><td><a href="{}">Evidence verknuepfen</a></td></tr>"#,
@@ -14297,6 +14439,7 @@ fn evidence_prefill_href(
     description: &str,
     linked_requirement: &str,
     status: Option<&str>,
+    return_to: Option<&str>,
 ) -> String {
     let mut path = format!(
         "/evidence/?evidence_title={}&evidence_description={}&linked_requirement={}",
@@ -14307,6 +14450,10 @@ fn evidence_prefill_href(
     if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
         path.push_str("&evidence_status=");
         path.push_str(&url_component(status));
+    }
+    if let Some(return_to) = return_to.filter(|value| !value.trim().is_empty()) {
+        path.push_str("&return_to=");
+        path.push_str(&url_component(return_to));
     }
     web_path_with_context(&path, Some(context))
 }

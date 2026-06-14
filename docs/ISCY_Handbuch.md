@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.2 / Rust 0.3.0)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.3 / Rust 0.3.0)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -331,12 +331,15 @@ Kernlogik:
 - Risikostufe
 - Behandlungsstrategie
 - Fristen und Reviews
+- Review-Workflow fuer Behandlung, Akzeptanz, Mitigation und Abschluss
+- automatische CVE-Risiken aus akzeptierten Product-Security-Korrelationen
 
 Fachlicher Nutzen:
 
 - zentrales Risikoregister
 - transparente Priorisierung
 - Nachvollziehbarkeit von Entscheidungen
+- fachlicher Review von automatisch erzeugten Schwachstellenrisiken
 
 Fuer Nicht-Sicherheitsleute:
 Ein Risiko ist in ISCY kein Technikfehler, sondern eine moegliche negative Geschaeftsauswirkung.
@@ -382,12 +385,15 @@ Typische Funktionen:
 - Evidence hochladen
 - Evidence aktualisieren
 - Evidence Needs synchronisieren
+- Evidence direkt aus Risks, Roadmap-Tasks, Incidents und Product-Security-Kontexten vorbefuellen
+- nach dem Speichern automatisch zur Ausgangsseite zurueckkehren
 
 Fachlicher Nutzen:
 
 - Nachweisfuehrung an einem Ort
 - bessere Auditfaehigkeit
 - weniger Suche nach Dokumenten
+- klarere Rueckverfolgbarkeit durch stabile Linked-Requirement- und Evidence-Key-Bezuege
 
 Fuer Nicht-Sicherheitsleute:
 Evidence ist der Ordner mit den Belegen, aber strukturiert und auswertbar.
@@ -424,11 +430,13 @@ Typische Funktionen:
 - Kanban-Ansicht
 - Task-Bearbeitung
 - PDF- und PNG-Export
+- direkte Evidence-Verknuepfung je Roadmap-Task
 
 Fachlicher Nutzen:
 
 - Transformation von Analyse in Umsetzungsprogramm
 - Priorisierung nach Wirkung und Aufwand
+- Nachweisfuehrung dort starten, wo die Umsetzungsarbeit entsteht
 
 Fuer Nicht-Sicherheitsleute:
 Die Roadmap ist der Umsetzungsfahrplan.
@@ -478,15 +486,31 @@ Typische Objekte:
 - TARA
 - Vulnerability
 - PSIRT Case
+- CSAF-/SBOM-Importhistorie
+- CVE-Asset-Korrelation
+- CVE-Risiko-Review-Queue
 
 Fachlicher Nutzen:
 
 - Anbindung von Produktentwicklung und Sicherheitsgovernance
 - Vorbereitung fuer CRA, IEC 62443, ISO/SAE 21434 oder AI-bezogene Governance
 - Sicht auf Releases, Komponenten und Verwundbarkeit
+- strukturierte Verarbeitung von CSAF-Advisories, CycloneDX/SPDX-SBOMs und CVE-Korrelationen
+- automatische Ableitung von Risiko- und Roadmap-Arbeit aus akzeptierten CVE-Korrelationen
+- Nachweissteuerung ueber Evidence-Keys fuer CVE, Import, Risiko und Roadmap
 
 Fuer Nicht-Sicherheitsleute:
 Dieser Bereich ist fuer Unternehmen wichtig, die Software, digitale Produkte oder vernetzte Systeme bereitstellen.
+
+Aktueller Rust-Funktionsumfang:
+
+- Import-Historie fuer CSAF, CycloneDX und SPDX mit CSV-/JSON-Export
+- Import-Detailseite mit Validierungsfehlern und Komponenten-Matches
+- CVE-Asset-Korrelation ueber CPE oder PURL mit Akzeptieren/Ablehnen-Workflow
+- automatische Erzeugung von CVE-Risiken und Product-Security-Roadmap-Tasks aus akzeptierten Korrelationen
+- Dashboard-Kennzahlen fuer offene CVE-Reviews und fehlende Evidence
+- gebuendelte CVE-Risiko-Review-Queue mit Behandeln, Akzeptieren und Mitigiert markieren
+- Evidence-Vorbefuellung und Ruecksprung zur Ausgangsseite nach Upload
 
 ### 5.16 Vulnerability Intelligence
 
@@ -544,10 +568,14 @@ Hier wird aus einer technischen Schwachstellenmeldung eine geschaeftlich nutzbar
 ### 6.4 Produkt- und Schwachstellensteuerung
 
 1. Produkte, Releases und Komponenten pflegen
-2. CVEs laden oder importieren
-3. EPSS, KEV und Exponierung bewerten
-4. Risiko und Vulnerability automatisch verknuepfen
-5. Massnahmen ueber Roadmap oder Behandlung steuern
+2. CSAF-Advisories oder SBOMs importieren und Validierungsfehler pruefen
+3. Komponenten-Matches ueber CPE oder PURL kontrollieren
+4. CVE-Asset-Korrelationen vorschlagen lassen
+5. Korrelationen fachlich akzeptieren oder ablehnen
+6. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen
+7. CVE-Risiko-Review-Queue abarbeiten
+8. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen
+9. Massnahmen ueber Roadmap oder Risiko-Behandlung steuern
 
 ### 6.5 Incident- und NIS2-Meldeworkflow
 

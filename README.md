@@ -1,4 +1,4 @@
-# ISCY V23.7.2 / Rust 0.3.0
+# ISCY V23.7.3 / Rust 0.3.0
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -96,6 +96,10 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 - `/admin/users/`
 
 Incidents werden als Rust-Fallakten unter `/incidents/` gefuehrt. Detailseiten unter `/incidents/{id}` erlauben die Bearbeitung von Typ, Runbook, Status, Severity, Meldezeitpunkten und Behoerdenreferenz; Statuswechsel, Anlage, manuelle Timeline-Notizen und incidentbezogene Evidence-Uploads werden als Timeline-/Audit-Events in der Fallakte dokumentiert. Tenantbezogene Runbook-Vorlagen stehen ueber `/api/v1/incidents/runbook-templates` und im Incident-Formular bereit. Verknuepfte Evidence wird direkt in der Fallakte angezeigt und kann dort hochgeladen werden. Das NIS2-Meldepaket inklusive Audit-Timeline kann als Markdown, HTML oder PDF ueber `/incidents/{id}/nis2-export`, `/incidents/{id}/nis2-export.html`, `/incidents/{id}/nis2-export.pdf` sowie die entsprechenden `/api/v1/incidents/{id}/...` Endpunkte exportiert werden.
+
+Product Security wird unter `/product-security/` als Rust-Arbeitsbereich gefuehrt. CSAF-, CycloneDX- und SPDX-Importe werden historisiert, validiert und ueber Detailseiten mit Validierungsfehlern sowie Komponenten-Matches angezeigt. CVE-Asset-Korrelationen koennen vorgeschlagen, akzeptiert oder abgelehnt werden; akzeptierte Korrelationen erzeugen bei Bedarf Risiko- und Roadmap-Arbeit mit stabilem Evidence-Key. Das Dashboard zeigt offene CVE-Reviews und fehlende Evidence, buendelt automatisch erzeugte CVE-Risiken in einer Review-Queue und verlinkt Evidence-Uploads nach dem Speichern zur Ausgangsseite zurueck.
+
+Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel, Beschreibung, Linked Requirement, Status und Ruecksprungziel vor. Dadurch kann ein Nachweis direkt aus dem fachlichen Kontext erstellt werden und landet nach dem Upload wieder dort, wo die Arbeit begonnen hat.
 
 ## Zero-Trust Agent
 
