@@ -107,6 +107,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_ISCY27_CONTROL_SCHEMA,
         postgres_sql: POSTGRES_ISCY27_CONTROL_SCHEMA,
     },
+    Migration {
+        version: "0016_rust_control_evidence_product_imports",
+        sqlite_sql: SQLITE_CONTROL_EVIDENCE_PRODUCT_IMPORT_SCHEMA,
+        postgres_sql: POSTGRES_CONTROL_EVIDENCE_PRODUCT_IMPORT_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -258,6 +263,140 @@ CREATE TABLE IF NOT EXISTS iscy_auth_session (
 );
 CREATE INDEX IF NOT EXISTS idx_iscy_auth_session_user ON iscy_auth_session(tenant_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_iscy_auth_session_expires ON iscy_auth_session(expires_at);
+"#;
+
+const SQLITE_CONTROL_EVIDENCE_PRODUCT_IMPORT_SCHEMA: &str = r#"
+ALTER TABLE evidence_evidenceitem ADD COLUMN control_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_evidence_control
+    ON evidence_evidenceitem(tenant_id, control_id);
+
+ALTER TABLE roadmap_roadmaptask ADD COLUMN control_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_roadmap_task_control
+    ON roadmap_roadmaptask(control_id);
+
+CREATE TABLE IF NOT EXISTS product_security_importartifact (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NULL,
+    artifact_type varchar(16) NOT NULL,
+    file_name varchar(255) NOT NULL DEFAULT '',
+    document_id varchar(255) NOT NULL DEFAULT '',
+    format_name varchar(32) NOT NULL DEFAULT '',
+    format_version varchar(64) NOT NULL DEFAULT '',
+    validation_status varchar(16) NOT NULL DEFAULT 'VALID',
+    validation_errors_json TEXT NOT NULL DEFAULT '[]',
+    component_count INTEGER NOT NULL DEFAULT 0,
+    matched_component_count INTEGER NOT NULL DEFAULT 0,
+    cve_count INTEGER NOT NULL DEFAULT 0,
+    created_by_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_importcomponent (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NULL,
+    component_id INTEGER NULL,
+    name varchar(255) NOT NULL DEFAULT '',
+    version varchar(128) NOT NULL DEFAULT '',
+    package_url TEXT NOT NULL DEFAULT '',
+    cpe23_uri TEXT NOT NULL DEFAULT '',
+    supplier_name varchar(255) NOT NULL DEFAULT '',
+    match_status varchar(16) NOT NULL DEFAULT 'UNMATCHED',
+    match_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_cvecorrelation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    cve_record_id INTEGER NULL,
+    cve varchar(50) NOT NULL,
+    asset_id INTEGER NULL,
+    product_id INTEGER NULL,
+    component_id INTEGER NULL,
+    match_type varchar(16) NOT NULL,
+    match_value TEXT NOT NULL,
+    confidence INTEGER NOT NULL DEFAULT 80,
+    status varchar(16) NOT NULL DEFAULT 'SUGGESTED',
+    rationale TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, cve, match_type, match_value)
+);
+CREATE INDEX IF NOT EXISTS idx_product_security_importartifact_tenant
+    ON product_security_importartifact(tenant_id, artifact_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_product_security_importcomponent_artifact
+    ON product_security_importcomponent(artifact_id);
+CREATE INDEX IF NOT EXISTS idx_product_security_cvecorrelation_tenant
+    ON product_security_cvecorrelation(tenant_id, status, cve);
+"#;
+
+const POSTGRES_CONTROL_EVIDENCE_PRODUCT_IMPORT_SCHEMA: &str = r#"
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS control_id BIGINT NULL;
+CREATE INDEX IF NOT EXISTS idx_evidence_control
+    ON evidence_evidenceitem(tenant_id, control_id);
+
+ALTER TABLE roadmap_roadmaptask ADD COLUMN IF NOT EXISTS control_id BIGINT NULL;
+CREATE INDEX IF NOT EXISTS idx_roadmap_task_control
+    ON roadmap_roadmaptask(control_id);
+
+CREATE TABLE IF NOT EXISTS product_security_importartifact (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NULL,
+    artifact_type varchar(16) NOT NULL,
+    file_name varchar(255) NOT NULL DEFAULT '',
+    document_id varchar(255) NOT NULL DEFAULT '',
+    format_name varchar(32) NOT NULL DEFAULT '',
+    format_version varchar(64) NOT NULL DEFAULT '',
+    validation_status varchar(16) NOT NULL DEFAULT 'VALID',
+    validation_errors_json TEXT NOT NULL DEFAULT '[]',
+    component_count INTEGER NOT NULL DEFAULT 0,
+    matched_component_count INTEGER NOT NULL DEFAULT 0,
+    cve_count INTEGER NOT NULL DEFAULT 0,
+    created_by_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_importcomponent (
+    id BIGSERIAL PRIMARY KEY,
+    artifact_id BIGINT NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NULL,
+    component_id BIGINT NULL,
+    name varchar(255) NOT NULL DEFAULT '',
+    version varchar(128) NOT NULL DEFAULT '',
+    package_url TEXT NOT NULL DEFAULT '',
+    cpe23_uri TEXT NOT NULL DEFAULT '',
+    supplier_name varchar(255) NOT NULL DEFAULT '',
+    match_status varchar(16) NOT NULL DEFAULT 'UNMATCHED',
+    match_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS product_security_cvecorrelation (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    cve_record_id BIGINT NULL,
+    cve varchar(50) NOT NULL,
+    asset_id BIGINT NULL,
+    product_id BIGINT NULL,
+    component_id BIGINT NULL,
+    match_type varchar(16) NOT NULL,
+    match_value TEXT NOT NULL,
+    confidence INTEGER NOT NULL DEFAULT 80,
+    status varchar(16) NOT NULL DEFAULT 'SUGGESTED',
+    rationale TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, cve, match_type, match_value)
+);
+CREATE INDEX IF NOT EXISTS idx_product_security_importartifact_tenant
+    ON product_security_importartifact(tenant_id, artifact_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_product_security_importcomponent_artifact
+    ON product_security_importcomponent(artifact_id);
+CREATE INDEX IF NOT EXISTS idx_product_security_cvecorrelation_tenant
+    ON product_security_cvecorrelation(tenant_id, status, cve);
 "#;
 
 const SQLITE_ZERO_TRUST_AGENT_SCHEMA: &str = r#"

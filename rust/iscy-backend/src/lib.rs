@@ -476,6 +476,14 @@ struct WebImportCsvForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct WebControlStatusForm {
+    status: Option<String>,
+    maturity_score: Option<i64>,
+    evidence_status: Option<String>,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebCveLlmTestForm {
     prompt: Option<String>,
 }
@@ -661,6 +669,22 @@ pub struct ProductSecurityVulnerabilityUpdateResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub result: product_security_store::ProductSecurityVulnerabilityUpdateResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductSecurityArtifactImportResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: product_security_store::ProductSecurityArtifactImportResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductSecurityCveCorrelationResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: product_security_store::ProductSecurityCveCorrelationResult,
 }
 
 #[derive(Debug, Serialize)]
@@ -976,6 +1000,22 @@ pub struct ControlLibraryResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub library: control_store::ControlLibrary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ControlStatusUpdateResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: control_store::ControlStatusUpdateResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ControlRoadmapGenerationResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: control_store::ControlRoadmapGenerationResult,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3339,6 +3379,188 @@ async fn product_security_vulnerability_update(
     }
 }
 
+async fn product_security_csaf_import(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<product_security_store::ProductSecurityArtifactImportRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .import_csaf(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(ProductSecurityArtifactImportResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_product_security_import",
+                message: format!("CSAF-Import konnte nicht verarbeitet werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_sbom_import(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<product_security_store::ProductSecurityArtifactImportRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .import_sbom(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(ProductSecurityArtifactImportResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_product_security_import",
+                message: format!("SBOM-Import konnte nicht verarbeitet werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_cve_correlations(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .suggest_cve_asset_correlations(context.tenant_id)
+        .await
+    {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(ProductSecurityCveCorrelationResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("CVE-Asset-Korrelationen konnten nicht erzeugt werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn risk_register(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
@@ -4447,6 +4669,7 @@ async fn evidence_upload(
         domain_id: optional_i64_form_field(&form.fields, "domain_id"),
         measure_id: optional_i64_form_field(&form.fields, "measure_id"),
         requirement_id: optional_i64_form_field(&form.fields, "requirement_id"),
+        control_id: optional_i64_form_field(&form.fields, "control_id"),
         incident_id: optional_i64_form_field(&form.fields, "incident_id"),
         title: form.fields.get("title").cloned().unwrap_or_default(),
         description: form.fields.get("description").cloned().unwrap_or_default(),
@@ -5483,6 +5706,132 @@ async fn control_library(State(state): State<AppState>, headers: HeaderMap) -> R
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Control Library konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn control_status_update(
+    Path(control_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<control_store::ControlStatusUpdateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.control_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Control-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .update_status(context.tenant_id, context.user_id, control_id, payload)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(ControlStatusUpdateResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "control_not_found",
+                message: format!("ISCY-Control '{}' wurde nicht gefunden.", control_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_control_status",
+                message: format!("Control-Status konnte nicht aktualisiert werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn control_roadmap_generate(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.control_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Control-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store.generate_roadmap_from_gaps(context.tenant_id).await {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(ControlRoadmapGenerationResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("ISCY-27 Gap-Roadmap konnte nicht erzeugt werden: {err}"),
             }),
         )
             .into_response(),
@@ -7092,6 +7441,7 @@ async fn web_evidence_upload(
         domain_id: optional_i64_form_field(&form.fields, "domain_id"),
         measure_id: optional_i64_form_field(&form.fields, "measure_id"),
         requirement_id: optional_i64_form_field(&form.fields, "requirement_id"),
+        control_id: optional_i64_form_field(&form.fields, "control_id"),
         incident_id: optional_i64_form_field(&form.fields, "incident_id"),
         title: form.fields.get("title").cloned().unwrap_or_default(),
         description: form.fields.get("description").cloned().unwrap_or_default(),
@@ -7721,6 +8071,9 @@ async fn web_controls(
     let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("ISCY-27 Controls", "/controls/");
     };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
     let Some(store) = state.control_store else {
         return web_store_missing("ISCY-27 Controls", "/controls/", &context, "Control");
     };
@@ -7745,25 +8098,97 @@ async fn web_controls(
                 .controls
                 .iter()
                 .map(|control| {
+                    let status_cell = if can_write {
+                        format!(
+                            r#"<form class="inline-form" method="post" action="{}">
+                                <select name="status">{}</select>
+                                <input name="maturity_score" type="number" min="0" max="5" value="{}">
+                                <select name="evidence_status">{}</select>
+                                <input name="notes" type="text" value="{}">
+                                <button type="submit">Speichern</button>
+                              </form>"#,
+                            web_path_with_context(
+                                &format!("/controls/{}/status", control.id),
+                                Some(&context),
+                            ),
+                            control_status_options_for(&control.status),
+                            control.maturity_score,
+                            control_evidence_status_options_for(&control.evidence_status),
+                            html_escape(&control.tenant_notes),
+                        )
+                    } else {
+                        format!(
+                            "{}<br>{}/{}<br>{}",
+                            web_badge(
+                                &control.status_label,
+                                control_status_badge_class(&control.status),
+                            ),
+                            control.maturity_score,
+                            control.maturity_target,
+                            web_badge(
+                                &control.evidence_status_label,
+                                evidence_status_badge_class(&control.evidence_status),
+                            ),
+                        )
+                    };
                     format!(
-                        r#"<tr><td>{}</td><td><strong>{}</strong><p>{}</p></td><td>{}</td><td>{}</td><td>{}/{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        r#"<tr><td>{}</td><td><strong>{}</strong><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}/{}</td><td>{}</td></tr>"#,
                         html_escape(&control.code),
                         html_escape(&control.title),
                         html_escape(&control.objective),
                         html_escape(&control.group_name),
-                        web_badge(&control.status_label, control_status_badge_class(&control.status)),
-                        control.maturity_score,
-                        control.maturity_target,
-                        web_badge(
-                            &control.evidence_status_label,
-                            evidence_status_badge_class(&control.evidence_status),
-                        ),
+                        status_cell,
                         framework_badges(&control.frameworks),
-                        html_escape(&control.tenant_notes),
+                        control.evidence_count,
+                        control.roadmap_open_task_count,
+                        control.roadmap_task_count,
+                        html_escape(control.owner_display.as_deref().unwrap_or("-")),
                     )
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            let control_options = library
+                .controls
+                .iter()
+                .map(|control| {
+                    format!(
+                        r#"<option value="{}">{} · {}</option>"#,
+                        control.id,
+                        html_escape(&control.code),
+                        html_escape(&control.title),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let action_panel = if can_write {
+                format!(
+                    r#"<article class="panel wide">
+                        <h2>Control-Arbeit</h2>
+                        <form method="post" action="{}">
+                          <button type="submit">Gap-Tasks erzeugen</button>
+                        </form>
+                        <form method="post" action="{}" enctype="multipart/form-data">
+                          <input type="hidden" name="return_to" value="{}">
+                          <div class="form-grid">
+                            <label>Control<select name="control_id">{}</select></label>
+                            <label>Titel<input name="title" type="text" required></label>
+                            <label>Status<select name="status">{}</select></label>
+                          </div>
+                          <label>Linked Requirement<input name="linked_requirement" type="text" value="ISCY-27"></label>
+                          <label>Beschreibung<textarea name="description" rows="3"></textarea></label>
+                          <label>Datei<input name="file" type="file" accept=".pdf,.docx,.xlsx,.png,.jpg,.jpeg,.csv,.txt"></label>
+                          <button type="submit">Evidence an Control haengen</button>
+                        </form>
+                      </article>"#,
+                    web_path_with_context("/controls/roadmap/generate", Some(&context)),
+                    web_path_with_context("/evidence/", Some(&context)),
+                    html_escape(&web_path_with_context("/controls/", Some(&context))),
+                    control_options,
+                    evidence_status_options_for("SUBMITTED"),
+                )
+            } else {
+                String::new()
+            };
             let mapping_rows = library
                 .controls
                 .iter()
@@ -7807,10 +8232,11 @@ async fn web_controls(
                   <article class="panel wide">
                     <h2>27-Control Heatmap</h2>
                     <table>
-                      <thead><tr><th>Control</th><th>Titel</th><th>Gruppe</th><th>Status</th><th>Score</th><th>Nachweis</th><th>Frameworks</th><th>Notiz</th></tr></thead>
+                      <thead><tr><th>Control</th><th>Titel</th><th>Gruppe</th><th>Status / Reife / Nachweis</th><th>Frameworks</th><th>Evidence</th><th>Roadmap</th><th>Owner</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                   </article>
+                  {}
                   <article class="panel wide">
                     <h2>Regulatory Crosswalk</h2>
                     <table>
@@ -7836,6 +8262,7 @@ async fn web_controls(
                 } else {
                     control_rows
                 },
+                action_panel,
                 if mapping_rows.is_empty() {
                     web_empty_row(6, "Keine Regulatory Mappings vorhanden.")
                 } else {
@@ -7845,6 +8272,101 @@ async fn web_controls(
             web_page("ISCY-27 Controls", "/controls/", Some(&context), &body)
         }
         Err(err) => web_error_page("ISCY-27 Controls", "/controls/", &context, &err.to_string()),
+    }
+}
+
+async fn web_control_status_submit(
+    Path(control_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebControlStatusForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("ISCY-27 Controls", "/controls/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "ISCY-27 Controls",
+            "/controls/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.control_store else {
+        return web_store_missing("ISCY-27 Controls", "/controls/", &context, "Control")
+            .into_response();
+    };
+    let payload = control_store::ControlStatusUpdateRequest {
+        status: form.status,
+        maturity_score: form.maturity_score,
+        evidence_status: form.evidence_status,
+        notes: form.notes,
+        owner_id: Some(auth_context.user_id),
+    };
+    match store
+        .update_status(
+            auth_context.tenant_id,
+            auth_context.user_id,
+            control_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => {
+            Redirect::to(&web_path_with_context("/controls/", Some(&context))).into_response()
+        }
+        Ok(None) => web_error_page(
+            "ISCY-27 Controls",
+            "/controls/",
+            &context,
+            "ISCY-Control wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page("ISCY-27 Controls", "/controls/", &context, &err.to_string())
+            .into_response(),
+    }
+}
+
+async fn web_control_roadmap_generate_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("ISCY-27 Controls", "/controls/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "ISCY-27 Controls",
+            "/controls/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.control_store else {
+        return web_store_missing("ISCY-27 Controls", "/controls/", &context, "Control")
+            .into_response();
+    };
+    match store
+        .generate_roadmap_from_gaps(auth_context.tenant_id)
+        .await
+    {
+        Ok(_) => Redirect::to(&web_path_with_context("/roadmap/", Some(&context))).into_response(),
+        Err(err) => web_error_page("ISCY-27 Controls", "/controls/", &context, &err.to_string())
+            .into_response(),
     }
 }
 async fn web_assessments(
@@ -8384,6 +8906,9 @@ async fn web_product_security(
     let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Product Security", "/product-security/");
     };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
     let Some(store) = state.product_security_store else {
         return web_store_missing(
             "Product Security",
@@ -8464,6 +8989,63 @@ async fn web_product_security(
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            let product_options = overview
+                .products
+                .iter()
+                .map(|product| {
+                    format!(
+                        r#"<option value="{}">{} · {}</option>"#,
+                        product.id,
+                        html_escape(&product.code),
+                        html_escape(&product.name),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let import_panel = if can_write {
+                format!(
+                    r#"<article class="panel wide">
+                    <h2>Security Advisories & SBOM</h2>
+                    <div class="grid">
+                      <form method="post" action="{}" enctype="multipart/form-data">
+                        <h3>CSAF importieren</h3>
+                        <label>Produkt<select name="product_id"><option value="">Tenantweit</option>{}</select></label>
+                        <label>Datei<input name="file" type="file" accept=".json,.csaf" required></label>
+                        <button type="submit">CSAF validieren</button>
+                      </form>
+                      <form method="post" action="{}" enctype="multipart/form-data">
+                        <h3>SBOM importieren</h3>
+                        <label>Produkt<select name="product_id"><option value="">Tenantweit</option>{}</select></label>
+                        <label>Datei<input name="file" type="file" accept=".json,.spdx,.cdx" required></label>
+                        <button type="submit">SBOM abgleichen</button>
+                      </form>
+                      <form method="post" action="{}">
+                        <h3>CVE-Korrelation</h3>
+                        <button type="submit">CVE-Asset-Vorschlaege erzeugen</button>
+                      </form>
+                    </div>
+                  </article>"#,
+                    web_path_with_context("/product-security/import/csaf", Some(&context)),
+                    product_options,
+                    web_path_with_context("/product-security/import/sbom", Some(&context)),
+                    overview
+                        .products
+                        .iter()
+                        .map(|product| {
+                            format!(
+                                r#"<option value="{}">{} · {}</option>"#,
+                                product.id,
+                                html_escape(&product.code),
+                                html_escape(&product.name),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(""),
+                    web_path_with_context("/product-security/cve-correlations", Some(&context)),
+                )
+            } else {
+                String::new()
+            };
             let body = format!(
                 r#"
                 <section class="hero compact"><h1>Product Security</h1><p>Tenant {} · {}</p></section>
@@ -8496,6 +9078,7 @@ async fn web_product_security(
                       <tbody>{}</tbody>
                     </table>
                   </article>
+                  {}
                 </section>
                 "#,
                 overview.tenant_id,
@@ -8523,6 +9106,7 @@ async fn web_product_security(
                 } else {
                     snapshot_rows
                 },
+                import_panel,
             );
             web_page(
                 "Product Security",
@@ -8543,6 +9127,142 @@ async fn web_product_security(
             &context,
             &err.to_string(),
         ),
+    }
+}
+
+async fn web_product_security_import_csaf(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    web_product_security_import(state, headers, body, "CSAF").await
+}
+
+async fn web_product_security_import_sbom(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    web_product_security_import(state, headers, body, "SBOM").await
+}
+
+async fn web_product_security_import(
+    state: AppState,
+    headers: HeaderMap,
+    body: Bytes,
+    artifact_type: &str,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Product Security", "/product-security/").into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Product Security",
+        )
+        .into_response();
+    };
+    let form = match parse_import_upload_form(&headers, &body) {
+        Ok(form) => form,
+        Err(message) => {
+            return web_error_page("Product Security", "/product-security/", &context, &message)
+                .into_response();
+        }
+    };
+    let payload = match product_security_import_request_from_form(&form) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return web_error_page("Product Security", "/product-security/", &context, &message)
+                .into_response();
+        }
+    };
+    let result = if artifact_type == "CSAF" {
+        store
+            .import_csaf(auth_context.tenant_id, auth_context.user_id, payload)
+            .await
+    } else {
+        store
+            .import_sbom(auth_context.tenant_id, auth_context.user_id, payload)
+            .await
+    };
+    match result {
+        Ok(_) => Redirect::to(&web_path_with_context("/product-security/", Some(&context)))
+            .into_response(),
+        Err(err) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_product_security_cve_correlations_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Product Security", "/product-security/").into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Product Security",
+        )
+        .into_response();
+    };
+    match store
+        .suggest_cve_asset_correlations(auth_context.tenant_id)
+        .await
+    {
+        Ok(_) => Redirect::to(&web_path_with_context("/product-security/", Some(&context)))
+            .into_response(),
+        Err(err) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
     }
 }
 fn selected_attr(selected: bool) -> &'static str {
@@ -11852,6 +12572,24 @@ fn import_upload_file_from_form(form: &ImportUploadFormData) -> Result<ImportUpl
     })
 }
 
+fn product_security_import_request_from_form(
+    form: &ImportUploadFormData,
+) -> Result<product_security_store::ProductSecurityArtifactImportRequest, String> {
+    let file = form
+        .file
+        .as_ref()
+        .ok_or_else(|| "Bitte eine CSAF- oder SBOM-JSON-Datei auswaehlen.".to_string())?;
+    let document: Value = serde_json::from_slice(&file.data)
+        .map_err(|err| format!("JSON-Datei konnte nicht gelesen werden: {err}"))?;
+    Ok(
+        product_security_store::ProductSecurityArtifactImportRequest {
+            product_id: optional_i64_form_field(&form.fields, "product_id"),
+            file_name: file.filename.clone(),
+            document,
+        },
+    )
+}
+
 fn required_import_type_field(fields: &HashMap<String, String>) -> Result<String, String> {
     fields
         .get("import_type")
@@ -12291,6 +13029,46 @@ fn evidence_status_options_for(selected_status: &str) -> String {
             r#"<option value="{}"{}>{}</option>"#,
             html_escape(code),
             selected,
+            html_escape(label),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn control_status_options_for(selected_status: &str) -> String {
+    [
+        ("GAP", "Fehlt"),
+        ("PARTIAL", "Teilweise"),
+        ("IMPLEMENTED", "Umgesetzt"),
+        ("EFFECTIVE", "Wirksam"),
+        ("NOT_APPLICABLE", "Nicht anwendbar"),
+    ]
+    .iter()
+    .map(|(code, label)| {
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            html_escape(code),
+            selected_attr(*code == selected_status),
+            html_escape(label),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn control_evidence_status_options_for(selected_status: &str) -> String {
+    [
+        ("MISSING", "Fehlt"),
+        ("PARTIAL", "Teilweise"),
+        ("EVIDENCED", "Nachgewiesen"),
+    ]
+    .iter()
+    .map(|(code, label)| {
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            html_escape(code),
+            selected_attr(*code == selected_status),
             html_escape(label),
         )
     })
@@ -13218,6 +13996,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/catalog/domains", get(catalog_domains))
         .route("/api/v1/controls", get(control_library))
+        .route(
+            "/api/v1/controls/{control_id}/status",
+            patch(control_status_update),
+        )
+        .route(
+            "/api/v1/controls/roadmap/generate",
+            post(control_roadmap_generate),
+        )
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
         .route("/api/v1/agents/posture", get(agent_posture))
         .route("/api/v1/agents/devices", get(agent_devices))
@@ -13256,6 +14042,18 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/product-security/vulnerabilities/{vulnerability_id}",
             patch(product_security_vulnerability_update),
+        )
+        .route(
+            "/api/v1/product-security/import/csaf",
+            post(product_security_csaf_import),
+        )
+        .route(
+            "/api/v1/product-security/import/sbom",
+            post(product_security_sbom_import),
+        )
+        .route(
+            "/api/v1/product-security/cve-correlations",
+            post(product_security_cve_correlations),
         )
         .route("/api/v1/risks", get(risk_register).post(risk_create))
         .route(
@@ -13395,6 +14193,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(web_incident_timeline_export_json),
         )
         .route("/controls/", get(web_controls))
+        .route(
+            "/controls/{control_id}/status",
+            post(web_control_status_submit),
+        )
+        .route(
+            "/controls/roadmap/generate",
+            post(web_control_roadmap_generate_submit),
+        )
         .route("/catalog/", get(web_catalog))
         .route("/reports/", get(web_reports))
         .route("/roadmap/", get(web_roadmap))
@@ -13413,6 +14219,18 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/admin/users/{user_id}", post(web_admin_user_update))
         .route("/product-security/", get(web_product_security))
+        .route(
+            "/product-security/import/csaf",
+            post(web_product_security_import_csaf),
+        )
+        .route(
+            "/product-security/import/sbom",
+            post(web_product_security_import_sbom),
+        )
+        .route(
+            "/product-security/cve-correlations",
+            post(web_product_security_cve_correlations_submit),
+        )
         .route("/cves/", get(web_cves).post(web_cves_submit))
         .route(
             "/cves/llm-test/",

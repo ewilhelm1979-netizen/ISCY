@@ -40,6 +40,7 @@ pub struct EvidenceItemSummary {
     pub requirement_framework: Option<String>,
     pub requirement_code: Option<String>,
     pub requirement_title: Option<String>,
+    pub control_id: Option<i64>,
     pub incident_id: Option<i64>,
     pub incident_title: Option<String>,
     pub mapping_program_name: Option<String>,
@@ -108,6 +109,7 @@ pub struct EvidenceItemCreateRequest {
     pub domain_id: Option<i64>,
     pub measure_id: Option<i64>,
     pub requirement_id: Option<i64>,
+    pub control_id: Option<i64>,
     pub incident_id: Option<i64>,
     pub title: String,
     pub description: String,
@@ -489,6 +491,7 @@ async fn create_evidence_item_postgres(
             domain_id,
             measure_id,
             requirement_id,
+            control_id,
             incident_id,
             title,
             description,
@@ -502,7 +505,7 @@ async fn create_evidence_item_postgres(
             created_at,
             updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NULL, NULL, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL, NULL, NOW(), NOW())
         RETURNING id
         "#,
     )
@@ -511,6 +514,7 @@ async fn create_evidence_item_postgres(
     .bind(payload.domain_id)
     .bind(payload.measure_id)
     .bind(payload.requirement_id)
+    .bind(payload.control_id)
     .bind(payload.incident_id)
     .bind(title)
     .bind(description)
@@ -549,6 +553,7 @@ async fn create_evidence_item_sqlite(
             domain_id,
             measure_id,
             requirement_id,
+            control_id,
             incident_id,
             title,
             description,
@@ -562,7 +567,7 @@ async fn create_evidence_item_sqlite(
             created_at,
             updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, NULL, datetime('now'), datetime('now'))
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, NULL, datetime('now'), datetime('now'))
         "#,
     )
     .bind(tenant_id)
@@ -570,6 +575,7 @@ async fn create_evidence_item_sqlite(
     .bind(payload.domain_id)
     .bind(payload.measure_id)
     .bind(payload.requirement_id)
+    .bind(payload.control_id)
     .bind(payload.incident_id)
     .bind(title)
     .bind(description)
@@ -604,6 +610,7 @@ async fn list_evidence_items_postgres(
             req.framework AS requirement_framework,
             req.code AS requirement_code,
             req.title AS requirement_title,
+            item.control_id,
             item.incident_id,
             incident.title AS incident_title,
             mv.program_name AS mapping_program_name,
@@ -683,6 +690,7 @@ async fn list_evidence_items_sqlite(
             req.framework AS requirement_framework,
             req.code AS requirement_code,
             req.title AS requirement_title,
+            item.control_id,
             item.incident_id,
             incident.title AS incident_title,
             mv.program_name AS mapping_program_name,
@@ -985,6 +993,7 @@ fn evidence_item_detail_postgres_sql() -> &'static str {
         req.framework AS requirement_framework,
         req.code AS requirement_code,
         req.title AS requirement_title,
+        item.control_id,
         item.incident_id,
         incident.title AS incident_title,
         mv.program_name AS mapping_program_name,
@@ -1043,6 +1052,7 @@ fn evidence_item_detail_sqlite_sql() -> &'static str {
         req.framework AS requirement_framework,
         req.code AS requirement_code,
         req.title AS requirement_title,
+        item.control_id,
         item.incident_id,
         incident.title AS incident_title,
         mv.program_name AS mapping_program_name,
@@ -1101,6 +1111,7 @@ fn evidence_item_from_pg_row(row: PgRow) -> Result<EvidenceItemSummary, sqlx::Er
         requirement_framework: row.try_get("requirement_framework")?,
         requirement_code: row.try_get("requirement_code")?,
         requirement_title: row.try_get("requirement_title")?,
+        control_id: row.try_get("control_id")?,
         incident_id: row.try_get("incident_id")?,
         incident_title: row.try_get("incident_title")?,
         mapping_program_name: row.try_get("mapping_program_name")?,
@@ -1138,6 +1149,7 @@ fn evidence_item_from_sqlite_row(row: SqliteRow) -> Result<EvidenceItemSummary, 
         requirement_framework: row.try_get("requirement_framework")?,
         requirement_code: row.try_get("requirement_code")?,
         requirement_title: row.try_get("requirement_title")?,
+        control_id: row.try_get("control_id")?,
         incident_id: row.try_get("incident_id")?,
         incident_title: row.try_get("incident_title")?,
         mapping_program_name: row.try_get("mapping_program_name")?,
@@ -1292,6 +1304,18 @@ async fn validate_evidence_item_refs_postgres(
             bail!("Incident {incident_id} wurde fuer diesen Tenant nicht gefunden.");
         }
     }
+    if let Some(control_id) = payload.control_id {
+        let exists: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM iscy_control_control WHERE id = $1 AND is_active = TRUE",
+        )
+        .bind(control_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-ISCY-Control fuer Evidence konnte nicht validiert werden")?;
+        if exists.is_none() {
+            bail!("ISCY-Control {control_id} wurde nicht gefunden.");
+        }
+    }
     Ok(())
 }
 
@@ -1335,6 +1359,18 @@ async fn validate_evidence_item_refs_sqlite(
         .context("SQLite-Incident fuer Evidence konnte nicht validiert werden")?;
         if exists.is_none() {
             bail!("Incident {incident_id} wurde fuer diesen Tenant nicht gefunden.");
+        }
+    }
+    if let Some(control_id) = payload.control_id {
+        let exists: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM iscy_control_control WHERE id = ?1 AND is_active = 1",
+        )
+        .bind(control_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-ISCY-Control fuer Evidence konnte nicht validiert werden")?;
+        if exists.is_none() {
+            bail!("ISCY-Control {control_id} wurde nicht gefunden.");
         }
     }
     Ok(())

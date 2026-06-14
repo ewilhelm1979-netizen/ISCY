@@ -2012,6 +2012,136 @@ async fn product_security_vulnerability_update_blocks_foreign_tenant_vulnerabili
 }
 
 #[tokio::test]
+async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let csaf_payload = serde_json::json!({
+        "product_id": 100,
+        "file_name": "iscy-2026-import.json",
+        "document": {
+            "document": {
+                "title": "ISCY Import Advisory",
+                "category": "Security Advisory",
+                "tracking": {
+                    "id": "ISCY-2026-ADV-IMPORT",
+                    "status": "final",
+                    "revision_history": [{"number": "1"}]
+                }
+            },
+            "vulnerabilities": [{
+                "cve": "CVE-2026-0001",
+                "product_status": {
+                    "known_affected": ["sensor-gateway-firmware-1.0.3"]
+                }
+            }]
+        }
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/import/csaf")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(csaf_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["artifact_type"], "CSAF");
+    assert_eq!(payload["validation_status"], "VALID");
+    assert_eq!(payload["cve_count"], 1);
+    let advisory_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_securityadvisory WHERE tenant_id = 42 AND csaf_document_id = 'ISCY-2026-ADV-IMPORT'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(advisory_count, 1);
+
+    let sbom_payload = serde_json::json!({
+        "product_id": 100,
+        "file_name": "sensor-gateway-1.0.3.cdx.json",
+        "document": {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "serialNumber": "urn:uuid:iscy-sbom-import",
+            "components": [{
+                "name": "Gateway Firmware",
+                "version": "1.0.3",
+                "purl": "pkg:generic/iscy/sensor-gateway-firmware@1.0.3",
+                "cpe": "cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*",
+                "supplier": {"name": "Secure Supplier"}
+            }]
+        }
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/import/sbom")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(sbom_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["artifact_type"], "SBOM");
+    assert_eq!(payload["component_count"], 1);
+    assert_eq!(payload["matched_component_count"], 1);
+    let matched_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_importcomponent WHERE tenant_id = 42 AND component_id = 250 AND match_status = 'MATCHED'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(matched_count, 1);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/cve-correlations")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["created_suggestions"].as_i64().unwrap() >= 2);
+    assert!(payload["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["asset_id"] == 700 && item["match_type"] == "CPE"));
+}
+
+#[tokio::test]
 async fn risk_register_requires_authenticated_tenant_context() {
     let response = app_router()
         .oneshot(
@@ -6224,7 +6354,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0012_rust_incident_runbook_template_library",
             "0013_rust_incident_runbook_tasks_timeline_markers",
             "0014_rust_review_supply_chain_metadata",
-            "0015_rust_iscy27_control_core"
+            "0015_rust_iscy27_control_core",
+            "0016_rust_control_evidence_product_imports"
         ]
     );
     assert!(
@@ -6303,6 +6434,16 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     );
     assert!(
         db_admin::sqlite_table_exists(&pool, "iscy_control_tenantstatus")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "product_security_importartifact")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "product_security_cvecorrelation")
             .await
             .unwrap()
     );
@@ -6475,9 +6616,12 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
         .any(|mapping| mapping["framework"] == "NIS2"));
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/controls/?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -6490,6 +6634,95 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     assert!(html.contains("Incident Response"));
     assert!(html.contains("DORA"));
     assert!(html.contains("M&amp;A-Governance"));
+    assert!(html.contains("Control-Arbeit"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/controls/1/status")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(
+                    r#"{"status":"IMPLEMENTED","maturity_score":3,"evidence_status":"PARTIAL","notes":"Updated from Rust test"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM iscy_control_tenantstatus WHERE tenant_id = 1 AND control_id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "IMPLEMENTED");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/controls/roadmap/generate")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["created_tasks"].as_i64().unwrap() > 0);
+    let control_task_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM roadmap_roadmaptask WHERE control_id IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(control_task_count > 0);
+
+    let media_root = test_media_root("control-evidence-cutover");
+    let evidence_app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+    let boundary = "iscy-control-evidence-upload-boundary";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("title", "Control Evidence"),
+            ("description", "Evidence linked to ISCY-01"),
+            ("control_id", "1"),
+            ("linked_requirement", "ISCY-01"),
+            ("status", "SUBMITTED"),
+        ],
+        Some(("file", "control.txt", "text/plain", b"control evidence\n")),
+    );
+    let response = evidence_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/uploads")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["item"]["control_id"], 1);
 
     let mapping_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM requirements_app_requirementquestionmapping")
@@ -7889,6 +8122,20 @@ async fn create_product_security_tables(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
+        CREATE TABLE assets_app_informationasset (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL,
+            cpe23_uri TEXT NOT NULL DEFAULT '',
+            package_url TEXT NOT NULL DEFAULT ''
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
         CREATE TABLE product_security_productfamily (
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
@@ -8187,6 +8434,77 @@ async fn create_product_security_tables(pool: &SqlitePool) {
     .execute(pool)
     .await
     .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_importartifact (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NULL,
+            artifact_type varchar(16) NOT NULL,
+            file_name varchar(255) NOT NULL DEFAULT '',
+            document_id varchar(255) NOT NULL DEFAULT '',
+            format_name varchar(32) NOT NULL DEFAULT '',
+            format_version varchar(64) NOT NULL DEFAULT '',
+            validation_status varchar(16) NOT NULL DEFAULT 'VALID',
+            validation_errors_json TEXT NOT NULL DEFAULT '[]',
+            component_count INTEGER NOT NULL DEFAULT 0,
+            matched_component_count INTEGER NOT NULL DEFAULT 0,
+            cve_count INTEGER NOT NULL DEFAULT 0,
+            created_by_id INTEGER NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_importcomponent (
+            id INTEGER PRIMARY KEY,
+            artifact_id INTEGER NOT NULL,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NULL,
+            component_id INTEGER NULL,
+            name varchar(255) NOT NULL DEFAULT '',
+            version varchar(128) NOT NULL DEFAULT '',
+            package_url TEXT NOT NULL DEFAULT '',
+            cpe23_uri TEXT NOT NULL DEFAULT '',
+            supplier_name varchar(255) NOT NULL DEFAULT '',
+            match_status varchar(16) NOT NULL DEFAULT 'UNMATCHED',
+            match_reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_cvecorrelation (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            cve_record_id INTEGER NULL,
+            cve varchar(50) NOT NULL,
+            asset_id INTEGER NULL,
+            product_id INTEGER NULL,
+            component_id INTEGER NULL,
+            match_type varchar(16) NOT NULL,
+            match_value TEXT NOT NULL,
+            confidence INTEGER NOT NULL DEFAULT 80,
+            status varchar(16) NOT NULL DEFAULT 'SUGGESTED',
+            rationale TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(tenant_id, cve, match_type, match_value)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn insert_product_security_fixture(pool: &SqlitePool) {
@@ -8207,6 +8525,21 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
         r#"
         INSERT INTO organizations_supplier (id, tenant_id, name)
         VALUES (50, 42, 'Secure Supplier')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO assets_app_informationasset (id, tenant_id, name, cpe23_uri, package_url)
+        VALUES (
+            700,
+            42,
+            'Gateway Firmware Asset',
+            'cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*',
+            'pkg:generic/iscy/sensor-gateway-firmware@1.0.3'
+        )
         "#,
     )
     .execute(pool)
@@ -8989,7 +9322,7 @@ async fn create_risk_tables(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
-        CREATE TABLE assets_app_informationasset (
+        CREATE TABLE IF NOT EXISTS assets_app_informationasset (
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
             name varchar(255) NOT NULL
@@ -9613,6 +9946,7 @@ async fn create_incident_evidence_support_tables(pool: &SqlitePool) {
             domain_id INTEGER NULL,
             measure_id INTEGER NULL,
             requirement_id INTEGER NULL,
+            control_id INTEGER NULL,
             incident_id INTEGER NULL,
             title varchar(255) NOT NULL,
             description TEXT NOT NULL,
@@ -9753,6 +10087,7 @@ async fn create_evidence_tables(pool: &SqlitePool) {
             domain_id INTEGER NULL,
             measure_id INTEGER NULL,
             requirement_id INTEGER NULL,
+            control_id INTEGER NULL,
             incident_id INTEGER NULL,
             title varchar(255) NOT NULL,
             description TEXT NOT NULL,
@@ -10468,6 +10803,7 @@ async fn create_roadmap_tables(pool: &SqlitePool) {
             updated_at TEXT NOT NULL,
             phase_id INTEGER NOT NULL,
             measure_id INTEGER NULL,
+            control_id INTEGER NULL,
             title varchar(255) NOT NULL,
             description TEXT NOT NULL,
             priority varchar(32) NOT NULL,
@@ -10900,7 +11236,8 @@ async fn create_wizard_tables(pool: &SqlitePool) {
         CREATE TABLE evidence_evidenceitem (
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
-            session_id INTEGER NULL
+            session_id INTEGER NULL,
+            control_id INTEGER NULL
         )
         "#,
     )
@@ -10984,6 +11321,7 @@ async fn create_wizard_tables(pool: &SqlitePool) {
             updated_at TEXT NOT NULL,
             phase_id INTEGER NOT NULL,
             measure_id INTEGER NULL,
+            control_id INTEGER NULL,
             title varchar(255) NOT NULL,
             description TEXT NOT NULL,
             priority varchar(32) NOT NULL,
@@ -11595,7 +11933,8 @@ async fn create_dashboard_tables(pool: &SqlitePool) {
         r#"
         CREATE TABLE evidence_evidenceitem (
             id INTEGER PRIMARY KEY,
-            tenant_id INTEGER NOT NULL
+            tenant_id INTEGER NOT NULL,
+            control_id INTEGER NULL
         )
         "#,
     )
@@ -11629,6 +11968,7 @@ async fn create_dashboard_tables(pool: &SqlitePool) {
         CREATE TABLE roadmap_roadmaptask (
             id INTEGER PRIMARY KEY,
             phase_id INTEGER NOT NULL,
+            control_id INTEGER NULL,
             status varchar(16) NOT NULL
         )
         "#,

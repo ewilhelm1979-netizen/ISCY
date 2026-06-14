@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -355,6 +357,50 @@ pub struct ProductSecurityVulnerabilityUpdateResult {
     pub vulnerability: VulnerabilitySummary,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProductSecurityArtifactImportRequest {
+    pub product_id: Option<i64>,
+    pub file_name: String,
+    pub document: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityArtifactImportResult {
+    pub artifact_id: i64,
+    pub artifact_type: String,
+    pub validation_status: String,
+    pub validation_errors: Vec<String>,
+    pub component_count: i64,
+    pub matched_component_count: i64,
+    pub cve_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityCveCorrelationSummary {
+    pub id: i64,
+    pub cve: String,
+    pub asset_id: Option<i64>,
+    pub asset_name: Option<String>,
+    pub product_id: Option<i64>,
+    pub product_name: Option<String>,
+    pub component_id: Option<i64>,
+    pub component_name: Option<String>,
+    pub match_type: String,
+    pub match_value: String,
+    pub confidence: i64,
+    pub status: String,
+    pub rationale: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityCveCorrelationResult {
+    pub created_suggestions: i64,
+    pub existing_suggestions: i64,
+    pub suggestions: Vec<ProductSecurityCveCorrelationSummary>,
+}
+
 #[derive(Debug, Clone)]
 struct TenantProductSecurityContext {
     sector: String,
@@ -476,6 +522,40 @@ impl ProductSecurityStore {
             Self::Sqlite(pool) => {
                 update_vulnerability_sqlite(pool, tenant_id, vulnerability_id, payload).await
             }
+        }
+    }
+
+    pub async fn import_csaf(
+        &self,
+        tenant_id: i64,
+        user_id: i64,
+        payload: ProductSecurityArtifactImportRequest,
+    ) -> anyhow::Result<ProductSecurityArtifactImportResult> {
+        match self {
+            Self::Postgres(pool) => import_csaf_postgres(pool, tenant_id, user_id, payload).await,
+            Self::Sqlite(pool) => import_csaf_sqlite(pool, tenant_id, user_id, payload).await,
+        }
+    }
+
+    pub async fn import_sbom(
+        &self,
+        tenant_id: i64,
+        user_id: i64,
+        payload: ProductSecurityArtifactImportRequest,
+    ) -> anyhow::Result<ProductSecurityArtifactImportResult> {
+        match self {
+            Self::Postgres(pool) => import_sbom_postgres(pool, tenant_id, user_id, payload).await,
+            Self::Sqlite(pool) => import_sbom_sqlite(pool, tenant_id, user_id, payload).await,
+        }
+    }
+
+    pub async fn suggest_cve_asset_correlations(
+        &self,
+        tenant_id: i64,
+    ) -> anyhow::Result<ProductSecurityCveCorrelationResult> {
+        match self {
+            Self::Postgres(pool) => suggest_cve_asset_correlations_postgres(pool, tenant_id).await,
+            Self::Sqlite(pool) => suggest_cve_asset_correlations_sqlite(pool, tenant_id).await,
         }
     }
 }
@@ -2346,6 +2426,1516 @@ fn tenant_context_from_pg_row(row: PgRow) -> Result<TenantProductSecurityContext
         uses_ai_systems: row.try_get("uses_ai_systems")?,
         ot_iacs_scope: row.try_get("ot_iacs_scope")?,
         automotive_scope: row.try_get("automotive_scope")?,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct CsafImportDocument {
+    document_id: String,
+    title: String,
+    profile: String,
+    tracking_status: String,
+    revision: String,
+    cves: Vec<String>,
+    product_status: Value,
+    validation_errors: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SbomImportDocument {
+    format_name: String,
+    format_version: String,
+    document_id: String,
+    components: Vec<SbomImportComponent>,
+    validation_errors: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SbomImportComponent {
+    name: String,
+    version: String,
+    package_url: String,
+    cpe23_uri: String,
+    supplier_name: String,
+}
+
+#[derive(Debug, Clone)]
+struct MatchedSbomImportComponent {
+    component: SbomImportComponent,
+    component_id: Option<i64>,
+    match_status: String,
+    match_reason: String,
+}
+
+#[derive(Debug, Clone)]
+struct CveCorrelationCandidate {
+    cve: String,
+    asset_id: Option<i64>,
+    product_id: Option<i64>,
+    component_id: Option<i64>,
+    match_type: String,
+    match_value: String,
+    confidence: i64,
+    rationale: String,
+}
+
+async fn import_csaf_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    user_id: i64,
+    payload: ProductSecurityArtifactImportRequest,
+) -> anyhow::Result<ProductSecurityArtifactImportResult> {
+    validate_optional_product_postgres(pool, tenant_id, payload.product_id).await?;
+    let document = parse_csaf_document(&payload.document);
+    let validation_status = validation_status(&document.validation_errors);
+    let artifact_id = insert_import_artifact_postgres(
+        pool,
+        tenant_id,
+        user_id,
+        payload.product_id,
+        "CSAF",
+        &payload.file_name,
+        &document.document_id,
+        "CSAF",
+        "",
+        validation_status,
+        &document.validation_errors,
+        0,
+        0,
+        document.cves.len() as i64,
+    )
+    .await?;
+    if validation_status != "INVALID" {
+        if let Some(product_id) = payload.product_id {
+            upsert_csaf_advisory_postgres(
+                pool,
+                tenant_id,
+                product_id,
+                &payload.file_name,
+                &document,
+            )
+            .await?;
+        }
+    }
+    Ok(ProductSecurityArtifactImportResult {
+        artifact_id,
+        artifact_type: "CSAF".to_string(),
+        validation_status: validation_status.to_string(),
+        validation_errors: document.validation_errors,
+        component_count: 0,
+        matched_component_count: 0,
+        cve_count: document.cves.len() as i64,
+    })
+}
+
+async fn import_csaf_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    user_id: i64,
+    payload: ProductSecurityArtifactImportRequest,
+) -> anyhow::Result<ProductSecurityArtifactImportResult> {
+    validate_optional_product_sqlite(pool, tenant_id, payload.product_id).await?;
+    let document = parse_csaf_document(&payload.document);
+    let validation_status = validation_status(&document.validation_errors);
+    let artifact_id = insert_import_artifact_sqlite(
+        pool,
+        tenant_id,
+        user_id,
+        payload.product_id,
+        "CSAF",
+        &payload.file_name,
+        &document.document_id,
+        "CSAF",
+        "",
+        validation_status,
+        &document.validation_errors,
+        0,
+        0,
+        document.cves.len() as i64,
+    )
+    .await?;
+    if validation_status != "INVALID" {
+        if let Some(product_id) = payload.product_id {
+            upsert_csaf_advisory_sqlite(pool, tenant_id, product_id, &payload.file_name, &document)
+                .await?;
+        }
+    }
+    Ok(ProductSecurityArtifactImportResult {
+        artifact_id,
+        artifact_type: "CSAF".to_string(),
+        validation_status: validation_status.to_string(),
+        validation_errors: document.validation_errors,
+        component_count: 0,
+        matched_component_count: 0,
+        cve_count: document.cves.len() as i64,
+    })
+}
+
+async fn import_sbom_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    user_id: i64,
+    payload: ProductSecurityArtifactImportRequest,
+) -> anyhow::Result<ProductSecurityArtifactImportResult> {
+    validate_optional_product_postgres(pool, tenant_id, payload.product_id).await?;
+    let document = parse_sbom_document(&payload.document);
+    let validation_status = validation_status(&document.validation_errors);
+    let mut matched_components = Vec::new();
+    for component in &document.components {
+        let (component_id, match_reason) =
+            find_component_match_postgres(pool, tenant_id, payload.product_id, component).await?;
+        matched_components.push(MatchedSbomImportComponent {
+            component: component.clone(),
+            component_id,
+            match_status: if component_id.is_some() {
+                "MATCHED".to_string()
+            } else {
+                "UNMATCHED".to_string()
+            },
+            match_reason,
+        });
+    }
+    let matched_count = matched_components
+        .iter()
+        .filter(|component| component.component_id.is_some())
+        .count() as i64;
+    let artifact_id = insert_import_artifact_postgres(
+        pool,
+        tenant_id,
+        user_id,
+        payload.product_id,
+        "SBOM",
+        &payload.file_name,
+        &document.document_id,
+        &document.format_name,
+        &document.format_version,
+        validation_status,
+        &document.validation_errors,
+        document.components.len() as i64,
+        matched_count,
+        0,
+    )
+    .await?;
+    for component in &matched_components {
+        insert_import_component_postgres(
+            pool,
+            artifact_id,
+            tenant_id,
+            payload.product_id,
+            component,
+        )
+        .await?;
+        if let Some(component_id) = component.component_id {
+            mark_component_sbom_postgres(
+                pool,
+                tenant_id,
+                component_id,
+                &document.format_name,
+                &payload.file_name,
+                &component.component,
+            )
+            .await?;
+        }
+    }
+    Ok(ProductSecurityArtifactImportResult {
+        artifact_id,
+        artifact_type: "SBOM".to_string(),
+        validation_status: validation_status.to_string(),
+        validation_errors: document.validation_errors,
+        component_count: document.components.len() as i64,
+        matched_component_count: matched_count,
+        cve_count: 0,
+    })
+}
+
+async fn import_sbom_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    user_id: i64,
+    payload: ProductSecurityArtifactImportRequest,
+) -> anyhow::Result<ProductSecurityArtifactImportResult> {
+    validate_optional_product_sqlite(pool, tenant_id, payload.product_id).await?;
+    let document = parse_sbom_document(&payload.document);
+    let validation_status = validation_status(&document.validation_errors);
+    let mut matched_components = Vec::new();
+    for component in &document.components {
+        let (component_id, match_reason) =
+            find_component_match_sqlite(pool, tenant_id, payload.product_id, component).await?;
+        matched_components.push(MatchedSbomImportComponent {
+            component: component.clone(),
+            component_id,
+            match_status: if component_id.is_some() {
+                "MATCHED".to_string()
+            } else {
+                "UNMATCHED".to_string()
+            },
+            match_reason,
+        });
+    }
+    let matched_count = matched_components
+        .iter()
+        .filter(|component| component.component_id.is_some())
+        .count() as i64;
+    let artifact_id = insert_import_artifact_sqlite(
+        pool,
+        tenant_id,
+        user_id,
+        payload.product_id,
+        "SBOM",
+        &payload.file_name,
+        &document.document_id,
+        &document.format_name,
+        &document.format_version,
+        validation_status,
+        &document.validation_errors,
+        document.components.len() as i64,
+        matched_count,
+        0,
+    )
+    .await?;
+    for component in &matched_components {
+        insert_import_component_sqlite(pool, artifact_id, tenant_id, payload.product_id, component)
+            .await?;
+        if let Some(component_id) = component.component_id {
+            mark_component_sbom_sqlite(
+                pool,
+                tenant_id,
+                component_id,
+                &document.format_name,
+                &payload.file_name,
+                &component.component,
+            )
+            .await?;
+        }
+    }
+    Ok(ProductSecurityArtifactImportResult {
+        artifact_id,
+        artifact_type: "SBOM".to_string(),
+        validation_status: validation_status.to_string(),
+        validation_errors: document.validation_errors,
+        component_count: document.components.len() as i64,
+        matched_component_count: matched_count,
+        cve_count: 0,
+    })
+}
+
+async fn validate_optional_product_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    product_id: Option<i64>,
+) -> anyhow::Result<()> {
+    let Some(product_id) = product_id else {
+        return Ok(());
+    };
+    let exists: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM product_security_product WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(product_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Produkt fuer Product-Security-Import konnte nicht validiert werden")?;
+    if exists.is_none() {
+        bail!("Produkt {product_id} wurde fuer diesen Tenant nicht gefunden.");
+    }
+    Ok(())
+}
+
+async fn validate_optional_product_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    product_id: Option<i64>,
+) -> anyhow::Result<()> {
+    let Some(product_id) = product_id else {
+        return Ok(());
+    };
+    let exists: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM product_security_product WHERE tenant_id = ?1 AND id = ?2",
+    )
+    .bind(tenant_id)
+    .bind(product_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Produkt fuer Product-Security-Import konnte nicht validiert werden")?;
+    if exists.is_none() {
+        bail!("Produkt {product_id} wurde fuer diesen Tenant nicht gefunden.");
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_import_artifact_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    user_id: i64,
+    product_id: Option<i64>,
+    artifact_type: &str,
+    file_name: &str,
+    document_id: &str,
+    format_name: &str,
+    format_version: &str,
+    validation_status: &str,
+    validation_errors: &[String],
+    component_count: i64,
+    matched_component_count: i64,
+    cve_count: i64,
+) -> anyhow::Result<i64> {
+    let validation_errors_json =
+        serde_json::to_string(validation_errors).unwrap_or_else(|_| "[]".to_string());
+    sqlx::query_scalar(
+        r#"
+        INSERT INTO product_security_importartifact (
+            tenant_id, product_id, artifact_type, file_name, document_id,
+            format_name, format_version, validation_status, validation_errors_json,
+            component_count, matched_component_count, cve_count, created_by_id,
+            created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW()::text, NOW()::text)
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(product_id)
+    .bind(artifact_type)
+    .bind(file_name.trim())
+    .bind(document_id.trim())
+    .bind(format_name.trim())
+    .bind(format_version.trim())
+    .bind(validation_status)
+    .bind(validation_errors_json)
+    .bind(component_count)
+    .bind(matched_component_count)
+    .bind(cve_count)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Product-Security-Importartefakt konnte nicht erstellt werden")
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_import_artifact_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    user_id: i64,
+    product_id: Option<i64>,
+    artifact_type: &str,
+    file_name: &str,
+    document_id: &str,
+    format_name: &str,
+    format_version: &str,
+    validation_status: &str,
+    validation_errors: &[String],
+    component_count: i64,
+    matched_component_count: i64,
+    cve_count: i64,
+) -> anyhow::Result<i64> {
+    let validation_errors_json =
+        serde_json::to_string(validation_errors).unwrap_or_else(|_| "[]".to_string());
+    let result = sqlx::query(
+        r#"
+        INSERT INTO product_security_importartifact (
+            tenant_id, product_id, artifact_type, file_name, document_id,
+            format_name, format_version, validation_status, validation_errors_json,
+            component_count, matched_component_count, cve_count, created_by_id,
+            created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'), datetime('now'))
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(product_id)
+    .bind(artifact_type)
+    .bind(file_name.trim())
+    .bind(document_id.trim())
+    .bind(format_name.trim())
+    .bind(format_version.trim())
+    .bind(validation_status)
+    .bind(validation_errors_json)
+    .bind(component_count)
+    .bind(matched_component_count)
+    .bind(cve_count)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .context("SQLite-Product-Security-Importartefakt konnte nicht erstellt werden")?;
+    Ok(result.last_insert_rowid())
+}
+
+async fn find_component_match_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    product_id: Option<i64>,
+    component: &SbomImportComponent,
+) -> anyhow::Result<(Option<i64>, String)> {
+    if !component.package_url.is_empty() {
+        if let Some(id) = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT id
+            FROM product_security_component
+            WHERE tenant_id = $1
+              AND ($2::bigint IS NULL OR product_id = $2)
+              AND package_url = $3
+              AND package_url <> ''
+            ORDER BY id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(product_id)
+        .bind(&component.package_url)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Komponentenmatch per PURL fehlgeschlagen")?
+        {
+            return Ok((Some(id), "PURL exact match".to_string()));
+        }
+    }
+    if !component.cpe23_uri.is_empty() {
+        if let Some(id) = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT id
+            FROM product_security_component
+            WHERE tenant_id = $1
+              AND ($2::bigint IS NULL OR product_id = $2)
+              AND cpe23_uri = $3
+              AND cpe23_uri <> ''
+            ORDER BY id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(product_id)
+        .bind(&component.cpe23_uri)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Komponentenmatch per CPE fehlgeschlagen")?
+        {
+            return Ok((Some(id), "CPE exact match".to_string()));
+        }
+    }
+    if !component.name.is_empty() {
+        if let Some(id) = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT id
+            FROM product_security_component
+            WHERE tenant_id = $1
+              AND ($2::bigint IS NULL OR product_id = $2)
+              AND LOWER(name) = LOWER($3)
+              AND version = $4
+            ORDER BY id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(product_id)
+        .bind(&component.name)
+        .bind(&component.version)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Komponentenmatch per Name/Version fehlgeschlagen")?
+        {
+            return Ok((Some(id), "Name and version match".to_string()));
+        }
+    }
+    Ok((None, "No component match".to_string()))
+}
+
+async fn find_component_match_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    product_id: Option<i64>,
+    component: &SbomImportComponent,
+) -> anyhow::Result<(Option<i64>, String)> {
+    if !component.package_url.is_empty() {
+        if let Some(id) = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT id
+            FROM product_security_component
+            WHERE tenant_id = ?1
+              AND (?2 IS NULL OR product_id = ?2)
+              AND package_url = ?3
+              AND package_url <> ''
+            ORDER BY id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(product_id)
+        .bind(&component.package_url)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Komponentenmatch per PURL fehlgeschlagen")?
+        {
+            return Ok((Some(id), "PURL exact match".to_string()));
+        }
+    }
+    if !component.cpe23_uri.is_empty() {
+        if let Some(id) = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT id
+            FROM product_security_component
+            WHERE tenant_id = ?1
+              AND (?2 IS NULL OR product_id = ?2)
+              AND cpe23_uri = ?3
+              AND cpe23_uri <> ''
+            ORDER BY id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(product_id)
+        .bind(&component.cpe23_uri)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Komponentenmatch per CPE fehlgeschlagen")?
+        {
+            return Ok((Some(id), "CPE exact match".to_string()));
+        }
+    }
+    if !component.name.is_empty() {
+        if let Some(id) = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT id
+            FROM product_security_component
+            WHERE tenant_id = ?1
+              AND (?2 IS NULL OR product_id = ?2)
+              AND LOWER(name) = LOWER(?3)
+              AND version = ?4
+            ORDER BY id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(product_id)
+        .bind(&component.name)
+        .bind(&component.version)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Komponentenmatch per Name/Version fehlgeschlagen")?
+        {
+            return Ok((Some(id), "Name and version match".to_string()));
+        }
+    }
+    Ok((None, "No component match".to_string()))
+}
+
+async fn insert_import_component_postgres(
+    pool: &PgPool,
+    artifact_id: i64,
+    tenant_id: i64,
+    product_id: Option<i64>,
+    component: &MatchedSbomImportComponent,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_importcomponent (
+            artifact_id, tenant_id, product_id, component_id, name, version,
+            package_url, cpe23_uri, supplier_name, match_status, match_reason,
+            created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()::text)
+        "#,
+    )
+    .bind(artifact_id)
+    .bind(tenant_id)
+    .bind(product_id)
+    .bind(component.component_id)
+    .bind(&component.component.name)
+    .bind(&component.component.version)
+    .bind(&component.component.package_url)
+    .bind(&component.component.cpe23_uri)
+    .bind(&component.component.supplier_name)
+    .bind(&component.match_status)
+    .bind(&component.match_reason)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-SBOM-Importkomponente konnte nicht erstellt werden")?;
+    Ok(())
+}
+
+async fn insert_import_component_sqlite(
+    pool: &SqlitePool,
+    artifact_id: i64,
+    tenant_id: i64,
+    product_id: Option<i64>,
+    component: &MatchedSbomImportComponent,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_importcomponent (
+            artifact_id, tenant_id, product_id, component_id, name, version,
+            package_url, cpe23_uri, supplier_name, match_status, match_reason,
+            created_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))
+        "#,
+    )
+    .bind(artifact_id)
+    .bind(tenant_id)
+    .bind(product_id)
+    .bind(component.component_id)
+    .bind(&component.component.name)
+    .bind(&component.component.version)
+    .bind(&component.component.package_url)
+    .bind(&component.component.cpe23_uri)
+    .bind(&component.component.supplier_name)
+    .bind(&component.match_status)
+    .bind(&component.match_reason)
+    .execute(pool)
+    .await
+    .context("SQLite-SBOM-Importkomponente konnte nicht erstellt werden")?;
+    Ok(())
+}
+
+async fn mark_component_sbom_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    component_id: i64,
+    format_name: &str,
+    file_name: &str,
+    component: &SbomImportComponent,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE product_security_component
+        SET has_sbom = TRUE,
+            package_url = CASE WHEN package_url = '' THEN $3 ELSE package_url END,
+            cpe23_uri = CASE WHEN cpe23_uri = '' THEN $4 ELSE cpe23_uri END,
+            sbom_format = $5,
+            sbom_document_url = $6,
+            sbom_generated_at = NOW()::text,
+            updated_at = NOW()::text
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(component_id)
+    .bind(&component.package_url)
+    .bind(&component.cpe23_uri)
+    .bind(format_name)
+    .bind(file_name)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Komponente konnte nicht als SBOM-abgedeckt markiert werden")?;
+    Ok(())
+}
+
+async fn mark_component_sbom_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    component_id: i64,
+    format_name: &str,
+    file_name: &str,
+    component: &SbomImportComponent,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE product_security_component
+        SET has_sbom = 1,
+            package_url = CASE WHEN package_url = '' THEN ?3 ELSE package_url END,
+            cpe23_uri = CASE WHEN cpe23_uri = '' THEN ?4 ELSE cpe23_uri END,
+            sbom_format = ?5,
+            sbom_document_url = ?6,
+            sbom_generated_at = datetime('now'),
+            updated_at = datetime('now')
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(component_id)
+    .bind(&component.package_url)
+    .bind(&component.cpe23_uri)
+    .bind(format_name)
+    .bind(file_name)
+    .execute(pool)
+    .await
+    .context("SQLite-Komponente konnte nicht als SBOM-abgedeckt markiert werden")?;
+    Ok(())
+}
+
+async fn upsert_csaf_advisory_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    product_id: i64,
+    file_name: &str,
+    document: &CsafImportDocument,
+) -> anyhow::Result<()> {
+    let cve_list_json = serde_json::to_string(&document.cves).unwrap_or_else(|_| "[]".to_string());
+    let product_status_json =
+        serde_json::to_string(&document.product_status).unwrap_or_else(|_| "{}".to_string());
+    if let Some(id) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM product_security_securityadvisory WHERE tenant_id = $1 AND csaf_document_id = $2 ORDER BY id ASC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(&document.document_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-CSAF-Advisory konnte nicht gesucht werden")?
+    {
+        sqlx::query(
+            r#"
+            UPDATE product_security_securityadvisory
+            SET title = $3,
+                status = $4,
+                summary = $5,
+                csaf_url = $6,
+                csaf_profile = $7,
+                csaf_tracking_status = $8,
+                csaf_revision = $9,
+                cve_list_json = $10,
+                product_status_json = $11,
+                updated_at = NOW()::text
+            WHERE tenant_id = $1 AND id = $2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(id)
+        .bind(&document.title)
+        .bind(csaf_advisory_status(&document.tracking_status))
+        .bind(format!("CSAF importiert mit {} CVEs.", document.cves.len()))
+        .bind(file_name)
+        .bind(&document.profile)
+        .bind(&document.tracking_status)
+        .bind(&document.revision)
+        .bind(cve_list_json)
+        .bind(product_status_json)
+        .execute(pool)
+        .await
+        .context("PostgreSQL-CSAF-Advisory konnte nicht aktualisiert werden")?;
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_securityadvisory (
+            tenant_id, product_id, release_id, psirt_case_id, advisory_id,
+            title, status, published_on, summary, csaf_url, csaf_document_id,
+            csaf_profile, csaf_tracking_status, csaf_revision, cve_list_json,
+            product_status_json, created_at, updated_at
+        )
+        VALUES ($1, $2, NULL, NULL, $3, $4, $5, NULL, $6, $7, $8, $9, $10, $11, $12, $13, NOW()::text, NOW()::text)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(product_id)
+    .bind(&document.document_id)
+    .bind(&document.title)
+    .bind(csaf_advisory_status(&document.tracking_status))
+    .bind(format!("CSAF importiert mit {} CVEs.", document.cves.len()))
+    .bind(file_name)
+    .bind(&document.document_id)
+    .bind(&document.profile)
+    .bind(&document.tracking_status)
+    .bind(&document.revision)
+    .bind(cve_list_json)
+    .bind(product_status_json)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-CSAF-Advisory konnte nicht erstellt werden")?;
+    Ok(())
+}
+
+async fn upsert_csaf_advisory_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    product_id: i64,
+    file_name: &str,
+    document: &CsafImportDocument,
+) -> anyhow::Result<()> {
+    let cve_list_json = serde_json::to_string(&document.cves).unwrap_or_else(|_| "[]".to_string());
+    let product_status_json =
+        serde_json::to_string(&document.product_status).unwrap_or_else(|_| "{}".to_string());
+    if let Some(id) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM product_security_securityadvisory WHERE tenant_id = ?1 AND csaf_document_id = ?2 ORDER BY id ASC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(&document.document_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-CSAF-Advisory konnte nicht gesucht werden")?
+    {
+        sqlx::query(
+            r#"
+            UPDATE product_security_securityadvisory
+            SET title = ?3,
+                status = ?4,
+                summary = ?5,
+                csaf_url = ?6,
+                csaf_profile = ?7,
+                csaf_tracking_status = ?8,
+                csaf_revision = ?9,
+                cve_list_json = ?10,
+                product_status_json = ?11,
+                updated_at = datetime('now')
+            WHERE tenant_id = ?1 AND id = ?2
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(id)
+        .bind(&document.title)
+        .bind(csaf_advisory_status(&document.tracking_status))
+        .bind(format!("CSAF importiert mit {} CVEs.", document.cves.len()))
+        .bind(file_name)
+        .bind(&document.profile)
+        .bind(&document.tracking_status)
+        .bind(&document.revision)
+        .bind(cve_list_json)
+        .bind(product_status_json)
+        .execute(pool)
+        .await
+        .context("SQLite-CSAF-Advisory konnte nicht aktualisiert werden")?;
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_securityadvisory (
+            tenant_id, product_id, release_id, psirt_case_id, advisory_id,
+            title, status, published_on, summary, csaf_url, csaf_document_id,
+            csaf_profile, csaf_tracking_status, csaf_revision, cve_list_json,
+            product_status_json, created_at, updated_at
+        )
+        VALUES (?1, ?2, NULL, NULL, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'), datetime('now'))
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(product_id)
+    .bind(&document.document_id)
+    .bind(&document.title)
+    .bind(csaf_advisory_status(&document.tracking_status))
+    .bind(format!("CSAF importiert mit {} CVEs.", document.cves.len()))
+    .bind(file_name)
+    .bind(&document.document_id)
+    .bind(&document.profile)
+    .bind(&document.tracking_status)
+    .bind(&document.revision)
+    .bind(cve_list_json)
+    .bind(product_status_json)
+    .execute(pool)
+    .await
+    .context("SQLite-CSAF-Advisory konnte nicht erstellt werden")?;
+    Ok(())
+}
+
+async fn suggest_cve_asset_correlations_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<ProductSecurityCveCorrelationResult> {
+    let mut candidates = cve_correlation_candidates_by_cpe_postgres(pool, tenant_id).await?;
+    candidates.extend(cve_correlation_candidates_by_purl_postgres(pool, tenant_id).await?);
+    let mut created = 0_i64;
+    let mut existing = 0_i64;
+    for candidate in candidates {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO product_security_cvecorrelation (
+                tenant_id, cve_record_id, cve, asset_id, product_id, component_id,
+                match_type, match_value, confidence, status, rationale, created_at, updated_at
+            )
+            VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, 'SUGGESTED', $9, NOW()::text, NOW()::text)
+            ON CONFLICT(tenant_id, cve, match_type, match_value) DO NOTHING
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(&candidate.cve)
+        .bind(candidate.asset_id)
+        .bind(candidate.product_id)
+        .bind(candidate.component_id)
+        .bind(&candidate.match_type)
+        .bind(&candidate.match_value)
+        .bind(candidate.confidence)
+        .bind(&candidate.rationale)
+        .execute(pool)
+        .await
+        .context("PostgreSQL-CVE-Asset-Korrelation konnte nicht vorgeschlagen werden")?;
+        if result.rows_affected() > 0 {
+            created += 1;
+        } else {
+            existing += 1;
+        }
+    }
+    Ok(ProductSecurityCveCorrelationResult {
+        created_suggestions: created,
+        existing_suggestions: existing,
+        suggestions: load_cve_correlations_postgres(pool, tenant_id, 50).await?,
+    })
+}
+
+async fn suggest_cve_asset_correlations_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<ProductSecurityCveCorrelationResult> {
+    let mut candidates = cve_correlation_candidates_by_cpe_sqlite(pool, tenant_id).await?;
+    candidates.extend(cve_correlation_candidates_by_purl_sqlite(pool, tenant_id).await?);
+    let mut created = 0_i64;
+    let mut existing = 0_i64;
+    for candidate in candidates {
+        let result = sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO product_security_cvecorrelation (
+                tenant_id, cve_record_id, cve, asset_id, product_id, component_id,
+                match_type, match_value, confidence, status, rationale, created_at, updated_at
+            )
+            VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'SUGGESTED', ?9, datetime('now'), datetime('now'))
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(&candidate.cve)
+        .bind(candidate.asset_id)
+        .bind(candidate.product_id)
+        .bind(candidate.component_id)
+        .bind(&candidate.match_type)
+        .bind(&candidate.match_value)
+        .bind(candidate.confidence)
+        .bind(&candidate.rationale)
+        .execute(pool)
+        .await
+        .context("SQLite-CVE-Asset-Korrelation konnte nicht vorgeschlagen werden")?;
+        if result.rows_affected() > 0 {
+            created += 1;
+        } else {
+            existing += 1;
+        }
+    }
+    Ok(ProductSecurityCveCorrelationResult {
+        created_suggestions: created,
+        existing_suggestions: existing,
+        suggestions: load_cve_correlations_sqlite(pool, tenant_id, 50).await?,
+    })
+}
+
+async fn cve_correlation_candidates_by_cpe_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<Vec<CveCorrelationCandidate>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            vuln.cve,
+            asset.id AS asset_id,
+            vuln.product_id,
+            vuln.component_id,
+            vuln.cpe23_uri AS match_value
+        FROM product_security_vulnerability vuln
+        INNER JOIN assets_app_informationasset asset
+            ON asset.tenant_id = vuln.tenant_id
+           AND asset.cpe23_uri = vuln.cpe23_uri
+           AND asset.cpe23_uri <> ''
+        WHERE vuln.tenant_id = $1
+          AND vuln.cve <> ''
+          AND vuln.cpe23_uri <> ''
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-CVE-CPE-Kandidaten konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(|row| {
+            let match_value: String = row.try_get("match_value")?;
+            Ok(CveCorrelationCandidate {
+                cve: row.try_get("cve")?,
+                asset_id: row.try_get("asset_id")?,
+                product_id: row.try_get("product_id")?,
+                component_id: row.try_get("component_id")?,
+                match_type: "CPE".to_string(),
+                match_value: match_value.clone(),
+                confidence: 95,
+                rationale: format!("CVE und Asset teilen CPE {match_value}."),
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(Into::into)
+}
+
+async fn cve_correlation_candidates_by_cpe_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<Vec<CveCorrelationCandidate>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            vuln.cve,
+            asset.id AS asset_id,
+            vuln.product_id,
+            vuln.component_id,
+            vuln.cpe23_uri AS match_value
+        FROM product_security_vulnerability vuln
+        INNER JOIN assets_app_informationasset asset
+            ON asset.tenant_id = vuln.tenant_id
+           AND asset.cpe23_uri = vuln.cpe23_uri
+           AND asset.cpe23_uri <> ''
+        WHERE vuln.tenant_id = ?
+          AND vuln.cve <> ''
+          AND vuln.cpe23_uri <> ''
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-CVE-CPE-Kandidaten konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(|row| {
+            let match_value: String = row.try_get("match_value")?;
+            Ok(CveCorrelationCandidate {
+                cve: row.try_get("cve")?,
+                asset_id: row.try_get("asset_id")?,
+                product_id: row.try_get("product_id")?,
+                component_id: row.try_get("component_id")?,
+                match_type: "CPE".to_string(),
+                match_value: match_value.clone(),
+                confidence: 95,
+                rationale: format!("CVE und Asset teilen CPE {match_value}."),
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(Into::into)
+}
+
+async fn cve_correlation_candidates_by_purl_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<Vec<CveCorrelationCandidate>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            vuln.cve,
+            asset.id AS asset_id,
+            vuln.product_id,
+            component.id AS component_id,
+            component.package_url AS match_value
+        FROM product_security_vulnerability vuln
+        INNER JOIN product_security_component component
+            ON component.id = vuln.component_id
+           AND component.tenant_id = vuln.tenant_id
+           AND component.package_url <> ''
+        INNER JOIN assets_app_informationasset asset
+            ON asset.tenant_id = vuln.tenant_id
+           AND asset.package_url = component.package_url
+           AND asset.package_url <> ''
+        WHERE vuln.tenant_id = $1
+          AND vuln.cve <> ''
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-CVE-PURL-Kandidaten konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(|row| {
+            let match_value: String = row.try_get("match_value")?;
+            Ok(CveCorrelationCandidate {
+                cve: row.try_get("cve")?,
+                asset_id: row.try_get("asset_id")?,
+                product_id: row.try_get("product_id")?,
+                component_id: row.try_get("component_id")?,
+                match_type: "PURL".to_string(),
+                match_value: match_value.clone(),
+                confidence: 90,
+                rationale: format!("CVE-Komponente und Asset teilen PURL {match_value}."),
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(Into::into)
+}
+
+async fn cve_correlation_candidates_by_purl_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<Vec<CveCorrelationCandidate>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            vuln.cve,
+            asset.id AS asset_id,
+            vuln.product_id,
+            component.id AS component_id,
+            component.package_url AS match_value
+        FROM product_security_vulnerability vuln
+        INNER JOIN product_security_component component
+            ON component.id = vuln.component_id
+           AND component.tenant_id = vuln.tenant_id
+           AND component.package_url <> ''
+        INNER JOIN assets_app_informationasset asset
+            ON asset.tenant_id = vuln.tenant_id
+           AND asset.package_url = component.package_url
+           AND asset.package_url <> ''
+        WHERE vuln.tenant_id = ?
+          AND vuln.cve <> ''
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-CVE-PURL-Kandidaten konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(|row| {
+            let match_value: String = row.try_get("match_value")?;
+            Ok(CveCorrelationCandidate {
+                cve: row.try_get("cve")?,
+                asset_id: row.try_get("asset_id")?,
+                product_id: row.try_get("product_id")?,
+                component_id: row.try_get("component_id")?,
+                match_type: "PURL".to_string(),
+                match_value: match_value.clone(),
+                confidence: 90,
+                rationale: format!("CVE-Komponente und Asset teilen PURL {match_value}."),
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(Into::into)
+}
+
+async fn load_cve_correlations_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<ProductSecurityCveCorrelationSummary>> {
+    let rows = sqlx::query(cve_correlation_list_postgres_sql())
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-CVE-Asset-Korrelationen konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(cve_correlation_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn load_cve_correlations_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<ProductSecurityCveCorrelationSummary>> {
+    let rows = sqlx::query(cve_correlation_list_sqlite_sql())
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("SQLite-CVE-Asset-Korrelationen konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(cve_correlation_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn parse_csaf_document(document: &Value) -> CsafImportDocument {
+    let document_id = json_pointer_string(document, "/document/tracking/id")
+        .or_else(|| json_pointer_string(document, "/document/title"))
+        .unwrap_or_default();
+    let title = json_pointer_string(document, "/document/title")
+        .or_else(|| json_pointer_string(document, "/document/tracking/id"))
+        .unwrap_or_else(|| "CSAF Advisory".to_string());
+    let profile = json_pointer_string(document, "/document/category").unwrap_or_default();
+    let tracking_status =
+        json_pointer_string(document, "/document/tracking/status").unwrap_or_default();
+    let revision = document
+        .pointer("/document/tracking/revision_history")
+        .and_then(Value::as_array)
+        .and_then(|items| items.last())
+        .and_then(|value| value.get("number"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let mut cves = BTreeSet::new();
+    let mut product_status = Value::Object(Default::default());
+    if let Some(vulnerabilities) = document.get("vulnerabilities").and_then(Value::as_array) {
+        for vulnerability in vulnerabilities {
+            if let Some(cve) = vulnerability.get("cve").and_then(Value::as_str) {
+                let cve = cve.trim().to_ascii_uppercase();
+                if !cve.is_empty() {
+                    cves.insert(cve);
+                }
+            }
+            if let Some(status) = vulnerability.get("product_status") {
+                product_status = status.clone();
+            }
+        }
+    }
+    let mut validation_errors = Vec::new();
+    if document_id.is_empty() {
+        validation_errors.push("CSAF document.tracking.id fehlt.".to_string());
+    }
+    if tracking_status.is_empty() {
+        validation_errors.push("CSAF document.tracking.status fehlt.".to_string());
+    }
+    if !document
+        .get("vulnerabilities")
+        .is_some_and(|value| value.is_array())
+    {
+        validation_errors.push("CSAF vulnerabilities[] fehlt oder ist kein Array.".to_string());
+    }
+    CsafImportDocument {
+        document_id,
+        title,
+        profile,
+        tracking_status,
+        revision,
+        cves: cves.into_iter().collect(),
+        product_status,
+        validation_errors,
+    }
+}
+
+fn parse_sbom_document(document: &Value) -> SbomImportDocument {
+    if document
+        .get("bomFormat")
+        .and_then(Value::as_str)
+        .is_some_and(|format| format.eq_ignore_ascii_case("CycloneDX"))
+    {
+        return parse_cyclonedx_document(document);
+    }
+    if document
+        .get("spdxVersion")
+        .and_then(Value::as_str)
+        .is_some()
+    {
+        return parse_spdx_document(document);
+    }
+    SbomImportDocument {
+        format_name: "UNKNOWN".to_string(),
+        format_version: String::new(),
+        document_id: String::new(),
+        components: Vec::new(),
+        validation_errors: vec![
+            "SBOM-Format wurde nicht als CycloneDX oder SPDX erkannt.".to_string()
+        ],
+    }
+}
+
+fn parse_cyclonedx_document(document: &Value) -> SbomImportDocument {
+    let components = document
+        .get("components")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|component| SbomImportComponent {
+                    name: json_field_string(component, "name").unwrap_or_default(),
+                    version: json_field_string(component, "version").unwrap_or_default(),
+                    package_url: json_field_string(component, "purl").unwrap_or_default(),
+                    cpe23_uri: json_field_string(component, "cpe").unwrap_or_default(),
+                    supplier_name: component
+                        .get("supplier")
+                        .and_then(|supplier| {
+                            supplier
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .or_else(|| supplier.as_str())
+                        })
+                        .unwrap_or("")
+                        .trim()
+                        .to_string(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut validation_errors = Vec::new();
+    if components.is_empty() {
+        validation_errors.push("CycloneDX components[] enthaelt keine Komponenten.".to_string());
+    }
+    SbomImportDocument {
+        format_name: "CycloneDX".to_string(),
+        format_version: json_field_string(document, "specVersion").unwrap_or_default(),
+        document_id: json_field_string(document, "serialNumber")
+            .or_else(|| json_field_string(document, "bom-ref"))
+            .unwrap_or_default(),
+        components,
+        validation_errors,
+    }
+}
+
+fn parse_spdx_document(document: &Value) -> SbomImportDocument {
+    let components = document
+        .get("packages")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|package| {
+                    let (package_url, cpe23_uri) = spdx_external_refs(package);
+                    SbomImportComponent {
+                        name: json_field_string(package, "name").unwrap_or_default(),
+                        version: json_field_string(package, "versionInfo").unwrap_or_default(),
+                        package_url,
+                        cpe23_uri,
+                        supplier_name: json_field_string(package, "supplier").unwrap_or_default(),
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut validation_errors = Vec::new();
+    if components.is_empty() {
+        validation_errors.push("SPDX packages[] enthaelt keine Komponenten.".to_string());
+    }
+    SbomImportDocument {
+        format_name: "SPDX".to_string(),
+        format_version: json_field_string(document, "spdxVersion").unwrap_or_default(),
+        document_id: json_field_string(document, "documentNamespace")
+            .or_else(|| json_field_string(document, "SPDXID"))
+            .unwrap_or_default(),
+        components,
+        validation_errors,
+    }
+}
+
+fn spdx_external_refs(package: &Value) -> (String, String) {
+    let mut package_url = String::new();
+    let mut cpe23_uri = String::new();
+    if let Some(refs) = package.get("externalRefs").and_then(Value::as_array) {
+        for reference in refs {
+            let reference_type = json_field_string(reference, "referenceType")
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            let locator = json_field_string(reference, "referenceLocator").unwrap_or_default();
+            if reference_type.contains("purl") || reference_type.contains("package-url") {
+                package_url = locator;
+            } else if reference_type.contains("cpe23") || reference_type.contains("cpe") {
+                cpe23_uri = locator;
+            }
+        }
+    }
+    (package_url, cpe23_uri)
+}
+
+fn json_field_string(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn json_pointer_string(value: &Value, pointer: &str) -> Option<String> {
+    value
+        .pointer(pointer)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
+fn validation_status(errors: &[String]) -> &'static str {
+    if errors.is_empty() {
+        "VALID"
+    } else {
+        "INVALID"
+    }
+}
+
+fn csaf_advisory_status(tracking_status: &str) -> &'static str {
+    match tracking_status.trim().to_ascii_lowercase().as_str() {
+        "final" => "PUBLISHED",
+        "draft" => "DRAFT",
+        _ => "DRAFT",
+    }
+}
+
+fn cve_correlation_list_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        corr.id,
+        corr.cve,
+        corr.asset_id,
+        asset.name AS asset_name,
+        corr.product_id,
+        product.name AS product_name,
+        corr.component_id,
+        component.name AS component_name,
+        corr.match_type,
+        corr.match_value,
+        corr.confidence::bigint AS confidence,
+        corr.status,
+        corr.rationale,
+        corr.created_at::text AS created_at,
+        corr.updated_at::text AS updated_at
+    FROM product_security_cvecorrelation corr
+    LEFT JOIN assets_app_informationasset asset
+        ON asset.id = corr.asset_id AND asset.tenant_id = corr.tenant_id
+    LEFT JOIN product_security_product product
+        ON product.id = corr.product_id AND product.tenant_id = corr.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = corr.component_id AND component.tenant_id = corr.tenant_id
+    WHERE corr.tenant_id = $1
+    ORDER BY corr.created_at DESC, corr.id DESC
+    LIMIT $2
+    "#
+}
+
+fn cve_correlation_list_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        corr.id,
+        corr.cve,
+        corr.asset_id,
+        asset.name AS asset_name,
+        corr.product_id,
+        product.name AS product_name,
+        corr.component_id,
+        component.name AS component_name,
+        corr.match_type,
+        corr.match_value,
+        corr.confidence,
+        corr.status,
+        corr.rationale,
+        CAST(corr.created_at AS TEXT) AS created_at,
+        CAST(corr.updated_at AS TEXT) AS updated_at
+    FROM product_security_cvecorrelation corr
+    LEFT JOIN assets_app_informationasset asset
+        ON asset.id = corr.asset_id AND asset.tenant_id = corr.tenant_id
+    LEFT JOIN product_security_product product
+        ON product.id = corr.product_id AND product.tenant_id = corr.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = corr.component_id AND component.tenant_id = corr.tenant_id
+    WHERE corr.tenant_id = ?
+    ORDER BY corr.created_at DESC, corr.id DESC
+    LIMIT ?
+    "#
+}
+
+fn cve_correlation_from_pg_row(
+    row: PgRow,
+) -> Result<ProductSecurityCveCorrelationSummary, sqlx::Error> {
+    Ok(ProductSecurityCveCorrelationSummary {
+        id: row.try_get("id")?,
+        cve: row.try_get("cve")?,
+        asset_id: row.try_get("asset_id")?,
+        asset_name: row.try_get("asset_name")?,
+        product_id: row.try_get("product_id")?,
+        product_name: row.try_get("product_name")?,
+        component_id: row.try_get("component_id")?,
+        component_name: row.try_get("component_name")?,
+        match_type: row.try_get("match_type")?,
+        match_value: row.try_get("match_value")?,
+        confidence: row.try_get("confidence")?,
+        status: row.try_get("status")?,
+        rationale: row.try_get("rationale")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn cve_correlation_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<ProductSecurityCveCorrelationSummary, sqlx::Error> {
+    Ok(ProductSecurityCveCorrelationSummary {
+        id: row.try_get("id")?,
+        cve: row.try_get("cve")?,
+        asset_id: row.try_get("asset_id")?,
+        asset_name: row.try_get("asset_name")?,
+        product_id: row.try_get("product_id")?,
+        product_name: row.try_get("product_name")?,
+        component_id: row.try_get("component_id")?,
+        component_name: row.try_get("component_name")?,
+        match_type: row.try_get("match_type")?,
+        match_value: row.try_get("match_value")?,
+        confidence: row.try_get("confidence")?,
+        status: row.try_get("status")?,
+        rationale: row.try_get("rationale")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
     })
 }
 

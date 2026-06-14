@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -57,6 +57,9 @@ pub struct ControlSummary {
     pub tenant_notes: String,
     pub owner_display: Option<String>,
     pub reviewed_at: Option<String>,
+    pub evidence_count: i64,
+    pub roadmap_task_count: i64,
+    pub roadmap_open_task_count: i64,
     pub framework_count: i64,
     pub mapping_count: i64,
     pub frameworks: Vec<String>,
@@ -75,6 +78,29 @@ pub struct ControlMappingSummary {
     pub coverage_level: String,
     pub coverage_level_label: String,
     pub rationale: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ControlStatusUpdateRequest {
+    pub status: Option<String>,
+    pub maturity_score: Option<i64>,
+    pub evidence_status: Option<String>,
+    pub notes: Option<String>,
+    pub owner_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ControlStatusUpdateResult {
+    pub control: ControlSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ControlRoadmapGenerationResult {
+    pub plan_id: i64,
+    pub phase_id: i64,
+    pub gap_controls: i64,
+    pub created_tasks: i64,
+    pub existing_tasks: i64,
 }
 
 impl ControlStore {
@@ -110,6 +136,33 @@ impl ControlStore {
             Self::Sqlite(pool) => library_sqlite(pool, tenant_id).await,
         }
     }
+
+    pub async fn update_status(
+        &self,
+        tenant_id: i64,
+        user_id: i64,
+        control_id: i64,
+        payload: ControlStatusUpdateRequest,
+    ) -> anyhow::Result<Option<ControlStatusUpdateResult>> {
+        match self {
+            Self::Postgres(pool) => {
+                update_status_postgres(pool, tenant_id, user_id, control_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                update_status_sqlite(pool, tenant_id, user_id, control_id, payload).await
+            }
+        }
+    }
+
+    pub async fn generate_roadmap_from_gaps(
+        &self,
+        tenant_id: i64,
+    ) -> anyhow::Result<ControlRoadmapGenerationResult> {
+        match self {
+            Self::Postgres(pool) => generate_roadmap_from_gaps_postgres(pool, tenant_id).await,
+            Self::Sqlite(pool) => generate_roadmap_from_gaps_sqlite(pool, tenant_id).await,
+        }
+    }
 }
 
 async fn library_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result<ControlLibrary> {
@@ -135,6 +188,8 @@ async fn library_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result<Contr
 async fn library_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Result<ControlLibrary> {
     let mut controls = sqlx::query(controls_sqlite_sql())
         .bind(tenant_id)
+        .bind(tenant_id)
+        .bind(tenant_id)
         .fetch_all(pool)
         .await
         .context("SQLite-Control-Library konnte nicht gelesen werden")?
@@ -150,6 +205,476 @@ async fn library_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Result<Con
         .collect::<Result<Vec<_>, _>>()?;
     attach_mappings(&mut controls, mappings);
     Ok(build_library(controls))
+}
+
+async fn update_status_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    user_id: i64,
+    control_id: i64,
+    payload: ControlStatusUpdateRequest,
+) -> anyhow::Result<Option<ControlStatusUpdateResult>> {
+    let library = library_postgres(pool, tenant_id).await?;
+    let Some(current) = library
+        .controls
+        .iter()
+        .find(|control| control.id == control_id)
+    else {
+        return Ok(None);
+    };
+    let status = payload
+        .status
+        .as_deref()
+        .map(normalize_control_status)
+        .transpose()?
+        .unwrap_or_else(|| current.status.clone());
+    let maturity_score = payload
+        .maturity_score
+        .unwrap_or(current.maturity_score)
+        .clamp(0, 5);
+    let evidence_status = payload
+        .evidence_status
+        .as_deref()
+        .map(normalize_control_evidence_status)
+        .transpose()?
+        .unwrap_or_else(|| current.evidence_status.clone());
+    let notes = payload
+        .notes
+        .unwrap_or_else(|| current.tenant_notes.clone())
+        .trim()
+        .to_string();
+    let owner_id = payload.owner_id.unwrap_or(user_id);
+
+    sqlx::query(
+        r#"
+        INSERT INTO iscy_control_tenantstatus (
+            tenant_id, control_id, status, maturity_score, evidence_status,
+            owner_id, notes, reviewed_at, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()::text, NOW()::text, NOW()::text)
+        ON CONFLICT(tenant_id, control_id) DO UPDATE SET
+            status = EXCLUDED.status,
+            maturity_score = EXCLUDED.maturity_score,
+            evidence_status = EXCLUDED.evidence_status,
+            owner_id = EXCLUDED.owner_id,
+            notes = EXCLUDED.notes,
+            reviewed_at = NOW()::text,
+            updated_at = NOW()::text
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(control_id)
+    .bind(status)
+    .bind(maturity_score)
+    .bind(evidence_status)
+    .bind(owner_id)
+    .bind(notes)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Control-Status konnte nicht aktualisiert werden")?;
+
+    let library = library_postgres(pool, tenant_id).await?;
+    Ok(library
+        .controls
+        .into_iter()
+        .find(|control| control.id == control_id)
+        .map(|control| ControlStatusUpdateResult { control }))
+}
+
+async fn update_status_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    user_id: i64,
+    control_id: i64,
+    payload: ControlStatusUpdateRequest,
+) -> anyhow::Result<Option<ControlStatusUpdateResult>> {
+    let library = library_sqlite(pool, tenant_id).await?;
+    let Some(current) = library
+        .controls
+        .iter()
+        .find(|control| control.id == control_id)
+    else {
+        return Ok(None);
+    };
+    let status = payload
+        .status
+        .as_deref()
+        .map(normalize_control_status)
+        .transpose()?
+        .unwrap_or_else(|| current.status.clone());
+    let maturity_score = payload
+        .maturity_score
+        .unwrap_or(current.maturity_score)
+        .clamp(0, 5);
+    let evidence_status = payload
+        .evidence_status
+        .as_deref()
+        .map(normalize_control_evidence_status)
+        .transpose()?
+        .unwrap_or_else(|| current.evidence_status.clone());
+    let notes = payload
+        .notes
+        .unwrap_or_else(|| current.tenant_notes.clone())
+        .trim()
+        .to_string();
+    let owner_id = payload.owner_id.unwrap_or(user_id);
+
+    sqlx::query(
+        r#"
+        INSERT INTO iscy_control_tenantstatus (
+            tenant_id, control_id, status, maturity_score, evidence_status,
+            owner_id, notes, reviewed_at, created_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'), datetime('now'), datetime('now'))
+        ON CONFLICT(tenant_id, control_id) DO UPDATE SET
+            status = excluded.status,
+            maturity_score = excluded.maturity_score,
+            evidence_status = excluded.evidence_status,
+            owner_id = excluded.owner_id,
+            notes = excluded.notes,
+            reviewed_at = datetime('now'),
+            updated_at = datetime('now')
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(control_id)
+    .bind(status)
+    .bind(maturity_score)
+    .bind(evidence_status)
+    .bind(owner_id)
+    .bind(notes)
+    .execute(pool)
+    .await
+    .context("SQLite-Control-Status konnte nicht aktualisiert werden")?;
+
+    let library = library_sqlite(pool, tenant_id).await?;
+    Ok(library
+        .controls
+        .into_iter()
+        .find(|control| control.id == control_id)
+        .map(|control| ControlStatusUpdateResult { control }))
+}
+
+async fn generate_roadmap_from_gaps_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<ControlRoadmapGenerationResult> {
+    let library = library_postgres(pool, tenant_id).await?;
+    let gap_controls = roadmap_gap_controls(&library.controls);
+    let plan_id = ensure_control_roadmap_plan_postgres(pool, tenant_id).await?;
+    let phase_id = ensure_control_roadmap_phase_postgres(pool, plan_id).await?;
+    let mut created_tasks = 0_i64;
+    let mut existing_tasks = 0_i64;
+
+    for control in gap_controls {
+        if roadmap_task_exists_postgres(pool, phase_id, control.id).await? {
+            existing_tasks += 1;
+            continue;
+        }
+        insert_control_roadmap_task_postgres(pool, phase_id, control).await?;
+        created_tasks += 1;
+    }
+
+    Ok(ControlRoadmapGenerationResult {
+        plan_id,
+        phase_id,
+        gap_controls: created_tasks + existing_tasks,
+        created_tasks,
+        existing_tasks,
+    })
+}
+
+async fn generate_roadmap_from_gaps_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<ControlRoadmapGenerationResult> {
+    let library = library_sqlite(pool, tenant_id).await?;
+    let gap_controls = roadmap_gap_controls(&library.controls);
+    let plan_id = ensure_control_roadmap_plan_sqlite(pool, tenant_id).await?;
+    let phase_id = ensure_control_roadmap_phase_sqlite(pool, plan_id).await?;
+    let mut created_tasks = 0_i64;
+    let mut existing_tasks = 0_i64;
+
+    for control in gap_controls {
+        if roadmap_task_exists_sqlite(pool, phase_id, control.id).await? {
+            existing_tasks += 1;
+            continue;
+        }
+        insert_control_roadmap_task_sqlite(pool, phase_id, control).await?;
+        created_tasks += 1;
+    }
+
+    Ok(ControlRoadmapGenerationResult {
+        plan_id,
+        phase_id,
+        gap_controls: created_tasks + existing_tasks,
+        created_tasks,
+        existing_tasks,
+    })
+}
+
+fn roadmap_gap_controls(controls: &[ControlSummary]) -> Vec<&ControlSummary> {
+    controls
+        .iter()
+        .filter(|control| {
+            matches!(
+                control.status.trim().to_ascii_uppercase().as_str(),
+                "GAP" | "PARTIAL"
+            )
+        })
+        .collect()
+}
+
+async fn ensure_control_roadmap_plan_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<i64> {
+    let title = "ISCY-27 Gap Roadmap";
+    if let Some(id) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM roadmap_roadmapplan WHERE tenant_id = $1 AND title = $2 ORDER BY id ASC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(title)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-ISCY-27-Roadmap konnte nicht gesucht werden")?
+    {
+        return Ok(id);
+    }
+    sqlx::query_scalar(
+        r#"
+        INSERT INTO roadmap_roadmapplan (
+            tenant_id, session_id, title, summary, overall_priority,
+            planned_start, created_at, updated_at
+        )
+        VALUES ($1, 0, $2, $3, 'HIGH', NULL, NOW()::text, NOW()::text)
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(title)
+    .bind("Automatisch aus ISCY-27 Control-Gaps erzeugte Roadmap.")
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-ISCY-27-Roadmap konnte nicht erstellt werden")
+}
+
+async fn ensure_control_roadmap_plan_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<i64> {
+    let title = "ISCY-27 Gap Roadmap";
+    if let Some(id) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM roadmap_roadmapplan WHERE tenant_id = ?1 AND title = ?2 ORDER BY id ASC LIMIT 1",
+    )
+    .bind(tenant_id)
+    .bind(title)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-ISCY-27-Roadmap konnte nicht gesucht werden")?
+    {
+        return Ok(id);
+    }
+    let result = sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmapplan (
+            tenant_id, session_id, title, summary, overall_priority,
+            planned_start, created_at, updated_at
+        )
+        VALUES (?1, 0, ?2, ?3, 'HIGH', NULL, datetime('now'), datetime('now'))
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(title)
+    .bind("Automatisch aus ISCY-27 Control-Gaps erzeugte Roadmap.")
+    .execute(pool)
+    .await
+    .context("SQLite-ISCY-27-Roadmap konnte nicht erstellt werden")?;
+    Ok(result.last_insert_rowid())
+}
+
+async fn ensure_control_roadmap_phase_postgres(pool: &PgPool, plan_id: i64) -> anyhow::Result<i64> {
+    let name = "ISCY-27 Control-Gaps";
+    if let Some(id) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM roadmap_roadmapphase WHERE plan_id = $1 AND name = $2 ORDER BY id ASC LIMIT 1",
+    )
+    .bind(plan_id)
+    .bind(name)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-ISCY-27-Roadmap-Phase konnte nicht gesucht werden")?
+    {
+        return Ok(id);
+    }
+    sqlx::query_scalar(
+        r#"
+        INSERT INTO roadmap_roadmapphase (
+            plan_id, name, sort_order, objective, duration_weeks,
+            planned_start, planned_end, created_at, updated_at
+        )
+        VALUES ($1, $2, 10, $3, 12, NULL, NULL, NOW()::text, NOW()::text)
+        RETURNING id
+        "#,
+    )
+    .bind(plan_id)
+    .bind(name)
+    .bind("Controls mit GAP/PARTIAL-Status schliessen und Nachweise aufbauen.")
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-ISCY-27-Roadmap-Phase konnte nicht erstellt werden")
+}
+
+async fn ensure_control_roadmap_phase_sqlite(
+    pool: &SqlitePool,
+    plan_id: i64,
+) -> anyhow::Result<i64> {
+    let name = "ISCY-27 Control-Gaps";
+    if let Some(id) = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM roadmap_roadmapphase WHERE plan_id = ?1 AND name = ?2 ORDER BY id ASC LIMIT 1",
+    )
+    .bind(plan_id)
+    .bind(name)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-ISCY-27-Roadmap-Phase konnte nicht gesucht werden")?
+    {
+        return Ok(id);
+    }
+    let result = sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmapphase (
+            plan_id, name, sort_order, objective, duration_weeks,
+            planned_start, planned_end, created_at, updated_at
+        )
+        VALUES (?1, ?2, 10, ?3, 12, NULL, NULL, datetime('now'), datetime('now'))
+        "#,
+    )
+    .bind(plan_id)
+    .bind(name)
+    .bind("Controls mit GAP/PARTIAL-Status schliessen und Nachweise aufbauen.")
+    .execute(pool)
+    .await
+    .context("SQLite-ISCY-27-Roadmap-Phase konnte nicht erstellt werden")?;
+    Ok(result.last_insert_rowid())
+}
+
+async fn roadmap_task_exists_postgres(
+    pool: &PgPool,
+    phase_id: i64,
+    control_id: i64,
+) -> anyhow::Result<bool> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM roadmap_roadmaptask WHERE phase_id = $1 AND control_id = $2",
+    )
+    .bind(phase_id)
+    .bind(control_id)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-ISCY-27-Roadmaptask konnte nicht geprueft werden")?;
+    Ok(count > 0)
+}
+
+async fn roadmap_task_exists_sqlite(
+    pool: &SqlitePool,
+    phase_id: i64,
+    control_id: i64,
+) -> anyhow::Result<bool> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM roadmap_roadmaptask WHERE phase_id = ?1 AND control_id = ?2",
+    )
+    .bind(phase_id)
+    .bind(control_id)
+    .fetch_one(pool)
+    .await
+    .context("SQLite-ISCY-27-Roadmaptask konnte nicht geprueft werden")?;
+    Ok(count > 0)
+}
+
+async fn insert_control_roadmap_task_postgres(
+    pool: &PgPool,
+    phase_id: i64,
+    control: &ControlSummary,
+) -> anyhow::Result<()> {
+    sqlx::query(control_roadmap_task_insert_postgres_sql())
+        .bind(phase_id)
+        .bind(control.id)
+        .bind(control_roadmap_task_title(control))
+        .bind(control_roadmap_task_description(control))
+        .bind(control_gap_priority(control))
+        .bind(control.owner_role.trim())
+        .bind(control_gap_due_days(control))
+        .execute(pool)
+        .await
+        .context("PostgreSQL-ISCY-27-Roadmaptask konnte nicht erstellt werden")?;
+    Ok(())
+}
+
+async fn insert_control_roadmap_task_sqlite(
+    pool: &SqlitePool,
+    phase_id: i64,
+    control: &ControlSummary,
+) -> anyhow::Result<()> {
+    sqlx::query(control_roadmap_task_insert_sqlite_sql())
+        .bind(phase_id)
+        .bind(control.id)
+        .bind(control_roadmap_task_title(control))
+        .bind(control_roadmap_task_description(control))
+        .bind(control_gap_priority(control))
+        .bind(control.owner_role.trim())
+        .bind(control_gap_due_days(control))
+        .execute(pool)
+        .await
+        .context("SQLite-ISCY-27-Roadmaptask konnte nicht erstellt werden")?;
+    Ok(())
+}
+
+fn control_roadmap_task_insert_postgres_sql() -> &'static str {
+    r#"
+    INSERT INTO roadmap_roadmaptask (
+        phase_id, measure_id, control_id, title, description, priority, owner_role,
+        due_in_days, dependency_text, status, planned_start, due_date, notes,
+        created_at, updated_at
+    )
+    VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, '', 'OPEN', NULL, NULL, '', NOW()::text, NOW()::text)
+    "#
+}
+
+fn control_roadmap_task_insert_sqlite_sql() -> &'static str {
+    r#"
+    INSERT INTO roadmap_roadmaptask (
+        phase_id, measure_id, control_id, title, description, priority, owner_role,
+        due_in_days, dependency_text, status, planned_start, due_date, notes,
+        created_at, updated_at
+    )
+    VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, '', 'OPEN', NULL, NULL, '', datetime('now'), datetime('now'))
+    "#
+}
+
+fn control_roadmap_task_title(control: &ControlSummary) -> String {
+    format!("{}: {} schliessen", control.code, control.title)
+}
+
+fn control_roadmap_task_description(control: &ControlSummary) -> String {
+    format!(
+        "Automatisch aus ISCY-27 Status {} erzeugt. Ziel: {} Nachweis: {}",
+        control.status_label, control.objective, control.evidence_guidance
+    )
+}
+
+fn control_gap_priority(control: &ControlSummary) -> &'static str {
+    if control.status.eq_ignore_ascii_case("GAP") {
+        "HIGH"
+    } else {
+        "MEDIUM"
+    }
+}
+
+fn control_gap_due_days(control: &ControlSummary) -> i64 {
+    if control.status.eq_ignore_ascii_case("GAP") {
+        30
+    } else {
+        60
+    }
 }
 
 fn attach_mappings(controls: &mut [ControlSummary], mappings: Vec<ControlMappingSummary>) {
@@ -269,6 +794,9 @@ fn control_from_pg_row(row: PgRow) -> Result<ControlSummary, sqlx::Error> {
         tenant_notes: row.try_get("tenant_notes")?,
         owner_display: row.try_get("owner_display")?,
         reviewed_at: row.try_get("reviewed_at")?,
+        evidence_count: row.try_get("evidence_count")?,
+        roadmap_task_count: row.try_get("roadmap_task_count")?,
+        roadmap_open_task_count: row.try_get("roadmap_open_task_count")?,
         framework_count: 0,
         mapping_count: 0,
         frameworks: Vec::new(),
@@ -298,6 +826,9 @@ fn control_from_sqlite_row(row: SqliteRow) -> Result<ControlSummary, sqlx::Error
         tenant_notes: row.try_get("tenant_notes")?,
         owner_display: row.try_get("owner_display")?,
         reviewed_at: row.try_get("reviewed_at")?,
+        evidence_count: row.try_get("evidence_count")?,
+        roadmap_task_count: row.try_get("roadmap_task_count")?,
+        roadmap_open_task_count: row.try_get("roadmap_open_task_count")?,
         framework_count: 0,
         mapping_count: 0,
         frameworks: Vec::new(),
@@ -357,7 +888,10 @@ fn controls_sqlite_sql() -> &'static str {
         COALESCE(status.evidence_status, 'MISSING') AS evidence_status,
         COALESCE(status.notes, '') AS tenant_notes,
         status.reviewed_at AS reviewed_at,
-        COALESCE(NULLIF(TRIM(COALESCE(owner.first_name, '') || ' ' || COALESCE(owner.last_name, '')), ''), owner.username) AS owner_display
+        COALESCE(NULLIF(TRIM(COALESCE(owner.first_name, '') || ' ' || COALESCE(owner.last_name, '')), ''), owner.username) AS owner_display,
+        COALESCE(evidence_counts.evidence_count, 0) AS evidence_count,
+        COALESCE(task_counts.task_count, 0) AS roadmap_task_count,
+        COALESCE(task_counts.open_task_count, 0) AS roadmap_open_task_count
     FROM iscy_control_control control
     LEFT JOIN iscy_control_tenantstatus status
         ON status.control_id = control.id
@@ -365,6 +899,22 @@ fn controls_sqlite_sql() -> &'static str {
     LEFT JOIN accounts_user owner
         ON owner.id = status.owner_id
         AND owner.tenant_id = status.tenant_id
+    LEFT JOIN (
+        SELECT control_id, COUNT(*) AS evidence_count
+        FROM evidence_evidenceitem
+        WHERE tenant_id = ? AND control_id IS NOT NULL
+        GROUP BY control_id
+    ) evidence_counts ON evidence_counts.control_id = control.id
+    LEFT JOIN (
+        SELECT task.control_id,
+               COUNT(*) AS task_count,
+               SUM(CASE WHEN task.status != 'DONE' THEN 1 ELSE 0 END) AS open_task_count
+        FROM roadmap_roadmaptask task
+        INNER JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id
+        INNER JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id
+        WHERE plan.tenant_id = ? AND task.control_id IS NOT NULL
+        GROUP BY task.control_id
+    ) task_counts ON task_counts.control_id = control.id
     WHERE control.is_active = 1
     ORDER BY control.sort_order ASC, control.control_number ASC
     "#
@@ -388,7 +938,10 @@ fn controls_postgres_sql() -> &'static str {
         COALESCE(status.evidence_status, 'MISSING') AS evidence_status,
         COALESCE(status.notes, '') AS tenant_notes,
         status.reviewed_at AS reviewed_at,
-        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(owner.first_name, ''), ' ', COALESCE(owner.last_name, ''))), ''), owner.username) AS owner_display
+        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(owner.first_name, ''), ' ', COALESCE(owner.last_name, ''))), ''), owner.username) AS owner_display,
+        COALESCE(evidence_counts.evidence_count, 0)::bigint AS evidence_count,
+        COALESCE(task_counts.task_count, 0)::bigint AS roadmap_task_count,
+        COALESCE(task_counts.open_task_count, 0)::bigint AS roadmap_open_task_count
     FROM iscy_control_control control
     LEFT JOIN iscy_control_tenantstatus status
         ON status.control_id = control.id
@@ -396,6 +949,22 @@ fn controls_postgres_sql() -> &'static str {
     LEFT JOIN accounts_user owner
         ON owner.id = status.owner_id
         AND owner.tenant_id = status.tenant_id
+    LEFT JOIN (
+        SELECT control_id, COUNT(*)::bigint AS evidence_count
+        FROM evidence_evidenceitem
+        WHERE tenant_id = $1 AND control_id IS NOT NULL
+        GROUP BY control_id
+    ) evidence_counts ON evidence_counts.control_id = control.id
+    LEFT JOIN (
+        SELECT task.control_id,
+               COUNT(*)::bigint AS task_count,
+               COUNT(CASE WHEN task.status != 'DONE' THEN 1 END)::bigint AS open_task_count
+        FROM roadmap_roadmaptask task
+        INNER JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id
+        INNER JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id
+        WHERE plan.tenant_id = $1 AND task.control_id IS NOT NULL
+        GROUP BY task.control_id
+    ) task_counts ON task_counts.control_id = control.id
     WHERE control.is_active = TRUE
     ORDER BY control.sort_order ASC, control.control_number ASC
     "#
@@ -480,6 +1049,22 @@ fn status_label(status: &str) -> &'static str {
         "NOT_APPLICABLE" => "Nicht anwendbar",
         "GAP" => "Fehlt",
         _ => "Unklar",
+    }
+}
+
+fn normalize_control_status(value: &str) -> anyhow::Result<String> {
+    let normalized = value.trim().to_ascii_uppercase().replace('-', "_");
+    match normalized.as_str() {
+        "GAP" | "PARTIAL" | "IMPLEMENTED" | "EFFECTIVE" | "NOT_APPLICABLE" => Ok(normalized),
+        _ => bail!("Unbekannter Control-Status '{}'.", value),
+    }
+}
+
+fn normalize_control_evidence_status(value: &str) -> anyhow::Result<String> {
+    let normalized = value.trim().to_ascii_uppercase().replace('-', "_");
+    match normalized.as_str() {
+        "MISSING" | "PARTIAL" | "EVIDENCED" => Ok(normalized),
+        _ => bail!("Unbekannter Evidence-Status '{}'.", value),
     }
 }
 
