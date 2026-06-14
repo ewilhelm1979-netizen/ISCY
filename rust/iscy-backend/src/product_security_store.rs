@@ -399,6 +399,32 @@ pub struct ProductSecurityImportArtifactSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityImportComponentSummary {
+    pub id: i64,
+    pub artifact_id: i64,
+    pub tenant_id: i64,
+    pub product_id: Option<i64>,
+    pub product_name: Option<String>,
+    pub component_id: Option<i64>,
+    pub component_name: Option<String>,
+    pub name: String,
+    pub version: String,
+    pub package_url: String,
+    pub cpe23_uri: String,
+    pub supplier_name: String,
+    pub match_status: String,
+    pub match_status_label: String,
+    pub match_reason: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityImportArtifactDetail {
+    pub artifact: ProductSecurityImportArtifactSummary,
+    pub components: Vec<ProductSecurityImportComponentSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ProductSecurityCveCorrelationSummary {
     pub id: i64,
     pub cve: String,
@@ -610,6 +636,17 @@ impl ProductSecurityStore {
         match self {
             Self::Postgres(pool) => load_import_artifacts_postgres(pool, tenant_id, limit).await,
             Self::Sqlite(pool) => load_import_artifacts_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
+    pub async fn import_detail(
+        &self,
+        tenant_id: i64,
+        artifact_id: i64,
+    ) -> anyhow::Result<Option<ProductSecurityImportArtifactDetail>> {
+        match self {
+            Self::Postgres(pool) => load_import_detail_postgres(pool, tenant_id, artifact_id).await,
+            Self::Sqlite(pool) => load_import_detail_sqlite(pool, tenant_id, artifact_id).await,
         }
     }
 
@@ -4185,8 +4222,9 @@ fn correlation_risk_description(candidate: &AcceptedCorrelationWorkCandidate) ->
 
 fn correlation_treatment_plan(candidate: &AcceptedCorrelationWorkCandidate) -> String {
     format!(
-        "PSIRT-Triage durchfuehren, betroffene Versionen bestaetigen, Patch/Workaround fuer {} planen und Evidence aus SBOM/CSAF/Asset-Inventar verknuepfen.",
-        candidate.cve
+        "PSIRT-Triage durchfuehren, betroffene Versionen bestaetigen, Patch/Workaround fuer {} planen und Evidence aus SBOM/CSAF/Asset-Inventar verknuepfen. Evidence-Key: {}.",
+        candidate.cve,
+        correlation_evidence_key(candidate),
     )
 }
 
@@ -4207,8 +4245,18 @@ fn correlation_roadmap_task_title(candidate: &AcceptedCorrelationWorkCandidate) 
 
 fn correlation_roadmap_description(candidate: &AcceptedCorrelationWorkCandidate) -> String {
     format!(
-        "Akzeptierte {}-Korrelation '{}' fuer {}. Risiko pruefen, Remediation-Owner festlegen, Fix oder Kompensation dokumentieren.",
-        candidate.match_type, candidate.match_value, candidate.cve
+        "Akzeptierte {}-Korrelation '{}' fuer {}. Risiko pruefen, Remediation-Owner festlegen, Fix oder Kompensation dokumentieren. Evidence-Key: {}.",
+        candidate.match_type,
+        candidate.match_value,
+        candidate.cve,
+        correlation_evidence_key(candidate),
+    )
+}
+
+fn correlation_evidence_key(candidate: &AcceptedCorrelationWorkCandidate) -> String {
+    format!(
+        "PRODUCT-SECURITY:CVE:{}:CORRELATION:{}",
+        candidate.cve, candidate.correlation_id
     )
 }
 
@@ -4473,6 +4521,84 @@ async fn load_import_artifacts_sqlite(
         .context("SQLite-Product-Security-Importhistorie konnte nicht gelesen werden")?;
     rows.into_iter()
         .map(import_artifact_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn load_import_detail_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    artifact_id: i64,
+) -> anyhow::Result<Option<ProductSecurityImportArtifactDetail>> {
+    let Some(row) = sqlx::query(import_artifact_detail_postgres_sql())
+        .bind(tenant_id)
+        .bind(artifact_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Product-Security-Importdetail konnte nicht gelesen werden")?
+    else {
+        return Ok(None);
+    };
+    let artifact = import_artifact_from_pg_row(row)?;
+    let components = load_import_components_postgres(pool, tenant_id, artifact_id).await?;
+    Ok(Some(ProductSecurityImportArtifactDetail {
+        artifact,
+        components,
+    }))
+}
+
+async fn load_import_detail_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    artifact_id: i64,
+) -> anyhow::Result<Option<ProductSecurityImportArtifactDetail>> {
+    let Some(row) = sqlx::query(import_artifact_detail_sqlite_sql())
+        .bind(tenant_id)
+        .bind(artifact_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Product-Security-Importdetail konnte nicht gelesen werden")?
+    else {
+        return Ok(None);
+    };
+    let artifact = import_artifact_from_sqlite_row(row)?;
+    let components = load_import_components_sqlite(pool, tenant_id, artifact_id).await?;
+    Ok(Some(ProductSecurityImportArtifactDetail {
+        artifact,
+        components,
+    }))
+}
+
+async fn load_import_components_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    artifact_id: i64,
+) -> anyhow::Result<Vec<ProductSecurityImportComponentSummary>> {
+    let rows = sqlx::query(import_component_list_postgres_sql())
+        .bind(tenant_id)
+        .bind(artifact_id)
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-Product-Security-Importkomponenten konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(import_component_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn load_import_components_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    artifact_id: i64,
+) -> anyhow::Result<Vec<ProductSecurityImportComponentSummary>> {
+    let rows = sqlx::query(import_component_list_sqlite_sql())
+        .bind(tenant_id)
+        .bind(artifact_id)
+        .fetch_all(pool)
+        .await
+        .context("SQLite-Product-Security-Importkomponenten konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(import_component_from_sqlite_row)
         .collect::<Result<Vec<_>, _>>()
         .map_err(Into::into)
 }
@@ -5782,6 +5908,122 @@ fn import_artifact_list_sqlite_sql() -> &'static str {
     "#
 }
 
+fn import_artifact_detail_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        artifact.id,
+        artifact.tenant_id,
+        artifact.product_id,
+        product.name AS product_name,
+        artifact.artifact_type,
+        artifact.file_name,
+        artifact.document_id,
+        artifact.format_name,
+        artifact.format_version,
+        artifact.validation_status,
+        artifact.validation_errors_json,
+        artifact.component_count::bigint AS component_count,
+        artifact.matched_component_count::bigint AS matched_component_count,
+        artifact.cve_count::bigint AS cve_count,
+        artifact.created_by_id,
+        artifact.created_at::text AS created_at,
+        artifact.updated_at::text AS updated_at
+    FROM product_security_importartifact artifact
+    LEFT JOIN product_security_product product
+        ON product.id = artifact.product_id AND product.tenant_id = artifact.tenant_id
+    WHERE artifact.tenant_id = $1 AND artifact.id = $2
+    "#
+}
+
+fn import_artifact_detail_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        artifact.id,
+        artifact.tenant_id,
+        artifact.product_id,
+        product.name AS product_name,
+        artifact.artifact_type,
+        artifact.file_name,
+        artifact.document_id,
+        artifact.format_name,
+        artifact.format_version,
+        artifact.validation_status,
+        artifact.validation_errors_json,
+        artifact.component_count,
+        artifact.matched_component_count,
+        artifact.cve_count,
+        artifact.created_by_id,
+        CAST(artifact.created_at AS TEXT) AS created_at,
+        CAST(artifact.updated_at AS TEXT) AS updated_at
+    FROM product_security_importartifact artifact
+    LEFT JOIN product_security_product product
+        ON product.id = artifact.product_id AND product.tenant_id = artifact.tenant_id
+    WHERE artifact.tenant_id = ? AND artifact.id = ?
+    "#
+}
+
+fn import_component_list_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        import_component.id,
+        import_component.artifact_id,
+        import_component.tenant_id,
+        import_component.product_id,
+        product.name AS product_name,
+        import_component.component_id,
+        component.name AS component_name,
+        import_component.name,
+        import_component.version,
+        import_component.package_url,
+        import_component.cpe23_uri,
+        import_component.supplier_name,
+        import_component.match_status,
+        import_component.match_reason,
+        import_component.created_at::text AS created_at
+    FROM product_security_importcomponent import_component
+    LEFT JOIN product_security_product product
+        ON product.id = import_component.product_id
+       AND product.tenant_id = import_component.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = import_component.component_id
+       AND component.tenant_id = import_component.tenant_id
+    WHERE import_component.tenant_id = $1
+      AND import_component.artifact_id = $2
+    ORDER BY import_component.match_status DESC, import_component.name ASC, import_component.id ASC
+    "#
+}
+
+fn import_component_list_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        import_component.id,
+        import_component.artifact_id,
+        import_component.tenant_id,
+        import_component.product_id,
+        product.name AS product_name,
+        import_component.component_id,
+        component.name AS component_name,
+        import_component.name,
+        import_component.version,
+        import_component.package_url,
+        import_component.cpe23_uri,
+        import_component.supplier_name,
+        import_component.match_status,
+        import_component.match_reason,
+        CAST(import_component.created_at AS TEXT) AS created_at
+    FROM product_security_importcomponent import_component
+    LEFT JOIN product_security_product product
+        ON product.id = import_component.product_id
+       AND product.tenant_id = import_component.tenant_id
+    LEFT JOIN product_security_component component
+        ON component.id = import_component.component_id
+       AND component.tenant_id = import_component.tenant_id
+    WHERE import_component.tenant_id = ?
+      AND import_component.artifact_id = ?
+    ORDER BY import_component.match_status DESC, import_component.name ASC, import_component.id ASC
+    "#
+}
+
 fn cve_correlation_list_postgres_sql() -> &'static str {
     r#"
     SELECT
@@ -5948,6 +6190,62 @@ fn import_artifact_from_sqlite_row(
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
+}
+
+fn import_component_from_pg_row(
+    row: PgRow,
+) -> Result<ProductSecurityImportComponentSummary, sqlx::Error> {
+    let match_status: String = row.try_get("match_status")?;
+    Ok(ProductSecurityImportComponentSummary {
+        id: row.try_get("id")?,
+        artifact_id: row.try_get("artifact_id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        product_id: row.try_get("product_id")?,
+        product_name: row.try_get("product_name")?,
+        component_id: row.try_get("component_id")?,
+        component_name: row.try_get("component_name")?,
+        name: row.try_get("name")?,
+        version: row.try_get("version")?,
+        package_url: row.try_get("package_url")?,
+        cpe23_uri: row.try_get("cpe23_uri")?,
+        supplier_name: row.try_get("supplier_name")?,
+        match_status_label: import_component_match_status_label(&match_status).to_string(),
+        match_status,
+        match_reason: row.try_get("match_reason")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn import_component_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<ProductSecurityImportComponentSummary, sqlx::Error> {
+    let match_status: String = row.try_get("match_status")?;
+    Ok(ProductSecurityImportComponentSummary {
+        id: row.try_get("id")?,
+        artifact_id: row.try_get("artifact_id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        product_id: row.try_get("product_id")?,
+        product_name: row.try_get("product_name")?,
+        component_id: row.try_get("component_id")?,
+        component_name: row.try_get("component_name")?,
+        name: row.try_get("name")?,
+        version: row.try_get("version")?,
+        package_url: row.try_get("package_url")?,
+        cpe23_uri: row.try_get("cpe23_uri")?,
+        supplier_name: row.try_get("supplier_name")?,
+        match_status_label: import_component_match_status_label(&match_status).to_string(),
+        match_status,
+        match_reason: row.try_get("match_reason")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn import_component_match_status_label(status: &str) -> &'static str {
+    match status.trim().to_ascii_uppercase().as_str() {
+        "MATCHED" => "Gematcht",
+        "UNMATCHED" => "Nicht gematcht",
+        _ => "Unbekannt",
+    }
 }
 
 fn cve_correlation_from_pg_row(

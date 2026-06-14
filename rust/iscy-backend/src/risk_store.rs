@@ -90,6 +90,19 @@ pub struct RiskWriteResult {
     pub risk: RiskSummary,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct RiskReviewRequest {
+    pub action: String,
+    pub review_notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RiskReviewResult {
+    pub action: String,
+    pub action_label: String,
+    pub risk: RiskSummary,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum TenantRelation {
     Category,
@@ -171,6 +184,23 @@ impl RiskStore {
         match self {
             Self::Postgres(pool) => update_risk_postgres(pool, tenant_id, risk_id, payload).await,
             Self::Sqlite(pool) => update_risk_sqlite(pool, tenant_id, risk_id, payload).await,
+        }
+    }
+
+    pub async fn review_risk(
+        &self,
+        tenant_id: i64,
+        risk_id: i64,
+        reviewer_id: i64,
+        payload: RiskReviewRequest,
+    ) -> anyhow::Result<Option<RiskReviewResult>> {
+        match self {
+            Self::Postgres(pool) => {
+                review_risk_postgres(pool, tenant_id, risk_id, reviewer_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                review_risk_sqlite(pool, tenant_id, risk_id, reviewer_id, payload).await
+            }
         }
     }
 }
@@ -812,6 +842,102 @@ async fn update_risk_sqlite(
     Ok(Some(RiskWriteResult { risk }))
 }
 
+async fn review_risk_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    risk_id: i64,
+    reviewer_id: i64,
+    payload: RiskReviewRequest,
+) -> anyhow::Result<Option<RiskReviewResult>> {
+    let Some(action) = RiskReviewAction::from_request(&payload.action) else {
+        bail!("Unbekannte Risiko-Review-Aktion '{}'.", payload.action);
+    };
+    let Some(current) = risk_detail_postgres(pool, tenant_id, risk_id).await? else {
+        return Ok(None);
+    };
+    let review_notes = normalized_review_notes(payload.review_notes);
+    let treatment_plan = reviewed_treatment_plan(&current.treatment_plan, &review_notes);
+    sqlx::query(
+        r#"
+        UPDATE risks_risk
+        SET status = $2,
+            treatment_strategy = $3,
+            treatment_plan = $4,
+            review_date = CURRENT_DATE,
+            accepted_by_id = CASE WHEN $5 THEN $6 ELSE accepted_by_id END,
+            accepted_at = CASE WHEN $5 THEN NOW() ELSE accepted_at END,
+            updated_at = NOW()
+        WHERE id = $1 AND tenant_id = $7
+        "#,
+    )
+    .bind(risk_id)
+    .bind(action.status)
+    .bind(action.treatment_strategy)
+    .bind(treatment_plan)
+    .bind(action.set_acceptance)
+    .bind(reviewer_id)
+    .bind(tenant_id)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Risiko-Review konnte nicht gespeichert werden")?;
+    let risk = risk_detail_postgres(pool, tenant_id, risk_id)
+        .await?
+        .context("Geprueftes Risiko wurde nicht gefunden")?;
+    Ok(Some(RiskReviewResult {
+        action: action.code.to_string(),
+        action_label: action.label.to_string(),
+        risk,
+    }))
+}
+
+async fn review_risk_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    risk_id: i64,
+    reviewer_id: i64,
+    payload: RiskReviewRequest,
+) -> anyhow::Result<Option<RiskReviewResult>> {
+    let Some(action) = RiskReviewAction::from_request(&payload.action) else {
+        bail!("Unbekannte Risiko-Review-Aktion '{}'.", payload.action);
+    };
+    let Some(current) = risk_detail_sqlite(pool, tenant_id, risk_id).await? else {
+        return Ok(None);
+    };
+    let review_notes = normalized_review_notes(payload.review_notes);
+    let treatment_plan = reviewed_treatment_plan(&current.treatment_plan, &review_notes);
+    sqlx::query(
+        r#"
+        UPDATE risks_risk
+        SET status = ?2,
+            treatment_strategy = ?3,
+            treatment_plan = ?4,
+            review_date = date('now'),
+            accepted_by_id = CASE WHEN ?5 THEN ?6 ELSE accepted_by_id END,
+            accepted_at = CASE WHEN ?5 THEN datetime('now') ELSE accepted_at END,
+            updated_at = datetime('now')
+        WHERE id = ?1 AND tenant_id = ?7
+        "#,
+    )
+    .bind(risk_id)
+    .bind(action.status)
+    .bind(action.treatment_strategy)
+    .bind(treatment_plan)
+    .bind(action.set_acceptance)
+    .bind(reviewer_id)
+    .bind(tenant_id)
+    .execute(pool)
+    .await
+    .context("SQLite-Risiko-Review konnte nicht gespeichert werden")?;
+    let risk = risk_detail_sqlite(pool, tenant_id, risk_id)
+        .await?
+        .context("Geprueftes Risiko wurde nicht gefunden")?;
+    Ok(Some(RiskReviewResult {
+        action: action.code.to_string(),
+        action_label: action.label.to_string(),
+        risk,
+    }))
+}
+
 fn summary_from_pg_row(row: PgRow) -> Result<RiskSummary, sqlx::Error> {
     let impact: i64 = row.try_get("impact")?;
     let likelihood: i64 = row.try_get("likelihood")?;
@@ -1259,6 +1385,78 @@ fn normalize_treatment_strategy(value: Option<&str>, default: &str) -> &'static 
             "AVOID" => "AVOID",
             _ => "",
         },
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RiskReviewAction {
+    code: &'static str,
+    label: &'static str,
+    status: &'static str,
+    treatment_strategy: &'static str,
+    set_acceptance: bool,
+}
+
+impl RiskReviewAction {
+    fn from_request(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "request_review" | "review" => Some(Self {
+                code: "request_review",
+                label: "Review angefordert",
+                status: "ANALYZING",
+                treatment_strategy: "MITIGATE",
+                set_acceptance: false,
+            }),
+            "approve_treatment" | "treat" => Some(Self {
+                code: "approve_treatment",
+                label: "Behandlung freigegeben",
+                status: "TREATING",
+                treatment_strategy: "MITIGATE",
+                set_acceptance: false,
+            }),
+            "accept_risk" | "accept" => Some(Self {
+                code: "accept_risk",
+                label: "Risiko akzeptiert",
+                status: "ACCEPTED",
+                treatment_strategy: "ACCEPT",
+                set_acceptance: true,
+            }),
+            "mark_mitigated" | "mitigated" => Some(Self {
+                code: "mark_mitigated",
+                label: "Als mitigiert markiert",
+                status: "MITIGATED",
+                treatment_strategy: "MITIGATE",
+                set_acceptance: false,
+            }),
+            "close" | "closed" => Some(Self {
+                code: "close",
+                label: "Geschlossen",
+                status: "CLOSED",
+                treatment_strategy: "MITIGATE",
+                set_acceptance: false,
+            }),
+            _ => None,
+        }
+    }
+}
+
+fn normalized_review_notes(value: Option<String>) -> String {
+    value
+        .map(|item| item.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn reviewed_treatment_plan(current: &str, review_notes: &str) -> String {
+    if review_notes.is_empty() {
+        return current.to_string();
+    }
+    let marker = format!("Review-Notiz: {review_notes}");
+    if current.contains(&marker) {
+        current.to_string()
+    } else if current.trim().is_empty() {
+        marker
+    } else {
+        format!("{}\n\n{}", current.trim_end(), marker)
     }
 }
 

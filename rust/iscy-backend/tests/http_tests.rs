@@ -2021,10 +2021,11 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
     create_product_security_tables(&pool).await;
     create_risk_tables(&pool).await;
     insert_product_security_fixture(&pool).await;
-    let app =
-        app_router_with_state(AppState::default().with_product_security_store(Some(
-            ProductSecurityStore::from_sqlite_pool(pool.clone()),
-        )));
+    let app = app_router_with_state(
+        AppState::default()
+            .with_product_security_store(Some(ProductSecurityStore::from_sqlite_pool(pool.clone())))
+            .with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
 
     let csaf_payload = serde_json::json!({
         "product_id": 100,
@@ -2123,6 +2124,7 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["artifact_type"], "SBOM");
+    let sbom_artifact_id = payload["artifact_id"].as_i64().unwrap();
     assert_eq!(payload["component_count"], 1);
     assert_eq!(payload["matched_component_count"], 1);
     let matched_count: i64 = sqlx::query_scalar(
@@ -2132,6 +2134,49 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
     .await
     .unwrap();
     assert_eq!(matched_count, 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/product-security/imports/{sbom_artifact_id}"
+                ))
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["artifact"]["file_name"],
+        "sensor-gateway-1.0.3.cdx.json"
+    );
+    assert_eq!(payload["components"][0]["name"], "Gateway Firmware");
+    assert_eq!(payload["components"][0]["match_status"], "MATCHED");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/product-security/imports/{sbom_artifact_id}?tenant_id=42&user_id=1"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Komponenten-Matches"));
+    assert!(html.contains("Gateway Firmware"));
+    assert!(html.contains("Evidence verknuepfen"));
 
     let response = app
         .clone()
@@ -2186,13 +2231,12 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["correlation"]["status"], "ACCEPTED");
 
-    let generated_risk_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM risks_risk WHERE tenant_id = 42 AND title LIKE 'CVE-2026-0001%'",
+    let generated_risk_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM risks_risk WHERE tenant_id = 42 AND title LIKE 'CVE-2026-0001%'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(generated_risk_count, 1);
     let generated_task_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM product_security_productsecurityroadmaptask WHERE tenant_id = 42 AND title LIKE 'CVE-2026-0001 behandeln%'",
     )
@@ -2200,6 +2244,59 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
     .await
     .unwrap();
     assert_eq!(generated_task_count, 1);
+
+    let treatment_plan: String =
+        sqlx::query_scalar("SELECT treatment_plan FROM risks_risk WHERE id = ?1")
+            .bind(generated_risk_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(treatment_plan.contains("Evidence-Key: PRODUCT-SECURITY:CVE:CVE-2026-0001"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/risks/?tenant_id=42&user_id=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("CVE-2026-0001"));
+    assert!(
+        html.contains("linked_requirement=PRODUCT-SECURITY%3ACVE%3ACVE-2026-0001%3ACORRELATION%3A")
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/risks/{generated_risk_id}/review"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(
+                    r#"{"action":"accept_risk","review_notes":"Residual risk accepted by PSIRT."}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["risk"]["status"], "ACCEPTED");
+    assert_eq!(payload["risk"]["accepted_by_id"], 1);
+    assert!(payload["risk"]["treatment_plan"]
+        .as_str()
+        .unwrap()
+        .contains("Residual risk accepted by PSIRT."));
 
     let response = app
         .clone()
@@ -3671,6 +3768,23 @@ async fn rust_web_evidence_accepts_file_upload_from_form() {
             .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
             .with_evidence_media_root(Some(media_root.clone())),
     );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/evidence/?tenant_id=42&user_id=7&evidence_title=CVE-Evidence%3A%20CVE-2026-0001&evidence_description=Patch%20proof&linked_requirement=PRODUCT-SECURITY%3ACVE%3ACVE-2026-0001&evidence_status=SUBMITTED&incident_id=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("CVE-Evidence: CVE-2026-0001"));
+    assert!(html.contains("PRODUCT-SECURITY:CVE:CVE-2026-0001"));
+    assert!(html.contains("Patch proof"));
+
     let boundary = "iscy-web-evidence-upload-boundary";
     let body = multipart_body(
         boundary,
@@ -5189,6 +5303,8 @@ async fn rust_web_risks_renders_rows_from_database() {
     assert!(html.contains("Credential Phishing"));
     assert!(html.contains("Kritisch"));
     assert!(html.contains("Ada Lovelace"));
+    assert!(html.contains("Evidence"));
+    assert!(html.contains("linked_requirement=RISK%3A10"));
     assert!(!html.contains("Rust-Web-Migrationsroute"));
 }
 
@@ -5743,6 +5859,10 @@ async fn rust_web_roadmap_renders_plans_from_database() {
     assert!(html.contains("Security Roadmap"));
     assert!(html.contains("HIGH"));
     assert!(html.contains("2026-05-01"));
+    assert!(html.contains("Roadmap-Tasks"));
+    assert!(html.contains("MFA ausrollen"));
+    assert!(html
+        .contains("linked_requirement=PRODUCT-SECURITY%3ACVE%3ACVE-2026-0002%3ACORRELATION%3A77"));
     assert!(!html.contains("Foreign Roadmap"));
     assert!(!html.contains("Rust-Web-Migrationsroute"));
 }
@@ -11285,7 +11405,7 @@ async fn insert_roadmap_fixture(pool: &SqlitePool) {
                 101,
                 NULL,
                 'MFA ausrollen',
-                'Roll out MFA',
+                'Roll out MFA. Evidence-Key: PRODUCT-SECURITY:CVE:CVE-2026-0002:CORRELATION:77.',
                 'CRITICAL',
                 'IAM Lead',
                 21,

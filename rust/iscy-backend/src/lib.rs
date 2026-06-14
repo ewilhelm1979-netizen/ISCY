@@ -490,6 +490,12 @@ struct WebCveCorrelationDecisionForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct WebRiskReviewForm {
+    action: String,
+    review_notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebCveLlmTestForm {
     prompt: Option<String>,
 }
@@ -693,6 +699,13 @@ pub struct ProductSecurityImportHistoryExportResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProductSecurityImportDetailResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub detail: product_security_store::ProductSecurityImportArtifactDetail,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ProductSecurityCveCorrelationResponse {
     pub accepted: bool,
     pub api_version: &'static str,
@@ -787,6 +800,14 @@ pub struct RiskWriteResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct RiskReviewResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: risk_store::RiskReviewResult,
+}
+
+#[derive(Debug, Serialize)]
 pub struct IncidentRegisterResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
@@ -838,6 +859,13 @@ pub struct WebContextQuery {
     pub user_email: Option<String>,
     pub session_id: Option<i64>,
     pub timeline: Option<String>,
+    pub evidence_title: Option<String>,
+    pub evidence_description: Option<String>,
+    pub linked_requirement: Option<String>,
+    pub evidence_status: Option<String>,
+    pub control_id: Option<i64>,
+    pub incident_id: Option<i64>,
+    pub requirement_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -3599,6 +3627,72 @@ async fn product_security_import_history_export(
     }
 }
 
+async fn product_security_import_detail(
+    Path(artifact_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store.import_detail(context.tenant_id, artifact_id).await {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(ProductSecurityImportDetailResponse {
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "product_security_import_not_found",
+                message: "Product-Security-Import wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!(
+                    "Product-Security-Importdetail konnte nicht gelesen werden: {err}"
+                ),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn product_security_cve_correlations(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4035,6 +4129,80 @@ async fn risk_update(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Risiko konnte nicht aktualisiert werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn risk_review(
+    Path(risk_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<risk_store::RiskReviewRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.risk_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Risk-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .review_risk(context.tenant_id, risk_id, context.user_id, payload)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(RiskReviewResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "risk_not_found",
+                message: format!("Risiko {} wurde nicht gefunden.", risk_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_risk_review",
+                message: format!("Risiko-Review konnte nicht verarbeitet werden: {err}"),
             }),
         )
             .into_response(),
@@ -6429,6 +6597,9 @@ async fn web_risks(
     let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Risks", "/risks/");
     };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
     let Some(store) = state.risk_store else {
         return web_store_missing("Risks", "/risks/", &context, "Risk");
     };
@@ -6437,14 +6608,55 @@ async fn web_risks(
             let rows = risks
                 .iter()
                 .map(|risk| {
+                    let linked_requirement =
+                        evidence_key_from_text(&risk.treatment_plan)
+                            .unwrap_or_else(|| format!("RISK:{}", risk.id));
+                    let evidence_href = evidence_prefill_href(
+                        &context,
+                        &format!("Risk-Evidence: {}", risk.title),
+                        &format!(
+                            "Nachweis zum Risiko {}. Threat: {}. Vulnerability: {}. Treatment: {}.",
+                            risk.title, risk.threat, risk.vulnerability, risk.treatment_plan
+                        ),
+                        &linked_requirement,
+                        Some("SUBMITTED"),
+                    );
+                    let review_actions = if can_write {
+                        let action = web_path_with_context(
+                            &format!("/risks/{}/review", risk.id),
+                            Some(&context),
+                        );
+                        format!(
+                            r#"<form method="post" action="{}" class="inline-form">
+                                <input type="hidden" name="action" value="approve_treatment">
+                                <input type="hidden" name="review_notes" value="Treatment im Risk-Review freigegeben.">
+                                <button type="submit">Behandlung</button>
+                              </form>
+                              <form method="post" action="{}" class="inline-form">
+                                <input type="hidden" name="action" value="accept_risk">
+                                <input type="hidden" name="review_notes" value="Restrisiko fachlich akzeptiert.">
+                                <button type="submit">Akzeptieren</button>
+                              </form>
+                              <form method="post" action="{}" class="inline-form">
+                                <input type="hidden" name="action" value="mark_mitigated">
+                                <input type="hidden" name="review_notes" value="Massnahme umgesetzt und Risiko mitigiert.">
+                                <button type="submit">Mitigiert</button>
+                              </form>"#,
+                            action, action, action,
+                        )
+                    } else {
+                        "-".to_string()
+                    };
                     format!(
-                        r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Evidence</a></td><td>{}</td></tr>"#,
                         web_path_with_context(&format!("/api/v1/risks/{}", risk.id), Some(&context)),
                         html_escape(&risk.title),
                         risk.score,
                         html_escape(&risk.risk_level_label),
                         html_escape(&risk.status_label),
                         html_escape(risk.owner_display.as_deref().unwrap_or("-")),
+                        evidence_href,
+                        review_actions,
                     )
                 })
                 .collect::<Vec<_>>()
@@ -6454,14 +6666,14 @@ async fn web_risks(
                 <section class="hero compact"><h1>Risks</h1><p>{} Risiken</p></section>
                 <section class="panel wide">
                   <table>
-                    <thead><tr><th>Titel</th><th>Score</th><th>Level</th><th>Status</th><th>Owner</th></tr></thead>
+                    <thead><tr><th>Titel</th><th>Score</th><th>Level</th><th>Status</th><th>Owner</th><th>Evidence</th><th>Review</th></tr></thead>
                     <tbody>{}</tbody>
                   </table>
                 </section>
                 "#,
                 risks.len(),
                 if rows.is_empty() {
-                    r#"<tr><td colspan="5">Keine Risiken vorhanden.</td></tr>"#.to_string()
+                    r#"<tr><td colspan="7">Keine Risiken vorhanden.</td></tr>"#.to_string()
                 } else {
                     rows
                 },
@@ -6469,6 +6681,60 @@ async fn web_risks(
             web_page("Risks", "/risks/", Some(&context), &body)
         }
         Err(err) => web_error_page("Risks", "/risks/", &context, &err.to_string()),
+    }
+}
+
+async fn web_risk_review_submit(
+    Path(risk_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebRiskReviewForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Risks", "/risks/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Risks",
+            "/risks/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.risk_store else {
+        return web_store_missing("Risks", "/risks/", &context, "Risk").into_response();
+    };
+    let payload = risk_store::RiskReviewRequest {
+        action: form.action,
+        review_notes: form.review_notes,
+    };
+    match store
+        .review_risk(
+            auth_context.tenant_id,
+            risk_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => {
+            Redirect::to(&web_path_with_context("/risks/", Some(&context))).into_response()
+        }
+        Ok(None) => web_error_page(
+            "Risks",
+            "/risks/",
+            &context,
+            "Risiko wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page("Risks", "/risks/", &context, &err.to_string()).into_response(),
     }
 }
 
@@ -7558,6 +7824,26 @@ async fn web_evidence(
         .await
     {
         Ok(overview) => {
+            let prefill_title = query.evidence_title.as_deref().unwrap_or("");
+            let prefill_description = query.evidence_description.as_deref().unwrap_or("");
+            let prefill_linked_requirement = query.linked_requirement.as_deref().unwrap_or("");
+            let prefill_status = query.evidence_status.as_deref().unwrap_or("SUBMITTED");
+            let prefill_session_id = query
+                .session_id
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            let prefill_requirement_id = query
+                .requirement_id
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            let prefill_control_id = query
+                .control_id
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            let prefill_incident_id = query
+                .incident_id
+                .map(|value| value.to_string())
+                .unwrap_or_default();
             let rows = overview
                 .evidence_items
                 .iter()
@@ -7590,16 +7876,17 @@ async fn web_evidence(
                   </article>
                   <article class="panel wide">
                     <h2>Evidence hochladen</h2>
-                    <form method="post" action="/evidence/" enctype="multipart/form-data">
+                    <form method="post" action="{}" enctype="multipart/form-data">
                       <div class="form-grid">
-                        <label>Titel<input name="title" type="text" required></label>
+                        <label>Titel<input name="title" type="text" value="{}" required></label>
                         <label>Status<select name="status">{}</select></label>
-                        <label>Session-ID<input name="session_id" type="number" min="1"></label>
-                        <label>Requirement-ID<input name="requirement_id" type="number" min="1"></label>
-                        <label>Incident-ID<input name="incident_id" type="number" min="1"></label>
+                        <label>Session-ID<input name="session_id" type="number" min="1" value="{}"></label>
+                        <label>Requirement-ID<input name="requirement_id" type="number" min="1" value="{}"></label>
+                        <label>Control-ID<input name="control_id" type="number" min="1" value="{}"></label>
+                        <label>Incident-ID<input name="incident_id" type="number" min="1" value="{}"></label>
                       </div>
-                      <label>Linked Requirement<input name="linked_requirement" type="text"></label>
-                      <label>Beschreibung<textarea name="description" rows="4"></textarea></label>
+                      <label>Linked Requirement<input name="linked_requirement" type="text" value="{}"></label>
+                      <label>Beschreibung<textarea name="description" rows="4">{}</textarea></label>
                       <label>Datei<input name="file" type="file" accept=".pdf,.docx,.xlsx,.png,.jpg,.jpeg,.csv,.txt"></label>
                       <button type="submit">Evidence speichern</button>
                     </form>
@@ -7616,7 +7903,15 @@ async fn web_evidence(
                 } else {
                     rows
                 },
-                evidence_status_options_for("SUBMITTED"),
+                web_path_with_context("/evidence/", Some(&context)),
+                html_escape(prefill_title),
+                evidence_status_options_for(prefill_status),
+                html_escape(&prefill_session_id),
+                html_escape(&prefill_requirement_id),
+                html_escape(&prefill_control_id),
+                html_escape(&prefill_incident_id),
+                html_escape(prefill_linked_requirement),
+                html_escape(prefill_description),
             );
             web_page("Evidence", "/evidence/", Some(&context), &body)
         }
@@ -7874,6 +8169,41 @@ async fn web_roadmap(
     };
     match store.list_plans(context.tenant_id, 50).await {
         Ok(plans) => {
+            let mut task_rows = Vec::new();
+            for plan in &plans {
+                match store.plan_detail(context.tenant_id, plan.id).await {
+                    Ok(Some(detail)) => {
+                        for task in detail.tasks {
+                            let linked_requirement = evidence_key_from_text(&task.description)
+                                .unwrap_or_else(|| format!("ROADMAP:TASK:{}", task.id));
+                            let evidence_href = evidence_prefill_href(
+                                &context,
+                                &format!("Roadmap-Evidence: {}", task.title),
+                                &format!(
+                                    "Nachweis zum Roadmap-Task '{}'. Plan: {}. Phase: {}. Beschreibung: {}.",
+                                    task.title, plan.title, task.phase_name, task.description
+                                ),
+                                &linked_requirement,
+                                Some("SUBMITTED"),
+                            );
+                            task_rows.push(format!(
+                                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Evidence</a></td></tr>"#,
+                                html_escape(&plan.title),
+                                html_escape(&task.phase_name),
+                                html_escape(&task.title),
+                                html_escape(&task.priority),
+                                html_escape(&task.status_label),
+                                html_escape(task.due_date.as_deref().unwrap_or("-")),
+                                evidence_href,
+                            ));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        return web_error_page("Roadmap", "/roadmap/", &context, &err.to_string())
+                    }
+                }
+            }
             let rows = plans
                 .iter()
                 .map(|plan| {
@@ -7898,12 +8228,24 @@ async fn web_roadmap(
                     <tbody>{}</tbody>
                   </table>
                 </section>
+                <section class="panel wide">
+                  <h2>Roadmap-Tasks</h2>
+                  <table>
+                    <thead><tr><th>Plan</th><th>Phase</th><th>Task</th><th>Prioritaet</th><th>Status</th><th>Faellig</th><th>Evidence</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
                 "#,
                 plans.len(),
                 if rows.is_empty() {
                     web_empty_row(6, "Keine Roadmaps vorhanden.")
                 } else {
                     rows
+                },
+                if task_rows.is_empty() {
+                    web_empty_row(7, "Keine Roadmap-Tasks vorhanden.")
+                } else {
+                    task_rows.join("")
                 },
             );
             web_page("Roadmap", "/roadmap/", Some(&context), &body)
@@ -9236,8 +9578,12 @@ async fn web_product_security(
                             .join("<br>")
                     };
                     format!(
-                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{} {}</td><td>{}</td><td>{}</td><td>{}/{}</td><td>{}</td><td>{}</td></tr>"#,
+                        r#"<tr><td>{}</td><td><a href="{}">{}</a></td><td>{}</td><td>{} {}</td><td>{}</td><td>{}</td><td>{}/{}</td><td>{}</td><td>{}</td></tr>"#,
                         html_escape(&artifact.artifact_type),
+                        web_path_with_context(
+                            &format!("/product-security/imports/{}", artifact.id),
+                            Some(&context),
+                        ),
                         html_escape(&artifact.file_name),
                         html_escape(artifact.product_name.as_deref().unwrap_or("Tenantweit")),
                         html_escape(&artifact.format_name),
@@ -9283,6 +9629,23 @@ async fn web_product_security(
                                 Some(&context),
                             ),
                         )
+                    } else if can_write && correlation.status == "ACCEPTED" {
+                        let evidence_href = evidence_prefill_href(
+                            &context,
+                            &format!("CVE-Evidence: {}", correlation.cve),
+                            &format!(
+                                "Nachweis zur akzeptierten CVE-Korrelation {}. Asset: {}. Produkt: {}. Komponente: {}. Match: {} {}.",
+                                correlation.cve,
+                                correlation.asset_name.as_deref().unwrap_or("-"),
+                                correlation.product_name.as_deref().unwrap_or("-"),
+                                correlation.component_name.as_deref().unwrap_or("-"),
+                                correlation.match_type,
+                                correlation.match_value,
+                            ),
+                            &format!("PRODUCT-SECURITY:CVE:{}", correlation.cve),
+                            Some("SUBMITTED"),
+                        );
+                        format!(r#"<a href="{}">Evidence verknuepfen</a>"#, evidence_href)
                     } else {
                         "-".to_string()
                     };
@@ -9475,6 +9838,138 @@ async fn web_product_security(
             "/product-security/",
             &context,
             "Tenant wurde fuer diesen Kontext nicht gefunden.",
+        ),
+        Err(err) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        ),
+    }
+}
+
+async fn web_product_security_import_detail(
+    Path(artifact_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Product Security", "/product-security/");
+    };
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Product Security",
+        );
+    };
+    match store.import_detail(context.tenant_id, artifact_id).await {
+        Ok(Some(detail)) => {
+            let artifact = &detail.artifact;
+            let validation_rows = if artifact.validation_errors.is_empty() {
+                r#"<li>Keine Validierungsfehler.</li>"#.to_string()
+            } else {
+                artifact
+                    .validation_errors
+                    .iter()
+                    .map(|error| format!("<li>{}</li>", html_escape(error)))
+                    .collect::<Vec<_>>()
+                    .join("")
+            };
+            let component_rows = detail
+                .components
+                .iter()
+                .map(|component| {
+                    let evidence_href = evidence_prefill_href(
+                        &context,
+                        &format!(
+                            "Product-Security-Evidence: {} {}",
+                            component.name, component.version
+                        ),
+                        &format!(
+                            "Nachweis fuer Import {} / Komponente {} {}. Match: {}. CPE: {}. PURL: {}.",
+                            artifact.file_name,
+                            component.name,
+                            component.version,
+                            component.match_reason,
+                            component.cpe23_uri,
+                            component.package_url,
+                        ),
+                        &format!(
+                            "PRODUCT-SECURITY:IMPORT:{}:COMPONENT:{}",
+                            artifact.id, component.id
+                        ),
+                        None,
+                    );
+                    format!(
+                        r#"<tr><td>{}<br><small>{}</small></td><td>{}</td><td>{}</td><td><code>{}</code><br><code>{}</code></td><td>{}</td><td>{}<br><small>{}</small></td><td><a href="{}">Evidence verknuepfen</a></td></tr>"#,
+                        html_escape(&component.name),
+                        html_escape(&component.version),
+                        html_escape(component.product_name.as_deref().unwrap_or("-")),
+                        html_escape(component.component_name.as_deref().unwrap_or("-")),
+                        html_escape(&component.cpe23_uri),
+                        html_escape(&component.package_url),
+                        html_escape(&component.supplier_name),
+                        html_escape(&component.match_status_label),
+                        html_escape(&component.match_reason),
+                        evidence_href,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Import {}</h1><p>{} · {} {} · {}</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <h2>Validierung</h2>
+                    <p>Status: {}</p>
+                    <ul>{}</ul>
+                  </article>
+                  <article class="panel wide">
+                    <h2>Komponenten-Matches</h2>
+                    <table>
+                      <thead><tr><th>Import-Komponente</th><th>Produkt</th><th>ISCY-Komponente</th><th>Identifier</th><th>Supplier</th><th>Match</th><th>Evidence</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                </section>
+                "#,
+                artifact.id,
+                html_escape(&artifact.artifact_type),
+                html_escape(&artifact.format_name),
+                html_escape(&artifact.format_version),
+                html_escape(&artifact.file_name),
+                metric_card("Komponenten", artifact.component_count),
+                metric_card("Matches", artifact.matched_component_count),
+                metric_card("CVEs", artifact.cve_count),
+                html_escape(&artifact.validation_status),
+                validation_rows,
+                if component_rows.is_empty() {
+                    web_empty_row(7, "Keine Komponenten-Matches fuer diesen Import vorhanden.")
+                } else {
+                    component_rows
+                },
+            );
+            web_page(
+                "Product Security Import",
+                "/product-security/",
+                Some(&context),
+                &body,
+            )
+        }
+        Ok(None) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Product-Security-Import wurde fuer diesen Tenant nicht gefunden.",
         ),
         Err(err) => web_error_page(
             "Product Security",
@@ -13796,6 +14291,37 @@ fn web_path_with_context(path: &str, context: Option<&WebContext>) -> String {
     )
 }
 
+fn evidence_prefill_href(
+    context: &WebContext,
+    title: &str,
+    description: &str,
+    linked_requirement: &str,
+    status: Option<&str>,
+) -> String {
+    let mut path = format!(
+        "/evidence/?evidence_title={}&evidence_description={}&linked_requirement={}",
+        url_component(title),
+        url_component(description),
+        url_component(linked_requirement),
+    );
+    if let Some(status) = status.filter(|value| !value.trim().is_empty()) {
+        path.push_str("&evidence_status=");
+        path.push_str(&url_component(status));
+    }
+    web_path_with_context(&path, Some(context))
+}
+
+fn evidence_key_from_text(value: &str) -> Option<String> {
+    let (_, after_marker) = value.split_once("Evidence-Key:")?;
+    let key = after_marker
+        .trim_start()
+        .split(|character: char| character.is_ascii_whitespace() || matches!(character, '.' | ','))
+        .next()
+        .unwrap_or_default()
+        .trim();
+    (!key.is_empty()).then(|| key.to_string())
+}
+
 fn safe_web_return_path(value: Option<&String>) -> Option<String> {
     let value = value?.trim();
     if value.starts_with('/')
@@ -14685,6 +15211,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(product_security_import_history_export_json),
         )
         .route(
+            "/api/v1/product-security/imports/{artifact_id}",
+            get(product_security_import_detail),
+        )
+        .route(
             "/api/v1/product-security/cve-correlations",
             post(product_security_cve_correlations),
         )
@@ -14697,6 +15227,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             patch(product_security_cve_correlation_update),
         )
         .route("/api/v1/risks", get(risk_register).post(risk_create))
+        .route("/api/v1/risks/{risk_id}/review", post(risk_review))
         .route(
             "/api/v1/risks/{risk_id}",
             get(risk_detail).patch(risk_update),
@@ -14852,6 +15383,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/processes/", get(web_processes))
         .route("/requirements/", get(web_requirements))
         .route("/risks/", get(web_risks))
+        .route("/risks/{risk_id}/review", post(web_risk_review_submit))
         .route("/assessments/", get(web_assessments))
         .route("/organizations/", get(web_organizations))
         .route(
@@ -14875,6 +15407,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/product-security/imports.json",
             get(web_product_security_imports_json),
+        )
+        .route(
+            "/product-security/imports/{artifact_id}",
+            get(web_product_security_import_detail),
         )
         .route(
             "/product-security/cve-correlations",
