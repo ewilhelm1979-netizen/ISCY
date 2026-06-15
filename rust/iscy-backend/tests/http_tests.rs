@@ -79,6 +79,9 @@ async fn rust_status_page_renders_runtime_and_module_overview() {
     assert!(html.contains("/metrics"));
     assert!(html.contains("Prometheus Scrape Config"));
     assert!(html.contains("job_name: &quot;iscy-rust&quot;"));
+    assert!(html.contains("Grafana Queries"));
+    assert!(html.contains("iscy_operations_exit_code"));
+    assert!(html.contains("iscy_operations_signal{level=&quot;critical&quot;}"));
 }
 
 #[tokio::test]
@@ -143,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.2\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.3\""));
 }
 
 #[tokio::test]

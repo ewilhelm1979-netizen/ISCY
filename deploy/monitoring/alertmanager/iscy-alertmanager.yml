@@ -1,0 +1,36 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: iscy-operations
+  group_by:
+    - alertname
+    - service
+    - severity
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: iscy-critical
+      matchers:
+        - severity="critical"
+      repeat_interval: 30m
+
+receivers:
+  - name: iscy-operations
+    webhook_configs:
+      - url: https://alert-webhook.example.invalid/iscy-operations
+        send_resolved: true
+
+  - name: iscy-critical
+    webhook_configs:
+      - url: https://alert-webhook.example.invalid/iscy-critical
+        send_resolved: true
+
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal:
+      - service

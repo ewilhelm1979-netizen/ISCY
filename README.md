@@ -1,4 +1,4 @@
-# ISCY V23.7.6 / Rust 0.3.2
+# ISCY V23.7.7 / Rust 0.3.3
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -61,6 +61,13 @@ curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
 ```
 
 Prometheus-/Grafana-Betrieb: [docs/OPERATIONS_MONITORING.md](docs/OPERATIONS_MONITORING.md)
+
+Monitoring-Artefakte fuer den direkten Betrieb:
+
+- Prometheus Scrape Config: [deploy/monitoring/prometheus/iscy-scrape.yml](deploy/monitoring/prometheus/iscy-scrape.yml)
+- Prometheus Alert Rules: [deploy/monitoring/prometheus/iscy-operations-alerts.yml](deploy/monitoring/prometheus/iscy-operations-alerts.yml)
+- Alertmanager Routing-Beispiel: [deploy/monitoring/alertmanager/iscy-alertmanager.yml](deploy/monitoring/alertmanager/iscy-alertmanager.yml)
+- Grafana Dashboard JSON: [deploy/monitoring/grafana/iscy-operations-dashboard.json](deploy/monitoring/grafana/iscy-operations-dashboard.json)
 
 Kurzpruefung fuer Betrieb und Regression:
 
@@ -141,7 +148,7 @@ Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel,
 
 ## Zero-Trust Agent
 
-ISCY `0.3.2` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.3` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 

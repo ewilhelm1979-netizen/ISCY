@@ -18,6 +18,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Operations-Drilldown: `/status/operations.json` und `/api/v1/status/operations`
 - Prometheus-kompatible Metriken: `/metrics` und `/api/v1/status/metrics`
 - Monitoring-Doku: `docs/OPERATIONS_MONITORING.md`
+- Monitoring-Deploy-Artefakte: `deploy/monitoring/prometheus/`, `deploy/monitoring/alertmanager/` und `deploy/monitoring/grafana/`
 
 ## Abgedeckte Rust-Web-/API-Bereiche
 

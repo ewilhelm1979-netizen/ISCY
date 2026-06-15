@@ -1,8 +1,19 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.6 / Rust 0.3.2
+Stand: ISCY V23.7.7 / Rust 0.3.3
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
+
+## Repo-Artefakte
+
+Fuer den direkten Betrieb liegen Monitoring-Beispiele im Repository:
+
+- `deploy/monitoring/prometheus/iscy-scrape.yml`: minimaler Prometheus-Scrape-Job fuer `/metrics`.
+- `deploy/monitoring/prometheus/iscy-operations-alerts.yml`: Alert-Regeln fuer kritische Statussignale, Warnungen, Migrationen, Modulstatus und Runtime-Flags.
+- `deploy/monitoring/alertmanager/iscy-alertmanager.yml`: Alertmanager-Routing-Beispiel mit getrennten Receivern fuer Warnungen und kritische Meldungen.
+- `deploy/monitoring/grafana/iscy-operations-dashboard.json`: importierbares Grafana-Dashboard fuer Betriebsstatus, offene Signale, Migrationen, Module, Build-Info und Signal-Tabelle.
+
+Die Webhook-URLs im Alertmanager-Beispiel sind bewusst Platzhalter unter `example.invalid` und muessen fuer den produktiven Betrieb durch eigene Receiver ersetzt werden.
 
 ## Endpunkte
 
@@ -34,6 +45,8 @@ scrape_configs:
       - targets: ["127.0.0.1:9000"]
 ```
 
+Dasselbe Beispiel liegt als Datei unter `deploy/monitoring/prometheus/iscy-scrape.yml`.
+
 Wichtige Metriken:
 
 - `iscy_operations_exit_code`: `0` fuer OK, `1` fuer Warnung, `2` fuer kritisch.
@@ -45,7 +58,7 @@ Wichtige Metriken:
 - `iscy_operations_runtime_flag`: Runtime-Flags wie `rust_only` und `strict_mode`.
 - `iscy_operations_build_info`: Build-Metadaten mit Version, Commit, Profil und Target.
 
-Beispiel-Alerts:
+Produktive Beispiel-Alerts liegen unter `deploy/monitoring/prometheus/iscy-operations-alerts.yml`. Der Kern ist:
 
 ```yaml
 groups:
@@ -78,7 +91,9 @@ groups:
 
 ## Grafana
 
-Sinnvolle Panels:
+Das Dashboard `deploy/monitoring/grafana/iscy-operations-dashboard.json` kann in Grafana ueber **Dashboards -> New -> Import -> Upload JSON file** importiert werden. Danach muss nur die Prometheus-Datasource im Importdialog ausgewaehlt werden.
+
+Die Statusseite `/status/` enthaelt zusaetzlich einen kompakten Grafana-Query-Spickzettel. Sinnvolle Panels:
 
 - Stat: `iscy_operations_exit_code`
 - Stat: `iscy_operations_issue_count`
@@ -99,5 +114,6 @@ Empfohlene Schwellen:
 
 - `/metrics` ist bewusst ohne Tenant-Kontext abrufbar, damit Prometheus ohne zusaetzliche Header starten kann.
 - Fuer mandantenbezogene Metriken kann ein Reverse Proxy den Tenant-/User-Kontext setzen und `/api/v1/status/metrics` scrapen.
-- Die Statusseite `/status/` zeigt eine kopierbare Prometheus-Scrape-Konfiguration fuer den aktuell gesetzten `RUST_BACKEND_BIND`.
+- Die Statusseite `/status/` zeigt eine kopierbare Prometheus-Scrape-Konfiguration fuer den aktuell gesetzten `RUST_BACKEND_BIND` und einen Grafana-Query-Spickzettel.
 - Der JSON-Endpunkt eignet sich fuer Agenten, Runbooks und externe Checks, die Details wie `severity`, `exit_code`, `signals` und `modules` strukturiert auswerten wollen.
+- Alertmanager-Routing sollte produktiv an die eigenen Incident-, ChatOps- oder Ticket-Receiver angebunden werden. Die Beispielkonfiguration setzt bewusst keine ISCY-Schreib-API voraus.

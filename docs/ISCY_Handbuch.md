@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.6 / Rust 0.3.2)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.7 / Rust 0.3.3)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -664,6 +664,15 @@ curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
 ```
 
 Die Prometheus-/Grafana-Betriebsdoku liegt in `docs/OPERATIONS_MONITORING.md`.
+
+Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:
+
+- `deploy/monitoring/prometheus/iscy-scrape.yml`
+- `deploy/monitoring/prometheus/iscy-operations-alerts.yml`
+- `deploy/monitoring/alertmanager/iscy-alertmanager.yml`
+- `deploy/monitoring/grafana/iscy-operations-dashboard.json`
+
+Die Statusseite `/status/` zeigt neben Health, Migrationen, Modulen, offenen Signalen und Prometheus-Scrape-Konfiguration auch einen kompakten Grafana-Query-Spickzettel.
 
 Wichtige lokale Pruefbefehle:
 

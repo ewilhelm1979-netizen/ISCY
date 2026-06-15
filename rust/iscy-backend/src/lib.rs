@@ -8804,6 +8804,7 @@ async fn web_status(
     ]
     .join("");
     let prometheus_scrape_config_panel = prometheus_scrape_config_panel();
+    let grafana_query_cheatsheet_panel = grafana_query_cheatsheet_panel();
     let body = format!(
         r#"
         <section class="hero compact">
@@ -8856,6 +8857,7 @@ async fn web_status(
           </article>
           {}
           {}
+          {}
         </section>
         "#,
         metric_card("Module bereit", configured_stores),
@@ -8870,6 +8872,7 @@ async fn web_status(
         build_rows,
         migration_rows,
         prometheus_scrape_config_panel,
+        grafana_query_cheatsheet_panel,
         status_links,
     );
     web_page("Rust-only Status", "/status/", context.as_ref(), &body)
@@ -8908,6 +8911,72 @@ fn prometheus_scrape_target() -> String {
         return format!("127.0.0.1:{port}");
     }
     raw_bind
+}
+
+fn grafana_query_cheatsheet_panel() -> String {
+    let rows = [
+        (
+            "Betriebsstatus",
+            "iscy_operations_exit_code",
+            "0 OK, 1 Warnung, 2 kritisch",
+        ),
+        (
+            "Offene Signale",
+            "iscy_operations_issue_count",
+            "Anzahl Warn-/Kritisch-Signale",
+        ),
+        (
+            "Kritische Signale",
+            r#"iscy_operations_signal{level="critical"}"#,
+            "Tabelle oder Stat fuer kritische Einzelbefunde",
+        ),
+        (
+            "Warnsignale",
+            r#"iscy_operations_signal{level="warn"}"#,
+            "Tabelle fuer offene Pruefpunkte",
+        ),
+        (
+            "Modulstatus",
+            "iscy_operations_module_configured",
+            "Rust-Stores und fachliche Module",
+        ),
+        (
+            "Migrationen",
+            "iscy_operations_migration_applied / iscy_operations_migration_expected",
+            "Schema-Fortschritt als Gauge",
+        ),
+        (
+            "Runtime Flags",
+            "iscy_operations_runtime_flag",
+            "Rust-only und Strict-Mode sichtbar machen",
+        ),
+        (
+            "Build Info",
+            "iscy_operations_build_info",
+            "Version, Commit, Profil und Target",
+        ),
+    ]
+    .iter()
+    .map(|(name, query, detail)| {
+        format!(
+            r#"<tr><td>{}</td><td><code>{}</code></td><td>{}</td></tr>"#,
+            html_escape(name),
+            html_escape(query),
+            html_escape(detail),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("");
+    format!(
+        r#"<article class="panel wide">
+            <h2>Grafana Queries</h2>
+            <table>
+              <thead><tr><th>Panel</th><th>PromQL</th><th>Hinweis</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>"#,
+        rows,
+    )
 }
 
 async fn status_operations_json(
