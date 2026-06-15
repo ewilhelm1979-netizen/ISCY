@@ -70,8 +70,41 @@ async fn rust_status_page_renders_runtime_and_module_overview() {
     assert!(html.contains("Rust-only Status"));
     assert!(html.contains("Runtime"));
     assert!(html.contains("Kernmodule"));
+    assert!(html.contains("Build"));
+    assert!(html.contains("Datenbank-Migrationen"));
     assert!(html.contains("Product Security"));
     assert!(html.contains("/health/live"));
+}
+
+#[tokio::test]
+async fn rust_status_page_reports_database_migration_and_build_status() {
+    let root = test_media_root("status-migration-db");
+    let db_path = root.join("status.sqlite3");
+    let database_url = format!("sqlite:///{}", db_path.display());
+    db_admin::run_db_admin_action(&database_url, db_admin::DbAdminAction::Migrate)
+        .await
+        .unwrap();
+    let app =
+        app_router_with_state(AppState::default().with_database_url(Some(database_url.clone())));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/status/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Datenbank-Migrationen"));
+    assert!(html.contains("0016_rust_control_evidence_product_imports"));
+    assert!(html.contains("16/16 angewendet"));
+    assert!(html.contains("Version"));
+    assert!(html.contains("Commit"));
 }
 
 #[tokio::test]
@@ -2044,7 +2077,7 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
     create_risk_tables(&pool).await;
     insert_product_security_fixture(&pool).await;
     let app = app_router_with_state(
-        AppState::default()
+        AppState::with_stores(None, Some(TenantStore::from_sqlite_pool(pool.clone())))
             .with_product_security_store(Some(ProductSecurityStore::from_sqlite_pool(pool.clone())))
             .with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
     );
@@ -6235,8 +6268,17 @@ async fn rust_web_product_security_renders_overview_from_database() {
     .execute(&pool)
     .await
     .unwrap();
+    let tenant_profile = TenantStore::from_sqlite_pool(pool.clone())
+        .tenant_profile(42)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tenant_profile.product_security_scope,
+        "Connected gateway product family"
+    );
     let app = app_router_with_state(
-        AppState::default()
+        AppState::with_stores(None, Some(TenantStore::from_sqlite_pool(pool.clone())))
             .with_product_security_store(Some(ProductSecurityStore::from_sqlite_pool(pool.clone())))
             .with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
     );
@@ -6297,6 +6339,10 @@ async fn rust_web_product_security_renders_overview_from_database() {
     assert!(html.contains("CSAF Coverage"));
     assert!(html.contains("Threat/TARA Coverage"));
     assert!(html.contains("Review-Backlog"));
+    assert!(html.contains("Ampel-Schwellen"));
+    assert!(html.contains("Connected gateway product family"));
+    assert!(html.contains("Schwellen speichern"));
+    assert!(html.contains(r#"value="80""#));
     assert!(html.contains("CSAF document.csaf_version fehlt."));
     assert!(html.contains("CVE-Reviews offen"));
     assert!(html.contains("Evidence fehlt"));
@@ -6313,6 +6359,56 @@ async fn rust_web_product_security_renders_overview_from_database() {
     assert!(html.contains("Akzeptieren"));
     assert!(html.contains("Akzeptierte CVEs uebernehmen"));
     assert!(!html.contains("Rust-Webroute aktiv."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/product-security/thresholds")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "scope=Regulated+gateway+portfolio&sbom_coverage_min=90&csaf_coverage_min=85&threat_tara_coverage_min=70&review_backlog_max=2&critical_open_vulnerabilities_max=1",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/product-security/?tenant_id=42&user_id=7"
+    );
+    let stored_scope: String =
+        sqlx::query_scalar("SELECT product_security_scope FROM organizations_tenant WHERE id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(stored_scope.contains(r#""scope":"Regulated gateway portfolio""#));
+    assert!(stored_scope.contains(r#""sbom_coverage_min":90"#));
+    assert!(stored_scope.contains(r#""review_backlog_max":2"#));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/product-security/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Regulated gateway portfolio"));
+    assert!(html.contains(r#"value="90""#));
+    assert!(html.contains(r#"value="85""#));
+    assert!(html.contains(r#"value="70""#));
 
     let response = app
         .clone()
@@ -7332,6 +7428,62 @@ async fn rust_db_admin_seed_sets_superuser_for_existing_sqlite_user_table() {
             .await
             .unwrap();
     assert_eq!(is_superuser, 1);
+}
+
+#[tokio::test]
+async fn rust_status_page_generates_control_gap_roadmap_tasks() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_control_store(Some(ControlStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/status/?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Cutover-Aktionen"));
+    assert!(html.contains("ISCY-27-Gaps in Roadmap ueberfuehren"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/status/control-gaps/generate")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/roadmap/?tenant_id=1&user_id=1"
+    );
+    let control_task_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM roadmap_roadmaptask WHERE control_id IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(control_task_count > 0);
 }
 
 #[tokio::test]
@@ -8698,12 +8850,28 @@ async fn create_product_security_tables(pool: &SqlitePool) {
         r#"
         CREATE TABLE organizations_tenant (
             id INTEGER PRIMARY KEY,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            name varchar(255) NOT NULL DEFAULT '',
+            slug varchar(50) NOT NULL DEFAULT '',
+            country varchar(100) NOT NULL DEFAULT '',
+            operation_countries TEXT NOT NULL DEFAULT '[]',
+            description TEXT NOT NULL DEFAULT '',
             sector varchar(64) NOT NULL,
+            employee_count integer NOT NULL DEFAULT 0,
+            annual_revenue_million decimal NOT NULL DEFAULT 0,
+            balance_sheet_million decimal NOT NULL DEFAULT 0,
+            critical_services TEXT NOT NULL DEFAULT '',
+            supply_chain_role varchar(255) NOT NULL DEFAULT '',
             nis2_relevant bool NOT NULL,
+            kritis_relevant bool NOT NULL DEFAULT 0,
             develops_digital_products bool NOT NULL,
             uses_ai_systems bool NOT NULL,
             ot_iacs_scope bool NOT NULL,
-            automotive_scope bool NOT NULL
+            automotive_scope bool NOT NULL,
+            psirt_defined bool NOT NULL DEFAULT 0,
+            sbom_required bool NOT NULL DEFAULT 0,
+            product_security_scope TEXT NOT NULL DEFAULT ''
         )
         "#,
     )
@@ -9113,11 +9281,25 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
     sqlx::query(
         r#"
         INSERT INTO organizations_tenant (
-            id, sector, nis2_relevant, develops_digital_products, uses_ai_systems, ot_iacs_scope, automotive_scope
+            id, name, slug, country, operation_countries, description, sector,
+            employee_count, annual_revenue_million, balance_sheet_million,
+            critical_services, supply_chain_role, nis2_relevant, kritis_relevant,
+            develops_digital_products, uses_ai_systems, ot_iacs_scope, automotive_scope,
+            psirt_defined, sbom_required, product_security_scope
         )
         VALUES
-            (42, 'MANUFACTURING', 1, 1, 1, 0, 0),
-            (99, 'OTHER', 0, 1, 0, 0, 0)
+            (
+                42, 'Manufacturing Tenant', 'manufacturing-tenant', 'DE', '["DE"]',
+                'Product security fixture tenant', 'MANUFACTURING', 500, '42.00', '25.00',
+                'Industrial gateway operations', 'Manufacturer', 1, 0, 1, 1, 0, 0,
+                1, 1, 'Connected gateway product family'
+            ),
+            (
+                99, 'Other Tenant', 'other-tenant', 'DE', '["DE"]',
+                'Secondary product security fixture tenant', 'OTHER', 50, '5.00', '3.00',
+                'Digital service', 'Supplier', 0, 0, 1, 0, 0, 0,
+                0, 0, ''
+            )
         "#,
     )
     .execute(pool)

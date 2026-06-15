@@ -72,6 +72,22 @@ impl TenantStore {
             Self::Sqlite(pool) => tenant_profile_sqlite(pool, tenant_id).await,
         }
     }
+
+    pub async fn update_product_security_scope(
+        &self,
+        tenant_id: i64,
+        product_security_scope: &str,
+    ) -> anyhow::Result<Option<TenantProfile>> {
+        match self {
+            Self::Postgres(pool) => {
+                update_product_security_scope_postgres(pool, tenant_id, product_security_scope)
+                    .await
+            }
+            Self::Sqlite(pool) => {
+                update_product_security_scope_sqlite(pool, tenant_id, product_security_scope).await
+            }
+        }
+    }
 }
 
 async fn tenant_profile_postgres(
@@ -156,6 +172,52 @@ async fn tenant_profile_sqlite(
     row.map(tenant_profile_from_sqlite_row)
         .transpose()
         .map_err(Into::into)
+}
+
+async fn update_product_security_scope_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    product_security_scope: &str,
+) -> anyhow::Result<Option<TenantProfile>> {
+    let result = sqlx::query(
+        r#"
+        UPDATE organizations_tenant
+        SET product_security_scope = $2, updated_at = NOW()::text
+        WHERE id = $1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(product_security_scope.trim())
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Product-Security-Scope konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    tenant_profile_postgres(pool, tenant_id).await
+}
+
+async fn update_product_security_scope_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    product_security_scope: &str,
+) -> anyhow::Result<Option<TenantProfile>> {
+    let result = sqlx::query(
+        r#"
+        UPDATE organizations_tenant
+        SET product_security_scope = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        "#,
+    )
+    .bind(product_security_scope.trim())
+    .bind(tenant_id)
+    .execute(pool)
+    .await
+    .context("SQLite-Product-Security-Scope konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    tenant_profile_sqlite(pool, tenant_id).await
 }
 
 fn tenant_profile_from_pg_row(row: PgRow) -> Result<TenantProfile, sqlx::Error> {

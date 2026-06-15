@@ -24,6 +24,16 @@ pub struct DbAdminOutcome {
     pub seeded_demo: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct DbMigrationStatus {
+    pub database_kind: &'static str,
+    pub applied_count: i64,
+    pub expected_count: usize,
+    pub latest_applied_version: Option<String>,
+    pub latest_applied_at: Option<String>,
+    pub expected_latest_version: Option<&'static str>,
+}
+
 #[derive(Clone, Copy)]
 struct Migration {
     version: &'static str,
@@ -1285,6 +1295,110 @@ pub async fn run_db_admin_action(
         });
     }
     bail!("Nicht unterstuetztes DATABASE_URL-Schema fuer Rust-DB-Admin");
+}
+
+pub async fn migration_status(database_url: &str) -> anyhow::Result<DbMigrationStatus> {
+    let normalized_url = normalize_database_url(database_url);
+    if normalized_url.starts_with("postgres://") || normalized_url.starts_with("postgresql://") {
+        let pool = PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&normalized_url)
+            .await
+            .context("PostgreSQL-Verbindung fuer Rust-Migrationsstatus fehlgeschlagen")?;
+        let table_exists: bool =
+            sqlx::query_scalar("SELECT to_regclass('public.iscy_schema_migrations') IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .context("PostgreSQL-Migrationstabelle konnte nicht geprueft werden")?;
+        if !table_exists {
+            return Ok(empty_migration_status("postgres"));
+        }
+        let applied_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*)::bigint FROM iscy_schema_migrations")
+                .fetch_one(&pool)
+                .await
+                .context("PostgreSQL-Migrationsanzahl konnte nicht gelesen werden")?;
+        let latest = sqlx::query(
+            "SELECT version, applied_at FROM iscy_schema_migrations ORDER BY version DESC LIMIT 1",
+        )
+        .fetch_optional(&pool)
+        .await
+        .context("PostgreSQL-letzte Migration konnte nicht gelesen werden")?;
+        return Ok(migration_status_from_row(
+            "postgres",
+            applied_count,
+            latest.map(|row| {
+                (
+                    row.try_get::<String, _>("version"),
+                    row.try_get::<String, _>("applied_at"),
+                )
+            }),
+        )?);
+    }
+    if normalized_url.starts_with("sqlite:") {
+        let options = SqliteConnectOptions::from_str(&normalized_url)
+            .context("SQLite-DATABASE_URL konnte nicht gelesen werden")?
+            .create_if_missing(false);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .context("SQLite-Verbindung fuer Rust-Migrationsstatus fehlgeschlagen")?;
+        if !sqlite_table_exists(&pool, "iscy_schema_migrations").await? {
+            return Ok(empty_migration_status("sqlite"));
+        }
+        let applied_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM iscy_schema_migrations")
+            .fetch_one(&pool)
+            .await
+            .context("SQLite-Migrationsanzahl konnte nicht gelesen werden")?;
+        let latest = sqlx::query(
+            "SELECT version, applied_at FROM iscy_schema_migrations ORDER BY version DESC LIMIT 1",
+        )
+        .fetch_optional(&pool)
+        .await
+        .context("SQLite-letzte Migration konnte nicht gelesen werden")?;
+        return Ok(migration_status_from_row(
+            "sqlite",
+            applied_count,
+            latest.map(|row| {
+                (
+                    row.try_get::<String, _>("version"),
+                    row.try_get::<String, _>("applied_at"),
+                )
+            }),
+        )?);
+    }
+    bail!("Nicht unterstuetztes DATABASE_URL-Schema fuer Rust-Migrationsstatus");
+}
+
+fn empty_migration_status(database_kind: &'static str) -> DbMigrationStatus {
+    DbMigrationStatus {
+        database_kind,
+        applied_count: 0,
+        expected_count: MIGRATIONS.len(),
+        latest_applied_version: None,
+        latest_applied_at: None,
+        expected_latest_version: MIGRATIONS.last().map(|migration| migration.version),
+    }
+}
+
+fn migration_status_from_row(
+    database_kind: &'static str,
+    applied_count: i64,
+    latest: Option<(Result<String, sqlx::Error>, Result<String, sqlx::Error>)>,
+) -> Result<DbMigrationStatus, sqlx::Error> {
+    let (latest_applied_version, latest_applied_at) = match latest {
+        Some((version, applied_at)) => (Some(version?), Some(applied_at?)),
+        None => (None, None),
+    };
+    Ok(DbMigrationStatus {
+        database_kind,
+        applied_count,
+        expected_count: MIGRATIONS.len(),
+        latest_applied_version,
+        latest_applied_at,
+        expected_latest_version: MIGRATIONS.last().map(|migration| migration.version),
+    })
 }
 
 pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'static str>> {

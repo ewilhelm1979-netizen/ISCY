@@ -93,6 +93,7 @@ pub struct AppState {
     pub wizard_store: Option<WizardStore>,
     pub evidence_media_root: Option<PathBuf>,
     pub nvd_api_base_url: Option<String>,
+    pub database_url: Option<String>,
 }
 
 impl AppState {
@@ -120,6 +121,7 @@ impl AppState {
             wizard_store: None,
             evidence_media_root: None,
             nvd_api_base_url: None,
+            database_url: None,
         }
     }
 
@@ -147,6 +149,7 @@ impl AppState {
             wizard_store: None,
             evidence_media_root: None,
             nvd_api_base_url: None,
+            database_url: None,
         }
     }
 
@@ -187,6 +190,11 @@ impl AppState {
 
     pub fn with_nvd_api_base_url(mut self, nvd_api_base_url: Option<String>) -> Self {
         self.nvd_api_base_url = nvd_api_base_url;
+        self
+    }
+
+    pub fn with_database_url(mut self, database_url: Option<String>) -> Self {
+        self.database_url = database_url;
         self
     }
 
@@ -597,6 +605,16 @@ struct WebIncidentTimelineEventMarkerForm {
     export_note: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebProductSecurityThresholdForm {
+    scope: Option<String>,
+    sbom_coverage_min: Option<String>,
+    csaf_coverage_min: Option<String>,
+    threat_tara_coverage_min: Option<String>,
+    review_backlog_max: Option<String>,
+    critical_open_vulnerabilities_max: Option<String>,
+}
+
 fn deserialize_optional_form_list<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -910,6 +928,33 @@ struct WebContext {
     tenant_id: i64,
     user_id: i64,
     user_email: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ProductSecurityScopeConfig {
+    scope: String,
+    thresholds: ProductSecurityThresholds,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ProductSecurityThresholds {
+    sbom_coverage_min: i64,
+    csaf_coverage_min: i64,
+    threat_tara_coverage_min: i64,
+    review_backlog_max: i64,
+    critical_open_vulnerabilities_max: i64,
+}
+
+impl Default for ProductSecurityThresholds {
+    fn default() -> Self {
+        Self {
+            sbom_coverage_min: 80,
+            csaf_coverage_min: 80,
+            threat_tara_coverage_min: 80,
+            review_backlog_max: 0,
+            critical_open_vulnerabilities_max: 0,
+        }
+    }
 }
 
 type ImportCsvRows = Vec<HashMap<String, Value>>;
@@ -8540,6 +8585,9 @@ async fn web_status(
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
     let context = web_context_from_request(&query, &headers, &state).await;
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
     let store_statuses = [
         (
             "Auth & Sessions",
@@ -8672,6 +8720,28 @@ async fn web_status(
     })
     .collect::<Vec<_>>()
     .join("");
+    let migration_status = match state.database_url.as_deref() {
+        Some(database_url) => match db_admin::migration_status(database_url).await {
+            Ok(status) => MigrationStatusView::Ready(status),
+            Err(err) => MigrationStatusView::Error(err.to_string()),
+        },
+        None => MigrationStatusView::Missing,
+    };
+    let (migration_metric, migration_rows) = migration_status_view(&migration_status);
+    let build_rows = build_status_rows();
+    let status_action_panel = if context.is_some() && can_write && state.control_store.is_some() {
+        format!(
+            r#"<article class="panel wide">
+                <h2>Cutover-Aktionen</h2>
+                <form method="post" action="{}">
+                  <button type="submit">ISCY-27-Gaps in Roadmap ueberfuehren</button>
+                </form>
+              </article>"#,
+            web_path_with_context("/status/control-gaps/generate", context.as_ref()),
+        )
+    } else {
+        String::new()
+    };
     let body = format!(
         r#"
         <section class="hero compact">
@@ -8682,8 +8752,10 @@ async fn web_status(
           {}
           {}
           {}
+          {}
         </section>
         <section class="grid">
+          {}
           <article class="panel wide">
             <h2>Runtime</h2>
             <table>
@@ -8698,6 +8770,20 @@ async fn web_status(
               <tbody>{}</tbody>
             </table>
           </article>
+          <article class="panel wide">
+            <h2>Build</h2>
+            <table>
+              <thead><tr><th>Signal</th><th>Wert</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <h2>Datenbank-Migrationen</h2>
+            <table>
+              <thead><tr><th>Signal</th><th>Status</th><th>Detail</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
           {}
           {}
           {}
@@ -8706,8 +8792,12 @@ async fn web_status(
         metric_card("Module bereit", configured_stores),
         metric_card("Rust-only", if rust_only { 1 } else { 0 }),
         metric_card("Strict Mode", if strict_mode { 1 } else { 0 }),
+        metric_card("Migrationen", migration_metric),
+        status_action_panel,
         runtime_rows,
         store_rows,
+        build_rows,
+        migration_rows,
         web_link_card(
             "Live Health JSON",
             "/health/live",
@@ -8725,6 +8815,42 @@ async fn web_status(
         ),
     );
     web_page("Rust-only Status", "/status/", context.as_ref(), &body)
+}
+
+async fn web_status_control_gaps_generate_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Rust-only Status", "/status/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Rust-only Status",
+            "/status/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.control_store else {
+        return web_store_missing("Rust-only Status", "/status/", &context, "Control")
+            .into_response();
+    };
+    match store
+        .generate_roadmap_from_gaps(auth_context.tenant_id)
+        .await
+    {
+        Ok(_) => Redirect::to(&web_path_with_context("/roadmap/", Some(&context))).into_response(),
+        Err(err) => web_error_page("Rust-only Status", "/status/", &context, &err.to_string())
+            .into_response(),
+    }
 }
 
 async fn web_processes(
@@ -9782,7 +9908,7 @@ async fn web_product_security(
     let can_write = authenticated_tenant_context(&state, &headers)
         .await
         .is_ok_and(|auth_context| auth_context.can_write());
-    let Some(store) = state.product_security_store else {
+    let Some(store) = state.product_security_store.as_ref() else {
         return web_store_missing(
             "Product Security",
             "/product-security/",
@@ -9792,6 +9918,21 @@ async fn web_product_security(
     };
     match store.overview(context.tenant_id, 50, 20).await {
         Ok(Some(overview)) => {
+            let product_security_config = match state.tenant_store.as_ref() {
+                Some(tenant_store) => match tenant_store.tenant_profile(context.tenant_id).await {
+                    Ok(Some(tenant)) => {
+                        product_security_scope_config(&tenant.product_security_scope)
+                    }
+                    Ok(None) | Err(_) => ProductSecurityScopeConfig {
+                        scope: String::new(),
+                        thresholds: ProductSecurityThresholds::default(),
+                    },
+                },
+                None => ProductSecurityScopeConfig {
+                    scope: String::new(),
+                    thresholds: ProductSecurityThresholds::default(),
+                },
+            };
             let matrix_rows = [
                 ("CRA", &overview.matrix.cra),
                 ("AI Act", &overview.matrix.ai_act),
@@ -10219,6 +10360,7 @@ async fn web_product_security(
             let review_backlog = overview.review_metrics.open_cve_reviews
                 + overview.review_metrics.open_risk_reviews
                 + overview.review_metrics.evidence_missing;
+            let thresholds = product_security_config.thresholds;
             let product_security_signal_panel = format!(
                 r#"<article class="panel wide">
                     <h2>Product-Security-Steuerung</h2>
@@ -10234,21 +10376,33 @@ async fn web_product_security(
                     </table>
                   </article>"#,
                 sbom_coverage,
-                signal_badge(total_components == 0 || sbom_coverage >= 80),
+                signal_badge(
+                    total_components == 0 || sbom_coverage >= thresholds.sbom_coverage_min
+                ),
                 sbom_components,
                 total_components,
                 csaf_coverage,
-                signal_badge(product_count == 0 || csaf_coverage >= 80),
+                signal_badge(product_count == 0 || csaf_coverage >= thresholds.csaf_coverage_min),
                 products_with_csaf,
                 product_count,
                 threat_coverage,
-                signal_badge(product_count == 0 || threat_coverage >= 80),
+                signal_badge(
+                    product_count == 0 || threat_coverage >= thresholds.threat_tara_coverage_min
+                ),
                 products_with_threat_model,
                 product_count,
                 review_backlog,
-                signal_badge(review_backlog == 0),
+                signal_badge(review_backlog <= thresholds.review_backlog_max),
                 overview.posture.critical_open_vulnerabilities,
-                signal_badge(overview.posture.critical_open_vulnerabilities == 0),
+                signal_badge(
+                    overview.posture.critical_open_vulnerabilities
+                        <= thresholds.critical_open_vulnerabilities_max,
+                ),
+            );
+            let threshold_panel = product_security_threshold_panel(
+                &context,
+                &product_security_config,
+                can_write && state.tenant_store.is_some(),
             );
             let body = format!(
                 r#"
@@ -10262,6 +10416,7 @@ async fn web_product_security(
                   {}
                 </section>
                 <section class="grid">
+                  {}
                   {}
                   <article class="panel wide">
                     <h2>Regulatorische Matrix</h2>
@@ -10327,6 +10482,7 @@ async fn web_product_security(
                 ),
                 metric_card("Evidence fehlt", overview.review_metrics.evidence_missing),
                 product_security_signal_panel,
+                threshold_panel,
                 html_escape(&overview.matrix.summary),
                 if matrix_rows.is_empty() {
                     web_empty_row(4, "Keine Matrixdaten vorhanden.")
@@ -10388,6 +10544,67 @@ async fn web_product_security(
             &context,
             &err.to_string(),
         ),
+    }
+}
+
+async fn web_product_security_thresholds_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebProductSecurityThresholdForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Product Security", "/product-security/").into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(tenant_store) = state.tenant_store else {
+        return web_store_missing("Product Security", "/product-security/", &context, "Tenant")
+            .into_response();
+    };
+    let thresholds = match product_security_thresholds_from_form(&form) {
+        Ok(thresholds) => thresholds,
+        Err(message) => {
+            return web_error_page("Product Security", "/product-security/", &context, &message)
+                .into_response()
+        }
+    };
+    let scope = form.scope.unwrap_or_default();
+    let scope_config = product_security_scope_config_json(&scope, thresholds);
+    match tenant_store
+        .update_product_security_scope(auth_context.tenant_id, &scope_config)
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context("/product-security/", Some(&context)))
+            .into_response(),
+        Ok(None) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Tenant wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
     }
 }
 
@@ -14124,6 +14341,314 @@ fn env_value_or(name: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
+enum MigrationStatusView {
+    Ready(db_admin::DbMigrationStatus),
+    Missing,
+    Error(String),
+}
+
+fn migration_status_view(status: &MigrationStatusView) -> (i64, String) {
+    match status {
+        MigrationStatusView::Ready(status) => {
+            let complete = status.applied_count >= status.expected_count as i64;
+            (
+                status.applied_count,
+                [
+                    status_row("Datenbank", web_badge(status.database_kind, "info"), ""),
+                    status_row(
+                        "Migrationen",
+                        signal_badge(complete),
+                        &format!(
+                            "{}/{} angewendet",
+                            status.applied_count, status.expected_count
+                        ),
+                    ),
+                    status_row(
+                        "Letzte angewendet",
+                        signal_badge(
+                            status.latest_applied_version.as_deref()
+                                == status.expected_latest_version,
+                        ),
+                        status
+                            .latest_applied_version
+                            .as_deref()
+                            .unwrap_or("keine Migration registriert"),
+                    ),
+                    status_row(
+                        "Soll-Version",
+                        web_badge("erwartet", "info"),
+                        status.expected_latest_version.unwrap_or("unbekannt"),
+                    ),
+                    status_row(
+                        "Angewendet am",
+                        web_badge("Info", "muted-badge"),
+                        status.latest_applied_at.as_deref().unwrap_or("-"),
+                    ),
+                ]
+                .join(""),
+            )
+        }
+        MigrationStatusView::Missing => (
+            0,
+            status_row(
+                "Datenbank",
+                web_badge("nicht konfiguriert", "warn"),
+                "DATABASE_URL ist im AppState nicht gesetzt.",
+            ),
+        ),
+        MigrationStatusView::Error(message) => (
+            0,
+            status_row("Datenbank", web_badge("nicht lesbar", "danger"), message),
+        ),
+    }
+}
+
+fn build_status_rows() -> String {
+    [
+        status_pair_row("Version", env!("CARGO_PKG_VERSION")),
+        status_pair_row("Commit", &build_commit()),
+        status_pair_row("Profil", option_env!("PROFILE").unwrap_or("unknown")),
+        status_pair_row("Ziel", option_env!("TARGET").unwrap_or("unknown")),
+    ]
+    .join("")
+}
+
+fn build_commit() -> String {
+    std::env::var("ISCY_BUILD_COMMIT")
+        .or_else(|_| std::env::var("GIT_COMMIT"))
+        .or_else(|_| std::env::var("GITHUB_SHA"))
+        .ok()
+        .or_else(|| option_env!("ISCY_BUILD_COMMIT").map(ToString::to_string))
+        .or_else(|| option_env!("GIT_COMMIT").map(ToString::to_string))
+        .or_else(|| option_env!("GITHUB_SHA").map(ToString::to_string))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(12).collect::<String>())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn status_row(signal: &str, status: String, detail: &str) -> String {
+    format!(
+        r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+        html_escape(signal),
+        status,
+        html_escape(detail),
+    )
+}
+
+fn status_pair_row(signal: &str, value: &str) -> String {
+    format!(
+        r#"<tr><td>{}</td><td>{}</td></tr>"#,
+        html_escape(signal),
+        html_escape(value),
+    )
+}
+
+fn product_security_scope_config(raw: &str) -> ProductSecurityScopeConfig {
+    let trimmed = raw.trim();
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        let scope = value
+            .get("scope")
+            .or_else(|| value.get("description"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let threshold_source = value.get("thresholds").unwrap_or(&value);
+        return ProductSecurityScopeConfig {
+            scope,
+            thresholds: ProductSecurityThresholds {
+                sbom_coverage_min: json_i64_threshold(
+                    threshold_source,
+                    &["sbom_coverage_min", "sbom_coverage"],
+                    80,
+                    0,
+                    100,
+                ),
+                csaf_coverage_min: json_i64_threshold(
+                    threshold_source,
+                    &["csaf_coverage_min", "csaf_coverage"],
+                    80,
+                    0,
+                    100,
+                ),
+                threat_tara_coverage_min: json_i64_threshold(
+                    threshold_source,
+                    &["threat_tara_coverage_min", "threat_tara_coverage"],
+                    80,
+                    0,
+                    100,
+                ),
+                review_backlog_max: json_i64_threshold(
+                    threshold_source,
+                    &["review_backlog_max", "review_backlog"],
+                    0,
+                    0,
+                    999,
+                ),
+                critical_open_vulnerabilities_max: json_i64_threshold(
+                    threshold_source,
+                    &[
+                        "critical_open_vulnerabilities_max",
+                        "critical_open_vulnerabilities",
+                    ],
+                    0,
+                    0,
+                    999,
+                ),
+            },
+        };
+    }
+    ProductSecurityScopeConfig {
+        scope: trimmed.to_string(),
+        thresholds: ProductSecurityThresholds::default(),
+    }
+}
+
+fn json_i64_threshold(value: &Value, names: &[&str], default: i64, min: i64, max: i64) -> i64 {
+    names
+        .iter()
+        .find_map(|name| value.get(*name))
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str()?.trim().parse::<i64>().ok())
+        })
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+fn product_security_scope_config_json(
+    scope: &str,
+    thresholds: ProductSecurityThresholds,
+) -> String {
+    serde_json::json!({
+        "scope": scope.trim(),
+        "thresholds": {
+            "sbom_coverage_min": thresholds.sbom_coverage_min,
+            "csaf_coverage_min": thresholds.csaf_coverage_min,
+            "threat_tara_coverage_min": thresholds.threat_tara_coverage_min,
+            "review_backlog_max": thresholds.review_backlog_max,
+            "critical_open_vulnerabilities_max": thresholds.critical_open_vulnerabilities_max
+        }
+    })
+    .to_string()
+}
+
+fn product_security_thresholds_from_form(
+    form: &WebProductSecurityThresholdForm,
+) -> Result<ProductSecurityThresholds, String> {
+    Ok(ProductSecurityThresholds {
+        sbom_coverage_min: threshold_form_i64(
+            "SBOM Coverage",
+            form.sbom_coverage_min.as_deref(),
+            80,
+            0,
+            100,
+        )?,
+        csaf_coverage_min: threshold_form_i64(
+            "CSAF Coverage",
+            form.csaf_coverage_min.as_deref(),
+            80,
+            0,
+            100,
+        )?,
+        threat_tara_coverage_min: threshold_form_i64(
+            "Threat/TARA Coverage",
+            form.threat_tara_coverage_min.as_deref(),
+            80,
+            0,
+            100,
+        )?,
+        review_backlog_max: threshold_form_i64(
+            "Review-Backlog",
+            form.review_backlog_max.as_deref(),
+            0,
+            0,
+            999,
+        )?,
+        critical_open_vulnerabilities_max: threshold_form_i64(
+            "Kritische Schwachstellen",
+            form.critical_open_vulnerabilities_max.as_deref(),
+            0,
+            0,
+            999,
+        )?,
+    })
+}
+
+fn threshold_form_i64(
+    label: &str,
+    value: Option<&str>,
+    default: i64,
+    min: i64,
+    max: i64,
+) -> Result<i64, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(default);
+    };
+    let parsed = value
+        .parse::<i64>()
+        .map_err(|_| format!("{label} muss eine Zahl sein."))?;
+    if parsed < min || parsed > max {
+        return Err(format!("{label} muss zwischen {min} und {max} liegen."));
+    }
+    Ok(parsed)
+}
+
+fn product_security_threshold_panel(
+    context: &WebContext,
+    config: &ProductSecurityScopeConfig,
+    can_write: bool,
+) -> String {
+    let thresholds = config.thresholds;
+    if can_write {
+        return format!(
+            r#"<article class="panel wide">
+                <h2>Ampel-Schwellen</h2>
+                <form method="post" action="{}">
+                  <label>Product-Security-Scope<textarea name="scope" rows="3">{}</textarea></label>
+                  <div class="form-grid">
+                    <label>SBOM Coverage Minimum (%)<input name="sbom_coverage_min" type="number" min="0" max="100" value="{}"></label>
+                    <label>CSAF Coverage Minimum (%)<input name="csaf_coverage_min" type="number" min="0" max="100" value="{}"></label>
+                    <label>Threat/TARA Coverage Minimum (%)<input name="threat_tara_coverage_min" type="number" min="0" max="100" value="{}"></label>
+                    <label>Review-Backlog Maximum<input name="review_backlog_max" type="number" min="0" max="999" value="{}"></label>
+                    <label>Kritische Schwachstellen Maximum<input name="critical_open_vulnerabilities_max" type="number" min="0" max="999" value="{}"></label>
+                  </div>
+                  <button type="submit">Schwellen speichern</button>
+                </form>
+              </article>"#,
+            web_path_with_context("/product-security/thresholds", Some(context)),
+            html_escape(&config.scope),
+            thresholds.sbom_coverage_min,
+            thresholds.csaf_coverage_min,
+            thresholds.threat_tara_coverage_min,
+            thresholds.review_backlog_max,
+            thresholds.critical_open_vulnerabilities_max,
+        );
+    }
+    format!(
+        r#"<article class="panel wide">
+            <h2>Ampel-Schwellen</h2>
+            <table>
+              <thead><tr><th>Signal</th><th>Schwelle</th></tr></thead>
+              <tbody>
+                <tr><td>SBOM Coverage Minimum</td><td>{}%</td></tr>
+                <tr><td>CSAF Coverage Minimum</td><td>{}%</td></tr>
+                <tr><td>Threat/TARA Coverage Minimum</td><td>{}%</td></tr>
+                <tr><td>Review-Backlog Maximum</td><td>{}</td></tr>
+                <tr><td>Kritische Schwachstellen Maximum</td><td>{}</td></tr>
+              </tbody>
+            </table>
+          </article>"#,
+        thresholds.sbom_coverage_min,
+        thresholds.csaf_coverage_min,
+        thresholds.threat_tara_coverage_min,
+        thresholds.review_backlog_max,
+        thresholds.critical_open_vulnerabilities_max,
+    )
+}
+
 fn web_empty_row(colspan: usize, message: &str) -> String {
     format!(
         r#"<tr><td colspan="{}">{}</td></tr>"#,
@@ -16130,6 +16655,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/navigator/", get(web_navigator))
         .route("/dashboard/", get(web_dashboard))
         .route("/status/", get(web_status))
+        .route(
+            "/status/control-gaps/generate",
+            post(web_status_control_gaps_generate_submit),
+        )
         .route("/zero-trust/", get(web_zero_trust))
         .route("/incidents/", get(web_incidents).post(web_incidents_submit))
         .route(
@@ -16208,6 +16737,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/admin/users/{user_id}", post(web_admin_user_update))
         .route("/product-security/", get(web_product_security))
+        .route(
+            "/product-security/thresholds",
+            post(web_product_security_thresholds_submit),
+        )
         .route(
             "/product-security/import/csaf",
             post(web_product_security_import_csaf),

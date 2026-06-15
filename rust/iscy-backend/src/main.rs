@@ -56,6 +56,9 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = std::env::var("RUST_BACKEND_BIND")
         .unwrap_or_else(|_| "0.0.0.0:9000".to_string())
         .parse()?;
+    let database_url = std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
     let (
         cve_store,
         account_store,
@@ -77,28 +80,28 @@ async fn main() -> anyhow::Result<()> {
         roadmap_store,
         wizard_store,
         product_security_store,
-    ) = match std::env::var("DATABASE_URL") {
-        Ok(database_url) if !database_url.trim().is_empty() => {
-            let cve_store = CveStore::connect(&database_url).await?;
-            let account_store = AccountStore::connect(&database_url).await?;
-            let agent_store = AgentStore::connect(&database_url).await?;
-            let auth_store = AuthStore::connect(&database_url).await?;
-            let tenant_store = TenantStore::connect(&database_url).await?;
-            let dashboard_store = DashboardStore::connect(&database_url).await?;
-            let report_store = ReportStore::connect(&database_url).await?;
-            let requirement_store = RequirementStore::connect(&database_url).await?;
-            let asset_store = AssetStore::connect(&database_url).await?;
-            let catalog_store = CatalogStore::connect(&database_url).await?;
-            let control_store = ControlStore::connect(&database_url).await?;
-            let process_store = ProcessStore::connect(&database_url).await?;
-            let risk_store = RiskStore::connect(&database_url).await?;
-            let evidence_store = EvidenceStore::connect(&database_url).await?;
-            let incident_store = IncidentStore::connect(&database_url).await?;
-            let import_store = ImportStore::connect(&database_url).await?;
-            let assessment_store = AssessmentStore::connect(&database_url).await?;
-            let roadmap_store = RoadmapStore::connect(&database_url).await?;
-            let wizard_store = WizardStore::connect(&database_url).await?;
-            let product_security_store = ProductSecurityStore::connect(&database_url).await?;
+    ) = match database_url.as_deref() {
+        Some(database_url) => {
+            let cve_store = CveStore::connect(database_url).await?;
+            let account_store = AccountStore::connect(database_url).await?;
+            let agent_store = AgentStore::connect(database_url).await?;
+            let auth_store = AuthStore::connect(database_url).await?;
+            let tenant_store = TenantStore::connect(database_url).await?;
+            let dashboard_store = DashboardStore::connect(database_url).await?;
+            let report_store = ReportStore::connect(database_url).await?;
+            let requirement_store = RequirementStore::connect(database_url).await?;
+            let asset_store = AssetStore::connect(database_url).await?;
+            let catalog_store = CatalogStore::connect(database_url).await?;
+            let control_store = ControlStore::connect(database_url).await?;
+            let process_store = ProcessStore::connect(database_url).await?;
+            let risk_store = RiskStore::connect(database_url).await?;
+            let evidence_store = EvidenceStore::connect(database_url).await?;
+            let incident_store = IncidentStore::connect(database_url).await?;
+            let import_store = ImportStore::connect(database_url).await?;
+            let assessment_store = AssessmentStore::connect(database_url).await?;
+            let roadmap_store = RoadmapStore::connect(database_url).await?;
+            let wizard_store = WizardStore::connect(database_url).await?;
+            let product_security_store = ProductSecurityStore::connect(database_url).await?;
             (
                 Some(cve_store),
                 Some(account_store),
@@ -146,7 +149,8 @@ async fn main() -> anyhow::Result<()> {
         .with_assessment_store(assessment_store)
         .with_roadmap_store(roadmap_store)
         .with_wizard_store(wizard_store)
-        .with_product_security_store(product_security_store);
+        .with_product_security_store(product_security_store)
+        .with_database_url(database_url);
 
     let listener = TcpListener::bind(addr).await?;
     println!("ISCY Rust backend listening on http://{}", addr);
