@@ -8803,6 +8803,7 @@ async fn web_status(
         ),
     ]
     .join("");
+    let prometheus_scrape_config_panel = prometheus_scrape_config_panel();
     let body = format!(
         r#"
         <section class="hero compact">
@@ -8854,6 +8855,7 @@ async fn web_status(
             </table>
           </article>
           {}
+          {}
         </section>
         "#,
         metric_card("Module bereit", configured_stores),
@@ -8867,9 +8869,45 @@ async fn web_status(
         store_rows,
         build_rows,
         migration_rows,
+        prometheus_scrape_config_panel,
         status_links,
     );
     web_page("Rust-only Status", "/status/", context.as_ref(), &body)
+}
+
+fn prometheus_scrape_config_panel() -> String {
+    let scrape_config = format!(
+        r#"scrape_configs:
+  - job_name: "iscy-rust"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["{}"]
+"#,
+        prometheus_scrape_target(),
+    );
+    format!(
+        r#"<article class="panel wide">
+            <h2>Prometheus Scrape Config</h2>
+            <button type="button" onclick="navigator.clipboard && navigator.clipboard.writeText(document.getElementById('iscy-prometheus-scrape-config').innerText)">Kopieren</button>
+            <pre id="iscy-prometheus-scrape-config">{}</pre>
+          </article>"#,
+        html_escape(&scrape_config),
+    )
+}
+
+fn prometheus_scrape_target() -> String {
+    let raw_bind = std::env::var("RUST_BACKEND_BIND")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "127.0.0.1:9000".to_string());
+    if let Some(port) = raw_bind.strip_prefix("0.0.0.0:") {
+        return format!("127.0.0.1:{port}");
+    }
+    if let Some(port) = raw_bind.strip_prefix("[::]:") {
+        return format!("127.0.0.1:{port}");
+    }
+    raw_bind
 }
 
 async fn status_operations_json(

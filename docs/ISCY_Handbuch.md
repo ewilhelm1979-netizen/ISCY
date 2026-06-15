@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.5 / Rust 0.3.1)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.6 / Rust 0.3.2)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -662,6 +662,8 @@ curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
 curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
   'http://127.0.0.1:9000/api/v1/status/metrics?tenant_id=1&user_id=1'
 ```
+
+Die Prometheus-/Grafana-Betriebsdoku liegt in `docs/OPERATIONS_MONITORING.md`.
 
 Wichtige lokale Pruefbefehle:
 
