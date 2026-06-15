@@ -15,6 +15,8 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Compose-App-Service: Rust-Backend auf Port `9000`
 - Stage/Production-Reverse-Proxy: Nginx -> `app:9000`
 - Healthchecks: `/health/live`, `/health/ready`
+- Operations-Drilldown: `/status/operations.json` und `/api/v1/status/operations`
+- Prometheus-kompatible Metriken: `/metrics` und `/api/v1/status/metrics`
 
 ## Abgedeckte Rust-Web-/API-Bereiche
 

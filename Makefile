@@ -73,6 +73,8 @@ rust-smoke:
 		sleep 1; \
 	done; \
 	curl -fsS "$$url/health/live" >/dev/null; \
+	curl -fsS "$$url/status/operations.json" >/dev/null; \
+	curl -fsS "$$url/metrics" >/dev/null; \
 	curl -fsS -c "$$cookie_file" -H "content-type: application/json" -d '{"tenant_id":1,"username":"admin","password":"Admin123!"}' "$$url/api/v1/auth/sessions" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/auth/session" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/dashboard/" >/dev/null; \
@@ -98,6 +100,7 @@ rust-smoke:
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/incidents/1/nis2-export.html" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/incidents/1/nis2-export.pdf" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/product-security/overview" >/dev/null; \
+	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/status/metrics?tenant_id=1&user_id=1" >/dev/null; \
 	echo "Rust smoke OK: $$url"
 
 canary-daily:

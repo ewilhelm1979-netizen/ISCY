@@ -18,7 +18,6 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path as FsPath, PathBuf},
-    thread,
     time::Duration,
 };
 
@@ -1471,102 +1470,100 @@ fn nvd_retryable_status(status: reqwest::StatusCode) -> bool {
 
 async fn fetch_nvd_payload(state: &AppState, cve_id: &str) -> Result<Value, Response> {
     let base_url = nvd_import_base_url(state);
-    let api_key = nvd_api_key();
-    let requested_cve_id = cve_id.to_string();
-    let task = tokio::task::spawn_blocking(
-        move || -> Result<Value, (StatusCode, &'static str, String)> {
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(NVD_API_REQUEST_TIMEOUT_SECS))
-                .build()
-                .map_err(|err| {
-                    (
-                        StatusCode::BAD_GATEWAY,
-                        "nvd_upstream_error",
-                        format!("Rust-NVD-Client konnte nicht aufgebaut werden: {err}"),
-                    )
-                })?;
-            let url = format!("{base_url}/rest/json/cves/2.0");
-
-            for attempt in 0..=NVD_API_MAX_RETRIES {
-                let mut request = client
-                    .get(&url)
-                    .query(&[("cveId", requested_cve_id.as_str())])
-                    .header(reqwest::header::ACCEPT, "application/json");
-                if let Some(api_key) = api_key.as_deref() {
-                    request = request.header("apiKey", api_key);
-                }
-
-                match request.send() {
-                    Ok(response) => {
-                        let status = response.status();
-                        if status.is_success() {
-                            return response.json::<Value>().map_err(|err| {
-                                (
-                                    StatusCode::BAD_GATEWAY,
-                                    "nvd_invalid_payload",
-                                    format!(
-                                        "NVD-Antwort konnte nicht als JSON gelesen werden: {err}"
-                                    ),
-                                )
-                            });
-                        }
-
-                        let detail = response
-                            .text()
-                            .ok()
-                            .map(|body| body.trim().to_string())
-                            .filter(|body| !body.is_empty())
-                            .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
-                        if nvd_retryable_status(status) && attempt < NVD_API_MAX_RETRIES {
-                            thread::sleep(Duration::from_millis(
-                                NVD_API_RETRY_DELAY_MILLIS * (attempt as u64 + 1),
-                            ));
-                            continue;
-                        }
-                        return Err((
-                            StatusCode::BAD_GATEWAY,
-                            "nvd_upstream_error",
-                            format!("NVD lieferte fuer {requested_cve_id} einen Fehler: {detail}"),
-                        ));
-                    }
-                    Err(err) => {
-                        let retryable = err.is_timeout() || err.is_connect() || err.is_request();
-                        if retryable && attempt < NVD_API_MAX_RETRIES {
-                            thread::sleep(Duration::from_millis(
-                                NVD_API_RETRY_DELAY_MILLIS * (attempt as u64 + 1),
-                            ));
-                            continue;
-                        }
-                        return Err((
-                            StatusCode::BAD_GATEWAY,
-                            "nvd_upstream_error",
-                            format!(
-                                "NVD konnte fuer {requested_cve_id} nicht erreicht werden: {err}"
-                            ),
-                        ));
-                    }
-                }
-            }
-
-            Err((
+    if let Some(path) = base_url.strip_prefix("file://") {
+        let payload = fs::read_to_string(path).map_err(|err| {
+            api_error_response(
                 StatusCode::BAD_GATEWAY,
                 "nvd_upstream_error",
-                format!("NVD konnte fuer {requested_cve_id} nicht erreicht werden."),
-            ))
-        },
-    );
-
-    match task.await {
-        Ok(Ok(payload)) => Ok(payload),
-        Ok(Err((status, error_code, message))) => {
-            Err(api_error_response(status, error_code, message))
-        }
-        Err(err) => Err(api_error_response(
-            StatusCode::BAD_GATEWAY,
-            "nvd_upstream_error",
-            format!("NVD-Importtask wurde unerwartet beendet: {err}"),
-        )),
+                format!("NVD-Fixture konnte fuer {cve_id} nicht gelesen werden: {err}"),
+            )
+        })?;
+        return serde_json::from_str::<Value>(&payload).map_err(|err| {
+            api_error_response(
+                StatusCode::BAD_GATEWAY,
+                "nvd_invalid_payload",
+                format!("NVD-Fixture konnte nicht als JSON gelesen werden: {err}"),
+            )
+        });
     }
+    let api_key = nvd_api_key();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(NVD_API_REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|err| {
+            api_error_response(
+                StatusCode::BAD_GATEWAY,
+                "nvd_upstream_error",
+                format!("Rust-NVD-Client konnte nicht aufgebaut werden: {err}"),
+            )
+        })?;
+    let url = format!("{base_url}/rest/json/cves/2.0");
+
+    for attempt in 0..=NVD_API_MAX_RETRIES {
+        let mut request = client
+            .get(&url)
+            .query(&[("cveId", cve_id)])
+            .header(reqwest::header::ACCEPT, "application/json");
+        if let Some(api_key) = api_key.as_deref() {
+            request = request.header("apiKey", api_key);
+        }
+
+        match request.send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    return response.json::<Value>().await.map_err(|err| {
+                        api_error_response(
+                            StatusCode::BAD_GATEWAY,
+                            "nvd_invalid_payload",
+                            format!("NVD-Antwort konnte nicht als JSON gelesen werden: {err}"),
+                        )
+                    });
+                }
+
+                let detail = response
+                    .text()
+                    .await
+                    .ok()
+                    .map(|body| body.trim().to_string())
+                    .filter(|body| !body.is_empty())
+                    .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
+                if nvd_retryable_status(status) && attempt < NVD_API_MAX_RETRIES {
+                    tokio::time::sleep(Duration::from_millis(
+                        NVD_API_RETRY_DELAY_MILLIS * (attempt as u64 + 1),
+                    ))
+                    .await;
+                    continue;
+                }
+                return Err(api_error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "nvd_upstream_error",
+                    format!("NVD lieferte fuer {cve_id} einen Fehler: {detail}"),
+                ));
+            }
+            Err(err) => {
+                let retryable = err.is_timeout() || err.is_connect() || err.is_request();
+                if retryable && attempt < NVD_API_MAX_RETRIES {
+                    tokio::time::sleep(Duration::from_millis(
+                        NVD_API_RETRY_DELAY_MILLIS * (attempt as u64 + 1),
+                    ))
+                    .await;
+                    continue;
+                }
+                return Err(api_error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "nvd_upstream_error",
+                    format!("NVD konnte fuer {cve_id} nicht erreicht werden: {err}"),
+                ));
+            }
+        }
+    }
+
+    Err(api_error_response(
+        StatusCode::BAD_GATEWAY,
+        "nvd_upstream_error",
+        format!("NVD konnte fuer {cve_id} nicht erreicht werden."),
+    ))
 }
 
 fn first_nvd_cve(payload: &Value) -> Option<Value> {
@@ -8778,6 +8775,34 @@ async fn web_status(
     } else {
         String::new()
     };
+    let status_links = [
+        web_link_card(
+            "Live Health JSON",
+            "/health/live",
+            "Maschinenlesbarer Liveness-Check fuer CI und Betrieb",
+        ),
+        web_link_card(
+            "Operations JSON",
+            &web_path_with_context("/status/operations.json", context.as_ref()),
+            "Betriebszentrale als maschinenlesbarer Drilldown",
+        ),
+        web_link_card(
+            "Prometheus Metrics",
+            &web_path_with_context("/metrics", context.as_ref()),
+            "Betriebssignale fuer Prometheus-kompatibles Monitoring",
+        ),
+        web_link_card(
+            "Product Security",
+            &web_path_with_context("/product-security/", context.as_ref()),
+            "SBOM, CSAF, CVE-Reviews und CRA/AI-Act-Signale",
+        ),
+        web_link_card(
+            "ISCY-27",
+            &web_path_with_context("/controls/", context.as_ref()),
+            "27 Controls, Evidence und Roadmap-Gaps",
+        ),
+    ]
+    .join("");
     let body = format!(
         r#"
         <section class="hero compact">
@@ -8785,7 +8810,6 @@ async fn web_status(
           <p>Betriebsuebersicht fuer Backend, Runtime-Flags und fachliche Kernmodule.</p>
         </section>
         <section class="metrics">
-          {}
           {}
           {}
           {}
@@ -8830,8 +8854,6 @@ async fn web_status(
             </table>
           </article>
           {}
-          {}
-          {}
         </section>
         "#,
         metric_card("Module bereit", configured_stores),
@@ -8845,26 +8867,7 @@ async fn web_status(
         store_rows,
         build_rows,
         migration_rows,
-        web_link_card(
-            "Live Health JSON",
-            "/health/live",
-            "Maschinenlesbarer Liveness-Check fuer CI und Betrieb",
-        ),
-        web_link_card(
-            "Operations JSON",
-            &web_path_with_context("/status/operations.json", context.as_ref()),
-            "Betriebszentrale als maschinenlesbarer Drilldown",
-        ),
-        web_link_card(
-            "Product Security",
-            &web_path_with_context("/product-security/", context.as_ref()),
-            "SBOM, CSAF, CVE-Reviews und CRA/AI-Act-Signale",
-        ),
-        web_link_card(
-            "ISCY-27",
-            &web_path_with_context("/controls/", context.as_ref()),
-            "27 Controls, Evidence und Roadmap-Gaps",
-        ),
+        status_links,
     );
     web_page("Rust-only Status", "/status/", context.as_ref(), &body)
 }
@@ -8874,8 +8877,35 @@ async fn status_operations_json(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Json<StatusOperationsJsonResponse> {
-    let context = web_context_from_request(&query, &headers, &state).await;
-    let store_statuses = status_store_statuses(&state);
+    Json(status_operations_payload(&state, &headers, &query).await)
+}
+
+async fn status_operations_metrics(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    let payload = status_operations_payload(&state, &headers, &query).await;
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
+    );
+    (
+        StatusCode::OK,
+        response_headers,
+        status_operations_metrics_body(&payload),
+    )
+        .into_response()
+}
+
+async fn status_operations_payload(
+    state: &AppState,
+    headers: &HeaderMap,
+    query: &WebContextQuery,
+) -> StatusOperationsJsonResponse {
+    let context = web_context_from_request(query, headers, state).await;
+    let store_statuses = status_store_statuses(state);
     let configured_stores = store_statuses
         .iter()
         .filter(|store| store.configured)
@@ -8890,7 +8920,7 @@ async fn status_operations_json(
         None => MigrationStatusView::Missing,
     };
     let operations_overview = status_operations_overview(
-        &state,
+        state,
         context.as_ref(),
         &migration_status,
         rust_only,
@@ -8899,7 +8929,7 @@ async fn status_operations_json(
         store_statuses.len() as i64,
     )
     .await;
-    Json(StatusOperationsJsonResponse {
+    StatusOperationsJsonResponse {
         accepted: true,
         api_version: "v1",
         service: "iscy-rust-backend",
@@ -8930,7 +8960,149 @@ async fn status_operations_json(
         },
         modules: store_statuses,
         signals: operations_overview.signals,
-    })
+    }
+}
+
+fn status_operations_metrics_body(payload: &StatusOperationsJsonResponse) -> String {
+    let configured_modules = payload
+        .modules
+        .iter()
+        .filter(|module| module.configured)
+        .count();
+    let tenant_id = payload
+        .tenant_id
+        .map(|tenant_id| tenant_id.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let user_id = payload
+        .user_id
+        .map(|user_id| user_id.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let mut body = String::new();
+    body.push_str(
+        "# HELP iscy_operations_context_info ISCY operations context metadata.\n\
+         # TYPE iscy_operations_context_info gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_operations_context_info{{service=\"{}\",tenant_id=\"{}\",user_id=\"{}\"}} 1\n",
+        prometheus_label_value(payload.service),
+        prometheus_label_value(&tenant_id),
+        prometheus_label_value(&user_id),
+    ));
+    body.push_str(
+        "# HELP iscy_operations_build_info ISCY Rust backend build metadata.\n\
+         # TYPE iscy_operations_build_info gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_operations_build_info{{version=\"{}\",commit=\"{}\",profile=\"{}\",target=\"{}\"}} 1\n",
+        prometheus_label_value(payload.build.version),
+        prometheus_label_value(&payload.build.commit),
+        prometheus_label_value(payload.build.profile),
+        prometheus_label_value(payload.build.target),
+    ));
+    body.push_str(
+        "# HELP iscy_operations_exit_code Overall ISCY operations exit code: 0 ok, 1 warn, 2 critical.\n\
+         # TYPE iscy_operations_exit_code gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_operations_exit_code{{severity=\"{}\"}} {}\n",
+        payload.severity.as_label(),
+        payload.exit_code,
+    ));
+    body.push_str(
+        "# HELP iscy_operations_issue_count Number of warning or critical operation signals.\n\
+         # TYPE iscy_operations_issue_count gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_operations_issue_count {}\n",
+        payload.issue_count
+    ));
+    body.push_str(
+        "# HELP iscy_operations_runtime_flag Runtime flag state, 1 enabled and 0 disabled.\n\
+         # TYPE iscy_operations_runtime_flag gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_operations_runtime_flag{{name=\"rust_only\"}} {}\n",
+        bool_metric(payload.runtime.rust_only)
+    ));
+    body.push_str(&format!(
+        "iscy_operations_runtime_flag{{name=\"strict_mode\"}} {}\n",
+        bool_metric(payload.runtime.strict_mode)
+    ));
+    body.push_str(
+        "# HELP iscy_operations_migration_applied Applied Rust database migrations.\n\
+         # TYPE iscy_operations_migration_applied gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_operations_migration_applied{{level=\"{}\",readable=\"{}\"}} {}\n",
+        payload.migration.level.as_label(),
+        payload.migration.readable,
+        payload.migration.applied_count,
+    ));
+    body.push_str(
+        "# HELP iscy_operations_migration_expected Expected Rust database migrations.\n\
+         # TYPE iscy_operations_migration_expected gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_operations_migration_expected {}\n",
+        payload.migration.expected_count
+    ));
+    body.push_str(
+        "# HELP iscy_operations_modules_configured Number of configured Rust stores/modules.\n\
+         # TYPE iscy_operations_modules_configured gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_operations_modules_configured {}\n",
+        configured_modules
+    ));
+    body.push_str(
+        "# HELP iscy_operations_modules_total Total expected Rust stores/modules.\n\
+         # TYPE iscy_operations_modules_total gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_operations_modules_total {}\n",
+        payload.modules.len()
+    ));
+    body.push_str(
+        "# HELP iscy_operations_module_configured Rust store/module configured flag, 1 configured and 0 missing.\n\
+         # TYPE iscy_operations_module_configured gauge\n",
+    );
+    for module in &payload.modules {
+        body.push_str(&format!(
+            "iscy_operations_module_configured{{name=\"{}\",scope=\"{}\"}} {}\n",
+            prometheus_label_value(module.name),
+            prometheus_label_value(module.scope),
+            bool_metric(module.configured),
+        ));
+    }
+    body.push_str(
+        "# HELP iscy_operations_signal Operation signal state: 0 ok, 1 warn, 2 critical.\n\
+         # TYPE iscy_operations_signal gauge\n",
+    );
+    for signal in &payload.signals {
+        body.push_str(&format!(
+            "iscy_operations_signal{{area=\"{}\",signal=\"{}\",level=\"{}\"}} {}\n",
+            prometheus_label_value(&signal.area),
+            prometheus_label_value(&signal.signal),
+            signal.level.as_label(),
+            signal.level.metric_value(),
+        ));
+    }
+    body
+}
+
+fn prometheus_label_value(value: &str) -> String {
+    value
+        .replace('\\', r"\\")
+        .replace('"', r#"\""#)
+        .replace('\n', r"\n")
+}
+
+fn bool_metric(value: bool) -> i64 {
+    if value {
+        1
+    } else {
+        0
+    }
 }
 
 async fn web_status_control_gaps_generate_submit(
@@ -15080,6 +15252,22 @@ impl StatusSignalLevel {
     fn is_issue(self) -> bool {
         matches!(self, Self::Warn | Self::Danger)
     }
+
+    fn as_label(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Warn => "warn",
+            Self::Danger => "critical",
+        }
+    }
+
+    fn metric_value(self) -> i64 {
+        match self {
+            Self::Ok => 0,
+            Self::Warn => 1,
+            Self::Danger => 2,
+        }
+    }
 }
 
 impl StatusOperationsSeverity {
@@ -15104,6 +15292,14 @@ impl StatusOperationsSeverity {
             Self::Ok => 0,
             Self::Warn => 1,
             Self::Critical => 2,
+        }
+    }
+
+    fn as_label(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Warn => "warn",
+            Self::Critical => "critical",
         }
     }
 }
@@ -17126,6 +17322,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/health", get(health_live))
         .route("/health/ready", get(health_live))
         .route("/health/live", get(health_live))
+        .route("/metrics", get(status_operations_metrics))
         .route("/api/v1/context/whoami", get(context_whoami))
         .route("/api/v1/context/tenant", get(context_tenant))
         .route(
@@ -17161,6 +17358,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
         .route("/api/v1/status/operations", get(status_operations_json))
+        .route("/api/v1/status/metrics", get(status_operations_metrics))
         .route("/api/v1/agents/posture", get(agent_posture))
         .route("/api/v1/agents/devices", get(agent_devices))
         .route(

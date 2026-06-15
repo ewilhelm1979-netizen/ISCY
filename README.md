@@ -1,4 +1,4 @@
-# ISCY V23.7.4 / Rust 0.3.0
+# ISCY V23.7.5 / Rust 0.3.1
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -42,6 +42,22 @@ Healthcheck:
 
 ```bash
 curl -fsS http://127.0.0.1:9000/health
+```
+
+Maschinenlesbarer Betriebsstatus:
+
+```bash
+curl -fsS http://127.0.0.1:9000/status/operations.json
+curl -fsS http://127.0.0.1:9000/metrics
+```
+
+Mit Tenant-Kontext liefert ISCY zusaetzlich fachliche Drilldowns fuer ISCY-27-Gaps, CVE-Review-Rueckstand, Evidence-Luecken, Migrationen, Runtime-Flags und Modulstatus:
+
+```bash
+curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
+  'http://127.0.0.1:9000/api/v1/status/operations?tenant_id=1&user_id=1'
+curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
+  'http://127.0.0.1:9000/api/v1/status/metrics?tenant_id=1&user_id=1'
 ```
 
 Kurzpruefung fuer Betrieb und Regression:
@@ -123,7 +139,7 @@ Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel,
 
 ## Zero-Trust Agent
 
-ISCY `0.3.0` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.1` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 
@@ -190,6 +206,8 @@ NVD-Konfiguration:
 NVD_API_BASE_URL=https://services.nvd.nist.gov
 NVD_API_KEY=
 ```
+
+Fuer lokale Tests und air-gapped Prueflaeufe kann `NVD_API_BASE_URL` auch auf eine einzelne NVD-JSON-Datei zeigen, zum Beispiel `file:///tmp/nvd-response.json`.
 
 ## CI
 

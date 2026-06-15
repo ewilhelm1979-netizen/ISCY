@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.4 / Rust 0.3.0)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.5 / Rust 0.3.1)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -531,6 +531,8 @@ Was der Bereich jetzt leisten soll:
 - Git-/Repository- und Paketkontext speichern
 - Risiko- und Vulnerability-Objekte automatisch verknuepfen
 
+Fuer lokale Tests und air-gapped Prueflaeufe kann der NVD-Import statt eines HTTP-Endpunkts auch eine lokale NVD-JSON-Datei lesen, wenn `NVD_API_BASE_URL` als `file:///pfad/zur/nvd-response.json` gesetzt wird.
+
 Fachlicher Nutzen:
 
 - bessere Priorisierung als nur CVSS
@@ -642,6 +644,23 @@ Ohne Wrapper kann der Rust-Service so initialisiert und gestartet werden:
 ```bash
 nix run .#iscy-backend -- init-demo
 DATABASE_URL=sqlite:///db.sqlite3 RUST_BACKEND_BIND=127.0.0.1:9000 nix run .#iscy-backend
+```
+
+Maschinenlesbarer Betriebsstatus fuer lokale Pruefung, Monitoring und Agenten:
+
+```bash
+curl -fsS http://127.0.0.1:9000/health/live
+curl -fsS http://127.0.0.1:9000/status/operations.json
+curl -fsS http://127.0.0.1:9000/metrics
+```
+
+Mit Tenant-Kontext enthaelt der Betriebsstatus zusaetzlich fachliche Signale zu ISCY-27, Product Security, offenen CVE-Reviews, fehlender Evidence, Migrationen, Runtime-Flags und verbundenen Rust-Modulen:
+
+```bash
+curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
+  'http://127.0.0.1:9000/api/v1/status/operations?tenant_id=1&user_id=1'
+curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
+  'http://127.0.0.1:9000/api/v1/status/metrics?tenant_id=1&user_id=1'
 ```
 
 Wichtige lokale Pruefbefehle:

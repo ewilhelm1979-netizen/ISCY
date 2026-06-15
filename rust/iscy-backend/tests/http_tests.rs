@@ -1,6 +1,5 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{header::SET_COOKIE, Request, StatusCode};
-use axum::{routing::get, Json, Router};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use iscy_backend::{
     account_store::AccountStore, agent_store::AgentStore, app_router, app_router_with_state,
@@ -77,6 +76,7 @@ async fn rust_status_page_renders_runtime_and_module_overview() {
     assert!(html.contains("Product Security"));
     assert!(html.contains("/health/live"));
     assert!(html.contains("/status/operations.json"));
+    assert!(html.contains("/metrics"));
 }
 
 #[tokio::test]
@@ -111,6 +111,37 @@ async fn rust_status_operations_json_reports_runtime_and_signals() {
     assert!(signals
         .iter()
         .any(|signal| signal["signal"] == "Evidence fehlt"));
+}
+
+#[tokio::test]
+async fn rust_status_metrics_exports_prometheus_text() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(content_type.contains("text/plain"));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let metrics = String::from_utf8(body.to_vec()).unwrap();
+    assert!(metrics.contains("# TYPE iscy_operations_exit_code gauge"));
+    assert!(metrics.contains("iscy_operations_exit_code{severity=\"warn\"} 1"));
+    assert!(metrics.contains("iscy_operations_issue_count "));
+    assert!(metrics
+        .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
+    assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.1\""));
 }
 
 #[tokio::test]
@@ -7542,6 +7573,32 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
         .any(|signal| signal["signal"] == "SBOM/CSAF Importlage"));
 
     let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/status/metrics?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let metrics = String::from_utf8(body.to_vec()).unwrap();
+    assert!(metrics.contains(
+        "iscy_operations_context_info{service=\"iscy-rust-backend\",tenant_id=\"1\",user_id=\"1\"} 1"
+    ));
+    assert!(
+        metrics.contains("iscy_operations_signal{area=\"ISCY-27\",signal=\"Offene Control-Gaps\"")
+    );
+    assert!(metrics.contains(
+        "iscy_operations_signal{area=\"Product Security\",signal=\"Offene CVE-Reviews\""
+    ));
+    assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
+
+    let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -7574,47 +7631,49 @@ async fn nvd_import_endpoint_fetches_and_persists_cve_record() {
         .await
         .unwrap();
     create_cverecord_table(&pool).await;
-    let (nvd_base_url, nvd_stub) = spawn_nvd_stub(serde_json::json!({
-        "resultsPerPage": 1,
-        "startIndex": 0,
-        "totalResults": 1,
-        "format": "NVD_CVE",
-        "version": "2.0",
-        "timestamp": "2026-04-25T12:00:00.000",
-        "vulnerabilities": [{
-            "cve": {
-                "id": "CVE-2026-9999",
-                "published": "2026-04-20T10:00:00.000",
-                "lastModified": "2026-04-22T10:00:00.000",
-                "descriptions": [{
-                    "lang": "en",
-                    "value": "Rust imported CVE"
-                }],
-                "metrics": {
-                    "cvssMetricV31": [{
-                        "cvssData": {
-                            "baseScore": 8.8,
-                            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-                        },
-                        "baseSeverity": "HIGH"
-                    }]
-                },
-                "weaknesses": [{
-                    "description": [{
+    let nvd_base_url = nvd_fixture_base_url(
+        "nvd-import-cve",
+        serde_json::json!({
+            "resultsPerPage": 1,
+            "startIndex": 0,
+            "totalResults": 1,
+            "format": "NVD_CVE",
+            "version": "2.0",
+            "timestamp": "2026-04-25T12:00:00.000",
+            "vulnerabilities": [{
+                "cve": {
+                    "id": "CVE-2026-9999",
+                    "published": "2026-04-20T10:00:00.000",
+                    "lastModified": "2026-04-22T10:00:00.000",
+                    "descriptions": [{
                         "lang": "en",
-                        "value": "CWE-79"
+                        "value": "Rust imported CVE"
+                    }],
+                    "metrics": {
+                        "cvssMetricV31": [{
+                            "cvssData": {
+                                "baseScore": 8.8,
+                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+                            },
+                            "baseSeverity": "HIGH"
+                        }]
+                    },
+                    "weaknesses": [{
+                        "description": [{
+                            "lang": "en",
+                            "value": "CWE-79"
+                        }]
+                    }],
+                    "references": [{
+                        "url": "https://example.test/CVE-2026-9999"
+                    }],
+                    "configurations": [{
+                        "nodes": []
                     }]
-                }],
-                "references": [{
-                    "url": "https://example.test/CVE-2026-9999"
-                }],
-                "configurations": [{
-                    "nodes": []
-                }]
-            }
-        }]
-    }))
-    .await;
+                }
+            }]
+        }),
+    );
     let app = app_router_with_state(
         AppState::new(Some(CveStore::from_sqlite_pool(pool.clone())))
             .with_nvd_api_base_url(Some(nvd_base_url)),
@@ -7632,8 +7691,12 @@ async fn nvd_import_endpoint_fetches_and_persists_cve_record() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    if status != StatusCode::OK {
+        let detail = String::from_utf8_lossy(&body);
+        panic!("unexpected NVD import status {status}: {detail}");
+    }
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["cve_id"], "CVE-2026-9999");
     assert_eq!(payload["persisted"], true);
@@ -7657,8 +7720,6 @@ async fn nvd_import_endpoint_fetches_and_persists_cve_record() {
         row.get::<String, _>("references_json"),
         r#"["https://example.test/CVE-2026-9999"]"#
     );
-
-    nvd_stub.abort();
 }
 
 #[tokio::test]
@@ -7669,16 +7730,18 @@ async fn nvd_import_endpoint_returns_not_found_for_missing_cve() {
         .await
         .unwrap();
     create_cverecord_table(&pool).await;
-    let (nvd_base_url, nvd_stub) = spawn_nvd_stub(serde_json::json!({
-        "resultsPerPage": 0,
-        "startIndex": 0,
-        "totalResults": 0,
-        "format": "NVD_CVE",
-        "version": "2.0",
-        "timestamp": "2026-04-25T12:00:00.000",
-        "vulnerabilities": []
-    }))
-    .await;
+    let nvd_base_url = nvd_fixture_base_url(
+        "nvd-import-missing",
+        serde_json::json!({
+            "resultsPerPage": 0,
+            "startIndex": 0,
+            "totalResults": 0,
+            "format": "NVD_CVE",
+            "version": "2.0",
+            "timestamp": "2026-04-25T12:00:00.000",
+            "vulnerabilities": []
+        }),
+    );
     let app = app_router_with_state(
         AppState::new(Some(CveStore::from_sqlite_pool(pool.clone())))
             .with_nvd_api_base_url(Some(nvd_base_url)),
@@ -7696,12 +7759,14 @@ async fn nvd_import_endpoint_returns_not_found_for_missing_cve() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    if status != StatusCode::NOT_FOUND {
+        let detail = String::from_utf8_lossy(&body);
+        panic!("unexpected NVD missing-CVE status {status}: {detail}");
+    }
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "cve_not_found");
-
-    nvd_stub.abort();
 }
 
 #[tokio::test]
@@ -8135,6 +8200,13 @@ fn test_media_root(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("iscy-{name}-{}-{nonce}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     root
+}
+
+fn nvd_fixture_base_url(name: &str, payload: serde_json::Value) -> String {
+    let root = test_media_root(name);
+    let path = root.join("nvd-response.json");
+    fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+    format!("file://{}", path.display())
 }
 
 fn import_preview_xlsx_fixture() -> Vec<u8> {
@@ -12974,22 +13046,6 @@ async fn create_cverecord_table(pool: &SqlitePool) {
     .execute(pool)
     .await
     .unwrap();
-}
-
-async fn spawn_nvd_stub(payload: serde_json::Value) -> (String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let app = Router::new().route(
-        "/rest/json/cves/2.0",
-        get(move || {
-            let payload = payload.clone();
-            async move { Json(payload) }
-        }),
-    );
-    let handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    (format!("http://{address}"), handle)
 }
 
 async fn insert_cverecord_fixture(pool: &SqlitePool) {
