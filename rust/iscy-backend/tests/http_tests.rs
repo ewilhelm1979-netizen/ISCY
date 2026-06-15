@@ -68,6 +68,8 @@ async fn rust_status_page_renders_runtime_and_module_overview() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Rust-only Status"));
+    assert!(html.contains("Betriebszentrale"));
+    assert!(html.contains("Live Health"));
     assert!(html.contains("Runtime"));
     assert!(html.contains("Kernmodule"));
     assert!(html.contains("Build"));
@@ -7440,7 +7442,11 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     db_admin::run_sqlite_migrations(&pool).await.unwrap();
     db_admin::seed_sqlite_demo(&pool).await.unwrap();
     let app = app_router_with_state(
-        AppState::default().with_control_store(Some(ControlStore::from_sqlite_pool(pool.clone()))),
+        AppState::default()
+            .with_control_store(Some(ControlStore::from_sqlite_pool(pool.clone())))
+            .with_product_security_store(Some(ProductSecurityStore::from_sqlite_pool(
+                pool.clone(),
+            ))),
     );
 
     let response = app
@@ -7458,6 +7464,13 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Betriebszentrale"));
+    assert!(html.contains("Offene Control-Gaps"));
+    assert!(html.contains("Control-Evidence fehlt"));
+    assert!(html.contains("Gap-Roadmap-Spur"));
+    assert!(html.contains("Offene CVE-Reviews"));
+    assert!(html.contains("Kritische CVEs offen"));
+    assert!(html.contains("SBOM/CSAF Importlage"));
     assert!(html.contains("Cutover-Aktionen"));
     assert!(html.contains("ISCY-27-Gaps in Roadmap ueberfuehren"));
 

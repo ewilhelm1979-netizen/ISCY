@@ -945,6 +945,28 @@ struct ProductSecurityThresholds {
     critical_open_vulnerabilities_max: i64,
 }
 
+#[derive(Debug, Clone)]
+struct StatusOperationsOverview {
+    issue_count: i64,
+    rows: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatusSignalLevel {
+    Ok,
+    Warn,
+    Danger,
+}
+
+#[derive(Debug, Clone)]
+struct StatusSignal {
+    area: String,
+    signal: String,
+    level: StatusSignalLevel,
+    detail: String,
+    href: Option<String>,
+}
+
 impl Default for ProductSecurityThresholds {
     fn default() -> Self {
         Self {
@@ -8728,6 +8750,16 @@ async fn web_status(
         None => MigrationStatusView::Missing,
     };
     let (migration_metric, migration_rows) = migration_status_view(&migration_status);
+    let operations_overview = status_operations_overview(
+        &state,
+        context.as_ref(),
+        &migration_status,
+        rust_only,
+        strict_mode,
+        configured_stores,
+        store_statuses.len() as i64,
+    )
+    .await;
     let build_rows = build_status_rows();
     let status_action_panel = if context.is_some() && can_write && state.control_store.is_some() {
         format!(
@@ -8753,8 +8785,16 @@ async fn web_status(
           {}
           {}
           {}
+          {}
         </section>
         <section class="grid">
+          <article class="panel wide">
+            <h2>Betriebszentrale</h2>
+            <table>
+              <thead><tr><th>Bereich</th><th>Signal</th><th>Status</th><th>Detail</th><th>Aktion</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
           {}
           <article class="panel wide">
             <h2>Runtime</h2>
@@ -8793,6 +8833,8 @@ async fn web_status(
         metric_card("Rust-only", if rust_only { 1 } else { 0 }),
         metric_card("Strict Mode", if strict_mode { 1 } else { 0 }),
         metric_card("Migrationen", migration_metric),
+        metric_card("Offene Signale", operations_overview.issue_count),
+        operations_overview.rows,
         status_action_panel,
         runtime_rows,
         store_rows,
@@ -14442,6 +14484,416 @@ fn status_pair_row(signal: &str, value: &str) -> String {
         html_escape(signal),
         html_escape(value),
     )
+}
+
+async fn status_operations_overview(
+    state: &AppState,
+    context: Option<&WebContext>,
+    migration_status: &MigrationStatusView,
+    rust_only: bool,
+    strict_mode: bool,
+    configured_stores: i64,
+    total_stores: i64,
+) -> StatusOperationsOverview {
+    let mut signals = vec![
+        StatusSignal::new(
+            "Health",
+            "Live Health",
+            StatusSignalLevel::Ok,
+            "/health/live liefert Liveness fuer CI, Monitoring und lokalen Betrieb.",
+            Some("/health/live".to_string()),
+        ),
+        StatusSignal::new(
+            "Runtime",
+            "Rust-only",
+            if rust_only {
+                StatusSignalLevel::Ok
+            } else {
+                StatusSignalLevel::Warn
+            },
+            if rust_only {
+                "Rust-only-Modus ist aktiv."
+            } else {
+                "RUST_ONLY_MODE ist nicht gesetzt."
+            },
+            None,
+        ),
+        StatusSignal::new(
+            "Runtime",
+            "Strict Mode",
+            if strict_mode {
+                StatusSignalLevel::Ok
+            } else {
+                StatusSignalLevel::Warn
+            },
+            if strict_mode {
+                "Strict Mode ist aktiv."
+            } else {
+                "RUST_STRICT_MODE ist nicht gesetzt."
+            },
+            None,
+        ),
+        StatusSignal::new(
+            "Migrationen",
+            "Datenbank-Schema",
+            migration_signal_level(migration_status),
+            migration_signal_detail(migration_status),
+            None,
+        ),
+        StatusSignal::new(
+            "Module",
+            "Kernmodule verbunden",
+            if configured_stores >= total_stores {
+                StatusSignalLevel::Ok
+            } else {
+                StatusSignalLevel::Warn
+            },
+            format!("{configured_stores}/{total_stores} Rust-Stores sind verbunden."),
+            None,
+        ),
+    ];
+
+    match context {
+        Some(context) => {
+            signals.extend(control_operation_signals(state, context).await);
+            signals.extend(product_security_operation_signals(state, context).await);
+        }
+        None => {
+            signals.push(StatusSignal::new(
+                "ISCY-27",
+                "Offene Control-Gaps",
+                StatusSignalLevel::Warn,
+                "Tenant-Kontext fehlt; Live-Gaps brauchen tenant_id und user_id.",
+                Some("/controls/".to_string()),
+            ));
+            signals.push(StatusSignal::new(
+                "Product Security",
+                "Offene CVE-Reviews",
+                StatusSignalLevel::Warn,
+                "Tenant-Kontext fehlt; CVE-Reviews brauchen tenant_id und user_id.",
+                Some("/product-security/".to_string()),
+            ));
+            signals.push(StatusSignal::new(
+                "Product Security",
+                "Evidence fehlt",
+                StatusSignalLevel::Warn,
+                "Tenant-Kontext fehlt; Evidence-Lage braucht tenant_id und user_id.",
+                Some("/product-security/".to_string()),
+            ));
+        }
+    }
+
+    let issue_count = signals
+        .iter()
+        .filter(|signal| signal.level.is_issue())
+        .count() as i64;
+    StatusOperationsOverview {
+        issue_count,
+        rows: status_signal_rows(&signals),
+    }
+}
+
+async fn control_operation_signals(state: &AppState, context: &WebContext) -> Vec<StatusSignal> {
+    let Some(store) = state.control_store.as_ref() else {
+        return vec![StatusSignal::new(
+            "ISCY-27",
+            "Offene Control-Gaps",
+            StatusSignalLevel::Warn,
+            "Control-Store ist nicht konfiguriert.",
+            Some(web_path_with_context("/controls/", Some(context))),
+        )];
+    };
+    match store.library(context.tenant_id).await {
+        Ok(library) => {
+            let partial_controls = library
+                .controls
+                .iter()
+                .filter(|control| control.status.eq_ignore_ascii_case("PARTIAL"))
+                .count() as i64;
+            let evidence_missing = library
+                .controls
+                .iter()
+                .filter(|control| control.evidence_status.eq_ignore_ascii_case("MISSING"))
+                .count() as i64;
+            let controls_needing_work = library.gap_controls + partial_controls;
+            let open_gap_roadmap_tasks = library
+                .controls
+                .iter()
+                .filter(|control| {
+                    control.status.eq_ignore_ascii_case("GAP")
+                        || control.status.eq_ignore_ascii_case("PARTIAL")
+                })
+                .map(|control| control.roadmap_open_task_count)
+                .sum::<i64>();
+            vec![
+                StatusSignal::new(
+                    "ISCY-27",
+                    "Offene Control-Gaps",
+                    if library.gap_controls == 0 {
+                        StatusSignalLevel::Ok
+                    } else {
+                        StatusSignalLevel::Warn
+                    },
+                    format!(
+                        "{} GAP, {} PARTIAL, Durchschnittsreife {:.1}/5.",
+                        library.gap_controls, partial_controls, library.average_maturity
+                    ),
+                    Some(web_path_with_context("/controls/", Some(context))),
+                ),
+                StatusSignal::new(
+                    "ISCY-27",
+                    "Control-Evidence fehlt",
+                    if evidence_missing == 0 {
+                        StatusSignalLevel::Ok
+                    } else {
+                        StatusSignalLevel::Warn
+                    },
+                    format!(
+                        "{evidence_missing}/{} Controls ohne ausreichende Evidence.",
+                        library.total_controls
+                    ),
+                    Some(web_path_with_context("/evidence/", Some(context))),
+                ),
+                StatusSignal::new(
+                    "Roadmap",
+                    "Gap-Roadmap-Spur",
+                    if controls_needing_work == 0 || open_gap_roadmap_tasks > 0 {
+                        StatusSignalLevel::Ok
+                    } else {
+                        StatusSignalLevel::Warn
+                    },
+                    format!(
+                        "{open_gap_roadmap_tasks} offene Roadmap-Tasks fuer {controls_needing_work} offene GAP/PARTIAL Controls."
+                    ),
+                    Some(web_path_with_context("/roadmap/", Some(context))),
+                ),
+            ]
+        }
+        Err(err) => vec![StatusSignal::new(
+            "ISCY-27",
+            "Offene Control-Gaps",
+            StatusSignalLevel::Danger,
+            format!("Control-Library konnte nicht gelesen werden: {err}"),
+            Some(web_path_with_context("/controls/", Some(context))),
+        )],
+    }
+}
+
+async fn product_security_operation_signals(
+    state: &AppState,
+    context: &WebContext,
+) -> Vec<StatusSignal> {
+    let Some(store) = state.product_security_store.as_ref() else {
+        return vec![
+            StatusSignal::new(
+                "Product Security",
+                "Offene CVE-Reviews",
+                StatusSignalLevel::Warn,
+                "Product-Security-Store ist nicht konfiguriert.",
+                Some(web_path_with_context("/product-security/", Some(context))),
+            ),
+            StatusSignal::new(
+                "Product Security",
+                "Evidence fehlt",
+                StatusSignalLevel::Warn,
+                "Product-Security-Store ist nicht konfiguriert.",
+                Some(web_path_with_context("/product-security/", Some(context))),
+            ),
+        ];
+    };
+    match store.overview(context.tenant_id, 25, 10).await {
+        Ok(Some(overview)) => {
+            let risk_missing = overview
+                .cve_risk_review_queue
+                .iter()
+                .filter(|item| item.risk_id.is_none())
+                .count() as i64;
+            let invalid_imports = overview
+                .import_artifacts
+                .iter()
+                .filter(|artifact| artifact.validation_status.eq_ignore_ascii_case("INVALID"))
+                .count() as i64;
+            let total_components = overview
+                .products
+                .iter()
+                .map(|product| product.component_count)
+                .sum::<i64>();
+            let sbom_components = overview
+                .products
+                .iter()
+                .map(|product| product.sbom_component_count)
+                .sum::<i64>();
+            let sbom_coverage = ratio_percent(sbom_components, total_components);
+            vec![
+                StatusSignal::new(
+                    "Product Security",
+                    "Offene CVE-Reviews",
+                    if overview.review_metrics.open_cve_reviews == 0 {
+                        StatusSignalLevel::Ok
+                    } else {
+                        StatusSignalLevel::Warn
+                    },
+                    format!(
+                        "{} offen, davon {} Korrelationen vorgeschlagen und {} ohne Risiko.",
+                        overview.review_metrics.open_cve_reviews,
+                        overview.review_metrics.suggested_correlation_reviews,
+                        risk_missing
+                    ),
+                    Some(product_security_review_filter_path(context, "review_open")),
+                ),
+                StatusSignal::new(
+                    "Product Security",
+                    "Evidence fehlt",
+                    if overview.review_metrics.evidence_missing == 0 {
+                        StatusSignalLevel::Ok
+                    } else {
+                        StatusSignalLevel::Warn
+                    },
+                    format!(
+                        "{} CVE-/Risiko-Reviews ohne verknuepfte Evidence.",
+                        overview.review_metrics.evidence_missing
+                    ),
+                    Some(product_security_review_filter_path(
+                        context,
+                        "evidence_missing",
+                    )),
+                ),
+                StatusSignal::new(
+                    "Product Security",
+                    "Kritische CVEs offen",
+                    if overview.posture.critical_open_vulnerabilities == 0 {
+                        StatusSignalLevel::Ok
+                    } else {
+                        StatusSignalLevel::Danger
+                    },
+                    format!(
+                        "{} kritisch, {} Schwachstellen insgesamt offen.",
+                        overview.posture.critical_open_vulnerabilities,
+                        overview.posture.open_vulnerabilities
+                    ),
+                    Some(web_path_with_context("/product-security/", Some(context))),
+                ),
+                StatusSignal::new(
+                    "Product Security",
+                    "SBOM/CSAF Importlage",
+                    if invalid_imports == 0 {
+                        StatusSignalLevel::Ok
+                    } else {
+                        StatusSignalLevel::Warn
+                    },
+                    format!(
+                        "{} Importe, {} ungueltig, SBOM Coverage {}%.",
+                        overview.import_artifacts.len(),
+                        invalid_imports,
+                        sbom_coverage
+                    ),
+                    Some(web_path_with_context("/product-security/", Some(context))),
+                ),
+            ]
+        }
+        Ok(None) => vec![StatusSignal::new(
+            "Product Security",
+            "Offene CVE-Reviews",
+            StatusSignalLevel::Warn,
+            "Tenant wurde im Product-Security-Kontext nicht gefunden.",
+            Some(web_path_with_context("/product-security/", Some(context))),
+        )],
+        Err(err) => vec![StatusSignal::new(
+            "Product Security",
+            "Offene CVE-Reviews",
+            StatusSignalLevel::Danger,
+            format!("Product-Security-Overview konnte nicht gelesen werden: {err}"),
+            Some(web_path_with_context("/product-security/", Some(context))),
+        )],
+    }
+}
+
+fn migration_signal_level(status: &MigrationStatusView) -> StatusSignalLevel {
+    match status {
+        MigrationStatusView::Ready(status) => {
+            if status.applied_count >= status.expected_count as i64
+                && status.latest_applied_version.as_deref() == status.expected_latest_version
+            {
+                StatusSignalLevel::Ok
+            } else {
+                StatusSignalLevel::Warn
+            }
+        }
+        MigrationStatusView::Missing => StatusSignalLevel::Warn,
+        MigrationStatusView::Error(_) => StatusSignalLevel::Danger,
+    }
+}
+
+fn migration_signal_detail(status: &MigrationStatusView) -> String {
+    match status {
+        MigrationStatusView::Ready(status) => format!(
+            "{}/{} angewendet; letzte Version {}.",
+            status.applied_count,
+            status.expected_count,
+            status
+                .latest_applied_version
+                .as_deref()
+                .unwrap_or("nicht registriert")
+        ),
+        MigrationStatusView::Missing => "DATABASE_URL ist im AppState nicht gesetzt.".to_string(),
+        MigrationStatusView::Error(message) => {
+            format!("Migrationsstatus konnte nicht gelesen werden: {message}")
+        }
+    }
+}
+
+fn status_signal_rows(signals: &[StatusSignal]) -> String {
+    signals
+        .iter()
+        .map(|signal| {
+            let action = signal
+                .href
+                .as_deref()
+                .map(|href| format!(r#"<a href="{}">Oeffnen</a>"#, html_escape(href)))
+                .unwrap_or_else(|| "-".to_string());
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&signal.area),
+                html_escape(&signal.signal),
+                status_signal_badge(signal.level),
+                html_escape(&signal.detail),
+                action,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn status_signal_badge(level: StatusSignalLevel) -> String {
+    match level {
+        StatusSignalLevel::Ok => web_badge("OK", "ok"),
+        StatusSignalLevel::Warn => web_badge("Pruefen", "warn"),
+        StatusSignalLevel::Danger => web_badge("Kritisch", "danger"),
+    }
+}
+
+impl StatusSignal {
+    fn new(
+        area: impl Into<String>,
+        signal: impl Into<String>,
+        level: StatusSignalLevel,
+        detail: impl Into<String>,
+        href: Option<String>,
+    ) -> Self {
+        Self {
+            area: area.into(),
+            signal: signal.into(),
+            level,
+            detail: detail.into(),
+            href,
+        }
+    }
+}
+
+impl StatusSignalLevel {
+    fn is_issue(self) -> bool {
+        matches!(self, Self::Warn | Self::Danger)
+    }
 }
 
 fn product_security_scope_config(raw: &str) -> ProductSecurityScopeConfig {
