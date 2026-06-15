@@ -98,6 +98,8 @@ async fn rust_status_operations_json_reports_runtime_and_signals() {
     assert_eq!(payload["api_version"], "v1");
     assert_eq!(payload["service"], "iscy-rust-backend");
     assert!(payload["issue_count"].as_i64().unwrap() >= 1);
+    assert_eq!(payload["severity"], "warn");
+    assert_eq!(payload["exit_code"], 1);
     assert!(payload["modules"].as_array().unwrap().len() >= 10);
     let signals = payload["signals"].as_array().unwrap();
     assert!(signals
@@ -7526,6 +7528,8 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     assert_eq!(payload["tenant_id"], 1);
     assert_eq!(payload["user_id"], 1);
     assert!(payload["issue_count"].as_i64().unwrap() >= 1);
+    assert!(["warn", "critical"].contains(&payload["severity"].as_str().unwrap()));
+    assert!(payload["exit_code"].as_i64().unwrap() >= 1);
     let signals = payload["signals"].as_array().unwrap();
     assert!(signals
         .iter()

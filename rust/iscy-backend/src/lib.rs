@@ -948,8 +948,18 @@ struct ProductSecurityThresholds {
 #[derive(Debug, Clone)]
 struct StatusOperationsOverview {
     issue_count: i64,
+    severity: StatusOperationsSeverity,
+    exit_code: i64,
     rows: String,
     signals: Vec<StatusSignal>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum StatusOperationsSeverity {
+    Ok,
+    Warn,
+    Critical,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -985,6 +995,8 @@ struct StatusOperationsJsonResponse {
     tenant_id: Option<i64>,
     user_id: Option<i64>,
     issue_count: i64,
+    severity: StatusOperationsSeverity,
+    exit_code: i64,
     runtime: StatusRuntimeJson,
     migration: StatusMigrationJson,
     build: StatusBuildJson,
@@ -8894,6 +8906,8 @@ async fn status_operations_json(
         tenant_id: context.as_ref().map(|context| context.tenant_id),
         user_id: context.as_ref().map(|context| context.user_id),
         issue_count: operations_overview.issue_count,
+        severity: operations_overview.severity,
+        exit_code: operations_overview.exit_code,
         runtime: StatusRuntimeJson {
             rust_only,
             strict_mode,
@@ -14717,8 +14731,11 @@ async fn status_operations_overview(
         .iter()
         .filter(|signal| signal.level.is_issue())
         .count() as i64;
+    let severity = StatusOperationsSeverity::from_signals(&signals);
     StatusOperationsOverview {
         issue_count,
+        severity,
+        exit_code: severity.exit_code(),
         rows: status_signal_rows(&signals),
         signals,
     }
@@ -15062,6 +15079,32 @@ impl StatusSignal {
 impl StatusSignalLevel {
     fn is_issue(self) -> bool {
         matches!(self, Self::Warn | Self::Danger)
+    }
+}
+
+impl StatusOperationsSeverity {
+    fn from_signals(signals: &[StatusSignal]) -> Self {
+        if signals
+            .iter()
+            .any(|signal| signal.level == StatusSignalLevel::Danger)
+        {
+            return Self::Critical;
+        }
+        if signals
+            .iter()
+            .any(|signal| signal.level == StatusSignalLevel::Warn)
+        {
+            return Self::Warn;
+        }
+        Self::Ok
+    }
+
+    fn exit_code(self) -> i64 {
+        match self {
+            Self::Ok => 0,
+            Self::Warn => 1,
+            Self::Critical => 2,
+        }
     }
 }
 
