@@ -146,7 +146,60 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.3\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.4\""));
+}
+
+#[tokio::test]
+async fn alertmanager_webhook_normalizes_operations_alerts() {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/api/v1/operations/alertmanager")
+        .header("content-type", "application/json");
+    if let Ok(token) = std::env::var("ISCY_ALERTMANAGER_TOKEN") {
+        if !token.trim().is_empty() {
+            builder = builder.header("x-iscy-alert-token", token);
+        }
+    }
+    let response = app_router()
+        .oneshot(
+            builder
+                .body(Body::from(
+                    r#"{
+                      "receiver":"iscy-operations",
+                      "status":"firing",
+                      "groupLabels":{"service":"iscy"},
+                      "commonLabels":{"severity":"critical","tenant_id":"42"},
+                      "commonAnnotations":{"summary":"ISCY meldet kritischen Betriebsstatus"},
+                      "externalURL":"http://alertmanager.local",
+                      "alerts":[{
+                        "status":"firing",
+                        "labels":{"alertname":"ISCYOperationsCritical","service":"iscy"},
+                        "annotations":{"description":"Statusseite pruefen"},
+                        "startsAt":"2026-06-15T14:45:00Z",
+                        "generatorURL":"http://prometheus.local/graph"
+                      }]
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["alert_count"], 1);
+    assert_eq!(payload["firing_count"], 1);
+    assert_eq!(payload["severity_counts"]["critical"], 1);
+    assert_eq!(payload["tenant_hint"], "42");
+    assert_eq!(payload["alerts"][0]["alertname"], "ISCYOperationsCritical");
+    assert_eq!(payload["alerts"][0]["severity"], "critical");
+    assert!(payload["alerts"][0]["action_hint"]
+        .as_str()
+        .unwrap()
+        .contains("Sofort Incident"));
 }
 
 #[tokio::test]
@@ -161,6 +214,7 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
         app_router_with_state(AppState::default().with_database_url(Some(database_url.clone())));
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/status/")
@@ -486,6 +540,7 @@ async fn account_users_return_seeded_admin_from_database() {
     );
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/accounts/users")
@@ -630,6 +685,7 @@ async fn account_user_create_persists_user_role_and_login() {
     assert_eq!(payload["user"]["is_staff"], true);
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -1719,6 +1775,7 @@ async fn product_security_overview_returns_tenant_products_from_database() {
         )));
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/product-security/overview")
@@ -1756,6 +1813,41 @@ async fn product_security_overview_returns_tenant_products_from_database() {
     assert_eq!(payload["snapshots"][0]["product_name"], "Sensor Gateway");
     assert_eq!(payload["snapshots"][0]["cra_readiness_percent"], 72);
     assert_eq!(payload["snapshots"][0]["critical_vulnerability_count"], 1);
+    assert_eq!(payload["trend_dashboard"]["coverage"]["component_count"], 1);
+    assert_eq!(
+        payload["trend_dashboard"]["coverage"]["sbom_coverage_percent"],
+        100
+    );
+    assert_eq!(
+        payload["trend_dashboard"]["signals"][0]["label"],
+        "SBOM Coverage"
+    );
+    assert_eq!(
+        payload["trend_dashboard"]["snapshot_points"][0]["product_name"],
+        "Sensor Gateway"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/trends")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["trends"]["coverage"]["products_with_csaf"], 1);
+    assert_eq!(
+        payload["trends"]["signals"][1]["key"],
+        "open_vulnerabilities"
+    );
 }
 
 #[tokio::test]
@@ -6412,6 +6504,10 @@ async fn rust_web_product_security_renders_overview_from_database() {
     assert!(html.contains("CSAF Coverage"));
     assert!(html.contains("Threat/TARA Coverage"));
     assert!(html.contains("Review-Backlog"));
+    assert!(html.contains("Product-Security-Trends"));
+    assert!(html.contains("Snapshot-Verlauf"));
+    assert!(html.contains("Importvalidierung:"));
+    assert!(html.contains("Offene Schwachstellen"));
     assert!(html.contains("Ampel-Schwellen"));
     assert!(html.contains("Connected gateway product family"));
     assert!(html.contains("Schwellen speichern"));

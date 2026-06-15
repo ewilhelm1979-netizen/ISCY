@@ -1,0 +1,51 @@
+services:
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:latest}
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${ISCY_PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/iscy-operations-alerts.yml:/etc/prometheus/rules/iscy-operations-alerts.yml:ro
+      - prometheus_data:/prometheus
+
+  alertmanager:
+    image: ${ALERTMANAGER_IMAGE:-prom/alertmanager:latest}
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${ISCY_ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./alertmanager/iscy-alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+
+  grafana:
+    image: ${GRAFANA_IMAGE:-grafana/grafana-oss:latest}
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    ports:
+      - "${ISCY_GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${ISCY_GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${ISCY_GRAFANA_PASSWORD:-admin}
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/iscy-operations-dashboard.json:/var/lib/grafana/dashboards/iscy-operations-dashboard.json:ro
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  prometheus_data:
+  alertmanager_data:
+  grafana_data:

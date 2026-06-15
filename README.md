@@ -1,4 +1,4 @@
-# ISCY V23.7.7 / Rust 0.3.3
+# ISCY V23.7.8 / Rust 0.3.4
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -51,6 +51,14 @@ curl -fsS http://127.0.0.1:9000/status/operations.json
 curl -fsS http://127.0.0.1:9000/metrics
 ```
 
+Alertmanager-Webhook fuer Betriebsalarme:
+
+```bash
+curl -fsS -X POST http://127.0.0.1:9000/api/v1/operations/alertmanager \
+  -H 'content-type: application/json' \
+  -d '{"receiver":"iscy-operations","status":"firing","alerts":[]}'
+```
+
 Mit Tenant-Kontext liefert ISCY zusaetzlich fachliche Drilldowns fuer ISCY-27-Gaps, CVE-Review-Rueckstand, Evidence-Luecken, Migrationen, Runtime-Flags und Modulstatus:
 
 ```bash
@@ -68,6 +76,8 @@ Monitoring-Artefakte fuer den direkten Betrieb:
 - Prometheus Alert Rules: [deploy/monitoring/prometheus/iscy-operations-alerts.yml](deploy/monitoring/prometheus/iscy-operations-alerts.yml)
 - Alertmanager Routing-Beispiel: [deploy/monitoring/alertmanager/iscy-alertmanager.yml](deploy/monitoring/alertmanager/iscy-alertmanager.yml)
 - Grafana Dashboard JSON: [deploy/monitoring/grafana/iscy-operations-dashboard.json](deploy/monitoring/grafana/iscy-operations-dashboard.json)
+- Monitoring Compose Stack: [deploy/monitoring/docker-compose.yml](deploy/monitoring/docker-compose.yml)
+- NixOS Monitoring Modulbeispiel: [deploy/monitoring/nixos/iscy-monitoring.nix](deploy/monitoring/nixos/iscy-monitoring.nix)
 
 Kurzpruefung fuer Betrieb und Regression:
 
@@ -148,7 +158,7 @@ Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel,
 
 ## Zero-Trust Agent
 
-ISCY `0.3.3` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.4` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 

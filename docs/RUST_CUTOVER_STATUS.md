@@ -17,6 +17,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Healthchecks: `/health/live`, `/health/ready`
 - Operations-Drilldown: `/status/operations.json` und `/api/v1/status/operations`
 - Prometheus-kompatible Metriken: `/metrics` und `/api/v1/status/metrics`
+- Alertmanager-Webhook: `/api/v1/operations/alertmanager`
 - Monitoring-Doku: `docs/OPERATIONS_MONITORING.md`
 - Monitoring-Deploy-Artefakte: `deploy/monitoring/prometheus/`, `deploy/monitoring/alertmanager/` und `deploy/monitoring/grafana/`
 
@@ -35,7 +36,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Assets
 - Imports inklusive CSV/XLSX/XLSM-Preview
 - Processes
-- Product Security inklusive CSAF-/CycloneDX-/SPDX-Importhistorie, Import-Detailseiten, CVE-Asset-Korrelation, automatischer Risiko-/Roadmap-Ableitung, CVE-Risiko-Review-Queue, Review-Filtern, Bulk-Aktionen und Evidence-Lueckenmetriken
+- Product Security inklusive CSAF-/CycloneDX-/SPDX-Importhistorie, Import-Detailseiten, CVE-Asset-Korrelation, automatischer Risiko-/Roadmap-Ableitung, CVE-Risiko-Review-Queue, Review-Filtern, Bulk-Aktionen, Evidence-Lueckenmetriken und Trend-Dashboard
 - CVE Feed, CVE Assessments und NVD-Import
 - User-Administration, Rollen, Gruppen und direkte Permissions
 

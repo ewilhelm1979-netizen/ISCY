@@ -15,7 +15,7 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     fs,
     path::{Path as FsPath, PathBuf},
     time::Duration,
@@ -708,6 +708,13 @@ pub struct ProductSecurityOverviewResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProductSecurityTrendsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub trends: product_security_store::ProductSecurityTrendDashboard,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ProductSecurityDetailResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
@@ -755,6 +762,66 @@ pub struct ProductSecurityImportDetailResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub detail: product_security_store::ProductSecurityImportArtifactDetail,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AlertmanagerWebhookPayload {
+    pub receiver: Option<String>,
+    pub status: Option<String>,
+    #[serde(default)]
+    pub alerts: Vec<AlertmanagerWebhookAlert>,
+    #[serde(rename = "groupLabels", default)]
+    pub group_labels: HashMap<String, String>,
+    #[serde(rename = "commonLabels", default)]
+    pub common_labels: HashMap<String, String>,
+    #[serde(rename = "commonAnnotations", default)]
+    pub common_annotations: HashMap<String, String>,
+    #[serde(rename = "externalURL")]
+    pub external_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AlertmanagerWebhookAlert {
+    pub status: Option<String>,
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
+    #[serde(default)]
+    pub annotations: HashMap<String, String>,
+    #[serde(rename = "startsAt")]
+    pub starts_at: Option<String>,
+    #[serde(rename = "endsAt")]
+    pub ends_at: Option<String>,
+    #[serde(rename = "generatorURL")]
+    pub generator_url: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AlertmanagerWebhookResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub receiver: String,
+    pub status: String,
+    pub alert_count: i64,
+    pub firing_count: i64,
+    pub resolved_count: i64,
+    pub severity_counts: BTreeMap<String, i64>,
+    pub tenant_hint: Option<String>,
+    pub external_url: Option<String>,
+    pub alerts: Vec<AlertmanagerAlertSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AlertmanagerAlertSummary {
+    pub alertname: String,
+    pub status: String,
+    pub severity: String,
+    pub service: String,
+    pub summary: String,
+    pub description: String,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+    pub source_url: Option<String>,
+    pub action_hint: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1594,6 +1661,159 @@ fn nvd_normalize_response(payload: NvdImportRequest) -> Response {
 
 async fn health_live() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "service": "iscy-rust-backend" }))
+}
+
+async fn operations_alertmanager_webhook(
+    headers: HeaderMap,
+    Json(payload): Json<AlertmanagerWebhookPayload>,
+) -> Response {
+    if !alertmanager_token_matches(&headers) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_alertmanager_token",
+                message: "Alertmanager-Webhook-Token ist ungueltig oder fehlt.".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let alert_count = payload.alerts.len() as i64;
+    let firing_count = payload
+        .alerts
+        .iter()
+        .filter(|alert| alert.status.as_deref().unwrap_or("firing") == "firing")
+        .count() as i64;
+    let resolved_count = payload
+        .alerts
+        .iter()
+        .filter(|alert| alert.status.as_deref().unwrap_or_default() == "resolved")
+        .count() as i64;
+    let mut severity_counts = BTreeMap::new();
+    let alerts = payload
+        .alerts
+        .iter()
+        .map(|alert| {
+            let severity = alert_label(alert, &payload, "severity", "unknown");
+            *severity_counts.entry(severity.clone()).or_insert(0) += 1;
+            AlertmanagerAlertSummary {
+                alertname: alert_label(alert, &payload, "alertname", "unknown"),
+                status: alert.status.clone().unwrap_or_else(|| "firing".to_string()),
+                severity: severity.clone(),
+                service: alert_label(alert, &payload, "service", "iscy"),
+                summary: alert_annotation(alert, &payload, "summary", "Alert ohne Summary"),
+                description: alert_annotation(alert, &payload, "description", ""),
+                starts_at: alert.starts_at.clone(),
+                ends_at: alert.ends_at.clone(),
+                source_url: alert.generator_url.clone(),
+                action_hint: alertmanager_action_hint(
+                    alert.status.as_deref().unwrap_or("firing"),
+                    &severity,
+                )
+                .to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let tenant_hint = payload
+        .common_labels
+        .get("tenant_id")
+        .or_else(|| payload.common_labels.get("tenant"))
+        .or_else(|| payload.group_labels.get("tenant_id"))
+        .or_else(|| payload.group_labels.get("tenant"))
+        .cloned();
+    (
+        StatusCode::ACCEPTED,
+        Json(AlertmanagerWebhookResponse {
+            accepted: true,
+            api_version: "v1",
+            receiver: payload
+                .receiver
+                .clone()
+                .unwrap_or_else(|| "iscy-alertmanager".to_string()),
+            status: payload.status.clone().unwrap_or_else(|| {
+                if firing_count > 0 {
+                    "firing".to_string()
+                } else {
+                    "resolved".to_string()
+                }
+            }),
+            alert_count,
+            firing_count,
+            resolved_count,
+            severity_counts,
+            tenant_hint,
+            external_url: payload.external_url.clone(),
+            alerts,
+        }),
+    )
+        .into_response()
+}
+
+fn alertmanager_token_matches(headers: &HeaderMap) -> bool {
+    let Ok(expected) = std::env::var("ISCY_ALERTMANAGER_TOKEN") else {
+        return true;
+    };
+    let expected = expected.trim();
+    if expected.is_empty() {
+        return true;
+    }
+    let header_token = headers
+        .get("x-iscy-alert-token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+    if header_token == Some(expected) {
+        return true;
+    }
+    headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().strip_prefix("Bearer "))
+        .is_some_and(|value| value.trim() == expected)
+}
+
+fn alert_label(
+    alert: &AlertmanagerWebhookAlert,
+    payload: &AlertmanagerWebhookPayload,
+    key: &str,
+    fallback: &str,
+) -> String {
+    alert
+        .labels
+        .get(key)
+        .or_else(|| payload.common_labels.get(key))
+        .or_else(|| payload.group_labels.get(key))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+fn alert_annotation(
+    alert: &AlertmanagerWebhookAlert,
+    payload: &AlertmanagerWebhookPayload,
+    key: &str,
+    fallback: &str,
+) -> String {
+    alert
+        .annotations
+        .get(key)
+        .or_else(|| payload.common_annotations.get(key))
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
+}
+
+fn alertmanager_action_hint(status: &str, severity: &str) -> &'static str {
+    if status.eq_ignore_ascii_case("resolved") {
+        return "Runbook aktualisieren und Evidence zur Entstoerung verlinken.";
+    }
+    match severity.trim().to_ascii_lowercase().as_str() {
+        "critical" => "Sofort Incident/Runbook pruefen und Verantwortliche eskalieren.",
+        "warning" => "Backlog pruefen, Owner setzen und naechstes Review einplanen.",
+        _ => "Signal triagieren und bei Bedarf als Evidence oder Roadmap-Arbeit aufnehmen.",
+    }
 }
 
 const ISCY_SESSION_COOKIE: &str = "iscy_session";
@@ -3315,6 +3535,68 @@ async fn product_security_overview(State(state): State<AppState>, headers: Heade
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Product-Security-Uebersicht konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_trends(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.overview(context.tenant_id, 200, 10).await {
+        Ok(Some(overview)) => (
+            StatusCode::OK,
+            Json(ProductSecurityTrendsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                trends: overview.trend_dashboard,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "tenant_not_found",
+                message: "Tenant wurde fuer Product-Security-Trends nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Product-Security-Trends konnten nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -10794,6 +11076,85 @@ async fn web_product_security(
                         <= thresholds.critical_open_vulnerabilities_max,
                 ),
             );
+            let trend_signal_rows = overview
+                .trend_dashboard
+                .signals
+                .iter()
+                .map(|signal| {
+                    let previous = signal
+                        .previous
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    let delta = signal
+                        .delta
+                        .map(|value| format!("{value:+}"))
+                        .unwrap_or_else(|| "-".to_string());
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&signal.label),
+                        signal.current,
+                        previous,
+                        delta,
+                        web_badge(
+                            product_security_trend_status_label(&signal.status),
+                            product_security_trend_status_class(&signal.status),
+                        ),
+                        html_escape(&signal.detail),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let snapshot_trend_rows = overview
+                .trend_dashboard
+                .snapshot_points
+                .iter()
+                .map(|point| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}%</td><td>{}%</td><td>{}%</td><td>{}%</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&point.created_at),
+                        html_escape(&point.product_name),
+                        point.cra_readiness_percent,
+                        point.ai_act_readiness_percent,
+                        point.threat_model_coverage_percent,
+                        point.psirt_readiness_percent,
+                        point.open_vulnerability_count,
+                        point.critical_vulnerability_count,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let trend_panel = format!(
+                r#"<article class="panel wide">
+                    <h2>Product-Security-Trends</h2>
+                    <table>
+                      <thead><tr><th>Signal</th><th>Aktuell</th><th>Vorher</th><th>Delta</th><th>Status</th><th>Detail</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                    <h3>Snapshot-Verlauf</h3>
+                    <table>
+                      <thead><tr><th>Zeit</th><th>Produkt</th><th>CRA</th><th>AI Act</th><th>Threat</th><th>PSIRT</th><th>Offen</th><th>Kritisch</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                    <p>Importvalidierung: {} valide, {} Warnung(en), {} fehlerhaft, {} Validierungsdetail(s).</p>
+                  </article>"#,
+                if trend_signal_rows.is_empty() {
+                    web_empty_row(6, "Noch keine Trenddaten vorhanden.")
+                } else {
+                    trend_signal_rows
+                },
+                if snapshot_trend_rows.is_empty() {
+                    web_empty_row(8, "Noch keine Snapshots fuer Trendverlauf vorhanden.")
+                } else {
+                    snapshot_trend_rows
+                },
+                overview.trend_dashboard.import_validation.valid_imports,
+                overview.trend_dashboard.import_validation.warning_imports,
+                overview.trend_dashboard.import_validation.invalid_imports,
+                overview
+                    .trend_dashboard
+                    .import_validation
+                    .validation_error_count,
+            );
             let threshold_panel = product_security_threshold_panel(
                 &context,
                 &product_security_config,
@@ -10811,6 +11172,7 @@ async fn web_product_security(
                   {}
                 </section>
                 <section class="grid">
+                  {}
                   {}
                   {}
                   <article class="panel wide">
@@ -10877,6 +11239,7 @@ async fn web_product_security(
                 ),
                 metric_card("Evidence fehlt", overview.review_metrics.evidence_missing),
                 product_security_signal_panel,
+                trend_panel,
                 threshold_panel,
                 html_escape(&overview.matrix.summary),
                 if matrix_rows.is_empty() {
@@ -11670,6 +12033,24 @@ fn product_security_bulk_review_notes(action: &str) -> &'static str {
             "CVE-Massnahmen wurden per Product-Security-Bulk-Review als mitigiert markiert."
         }
         _ => "CVE-Risiken wurden per Product-Security-Bulk-Review geprueft.",
+    }
+}
+
+fn product_security_trend_status_label(status: &str) -> &'static str {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "ok" => "stabil",
+        "critical" => "kritisch",
+        "warn" | "warning" => "handeln",
+        _ => "offen",
+    }
+}
+
+fn product_security_trend_status_class(status: &str) -> &'static str {
+    match status.trim().to_ascii_lowercase().as_str() {
+        "ok" => "ok",
+        "critical" => "danger",
+        "warn" | "warning" => "warn",
+        _ => "info",
     }
 }
 
@@ -17466,6 +17847,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
         .route("/api/v1/status/operations", get(status_operations_json))
         .route("/api/v1/status/metrics", get(status_operations_metrics))
+        .route(
+            "/api/v1/operations/alertmanager",
+            post(operations_alertmanager_webhook),
+        )
         .route("/api/v1/agents/posture", get(agent_posture))
         .route("/api/v1/agents/devices", get(agent_devices))
         .route(
@@ -17487,6 +17872,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/product-security/overview",
             get(product_security_overview),
+        )
+        .route(
+            "/api/v1/product-security/trends",
+            get(product_security_trends),
         )
         .route(
             "/api/v1/product-security/products/{product_id}",

@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.7 / Rust 0.3.3
+Stand: ISCY V23.7.8 / Rust 0.3.4
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 
@@ -9,11 +9,14 @@ Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only
 Fuer den direkten Betrieb liegen Monitoring-Beispiele im Repository:
 
 - `deploy/monitoring/prometheus/iscy-scrape.yml`: minimaler Prometheus-Scrape-Job fuer `/metrics`.
+- `deploy/monitoring/prometheus/prometheus.yml`: vollstaendige Prometheus-Konfiguration fuer den Compose-Monitoring-Stack.
 - `deploy/monitoring/prometheus/iscy-operations-alerts.yml`: Alert-Regeln fuer kritische Statussignale, Warnungen, Migrationen, Modulstatus und Runtime-Flags.
 - `deploy/monitoring/alertmanager/iscy-alertmanager.yml`: Alertmanager-Routing-Beispiel mit getrennten Receivern fuer Warnungen und kritische Meldungen.
 - `deploy/monitoring/grafana/iscy-operations-dashboard.json`: importierbares Grafana-Dashboard fuer Betriebsstatus, offene Signale, Migrationen, Module, Build-Info und Signal-Tabelle.
+- `deploy/monitoring/docker-compose.yml`: lokaler Monitoring-Stack aus Prometheus, Alertmanager und Grafana.
+- `deploy/monitoring/nixos/iscy-monitoring.nix`: NixOS-Modulbeispiel fuer denselben Stack.
 
-Die Webhook-URLs im Alertmanager-Beispiel sind bewusst Platzhalter unter `example.invalid` und muessen fuer den produktiven Betrieb durch eigene Receiver ersetzt werden.
+Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/operations/alertmanager` auf. Wenn `ISCY_ALERTMANAGER_TOKEN` gesetzt ist, muss Alertmanager denselben Wert per Bearer Token oder `x-iscy-alert-token` senden.
 
 ## Endpunkte
 
@@ -23,6 +26,8 @@ Die Webhook-URLs im Alertmanager-Beispiel sind bewusst Platzhalter unter `exampl
 - `GET /api/v1/status/operations`: API-Alias fuer denselben JSON-Drilldown.
 - `GET /metrics`: Prometheus-kompatible Textausgabe.
 - `GET /api/v1/status/metrics`: API-Alias fuer Prometheus-kompatible Textausgabe.
+- `POST /api/v1/operations/alertmanager`: Alertmanager-Webhook, der Alerts validiert und als normalisierte ISCY-Operations-Summary bestaetigt.
+- `GET /api/v1/product-security/trends`: Product-Security-Trends zu CVE-Reviews, Evidence-Luecken, Importvalidierung, Coverage und Snapshots.
 
 Mit Tenant-Kontext liefern die Operations-Endpunkte zusaetzlich fachliche Signale zu ISCY-27, Product Security, CVE-Reviews, Evidence-Luecken und Roadmap-Gaps:
 
@@ -110,10 +115,50 @@ Empfohlene Schwellen:
 - Issue Count `0`: gruen
 - Issue Count `> 0`: gelb oder rot je nach `level` der Signale
 
+## Lokaler Monitoring-Stack
+
+ISCY zuerst starten:
+
+```bash
+./start.sh
+```
+
+Danach den Monitoring-Stack starten:
+
+```bash
+docker compose -f deploy/monitoring/docker-compose.yml up -d
+```
+
+Standard-URLs:
+
+- Prometheus: `http://127.0.0.1:9090`
+- Alertmanager: `http://127.0.0.1:9093`
+- Grafana: `http://127.0.0.1:3000`
+
+Grafana-Login im Beispiel: `admin / admin`. Fuer dauerhaften Betrieb `ISCY_GRAFANA_PASSWORD` setzen.
+
+## NixOS-Beispiel
+
+Das Modulbeispiel kann in eine NixOS-Konfiguration importiert werden:
+
+```nix
+{
+  imports = [
+    /home/enricow79/Projekte/ISCY/deploy/monitoring/nixos/iscy-monitoring.nix
+  ];
+
+  services.iscy.monitoring = {
+    enable = true;
+    iscyTarget = "127.0.0.1:9000";
+    alertWebhookUrl = "http://127.0.0.1:9000/api/v1/operations/alertmanager";
+  };
+}
+```
+
 ## Betriebshinweise
 
 - `/metrics` ist bewusst ohne Tenant-Kontext abrufbar, damit Prometheus ohne zusaetzliche Header starten kann.
 - Fuer mandantenbezogene Metriken kann ein Reverse Proxy den Tenant-/User-Kontext setzen und `/api/v1/status/metrics` scrapen.
 - Die Statusseite `/status/` zeigt eine kopierbare Prometheus-Scrape-Konfiguration fuer den aktuell gesetzten `RUST_BACKEND_BIND` und einen Grafana-Query-Spickzettel.
 - Der JSON-Endpunkt eignet sich fuer Agenten, Runbooks und externe Checks, die Details wie `severity`, `exit_code`, `signals` und `modules` strukturiert auswerten wollen.
-- Alertmanager-Routing sollte produktiv an die eigenen Incident-, ChatOps- oder Ticket-Receiver angebunden werden. Die Beispielkonfiguration setzt bewusst keine ISCY-Schreib-API voraus.
+- Der Alertmanager-Webhook schreibt bewusst noch keine Incidents oder Evidence, sondern normalisiert Alarme fuer Monitoring, ChatOps und kuenftige Runbook-Automation.

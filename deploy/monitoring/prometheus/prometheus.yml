@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - "alertmanager:9093"
+
+rule_files:
+  - "/etc/prometheus/rules/iscy-operations-alerts.yml"
+
+scrape_configs:
+  - job_name: "iscy-rust"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets:
+          - "host.docker.internal:9000"

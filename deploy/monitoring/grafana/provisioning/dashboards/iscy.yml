@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: ISCY
+    orgId: 1
+    folder: ISCY
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

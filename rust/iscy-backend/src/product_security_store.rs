@@ -103,6 +103,7 @@ pub struct ProductSecurityOverview {
     pub matrix: ProductSecurityMatrix,
     pub posture: ProductSecurityPosture,
     pub review_metrics: ProductSecurityReviewMetrics,
+    pub trend_dashboard: ProductSecurityTrendDashboard,
     pub products: Vec<ProductListItem>,
     pub snapshots: Vec<ProductSecuritySnapshotSummary>,
     pub import_artifacts: Vec<ProductSecurityImportArtifactSummary>,
@@ -454,6 +455,60 @@ pub struct ProductSecurityReviewMetrics {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityTrendDashboard {
+    pub coverage: ProductSecurityCoverageTrend,
+    pub import_validation: ProductSecurityImportValidationTrend,
+    pub signals: Vec<ProductSecurityTrendSignal>,
+    pub snapshot_points: Vec<ProductSecuritySnapshotTrendPoint>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityCoverageTrend {
+    pub product_count: i64,
+    pub component_count: i64,
+    pub components_with_sbom: i64,
+    pub products_with_csaf: i64,
+    pub products_with_threat_tara: i64,
+    pub sbom_coverage_percent: i64,
+    pub csaf_coverage_percent: i64,
+    pub threat_tara_coverage_percent: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityImportValidationTrend {
+    pub total_imports: i64,
+    pub valid_imports: i64,
+    pub warning_imports: i64,
+    pub invalid_imports: i64,
+    pub validation_error_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityTrendSignal {
+    pub key: String,
+    pub label: String,
+    pub current: i64,
+    pub previous: Option<i64>,
+    pub delta: Option<i64>,
+    pub direction: String,
+    pub status: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecuritySnapshotTrendPoint {
+    pub product_id: i64,
+    pub product_name: String,
+    pub created_at: String,
+    pub cra_readiness_percent: i64,
+    pub ai_act_readiness_percent: i64,
+    pub threat_model_coverage_percent: i64,
+    pub psirt_readiness_percent: i64,
+    pub open_vulnerability_count: i64,
+    pub critical_vulnerability_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ProductSecurityCveRiskReviewSummary {
     pub correlation_id: i64,
     pub cve: String,
@@ -799,12 +854,21 @@ async fn overview_postgres(
     let cve_correlations = load_cve_correlations_postgres(pool, tenant_id, 50).await?;
     let cve_risk_review_queue = load_cve_risk_review_queue_postgres(pool, tenant_id, 50).await?;
     let review_metrics = build_review_metrics(&cve_correlations, &cve_risk_review_queue);
+    let trend_dashboard = build_trend_dashboard(
+        &products,
+        &snapshots,
+        &import_artifacts,
+        &review_metrics,
+        &cve_risk_review_queue,
+        &posture,
+    );
 
     Ok(Some(ProductSecurityOverview {
         tenant_id,
         matrix: build_matrix(&context),
         posture,
         review_metrics,
+        trend_dashboard,
         products,
         snapshots,
         import_artifacts,
@@ -875,12 +939,21 @@ async fn overview_sqlite(
     let cve_correlations = load_cve_correlations_sqlite(pool, tenant_id, 50).await?;
     let cve_risk_review_queue = load_cve_risk_review_queue_sqlite(pool, tenant_id, 50).await?;
     let review_metrics = build_review_metrics(&cve_correlations, &cve_risk_review_queue);
+    let trend_dashboard = build_trend_dashboard(
+        &products,
+        &snapshots,
+        &import_artifacts,
+        &review_metrics,
+        &cve_risk_review_queue,
+        &posture,
+    );
 
     Ok(Some(ProductSecurityOverview {
         tenant_id,
         matrix: build_matrix(&context),
         posture,
         review_metrics,
+        trend_dashboard,
         products,
         snapshots,
         import_artifacts,
@@ -6599,6 +6672,227 @@ fn build_review_metrics(
         suggested_correlation_reviews,
         open_risk_reviews,
         evidence_missing,
+    }
+}
+
+fn build_trend_dashboard(
+    products: &[ProductListItem],
+    snapshots: &[ProductSecuritySnapshotSummary],
+    import_artifacts: &[ProductSecurityImportArtifactSummary],
+    review_metrics: &ProductSecurityReviewMetrics,
+    queue: &[ProductSecurityCveRiskReviewSummary],
+    posture: &ProductSecurityPosture,
+) -> ProductSecurityTrendDashboard {
+    let product_count = products.len() as i64;
+    let component_count = products
+        .iter()
+        .map(|product| product.component_count)
+        .sum::<i64>();
+    let components_with_sbom = products
+        .iter()
+        .map(|product| product.sbom_component_count)
+        .sum::<i64>();
+    let products_with_csaf = products
+        .iter()
+        .filter(|product| product.csaf_advisory_count > 0)
+        .count() as i64;
+    let products_with_threat_tara = products
+        .iter()
+        .filter(|product| product.threat_model_count > 0 && product.tara_count > 0)
+        .count() as i64;
+    let coverage = ProductSecurityCoverageTrend {
+        product_count,
+        component_count,
+        components_with_sbom,
+        products_with_csaf,
+        products_with_threat_tara,
+        sbom_coverage_percent: product_security_ratio_percent(
+            components_with_sbom,
+            component_count,
+        ),
+        csaf_coverage_percent: product_security_ratio_percent(products_with_csaf, product_count),
+        threat_tara_coverage_percent: product_security_ratio_percent(
+            products_with_threat_tara,
+            product_count,
+        ),
+    };
+
+    let total_imports = import_artifacts.len() as i64;
+    let valid_imports = import_artifacts
+        .iter()
+        .filter(|artifact| artifact.validation_status.eq_ignore_ascii_case("VALID"))
+        .count() as i64;
+    let warning_imports = import_artifacts
+        .iter()
+        .filter(|artifact| {
+            artifact.validation_status.eq_ignore_ascii_case("WARNING")
+                || artifact.validation_status.eq_ignore_ascii_case("WARN")
+        })
+        .count() as i64;
+    let invalid_imports = import_artifacts
+        .iter()
+        .filter(|artifact| {
+            let status = artifact.validation_status.trim().to_ascii_uppercase();
+            !matches!(status.as_str(), "VALID" | "WARNING" | "WARN")
+        })
+        .count() as i64;
+    let validation_error_count = import_artifacts
+        .iter()
+        .map(|artifact| artifact.validation_errors.len() as i64)
+        .sum();
+    let import_validation = ProductSecurityImportValidationTrend {
+        total_imports,
+        valid_imports,
+        warning_imports,
+        invalid_imports,
+        validation_error_count,
+    };
+
+    let latest_snapshot = snapshots.first();
+    let risk_missing = queue.iter().filter(|item| item.risk_id.is_none()).count() as i64;
+    let signals = vec![
+        product_security_trend_signal(
+            "sbom_coverage",
+            "SBOM Coverage",
+            coverage.sbom_coverage_percent,
+            None,
+            false,
+            if coverage.sbom_coverage_percent >= 80 || component_count == 0 {
+                "ok"
+            } else {
+                "warn"
+            },
+            &format!(
+                "{} von {} Komponenten mit SBOM",
+                coverage.components_with_sbom, coverage.component_count
+            ),
+        ),
+        product_security_trend_signal(
+            "open_vulnerabilities",
+            "Offene Schwachstellen",
+            posture.open_vulnerabilities,
+            latest_snapshot.map(|snapshot| snapshot.open_vulnerability_count),
+            true,
+            if posture.critical_open_vulnerabilities > 0 {
+                "critical"
+            } else if posture.open_vulnerabilities > 0 {
+                "warn"
+            } else {
+                "ok"
+            },
+            "Offene Product-Security-Vulnerabilities aus Produktdaten",
+        ),
+        product_security_trend_signal(
+            "open_cve_reviews",
+            "Offene CVE-Reviews",
+            review_metrics.open_cve_reviews,
+            None,
+            true,
+            if review_metrics.open_cve_reviews > 0 {
+                "warn"
+            } else {
+                "ok"
+            },
+            "Suggested Korrelationen plus offene CVE-Risiko-Reviews",
+        ),
+        product_security_trend_signal(
+            "evidence_missing",
+            "Evidence fehlt",
+            review_metrics.evidence_missing,
+            None,
+            true,
+            if review_metrics.evidence_missing > 0 {
+                "warn"
+            } else {
+                "ok"
+            },
+            "Akzeptierte CVE-Korrelationen ohne verknuepfte Evidence",
+        ),
+        product_security_trend_signal(
+            "risk_missing",
+            "Risiko fehlt",
+            risk_missing,
+            None,
+            true,
+            if risk_missing > 0 { "warn" } else { "ok" },
+            "Akzeptierte CVE-Korrelationen ohne erzeugtes Risiko",
+        ),
+        product_security_trend_signal(
+            "invalid_imports",
+            "Importvalidierung",
+            import_validation.invalid_imports + import_validation.warning_imports,
+            None,
+            true,
+            if import_validation.invalid_imports > 0 {
+                "critical"
+            } else if import_validation.warning_imports > 0 {
+                "warn"
+            } else {
+                "ok"
+            },
+            "CSAF-/SBOM-Importe mit Warnungen oder Fehlern",
+        ),
+    ];
+
+    let snapshot_points = snapshots
+        .iter()
+        .map(|snapshot| ProductSecuritySnapshotTrendPoint {
+            product_id: snapshot.product_id,
+            product_name: snapshot.product_name.clone(),
+            created_at: snapshot.created_at.clone(),
+            cra_readiness_percent: snapshot.cra_readiness_percent,
+            ai_act_readiness_percent: snapshot.ai_act_readiness_percent,
+            threat_model_coverage_percent: snapshot.threat_model_coverage_percent,
+            psirt_readiness_percent: snapshot.psirt_readiness_percent,
+            open_vulnerability_count: snapshot.open_vulnerability_count,
+            critical_vulnerability_count: snapshot.critical_vulnerability_count,
+        })
+        .collect();
+
+    ProductSecurityTrendDashboard {
+        coverage,
+        import_validation,
+        signals,
+        snapshot_points,
+    }
+}
+
+fn product_security_ratio_percent(numerator: i64, denominator: i64) -> i64 {
+    if denominator <= 0 {
+        0
+    } else {
+        ((numerator * 100) / denominator).clamp(0, 100)
+    }
+}
+
+fn product_security_trend_signal(
+    key: &str,
+    label: &str,
+    current: i64,
+    previous: Option<i64>,
+    lower_is_better: bool,
+    status: &str,
+    detail: &str,
+) -> ProductSecurityTrendSignal {
+    let delta = previous.map(|previous| current - previous);
+    let direction = match delta {
+        Some(0) => "flat",
+        Some(value) if lower_is_better && value < 0 => "better",
+        Some(value) if lower_is_better && value > 0 => "worse",
+        Some(value) if !lower_is_better && value > 0 => "better",
+        Some(value) if !lower_is_better && value < 0 => "worse",
+        Some(_) => "flat",
+        None => "unknown",
+    };
+    ProductSecurityTrendSignal {
+        key: key.to_string(),
+        label: label.to_string(),
+        current,
+        previous,
+        delta,
+        direction: direction.to_string(),
+        status: status.to_string(),
+        detail: detail.to_string(),
     }
 }
 
