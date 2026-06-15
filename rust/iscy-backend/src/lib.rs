@@ -949,22 +949,76 @@ struct ProductSecurityThresholds {
 struct StatusOperationsOverview {
     issue_count: i64,
     rows: String,
+    signals: Vec<StatusSignal>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum StatusSignalLevel {
     Ok,
     Warn,
     Danger,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct StatusSignal {
     area: String,
     signal: String,
     level: StatusSignalLevel,
     detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     href: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StatusStoreStatus {
+    name: &'static str,
+    configured: bool,
+    scope: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StatusOperationsJsonResponse {
+    accepted: bool,
+    api_version: &'static str,
+    service: &'static str,
+    tenant_id: Option<i64>,
+    user_id: Option<i64>,
+    issue_count: i64,
+    runtime: StatusRuntimeJson,
+    migration: StatusMigrationJson,
+    build: StatusBuildJson,
+    modules: Vec<StatusStoreStatus>,
+    signals: Vec<StatusSignal>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StatusRuntimeJson {
+    rust_only: bool,
+    strict_mode: bool,
+    evidence_media_root: Option<String>,
+    nvd_api_base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StatusMigrationJson {
+    level: StatusSignalLevel,
+    readable: bool,
+    database_kind: Option<String>,
+    applied_count: i64,
+    expected_count: usize,
+    latest_applied_version: Option<String>,
+    latest_applied_at: Option<String>,
+    expected_latest_version: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StatusBuildJson {
+    version: &'static str,
+    commit: String,
+    profile: &'static str,
+    target: &'static str,
 }
 
 impl Default for ProductSecurityThresholds {
@@ -8610,85 +8664,23 @@ async fn web_status(
     let can_write = authenticated_tenant_context(&state, &headers)
         .await
         .is_ok_and(|auth_context| auth_context.can_write());
-    let store_statuses = [
-        (
-            "Auth & Sessions",
-            state.auth_store.is_some(),
-            "Login, RBAC, Rollen",
-        ),
-        (
-            "Accounts",
-            state.account_store.is_some(),
-            "User- und Gruppenverwaltung",
-        ),
-        (
-            "Dashboard",
-            state.dashboard_store.is_some(),
-            "Management-Uebersicht",
-        ),
-        (
-            "ISCY-27",
-            state.control_store.is_some(),
-            "Control-Kern und Mappings",
-        ),
-        (
-            "Product Security",
-            state.product_security_store.is_some(),
-            "CRA, SBOM, CSAF, CVE-Reviews",
-        ),
-        (
-            "Risks",
-            state.risk_store.is_some(),
-            "Risiko-Register und Reviews",
-        ),
-        (
-            "Evidence",
-            state.evidence_store.is_some(),
-            "Nachweise und Uploads",
-        ),
-        (
-            "Incidents",
-            state.incident_store.is_some(),
-            "NIS2- und Runbook-Flows",
-        ),
-        (
-            "Imports",
-            state.import_store.is_some(),
-            "CSV- und Datenimporte",
-        ),
-        (
-            "Assets",
-            state.asset_store.is_some(),
-            "Asset- und CPE/PURL-Bezug",
-        ),
-        (
-            "Roadmap",
-            state.roadmap_store.is_some(),
-            "Massnahmen und Tasks",
-        ),
-        (
-            "Reports",
-            state.report_store.is_some(),
-            "Snapshots und Exporte",
-        ),
-        ("Agents", state.agent_store.is_some(), "Zero-Trust-Posture"),
-    ];
+    let store_statuses = status_store_statuses(&state);
     let configured_stores = store_statuses
         .iter()
-        .filter(|(_, configured, _)| *configured)
+        .filter(|store| store.configured)
         .count() as i64;
     let store_rows = store_statuses
         .iter()
-        .map(|(name, configured, scope)| {
+        .map(|store| {
             format!(
                 r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
-                html_escape(name),
-                if *configured {
+                html_escape(store.name),
+                if store.configured {
                     web_badge("bereit", "ok")
                 } else {
                     web_badge("nicht verbunden", "warn")
                 },
-                html_escape(scope),
+                html_escape(store.scope),
             )
         })
         .collect::<Vec<_>>()
@@ -8786,6 +8778,7 @@ async fn web_status(
           {}
           {}
           {}
+          {}
         </section>
         <section class="grid">
           <article class="panel wide">
@@ -8846,6 +8839,11 @@ async fn web_status(
             "Maschinenlesbarer Liveness-Check fuer CI und Betrieb",
         ),
         web_link_card(
+            "Operations JSON",
+            &web_path_with_context("/status/operations.json", context.as_ref()),
+            "Betriebszentrale als maschinenlesbarer Drilldown",
+        ),
+        web_link_card(
             "Product Security",
             &web_path_with_context("/product-security/", context.as_ref()),
             "SBOM, CSAF, CVE-Reviews und CRA/AI-Act-Signale",
@@ -8857,6 +8855,68 @@ async fn web_status(
         ),
     );
     web_page("Rust-only Status", "/status/", context.as_ref(), &body)
+}
+
+async fn status_operations_json(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Json<StatusOperationsJsonResponse> {
+    let context = web_context_from_request(&query, &headers, &state).await;
+    let store_statuses = status_store_statuses(&state);
+    let configured_stores = store_statuses
+        .iter()
+        .filter(|store| store.configured)
+        .count() as i64;
+    let rust_only = env_flag_enabled("RUST_ONLY_MODE");
+    let strict_mode = env_flag_enabled("RUST_STRICT_MODE");
+    let migration_status = match state.database_url.as_deref() {
+        Some(database_url) => match db_admin::migration_status(database_url).await {
+            Ok(status) => MigrationStatusView::Ready(status),
+            Err(err) => MigrationStatusView::Error(err.to_string()),
+        },
+        None => MigrationStatusView::Missing,
+    };
+    let operations_overview = status_operations_overview(
+        &state,
+        context.as_ref(),
+        &migration_status,
+        rust_only,
+        strict_mode,
+        configured_stores,
+        store_statuses.len() as i64,
+    )
+    .await;
+    Json(StatusOperationsJsonResponse {
+        accepted: true,
+        api_version: "v1",
+        service: "iscy-rust-backend",
+        tenant_id: context.as_ref().map(|context| context.tenant_id),
+        user_id: context.as_ref().map(|context| context.user_id),
+        issue_count: operations_overview.issue_count,
+        runtime: StatusRuntimeJson {
+            rust_only,
+            strict_mode,
+            evidence_media_root: state
+                .evidence_media_root
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            nvd_api_base_url: state
+                .nvd_api_base_url
+                .as_deref()
+                .unwrap_or("NVD-Default")
+                .to_string(),
+        },
+        migration: status_migration_json(&migration_status),
+        build: StatusBuildJson {
+            version: env!("CARGO_PKG_VERSION"),
+            commit: build_commit(),
+            profile: option_env!("PROFILE").unwrap_or("unknown"),
+            target: option_env!("TARGET").unwrap_or("unknown"),
+        },
+        modules: store_statuses,
+        signals: operations_overview.signals,
+    })
 }
 
 async fn web_status_control_gaps_generate_submit(
@@ -14486,6 +14546,76 @@ fn status_pair_row(signal: &str, value: &str) -> String {
     )
 }
 
+fn status_store_statuses(state: &AppState) -> Vec<StatusStoreStatus> {
+    vec![
+        StatusStoreStatus {
+            name: "Auth & Sessions",
+            configured: state.auth_store.is_some(),
+            scope: "Login, RBAC, Rollen",
+        },
+        StatusStoreStatus {
+            name: "Accounts",
+            configured: state.account_store.is_some(),
+            scope: "User- und Gruppenverwaltung",
+        },
+        StatusStoreStatus {
+            name: "Dashboard",
+            configured: state.dashboard_store.is_some(),
+            scope: "Management-Uebersicht",
+        },
+        StatusStoreStatus {
+            name: "ISCY-27",
+            configured: state.control_store.is_some(),
+            scope: "Control-Kern und Mappings",
+        },
+        StatusStoreStatus {
+            name: "Product Security",
+            configured: state.product_security_store.is_some(),
+            scope: "CRA, SBOM, CSAF, CVE-Reviews",
+        },
+        StatusStoreStatus {
+            name: "Risks",
+            configured: state.risk_store.is_some(),
+            scope: "Risiko-Register und Reviews",
+        },
+        StatusStoreStatus {
+            name: "Evidence",
+            configured: state.evidence_store.is_some(),
+            scope: "Nachweise und Uploads",
+        },
+        StatusStoreStatus {
+            name: "Incidents",
+            configured: state.incident_store.is_some(),
+            scope: "NIS2- und Runbook-Flows",
+        },
+        StatusStoreStatus {
+            name: "Imports",
+            configured: state.import_store.is_some(),
+            scope: "CSV- und Datenimporte",
+        },
+        StatusStoreStatus {
+            name: "Assets",
+            configured: state.asset_store.is_some(),
+            scope: "Asset- und CPE/PURL-Bezug",
+        },
+        StatusStoreStatus {
+            name: "Roadmap",
+            configured: state.roadmap_store.is_some(),
+            scope: "Massnahmen und Tasks",
+        },
+        StatusStoreStatus {
+            name: "Reports",
+            configured: state.report_store.is_some(),
+            scope: "Snapshots und Exporte",
+        },
+        StatusStoreStatus {
+            name: "Agents",
+            configured: state.agent_store.is_some(),
+            scope: "Zero-Trust-Posture",
+        },
+    ]
+}
+
 async fn status_operations_overview(
     state: &AppState,
     context: Option<&WebContext>,
@@ -14590,6 +14720,7 @@ async fn status_operations_overview(
     StatusOperationsOverview {
         issue_count,
         rows: status_signal_rows(&signals),
+        signals,
     }
 }
 
@@ -14839,6 +14970,44 @@ fn migration_signal_detail(status: &MigrationStatusView) -> String {
         MigrationStatusView::Error(message) => {
             format!("Migrationsstatus konnte nicht gelesen werden: {message}")
         }
+    }
+}
+
+fn status_migration_json(status: &MigrationStatusView) -> StatusMigrationJson {
+    match status {
+        MigrationStatusView::Ready(status) => StatusMigrationJson {
+            level: migration_signal_level(&MigrationStatusView::Ready(status.clone())),
+            readable: true,
+            database_kind: Some(status.database_kind.to_string()),
+            applied_count: status.applied_count,
+            expected_count: status.expected_count,
+            latest_applied_version: status.latest_applied_version.clone(),
+            latest_applied_at: status.latest_applied_at.clone(),
+            expected_latest_version: status.expected_latest_version.map(ToString::to_string),
+            message: None,
+        },
+        MigrationStatusView::Missing => StatusMigrationJson {
+            level: StatusSignalLevel::Warn,
+            readable: false,
+            database_kind: None,
+            applied_count: 0,
+            expected_count: 0,
+            latest_applied_version: None,
+            latest_applied_at: None,
+            expected_latest_version: None,
+            message: Some("DATABASE_URL ist im AppState nicht gesetzt.".to_string()),
+        },
+        MigrationStatusView::Error(message) => StatusMigrationJson {
+            level: StatusSignalLevel::Danger,
+            readable: false,
+            database_kind: None,
+            applied_count: 0,
+            expected_count: 0,
+            latest_applied_version: None,
+            latest_applied_at: None,
+            expected_latest_version: None,
+            message: Some(message.clone()),
+        },
     }
 }
 
@@ -16948,6 +17117,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(control_roadmap_generate),
         )
         .route("/api/v1/dashboard/summary", get(dashboard_summary))
+        .route("/api/v1/status/operations", get(status_operations_json))
         .route("/api/v1/agents/posture", get(agent_posture))
         .route("/api/v1/agents/devices", get(agent_devices))
         .route(
@@ -17107,6 +17277,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/navigator/", get(web_navigator))
         .route("/dashboard/", get(web_dashboard))
         .route("/status/", get(web_status))
+        .route("/status/operations.json", get(status_operations_json))
         .route(
             "/status/control-gaps/generate",
             post(web_status_control_gaps_generate_submit),

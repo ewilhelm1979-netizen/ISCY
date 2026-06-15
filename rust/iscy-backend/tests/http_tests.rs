@@ -76,6 +76,39 @@ async fn rust_status_page_renders_runtime_and_module_overview() {
     assert!(html.contains("Datenbank-Migrationen"));
     assert!(html.contains("Product Security"));
     assert!(html.contains("/health/live"));
+    assert!(html.contains("/status/operations.json"));
+}
+
+#[tokio::test]
+async fn rust_status_operations_json_reports_runtime_and_signals() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/status/operations.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["service"], "iscy-rust-backend");
+    assert!(payload["issue_count"].as_i64().unwrap() >= 1);
+    assert!(payload["modules"].as_array().unwrap().len() >= 10);
+    let signals = payload["signals"].as_array().unwrap();
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "Live Health"));
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "Offene Control-Gaps"));
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "Evidence fehlt"));
 }
 
 #[tokio::test]
@@ -7473,6 +7506,36 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     assert!(html.contains("SBOM/CSAF Importlage"));
     assert!(html.contains("Cutover-Aktionen"));
     assert!(html.contains("ISCY-27-Gaps in Roadmap ueberfuehren"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/status/operations?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["tenant_id"], 1);
+    assert_eq!(payload["user_id"], 1);
+    assert!(payload["issue_count"].as_i64().unwrap() >= 1);
+    let signals = payload["signals"].as_array().unwrap();
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "Offene Control-Gaps"));
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "Offene CVE-Reviews"));
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "SBOM/CSAF Importlage"));
 
     let response = app
         .oneshot(
