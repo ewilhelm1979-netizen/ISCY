@@ -6,12 +6,13 @@
 - Product Security verarbeitet CSAF-/CycloneDX-/SPDX-Importe, CVE-Asset-Korrelationen, automatisch erzeugte CVE-Risiken und Product-Security-Roadmap-Tasks.
 - Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence und eine gebuendelte CVE-Risiko-Review-Queue mit Filtern und Bulk-Aktionen.
 - Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck.
+- Der Rust-only-Betrieb liefert Statusseite, JSON-Drilldown, Prometheus-Metriken, Alertmanager-Webhook mit optionaler Incident-/Evidence-Persistenz, Grafana-Dashboard, Compose-Beispiel und NixOS-Modul samt Beispielhost.
 
 ## Prioritaet P0 (vor breitem Produktivrollout)
 
 1. Secrets-Management statt Plain `.env`
 2. TLS-Absicherung und HSTS
-3. Monitoring/Alerting (Logs, Metriken, Errors)
+3. Logging-/Error-Pipeline und Alarm-Eskalation produktiv anbinden
 4. Regelmaessige Backup- und Restore-Drills
 5. Rollen-/Rechtekonzept und Admin-Hardening
 6. Auditierbare Retention- und Exportregeln fuer Evidence-Dateien

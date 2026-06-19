@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.4\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.5\""));
 }
 
 #[tokio::test]
@@ -194,12 +194,116 @@ async fn alertmanager_webhook_normalizes_operations_alerts() {
     assert_eq!(payload["firing_count"], 1);
     assert_eq!(payload["severity_counts"]["critical"], 1);
     assert_eq!(payload["tenant_hint"], "42");
+    assert_eq!(payload["persistence"]["enabled"], false);
+    assert_eq!(
+        payload["persistence"]["skipped_reason"],
+        "missing_tenant_context"
+    );
     assert_eq!(payload["alerts"][0]["alertname"], "ISCYOperationsCritical");
     assert_eq!(payload["alerts"][0]["severity"], "critical");
     assert!(payload["alerts"][0]["action_hint"]
         .as_str()
         .unwrap()
         .contains("Sofort Incident"));
+}
+
+#[tokio::test]
+async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_incident_reference_tables(&pool).await;
+    create_incident_table(&pool).await;
+    create_incident_evidence_support_tables(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/api/v1/operations/alertmanager")
+        .header("content-type", "application/json")
+        .header("x-iscy-tenant-id", "42")
+        .header("x-iscy-user-id", "7")
+        .header("x-iscy-roles", "ADMIN");
+    if let Ok(token) = std::env::var("ISCY_ALERTMANAGER_TOKEN") {
+        if !token.trim().is_empty() {
+            builder = builder.header("x-iscy-alert-token", token);
+        }
+    }
+
+    let response = app
+        .oneshot(
+            builder
+                .body(Body::from(
+                    r#"{
+                      "receiver":"iscy-critical",
+                      "status":"firing",
+                      "groupLabels":{"service":"iscy"},
+                      "commonLabels":{"severity":"critical","tenant_id":"42"},
+                      "commonAnnotations":{"summary":"ISCY meldet kritischen Betriebsstatus"},
+                      "externalURL":"http://alertmanager.local",
+                      "alerts":[{
+                        "status":"firing",
+                        "labels":{"alertname":"ISCYOperationsCritical","service":"iscy"},
+                        "annotations":{"description":"Statusseite pruefen"},
+                        "startsAt":"2026-06-15T14:45:00Z",
+                        "generatorURL":"http://prometheus.local/graph"
+                      }]
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["persistence"]["enabled"], true);
+    assert_eq!(payload["persistence"]["created_incidents"], 1);
+    assert_eq!(payload["persistence"]["created_evidence"], 1);
+    assert!(payload["persistence"]["errors"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let (incident_id, title, severity, status): (i64, String, String, String) = sqlx::query_as(
+        "SELECT id, title, severity, status FROM incidents_incident WHERE tenant_id = 42",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(title.contains("ISCYOperationsCritical"));
+    assert_eq!(severity, "CRITICAL");
+    assert_eq!(status, "TRIAGE");
+
+    let (evidence_title, linked_requirement, linked_incident_id): (String, String, Option<i64>) =
+        sqlx::query_as(
+            "SELECT title, linked_requirement, incident_id FROM evidence_evidenceitem WHERE tenant_id = 42",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(evidence_title.contains("ISCYOperationsCritical"));
+    assert_eq!(
+        linked_requirement,
+        "OPERATIONS:ALERTMANAGER:ISCYOperationsCritical"
+    );
+    assert_eq!(linked_incident_id, Some(incident_id));
+
+    let event_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM incidents_incidentevent WHERE tenant_id = 42 AND incident_id = ? AND event_type = 'EVIDENCE_UPLOADED'",
+    )
+    .bind(incident_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(event_count, 1);
 }
 
 #[tokio::test]
@@ -7698,6 +7802,9 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
         "iscy_operations_signal{area=\"Product Security\",signal=\"Offene CVE-Reviews\""
     ));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
+    assert!(metrics.contains("iscy_product_security_coverage_percent{kind=\"sbom\""));
+    assert!(metrics.contains("iscy_product_security_import_validation_total{status=\"invalid\""));
+    assert!(metrics.contains("iscy_product_security_trend_signal{key=\"open_cve_reviews\""));
 
     let response = app
         .oneshot(
@@ -10617,6 +10724,59 @@ async fn create_incident_table(pool: &SqlitePool) {
     create_incident_event_table(pool).await;
     create_incident_runbook_template_table(pool).await;
     create_incident_runbook_step_table(pool).await;
+}
+
+async fn create_incident_reference_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE accounts_user (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            username varchar(150) NOT NULL,
+            first_name varchar(150) NOT NULL,
+            last_name varchar(150) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE risks_risk (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL DEFAULT ''
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE assets_app_informationasset (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL DEFAULT ''
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE processes_process (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL DEFAULT ''
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn create_incident_event_table(pool: &SqlitePool) {

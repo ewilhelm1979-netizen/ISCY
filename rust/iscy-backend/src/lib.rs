@@ -807,7 +807,17 @@ pub struct AlertmanagerWebhookResponse {
     pub severity_counts: BTreeMap<String, i64>,
     pub tenant_hint: Option<String>,
     pub external_url: Option<String>,
+    pub persistence: AlertmanagerPersistenceSummary,
     pub alerts: Vec<AlertmanagerAlertSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct AlertmanagerPersistenceSummary {
+    pub enabled: bool,
+    pub created_incidents: i64,
+    pub created_evidence: i64,
+    pub skipped_reason: Option<String>,
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1068,6 +1078,8 @@ struct StatusOperationsJsonResponse {
     build: StatusBuildJson,
     modules: Vec<StatusStoreStatus>,
     signals: Vec<StatusSignal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    product_security_trends: Option<product_security_store::ProductSecurityTrendDashboard>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1664,6 +1676,7 @@ async fn health_live() -> Json<serde_json::Value> {
 }
 
 async fn operations_alertmanager_webhook(
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(payload): Json<AlertmanagerWebhookPayload>,
 ) -> Response {
@@ -1715,6 +1728,7 @@ async fn operations_alertmanager_webhook(
             }
         })
         .collect::<Vec<_>>();
+    let persistence = persist_alertmanager_alerts(&state, &headers, &alerts).await;
     let tenant_hint = payload
         .common_labels
         .get("tenant_id")
@@ -1744,6 +1758,7 @@ async fn operations_alertmanager_webhook(
             severity_counts,
             tenant_hint,
             external_url: payload.external_url.clone(),
+            persistence,
             alerts,
         }),
     )
@@ -1814,6 +1829,184 @@ fn alertmanager_action_hint(status: &str, severity: &str) -> &'static str {
         "warning" => "Backlog pruefen, Owner setzen und naechstes Review einplanen.",
         _ => "Signal triagieren und bei Bedarf als Evidence oder Roadmap-Arbeit aufnehmen.",
     }
+}
+
+async fn persist_alertmanager_alerts(
+    state: &AppState,
+    headers: &HeaderMap,
+    alerts: &[AlertmanagerAlertSummary],
+) -> AlertmanagerPersistenceSummary {
+    let context = match alertmanager_persistence_context(state, headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return AlertmanagerPersistenceSummary {
+                skipped_reason: Some("missing_tenant_context".to_string()),
+                ..Default::default()
+            }
+        }
+    };
+    if !context.can_write() {
+        return AlertmanagerPersistenceSummary {
+            skipped_reason: Some("read_only_context".to_string()),
+            ..Default::default()
+        };
+    }
+    let Some(incident_store) = state.incident_store.clone() else {
+        return AlertmanagerPersistenceSummary {
+            skipped_reason: Some("incident_store_not_configured".to_string()),
+            ..Default::default()
+        };
+    };
+    let evidence_store = state.evidence_store.clone();
+    let mut summary = AlertmanagerPersistenceSummary {
+        enabled: true,
+        ..Default::default()
+    };
+    for alert in alerts
+        .iter()
+        .filter(|alert| !alert.status.eq_ignore_ascii_case("resolved"))
+    {
+        let payload = alertmanager_incident_payload(alert);
+        match incident_store
+            .create_incident(context.tenant_id, Some(context.user_id), payload)
+            .await
+        {
+            Ok(result) => {
+                summary.created_incidents += 1;
+                if let Some(store) = evidence_store.clone() {
+                    let evidence_payload = alertmanager_evidence_payload(alert, result.incident.id);
+                    match store
+                        .create_evidence_item(context.tenant_id, context.user_id, evidence_payload)
+                        .await
+                    {
+                        Ok(item) => {
+                            summary.created_evidence += 1;
+                            record_incident_evidence_event(
+                                state,
+                                context.tenant_id,
+                                context.user_id,
+                                &item,
+                            )
+                            .await;
+                        }
+                        Err(err) => summary.errors.push(format!(
+                            "Evidence fuer {} konnte nicht erstellt werden: {err}",
+                            alert.alertname
+                        )),
+                    }
+                }
+            }
+            Err(err) => summary.errors.push(format!(
+                "Incident fuer {} konnte nicht erstellt werden: {err}",
+                alert.alertname
+            )),
+        }
+    }
+    if summary.created_incidents == 0 && summary.errors.is_empty() {
+        summary.skipped_reason = Some("no_firing_alerts".to_string());
+    }
+    summary
+}
+
+async fn alertmanager_persistence_context(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<AuthenticatedTenantContext, RequiredTenantContextError> {
+    match RequestContext::authenticated_tenant_from_headers(headers) {
+        Ok(context) => Ok(context),
+        Err(_) => authenticated_tenant_context(state, headers).await,
+    }
+}
+
+fn alertmanager_incident_payload(
+    alert: &AlertmanagerAlertSummary,
+) -> incident_store::IncidentWriteRequest {
+    let severity = alertmanager_incident_severity(&alert.severity).to_string();
+    let title = alertmanager_limit_text(
+        &format!("Alertmanager: {} ({})", alert.alertname, alert.severity),
+        240,
+    );
+    let summary = alertmanager_alert_detail(alert);
+    incident_store::IncidentWriteRequest {
+        reporter_id: None,
+        owner_id: None,
+        related_risk_id: None,
+        related_asset_id: None,
+        related_process_id: None,
+        title: Some(title),
+        summary: Some(summary),
+        incident_type: Some("GENERAL".to_string()),
+        runbook_template: Some(alertmanager_runbook_template(alert).to_string()),
+        severity: Some(severity),
+        status: Some("TRIAGE".to_string()),
+        detected_at: Some(alert.starts_at.clone()),
+        confirmed_at: None,
+        contained_at: None,
+        resolved_at: None,
+        nis2_reportable: Some(false),
+        early_warning_sent_at: None,
+        notification_sent_at: None,
+        final_report_sent_at: None,
+        authority_reference: Some(format!("Alertmanager:{}", alert.alertname)),
+        stakeholder_summary: Some(alert.summary.clone()),
+        lessons_learned: None,
+    }
+}
+
+fn alertmanager_evidence_payload(
+    alert: &AlertmanagerAlertSummary,
+    incident_id: i64,
+) -> evidence_store::EvidenceItemCreateRequest {
+    evidence_store::EvidenceItemCreateRequest {
+        session_id: None,
+        domain_id: None,
+        measure_id: None,
+        requirement_id: None,
+        control_id: None,
+        incident_id: Some(incident_id),
+        title: alertmanager_limit_text(&format!("Alertmanager Evidence: {}", alert.alertname), 240),
+        description: alertmanager_alert_detail(alert),
+        linked_requirement: format!("OPERATIONS:ALERTMANAGER:{}", alert.alertname),
+        file_name: None,
+        status: Some("SUBMITTED".to_string()),
+        review_notes: "Automatisch aus Alertmanager-Webhook erzeugt.".to_string(),
+    }
+}
+
+fn alertmanager_alert_detail(alert: &AlertmanagerAlertSummary) -> String {
+    [
+        format!("Alert: {}", alert.alertname),
+        format!("Status: {}", alert.status),
+        format!("Severity: {}", alert.severity),
+        format!("Service: {}", alert.service),
+        format!("Summary: {}", alert.summary),
+        format!("Description: {}", alert.description),
+        format!("Starts At: {}", alert.starts_at.as_deref().unwrap_or("-")),
+        format!("Ends At: {}", alert.ends_at.as_deref().unwrap_or("-")),
+        format!("Source: {}", alert.source_url.as_deref().unwrap_or("-")),
+        format!("Action: {}", alert.action_hint),
+    ]
+    .join("\n")
+}
+
+fn alertmanager_runbook_template(alert: &AlertmanagerAlertSummary) -> &'static str {
+    if alert.severity.eq_ignore_ascii_case("critical") {
+        return "1. Statusseite /status/ und Prometheus-Quelle pruefen.\n2. Incident Owner und technische Verantwortliche informieren.\n3. Auswirkungen, Scope und Tenant-Kontext bestaetigen.\n4. Eindaemmung oder Workaround dokumentieren.\n5. Evidence, Root Cause und Lessons Learned nachziehen.";
+    }
+    "1. Signal pruefen und Quelle bestaetigen.\n2. Owner, Scope und betroffene Controls bewerten.\n3. Falls noetig Roadmap-/Evidence-Arbeit anlegen.\n4. Monitoring-Schwelle oder Runbook nachjustieren.\n5. Abschluss im Review dokumentieren."
+}
+
+fn alertmanager_incident_severity(severity: &str) -> &'static str {
+    match severity.trim().to_ascii_lowercase().as_str() {
+        "critical" => "CRITICAL",
+        "warning" | "warn" => "MEDIUM",
+        "info" => "INFO",
+        _ => "LOW",
+    }
+}
+
+fn alertmanager_limit_text(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect::<String>()
 }
 
 const ISCY_SESSION_COOKIE: &str = "iscy_session";
@@ -9318,6 +9511,7 @@ async fn status_operations_payload(
         store_statuses.len() as i64,
     )
     .await;
+    let product_security_trends = product_security_trends_for_status(state, context.as_ref()).await;
     StatusOperationsJsonResponse {
         accepted: true,
         api_version: "v1",
@@ -9349,6 +9543,7 @@ async fn status_operations_payload(
         },
         modules: store_statuses,
         signals: operations_overview.signals,
+        product_security_trends,
     }
 }
 
@@ -9476,7 +9671,133 @@ fn status_operations_metrics_body(payload: &StatusOperationsJsonResponse) -> Str
             signal.level.metric_value(),
         ));
     }
+    if let Some(trends) = payload.product_security_trends.as_ref() {
+        push_product_security_trend_metrics(&mut body, trends);
+    }
     body
+}
+
+async fn product_security_trends_for_status(
+    state: &AppState,
+    context: Option<&WebContext>,
+) -> Option<product_security_store::ProductSecurityTrendDashboard> {
+    let context = context?;
+    let store = state.product_security_store.as_ref()?;
+    store
+        .overview(context.tenant_id, 25, 10)
+        .await
+        .ok()
+        .flatten()
+        .map(|overview| overview.trend_dashboard)
+}
+
+fn push_product_security_trend_metrics(
+    body: &mut String,
+    trends: &product_security_store::ProductSecurityTrendDashboard,
+) {
+    body.push_str(
+        "# HELP iscy_product_security_coverage_percent Product Security coverage by kind.\n\
+         # TYPE iscy_product_security_coverage_percent gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_product_security_coverage_percent{{kind=\"sbom\"}} {}\n",
+        trends.coverage.sbom_coverage_percent,
+    ));
+    body.push_str(&format!(
+        "iscy_product_security_coverage_percent{{kind=\"csaf\"}} {}\n",
+        trends.coverage.csaf_coverage_percent,
+    ));
+    body.push_str(&format!(
+        "iscy_product_security_coverage_percent{{kind=\"threat_tara\"}} {}\n",
+        trends.coverage.threat_tara_coverage_percent,
+    ));
+    body.push_str(
+        "# HELP iscy_product_security_coverage_total Product Security raw coverage counters.\n\
+         # TYPE iscy_product_security_coverage_total gauge\n",
+    );
+    for (kind, value) in [
+        ("products", trends.coverage.product_count),
+        ("components", trends.coverage.component_count),
+        ("components_with_sbom", trends.coverage.components_with_sbom),
+        ("products_with_csaf", trends.coverage.products_with_csaf),
+        (
+            "products_with_threat_tara",
+            trends.coverage.products_with_threat_tara,
+        ),
+    ] {
+        body.push_str(&format!(
+            "iscy_product_security_coverage_total{{kind=\"{}\"}} {}\n",
+            kind, value,
+        ));
+    }
+    body.push_str(
+        "# HELP iscy_product_security_import_validation_total Product Security import validation counters.\n\
+         # TYPE iscy_product_security_import_validation_total gauge\n",
+    );
+    for (status, value) in [
+        ("total", trends.import_validation.total_imports),
+        ("valid", trends.import_validation.valid_imports),
+        ("warning", trends.import_validation.warning_imports),
+        ("invalid", trends.import_validation.invalid_imports),
+        ("errors", trends.import_validation.validation_error_count),
+    ] {
+        body.push_str(&format!(
+            "iscy_product_security_import_validation_total{{status=\"{}\"}} {}\n",
+            status, value,
+        ));
+    }
+    body.push_str(
+        "# HELP iscy_product_security_trend_signal Product Security trend signal current value.\n\
+         # TYPE iscy_product_security_trend_signal gauge\n",
+    );
+    for signal in &trends.signals {
+        body.push_str(&format!(
+            "iscy_product_security_trend_signal{{key=\"{}\",label=\"{}\",status=\"{}\",direction=\"{}\"}} {}\n",
+            prometheus_label_value(&signal.key),
+            prometheus_label_value(&signal.label),
+            prometheus_label_value(&signal.status),
+            prometheus_label_value(&signal.direction),
+            signal.current,
+        ));
+    }
+    body.push_str(
+        "# HELP iscy_product_security_snapshot_readiness_percent Product Security snapshot readiness by product and dimension.\n\
+         # TYPE iscy_product_security_snapshot_readiness_percent gauge\n",
+    );
+    for snapshot in &trends.snapshot_points {
+        for (dimension, value) in [
+            ("cra", snapshot.cra_readiness_percent),
+            ("ai_act", snapshot.ai_act_readiness_percent),
+            ("threat_model", snapshot.threat_model_coverage_percent),
+            ("psirt", snapshot.psirt_readiness_percent),
+        ] {
+            body.push_str(&format!(
+                "iscy_product_security_snapshot_readiness_percent{{product_id=\"{}\",product_name=\"{}\",dimension=\"{}\"}} {}\n",
+                snapshot.product_id,
+                prometheus_label_value(&snapshot.product_name),
+                dimension,
+                value,
+            ));
+        }
+    }
+    body.push_str(
+        "# HELP iscy_product_security_snapshot_open_vulnerabilities Product Security snapshot open vulnerabilities by product and severity bucket.\n\
+         # TYPE iscy_product_security_snapshot_open_vulnerabilities gauge\n",
+    );
+    for snapshot in &trends.snapshot_points {
+        body.push_str(&format!(
+            "iscy_product_security_snapshot_open_vulnerabilities{{product_id=\"{}\",product_name=\"{}\",severity=\"all\"}} {}\n",
+            snapshot.product_id,
+            prometheus_label_value(&snapshot.product_name),
+            snapshot.open_vulnerability_count,
+        ));
+        body.push_str(&format!(
+            "iscy_product_security_snapshot_open_vulnerabilities{{product_id=\"{}\",product_name=\"{}\",severity=\"critical\"}} {}\n",
+            snapshot.product_id,
+            prometheus_label_value(&snapshot.product_name),
+            snapshot.critical_vulnerability_count,
+        ));
+    }
 }
 
 fn prometheus_label_value(value: &str) -> String {

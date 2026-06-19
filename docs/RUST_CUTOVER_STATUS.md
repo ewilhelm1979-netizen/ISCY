@@ -1,6 +1,6 @@
 # ISCY Rust-Cutover-Status
 
-Stand: 2026-06-14
+Stand: 2026-06-19
 
 ## Kurzfassung
 
@@ -17,9 +17,9 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Healthchecks: `/health/live`, `/health/ready`
 - Operations-Drilldown: `/status/operations.json` und `/api/v1/status/operations`
 - Prometheus-kompatible Metriken: `/metrics` und `/api/v1/status/metrics`
-- Alertmanager-Webhook: `/api/v1/operations/alertmanager`
+- Alertmanager-Webhook: `/api/v1/operations/alertmanager` mit optionaler Incident-/Evidence-Persistenz bei schreibendem Tenant-Kontext
 - Monitoring-Doku: `docs/OPERATIONS_MONITORING.md`
-- Monitoring-Deploy-Artefakte: `deploy/monitoring/prometheus/`, `deploy/monitoring/alertmanager/` und `deploy/monitoring/grafana/`
+- Monitoring-Deploy-Artefakte: `deploy/monitoring/prometheus/`, `deploy/monitoring/alertmanager/`, `deploy/monitoring/grafana/`, `deploy/monitoring/docker-compose.yml` und `deploy/monitoring/nixos/`
 
 ## Abgedeckte Rust-Web-/API-Bereiche
 
@@ -36,7 +36,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Assets
 - Imports inklusive CSV/XLSX/XLSM-Preview
 - Processes
-- Product Security inklusive CSAF-/CycloneDX-/SPDX-Importhistorie, Import-Detailseiten, CVE-Asset-Korrelation, automatischer Risiko-/Roadmap-Ableitung, CVE-Risiko-Review-Queue, Review-Filtern, Bulk-Aktionen, Evidence-Lueckenmetriken und Trend-Dashboard
+- Product Security inklusive CSAF-/CycloneDX-/SPDX-Importhistorie, Import-Detailseiten, CVE-Asset-Korrelation, automatischer Risiko-/Roadmap-Ableitung, CVE-Risiko-Review-Queue, Review-Filtern, Bulk-Aktionen, Evidence-Lueckenmetriken, Trend-Dashboard und Prometheus-Trendmetriken
 - CVE Feed, CVE Assessments und NVD-Import
 - User-Administration, Rollen, Gruppen und direkte Permissions
 

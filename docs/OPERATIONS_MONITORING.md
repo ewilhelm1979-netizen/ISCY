@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.8 / Rust 0.3.4
+Stand: ISCY V23.7.9 / Rust 0.3.5
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 
@@ -15,8 +15,9 @@ Fuer den direkten Betrieb liegen Monitoring-Beispiele im Repository:
 - `deploy/monitoring/grafana/iscy-operations-dashboard.json`: importierbares Grafana-Dashboard fuer Betriebsstatus, offene Signale, Migrationen, Module, Build-Info und Signal-Tabelle.
 - `deploy/monitoring/docker-compose.yml`: lokaler Monitoring-Stack aus Prometheus, Alertmanager und Grafana.
 - `deploy/monitoring/nixos/iscy-monitoring.nix`: NixOS-Modulbeispiel fuer denselben Stack.
+- `deploy/monitoring/nixos/example-host.nix`: kleine Beispiel-Hostkonfiguration, die das Modul importiert, Ports freigibt und den lokalen ISCY-Webhook verdrahtet.
 
-Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/operations/alertmanager` auf. Wenn `ISCY_ALERTMANAGER_TOKEN` gesetzt ist, muss Alertmanager denselben Wert per Bearer Token oder `x-iscy-alert-token` senden.
+Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/operations/alertmanager` auf. Wenn `ISCY_ALERTMANAGER_TOKEN` gesetzt ist, muss Alertmanager denselben Wert per Bearer Token oder `x-iscy-alert-token` senden. Ohne Tenant-/User-Kontext normalisiert der Webhook Alerts nur; mit schreibendem Kontext erzeugt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege.
 
 ## Endpunkte
 
@@ -26,7 +27,7 @@ Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/opera
 - `GET /api/v1/status/operations`: API-Alias fuer denselben JSON-Drilldown.
 - `GET /metrics`: Prometheus-kompatible Textausgabe.
 - `GET /api/v1/status/metrics`: API-Alias fuer Prometheus-kompatible Textausgabe.
-- `POST /api/v1/operations/alertmanager`: Alertmanager-Webhook, der Alerts validiert und als normalisierte ISCY-Operations-Summary bestaetigt.
+- `POST /api/v1/operations/alertmanager`: Alertmanager-Webhook, der Alerts validiert, normalisiert und bei schreibendem Tenant-Kontext als Incident/Evidence persistieren kann.
 - `GET /api/v1/product-security/trends`: Product-Security-Trends zu CVE-Reviews, Evidence-Luecken, Importvalidierung, Coverage und Snapshots.
 
 Mit Tenant-Kontext liefern die Operations-Endpunkte zusaetzlich fachliche Signale zu ISCY-27, Product Security, CVE-Reviews, Evidence-Luecken und Roadmap-Gaps:
@@ -62,6 +63,11 @@ Wichtige Metriken:
 - `iscy_operations_migration_expected`: erwartete DB-Migrationen.
 - `iscy_operations_runtime_flag`: Runtime-Flags wie `rust_only` und `strict_mode`.
 - `iscy_operations_build_info`: Build-Metadaten mit Version, Commit, Profil und Target.
+- `iscy_product_security_coverage_percent`: SBOM-, CSAF- und Threat-/TARA-Coverage in Prozent.
+- `iscy_product_security_import_validation_total`: Product-Security-Importe nach Validierungsstatus.
+- `iscy_product_security_trend_signal`: aktuelle Trend-Signale wie offene CVE-Reviews, fehlende Evidence oder Importvalidierungsprobleme.
+- `iscy_product_security_snapshot_readiness_percent`: Snapshot-Verlauf fuer CRA-, AI-Act-, Threat-Model- und PSIRT-Readiness.
+- `iscy_product_security_snapshot_open_vulnerabilities`: offene Product-Security-Schwachstellen je Snapshot.
 
 Produktive Beispiel-Alerts liegen unter `deploy/monitoring/prometheus/iscy-operations-alerts.yml`. Der Kern ist:
 
@@ -155,10 +161,12 @@ Das Modulbeispiel kann in eine NixOS-Konfiguration importiert werden:
 }
 ```
 
+Alternativ liegt eine kleine Beispiel-Hostkonfiguration unter `deploy/monitoring/nixos/example-host.nix`. Sie importiert das Modul, setzt die Standardports und oeffnet Prometheus, Alertmanager und Grafana in der lokalen Firewall.
+
 ## Betriebshinweise
 
 - `/metrics` ist bewusst ohne Tenant-Kontext abrufbar, damit Prometheus ohne zusaetzliche Header starten kann.
 - Fuer mandantenbezogene Metriken kann ein Reverse Proxy den Tenant-/User-Kontext setzen und `/api/v1/status/metrics` scrapen.
 - Die Statusseite `/status/` zeigt eine kopierbare Prometheus-Scrape-Konfiguration fuer den aktuell gesetzten `RUST_BACKEND_BIND` und einen Grafana-Query-Spickzettel.
 - Der JSON-Endpunkt eignet sich fuer Agenten, Runbooks und externe Checks, die Details wie `severity`, `exit_code`, `signals` und `modules` strukturiert auswerten wollen.
-- Der Alertmanager-Webhook schreibt bewusst noch keine Incidents oder Evidence, sondern normalisiert Alarme fuer Monitoring, ChatOps und kuenftige Runbook-Automation.
+- Der Alertmanager-Webhook persistiert Incidents/Evidence nur, wenn `x-iscy-tenant-id`, `x-iscy-user-id` und eine schreibende Rolle oder Session gesetzt sind. Ohne diesen Kontext bleibt der Webhook ein sicherer Normalisierer fuer Monitoring und ChatOps.
