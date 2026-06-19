@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.10 / Rust 0.3.6
+Stand: ISCY V23.7.11 / Rust 0.3.7
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 
@@ -11,13 +11,13 @@ Fuer den direkten Betrieb liegen Monitoring-Beispiele im Repository:
 - `deploy/monitoring/prometheus/iscy-scrape.yml`: minimaler Prometheus-Scrape-Job fuer `/metrics`.
 - `deploy/monitoring/prometheus/prometheus.yml`: vollstaendige Prometheus-Konfiguration fuer den Compose-Monitoring-Stack.
 - `deploy/monitoring/prometheus/iscy-operations-alerts.yml`: Alert-Regeln fuer kritische Statussignale, Warnungen, Migrationen, Modulstatus und Runtime-Flags.
-- `deploy/monitoring/alertmanager/iscy-alertmanager.yml`: Alertmanager-Routing-Beispiel mit getrennten Receivern fuer Warnungen und kritische Meldungen sowie ISCY-Kontext-Headern fuer Incident-/Evidence-Persistenz.
-- `deploy/monitoring/grafana/iscy-operations-dashboard.json`: importierbares Grafana-Dashboard fuer Betriebsstatus, offene Signale, Migrationen, Module, Build-Info, Product-Security-Coverage, CVE-Review-Trend und Importvalidierung.
+- `deploy/monitoring/alertmanager/iscy-alertmanager.yml`: Alertmanager-Routing-Beispiel mit getrennten Receivern fuer Warnungen und kritische Meldungen, ISCY-Kontext-Headern und Bearer-Token aus Secret-Datei fuer Incident-/Evidence-Persistenz.
+- `deploy/monitoring/grafana/iscy-operations-dashboard.json`: importierbares Grafana-Dashboard fuer Betriebsstatus, offene Signale, Migrationen, Module, Build-Info, Alert-Incidents, Product-Security-Coverage, CVE-Review-Trend und Importvalidierung.
 - `deploy/monitoring/docker-compose.yml`: lokaler Monitoring-Stack aus Prometheus, Alertmanager und Grafana.
 - `deploy/monitoring/nixos/iscy-monitoring.nix`: NixOS-Modulbeispiel fuer denselben Stack.
 - `deploy/monitoring/nixos/example-host.nix`: kleine Beispiel-Hostkonfiguration, die das Modul importiert, Ports freigibt und den lokalen ISCY-Webhook verdrahtet.
 
-Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/operations/alertmanager` auf. Wenn `ISCY_ALERTMANAGER_TOKEN` gesetzt ist, muss Alertmanager denselben Wert per Bearer Token oder `x-iscy-alert-token` senden. Ohne Tenant-/User-Kontext normalisiert der Webhook Alerts nur; mit schreibendem Kontext erzeugt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege. Das lokale Beispiel setzt `x-iscy-tenant-id: 1`, `x-iscy-user-id: 1` und `x-iscy-roles: ADMIN`; produktiv sollten diese Werte auf einen dedizierten technischen Operations-User zeigen.
+Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/operations/alertmanager` auf. Wenn `ISCY_ALERTMANAGER_TOKEN` gesetzt ist, muss Alertmanager denselben Wert per Bearer Token oder `x-iscy-alert-token` senden. Das Compose-Beispiel liest den Bearer Token aus `deploy/monitoring/alertmanager/secrets/iscy-alertmanager-token.example`; produktiv sollte `ISCY_ALERTMANAGER_TOKEN_FILE` auf eine lokale, nicht eingecheckte Secret-Datei zeigen. Ohne Tenant-/User-Kontext normalisiert der Webhook Alerts nur; mit schreibendem Kontext erzeugt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege. Das lokale Beispiel setzt `x-iscy-tenant-id: 1`, `x-iscy-user-id: 2` und `x-iscy-roles: CONTRIBUTOR`; User `2` ist der per Demo-Seed angelegte technische Operations-User `ops-alertmanager`.
 
 ## Endpunkte
 
@@ -63,6 +63,7 @@ Wichtige Metriken:
 - `iscy_operations_migration_expected`: erwartete DB-Migrationen.
 - `iscy_operations_runtime_flag`: Runtime-Flags wie `rust_only` und `strict_mode`.
 - `iscy_operations_build_info`: Build-Metadaten mit Version, Commit, Profil und Target.
+- `iscy_operations_alertmanager_incidents_total`: aus Alertmanager erzeugte Incident-Fallakten nach Status `all`, `open`, `triage` und `critical_open`.
 - `iscy_product_security_coverage_percent`: SBOM-, CSAF- und Threat-/TARA-Coverage in Prozent.
 - `iscy_product_security_import_validation_total`: Product-Security-Importe nach Validierungsstatus.
 - `iscy_product_security_trend_signal`: aktuelle Trend-Signale wie offene CVE-Reviews, fehlende Evidence oder Importvalidierungsprobleme.
@@ -112,6 +113,7 @@ Die Statusseite `/status/` enthaelt zusaetzlich einen kompakten Grafana-Query-Sp
 - Table: `iscy_operations_module_configured`
 - Gauge: `iscy_operations_migration_applied / iscy_operations_migration_expected`
 - Build-Info: `iscy_operations_build_info`
+- Bar Gauge: `iscy_operations_alertmanager_incidents_total{state!="all"}`
 - Bar Gauge: `iscy_product_security_coverage_percent`
 - Time Series: `iscy_product_security_trend_signal{key=~"open_cve_reviews|evidence_missing|risk_missing"}`
 - Bar Gauge: `iscy_product_security_import_validation_total{status!="total"}`
@@ -146,6 +148,15 @@ Standard-URLs:
 
 Grafana-Login im Beispiel: `admin / admin`. Fuer dauerhaften Betrieb `ISCY_GRAFANA_PASSWORD` setzen.
 
+Fuer produktive Alertmanager-Tokens eine lokale Secret-Datei anlegen und beim Compose-Start verweisen:
+
+```bash
+mkdir -p deploy/monitoring/alertmanager/secrets
+printf '%s\n' 'REPLACE_WITH_STRONG_TOKEN' > deploy/monitoring/alertmanager/secrets/iscy-alertmanager-token
+ISCY_ALERTMANAGER_TOKEN_FILE=./alertmanager/secrets/iscy-alertmanager-token \
+  docker compose -f deploy/monitoring/docker-compose.yml up -d
+```
+
 ## NixOS-Beispiel
 
 Das Modulbeispiel kann in eine NixOS-Konfiguration importiert werden:
@@ -161,8 +172,9 @@ Das Modulbeispiel kann in eine NixOS-Konfiguration importiert werden:
     iscyTarget = "127.0.0.1:9000";
     alertWebhookUrl = "http://127.0.0.1:9000/api/v1/operations/alertmanager";
     alertTenantId = 1;
-    alertUserId = 1;
-    alertRoles = [ "ADMIN" ];
+    alertUserId = 2;
+    alertRoles = [ "CONTRIBUTOR" ];
+    alertTokenFile = "/etc/iscy/alertmanager-token";
   };
 }
 ```
@@ -186,4 +198,4 @@ Wenn Alertmanager einen firing Alert mit ISCY-Kontext an `POST /api/v1/operation
 - Die Statusseite `/status/` zeigt eine kopierbare Prometheus-Scrape-Konfiguration fuer den aktuell gesetzten `RUST_BACKEND_BIND` und einen Grafana-Query-Spickzettel.
 - Der JSON-Endpunkt eignet sich fuer Agenten, Runbooks und externe Checks, die Details wie `severity`, `exit_code`, `signals` und `modules` strukturiert auswerten wollen.
 - Der Alertmanager-Webhook persistiert Incidents/Evidence nur, wenn `x-iscy-tenant-id`, `x-iscy-user-id` und eine schreibende Rolle oder Session gesetzt sind. Ohne diesen Kontext bleibt der Webhook ein sicherer Normalisierer fuer Monitoring und ChatOps.
-- Alertmanager unterstuetzt die Kontext-Header ueber `http_config.http_headers`; fuer aeltere Alertmanager-Versionen sollte die Konfiguration vor dem Rollout mit `amtool check-config` oder einem Container-Starttest validiert werden.
+- Alertmanager unterstuetzt die Kontext-Header ueber `http_config.http_headers` und Bearer Token ueber `http_config.authorization.credentials_file`; fuer aeltere Alertmanager-Versionen sollte die Konfiguration vor dem Rollout mit `amtool check-config` oder einem Container-Starttest validiert werden.

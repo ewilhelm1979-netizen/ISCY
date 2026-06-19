@@ -16,6 +16,14 @@ pub enum IncidentStore {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct IncidentAlertmanagerMetrics {
+    pub total: i64,
+    pub open: i64,
+    pub triage: i64,
+    pub critical_open: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct IncidentSummary {
     pub id: i64,
     pub tenant_id: i64,
@@ -668,6 +676,16 @@ impl IncidentStore {
             }
         }
     }
+
+    pub async fn alertmanager_metrics(
+        &self,
+        tenant_id: i64,
+    ) -> anyhow::Result<IncidentAlertmanagerMetrics> {
+        match self {
+            Self::Postgres(pool) => alertmanager_metrics_postgres(pool, tenant_id).await,
+            Self::Sqlite(pool) => alertmanager_metrics_sqlite(pool, tenant_id).await,
+        }
+    }
 }
 
 async fn list_runbook_templates_postgres(
@@ -1114,6 +1132,60 @@ async fn list_incidents_sqlite(
         .map(summary_from_sqlite_row)
         .collect::<Result<Vec<_>, _>>()
         .map_err(Into::into)
+}
+
+async fn alertmanager_metrics_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<IncidentAlertmanagerMetrics> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COUNT(*)::bigint AS total,
+            COALESCE(SUM(CASE WHEN status NOT IN ('RESOLVED', 'CLOSED') THEN 1 ELSE 0 END), 0)::bigint AS open,
+            COALESCE(SUM(CASE WHEN status = 'TRIAGE' THEN 1 ELSE 0 END), 0)::bigint AS triage,
+            COALESCE(SUM(CASE WHEN status NOT IN ('RESOLVED', 'CLOSED') AND severity = 'CRITICAL' THEN 1 ELSE 0 END), 0)::bigint AS critical_open
+        FROM incidents_incident
+        WHERE tenant_id = $1 AND authority_reference LIKE 'Alertmanager:%'
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Alertmanager-Incident-Metriken konnten nicht gelesen werden")?;
+    Ok(IncidentAlertmanagerMetrics {
+        total: row.try_get("total")?,
+        open: row.try_get("open")?,
+        triage: row.try_get("triage")?,
+        critical_open: row.try_get("critical_open")?,
+    })
+}
+
+async fn alertmanager_metrics_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<IncidentAlertmanagerMetrics> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN status NOT IN ('RESOLVED', 'CLOSED') THEN 1 ELSE 0 END), 0) AS open,
+            COALESCE(SUM(CASE WHEN status = 'TRIAGE' THEN 1 ELSE 0 END), 0) AS triage,
+            COALESCE(SUM(CASE WHEN status NOT IN ('RESOLVED', 'CLOSED') AND severity = 'CRITICAL' THEN 1 ELSE 0 END), 0) AS critical_open
+        FROM incidents_incident
+        WHERE tenant_id = ?1 AND authority_reference LIKE 'Alertmanager:%'
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await
+    .context("SQLite-Alertmanager-Incident-Metriken konnten nicht gelesen werden")?;
+    Ok(IncidentAlertmanagerMetrics {
+        total: row.try_get("total")?,
+        open: row.try_get("open")?,
+        triage: row.try_get("triage")?,
+        critical_open: row.try_get("critical_open")?,
+    })
 }
 
 async fn incident_detail_postgres(

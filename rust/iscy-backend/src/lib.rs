@@ -57,7 +57,7 @@ use dashboard_store::DashboardStore;
 use evidence_store::EvidenceStore;
 use import_preview::{ImportPreview, ImportUploadFile};
 use import_store::ImportStore;
-use incident_store::IncidentStore;
+use incident_store::{IncidentAlertmanagerMetrics, IncidentStore};
 use process_store::ProcessStore;
 use product_security_store::ProductSecurityStore;
 use report_store::ReportStore;
@@ -1078,6 +1078,8 @@ struct StatusOperationsJsonResponse {
     build: StatusBuildJson,
     modules: Vec<StatusStoreStatus>,
     signals: Vec<StatusSignal>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    alertmanager_incidents: Option<IncidentAlertmanagerMetrics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     product_security_trends: Option<product_security_store::ProductSecurityTrendDashboard>,
 }
@@ -2211,7 +2213,9 @@ async fn web_context_from_request(
             }
         }
     }
-    query.to_context()
+    query
+        .to_context()
+        .or_else(|| web_context_from_headers(headers))
 }
 
 fn session_token_from_headers(headers: &HeaderMap) -> Option<String> {
@@ -2248,6 +2252,22 @@ fn session_cookie_value(token: &str) -> String {
 
 fn expired_session_cookie_value() -> &'static str {
     "iscy_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+}
+
+fn web_context_from_headers(headers: &HeaderMap) -> Option<WebContext> {
+    let tenant_id = header_string(headers, "x-iscy-tenant-id")?
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)?;
+    let user_id = header_string(headers, "x-iscy-user-id")?
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)?;
+    Some(WebContext {
+        tenant_id,
+        user_id,
+        user_email: header_string(headers, "x-iscy-user-email"),
+    })
 }
 
 fn response_with_cookie(mut response: Response, cookie: &str) -> Response {
@@ -9430,6 +9450,11 @@ fn grafana_query_cheatsheet_panel() -> String {
             "iscy_operations_build_info",
             "Version, Commit, Profil und Target",
         ),
+        (
+            "Alert-Incidents",
+            r#"iscy_operations_alertmanager_incidents_total{state=~"open|critical_open"}"#,
+            "Persistierte Alertmanager-Fallakten",
+        ),
     ]
     .iter()
     .map(|(name, query, detail)| {
@@ -9512,6 +9537,8 @@ async fn status_operations_payload(
     )
     .await;
     let product_security_trends = product_security_trends_for_status(state, context.as_ref()).await;
+    let alertmanager_incidents =
+        alertmanager_incident_metrics_for_status(state, context.as_ref()).await;
     StatusOperationsJsonResponse {
         accepted: true,
         api_version: "v1",
@@ -9543,6 +9570,7 @@ async fn status_operations_payload(
         },
         modules: store_statuses,
         signals: operations_overview.signals,
+        alertmanager_incidents,
         product_security_trends,
     }
 }
@@ -9671,10 +9699,40 @@ fn status_operations_metrics_body(payload: &StatusOperationsJsonResponse) -> Str
             signal.level.metric_value(),
         ));
     }
+    if let Some(metrics) = payload.alertmanager_incidents.as_ref() {
+        push_alertmanager_incident_metrics(&mut body, metrics);
+    }
     if let Some(trends) = payload.product_security_trends.as_ref() {
         push_product_security_trend_metrics(&mut body, trends);
     }
     body
+}
+
+async fn alertmanager_incident_metrics_for_status(
+    state: &AppState,
+    context: Option<&WebContext>,
+) -> Option<IncidentAlertmanagerMetrics> {
+    let context = context?;
+    let store = state.incident_store.as_ref()?;
+    store.alertmanager_metrics(context.tenant_id).await.ok()
+}
+
+fn push_alertmanager_incident_metrics(body: &mut String, metrics: &IncidentAlertmanagerMetrics) {
+    body.push_str(
+        "# HELP iscy_operations_alertmanager_incidents_total Alertmanager-origin incidents by state.\n\
+         # TYPE iscy_operations_alertmanager_incidents_total gauge\n",
+    );
+    for (state, value) in [
+        ("all", metrics.total),
+        ("open", metrics.open),
+        ("triage", metrics.triage),
+        ("critical_open", metrics.critical_open),
+    ] {
+        body.push_str(&format!(
+            "iscy_operations_alertmanager_incidents_total{{state=\"{}\"}} {}\n",
+            state, value,
+        ));
+    }
 }
 
 async fn product_security_trends_for_status(

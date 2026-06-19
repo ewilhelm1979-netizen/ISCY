@@ -26,13 +26,12 @@ receivers:
             x-iscy-tenant-id:
               values: ["1"]
             x-iscy-user-id:
-              values: ["1"]
+              values: ["2"]
             x-iscy-roles:
-              values: ["ADMIN"]
-          # Wenn ISCY_ALERTMANAGER_TOKEN gesetzt ist, hier denselben Wert hinterlegen.
-          # authorization:
-          #   type: Bearer
-          #   credentials: change-me
+              values: ["CONTRIBUTOR"]
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/secrets/iscy-alertmanager-token
 
   - name: iscy-critical
     webhook_configs:
@@ -43,13 +42,12 @@ receivers:
             x-iscy-tenant-id:
               values: ["1"]
             x-iscy-user-id:
-              values: ["1"]
+              values: ["2"]
             x-iscy-roles:
-              values: ["ADMIN"]
-          # Wenn ISCY_ALERTMANAGER_TOKEN gesetzt ist, hier denselben Wert hinterlegen.
-          # authorization:
-          #   type: Bearer
-          #   credentials: change-me
+              values: ["CONTRIBUTOR"]
+          authorization:
+            type: Bearer
+            credentials_file: /etc/alertmanager/secrets/iscy-alertmanager-token
 
 inhibit_rules:
   - source_matchers:

@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.6\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.7\""));
 }
 
 #[tokio::test]
@@ -229,7 +229,7 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
         .header("content-type", "application/json")
         .header("x-iscy-tenant-id", "42")
         .header("x-iscy-user-id", "7")
-        .header("x-iscy-roles", "ADMIN");
+        .header("x-iscy-roles", "CONTRIBUTOR");
     if let Ok(token) = std::env::var("ISCY_ALERTMANAGER_TOKEN") {
         if !token.trim().is_empty() {
             builder = builder.header("x-iscy-alert-token", token);
@@ -237,6 +237,7 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
     }
 
     let response = app
+        .clone()
         .oneshot(
             builder
                 .body(Body::from(
@@ -304,6 +305,30 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
     .await
     .unwrap();
     assert_eq!(event_count, 1);
+
+    let metrics_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/status/metrics")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(metrics_response.status(), StatusCode::OK);
+    let metrics_body = to_bytes(metrics_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let metrics = String::from_utf8(metrics_body.to_vec()).unwrap();
+    assert!(metrics.contains("# TYPE iscy_operations_alertmanager_incidents_total gauge"));
+    assert!(metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"all\"} 1"));
+    assert!(metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"open\"} 1"));
+    assert!(metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"triage\"} 1"));
+    assert!(
+        metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"critical_open\"} 1")
+    );
 }
 
 #[tokio::test]
@@ -7701,6 +7726,30 @@ async fn rust_db_admin_seed_sets_superuser_for_existing_sqlite_user_table() {
             .await
             .unwrap();
     assert_eq!(is_superuser, 1);
+
+    let (username, role, is_superuser, is_staff): (String, String, i64, i64) = sqlx::query_as(
+        "SELECT username, role, is_superuser, is_staff FROM accounts_user WHERE id = 2",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(username, "ops-alertmanager");
+    assert_eq!(role, "CONTRIBUTOR");
+    assert_eq!(is_superuser, 0);
+    assert_eq!(is_staff, 0);
+
+    let contributor_role_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM accounts_userrole user_role
+        JOIN accounts_role role ON role.id = user_role.role_id
+        WHERE user_role.user_id = 2 AND role.code = 'CONTRIBUTOR'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(contributor_role_count, 1);
 }
 
 #[tokio::test]

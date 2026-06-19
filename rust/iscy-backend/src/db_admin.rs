@@ -2966,6 +2966,24 @@ INSERT INTO accounts_user (
     role = excluded.role,
     job_title = excluded.job_title,
     tenant_id = excluded.tenant_id;
+INSERT INTO accounts_user (
+    id, password, is_superuser, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
+) VALUES (
+    2, 'pbkdf2_sha256$720000$iscy-demo-salt$dHYZBIWxS3abL+0r4Rp7w3kbLXLSAFUrGq/HaPlAVrY=', 0,
+    'ops-alertmanager', 'Operations', 'Webhook', 'ops-alertmanager@example.com', 0, 1, '2026-04-22T10:00:00Z',
+    'CONTRIBUTOR', 'Alertmanager Integration', 1
+) ON CONFLICT(id) DO UPDATE SET
+    password = excluded.password,
+    is_superuser = excluded.is_superuser,
+    username = excluded.username,
+    first_name = excluded.first_name,
+    last_name = excluded.last_name,
+    email = excluded.email,
+    is_staff = excluded.is_staff,
+    is_active = excluded.is_active,
+    role = excluded.role,
+    job_title = excluded.job_title,
+    tenant_id = excluded.tenant_id;
 INSERT OR IGNORE INTO accounts_role (code, label, description) VALUES
     ('ADMIN', 'Administrator', 'Full tenant administration and write access'),
     ('MANAGEMENT', 'Management', 'Management oversight'),
@@ -2978,6 +2996,8 @@ INSERT OR IGNORE INTO accounts_role (code, label, description) VALUES
     ('CONTRIBUTOR', 'Contributor', 'Operational write access');
 INSERT OR IGNORE INTO accounts_userrole (user_id, role_id, scope_tenant_id, granted_at, granted_by_id)
 SELECT 1, id, 1, '2026-04-22T10:00:00Z', NULL FROM accounts_role WHERE code = 'ADMIN';
+INSERT OR IGNORE INTO accounts_userrole (user_id, role_id, scope_tenant_id, granted_at, granted_by_id)
+SELECT 2, id, 1, '2026-04-22T10:00:00Z', 1 FROM accounts_role WHERE code = 'CONTRIBUTOR';
 INSERT OR IGNORE INTO django_content_type (app_label, model) VALUES
     ('accounts', 'user'),
     ('accounts', 'role'),
@@ -3015,6 +3035,8 @@ JOIN auth_permission p ON p.codename IN ('view_user')
 WHERE g.name = 'Contributors';
 INSERT OR IGNORE INTO accounts_user_groups (user_id, group_id)
 SELECT 1, id FROM auth_group WHERE name = 'Administrators';
+INSERT OR IGNORE INTO accounts_user_groups (user_id, group_id)
+SELECT 2, id FROM auth_group WHERE name = 'Contributors';
 INSERT OR IGNORE INTO organizations_businessunit (
     id, tenant_id, name, owner_id, created_at, updated_at
 ) VALUES (
@@ -3309,6 +3331,24 @@ INSERT INTO accounts_user (
     role = EXCLUDED.role,
     job_title = EXCLUDED.job_title,
     tenant_id = EXCLUDED.tenant_id;
+INSERT INTO accounts_user (
+    id, password, is_superuser, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
+) VALUES (
+    2, 'pbkdf2_sha256$720000$iscy-demo-salt$dHYZBIWxS3abL+0r4Rp7w3kbLXLSAFUrGq/HaPlAVrY=', FALSE,
+    'ops-alertmanager', 'Operations', 'Webhook', 'ops-alertmanager@example.com', FALSE, TRUE, '2026-04-22T10:00:00Z',
+    'CONTRIBUTOR', 'Alertmanager Integration', 1
+) ON CONFLICT (id) DO UPDATE SET
+    password = EXCLUDED.password,
+    is_superuser = EXCLUDED.is_superuser,
+    username = EXCLUDED.username,
+    first_name = EXCLUDED.first_name,
+    last_name = EXCLUDED.last_name,
+    email = EXCLUDED.email,
+    is_staff = EXCLUDED.is_staff,
+    is_active = EXCLUDED.is_active,
+    role = EXCLUDED.role,
+    job_title = EXCLUDED.job_title,
+    tenant_id = EXCLUDED.tenant_id;
 INSERT INTO accounts_role (code, label, description) VALUES
     ('ADMIN', 'Administrator', 'Full tenant administration and write access'),
     ('MANAGEMENT', 'Management', 'Management oversight'),
@@ -3324,6 +3364,9 @@ ON CONFLICT (code) DO UPDATE SET
     description = EXCLUDED.description;
 INSERT INTO accounts_userrole (user_id, role_id, scope_tenant_id, granted_at, granted_by_id)
 SELECT 1, id, 1, '2026-04-22T10:00:00Z', NULL FROM accounts_role WHERE code = 'ADMIN'
+ON CONFLICT DO NOTHING;
+INSERT INTO accounts_userrole (user_id, role_id, scope_tenant_id, granted_at, granted_by_id)
+SELECT 2, id, 1, '2026-04-22T10:00:00Z', 1 FROM accounts_role WHERE code = 'CONTRIBUTOR'
 ON CONFLICT DO NOTHING;
 INSERT INTO django_content_type (app_label, model) VALUES
     ('accounts', 'user'),
@@ -3373,6 +3416,9 @@ WHERE g.name = 'Contributors'
 ON CONFLICT DO NOTHING;
 INSERT INTO accounts_user_groups (user_id, group_id)
 SELECT 1, id FROM auth_group WHERE name = 'Administrators'
+ON CONFLICT DO NOTHING;
+INSERT INTO accounts_user_groups (user_id, group_id)
+SELECT 2, id FROM auth_group WHERE name = 'Contributors'
 ON CONFLICT DO NOTHING;
 INSERT INTO organizations_businessunit (
     id, tenant_id, name, owner_id, created_at, updated_at

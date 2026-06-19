@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.10 / Rust 0.3.6)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.11 / Rust 0.3.7)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -662,7 +662,7 @@ curl -fsS -X POST http://127.0.0.1:9000/api/v1/operations/alertmanager \
   -d '{"receiver":"iscy-operations","status":"firing","alerts":[]}'
 ```
 
-Ohne Tenant-/User-Kontext wird der Alert nur normalisiert. Mit schreibendem Tenant-Kontext erzeugt ISCY fuer firing Alerts automatisch eine Incident-Fallakte, verknuepfte Evidence und einen Timeline-Eintrag. Das Monitoring-Beispiel nutzt fuer lokale Demo-Stacks Tenant `1`, User `1` und Rolle `ADMIN`; produktiv sollte dafuer ein dedizierter technischer Operations-User verwendet werden.
+Ohne Tenant-/User-Kontext wird der Alert nur normalisiert. Mit schreibendem Tenant-Kontext erzeugt ISCY fuer firing Alerts automatisch eine Incident-Fallakte, verknuepfte Evidence und einen Timeline-Eintrag. Das Monitoring-Beispiel nutzt fuer lokale Demo-Stacks Tenant `1`, User `2` und Rolle `CONTRIBUTOR`; User `2` ist der per Demo-Seed angelegte technische Operations-User `ops-alertmanager`.
 
 Mit Tenant-Kontext enthaelt der Betriebsstatus zusaetzlich fachliche Signale zu ISCY-27, Product Security, offenen CVE-Reviews, fehlender Evidence, Migrationen, Runtime-Flags und verbundenen Rust-Modulen:
 
@@ -685,7 +685,7 @@ Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:
 - `deploy/monitoring/nixos/iscy-monitoring.nix`
 - `deploy/monitoring/nixos/example-host.nix`
 
-Die Statusseite `/status/` zeigt neben Health, Migrationen, Modulen, offenen Signalen und Prometheus-Scrape-Konfiguration auch einen kompakten Grafana-Query-Spickzettel. Das Grafana-Dashboard enthaelt zusaetzlich Product-Security-Panels fuer Coverage, CVE-Review-Trend und Importvalidierung.
+Die Statusseite `/status/` zeigt neben Health, Migrationen, Modulen, offenen Signalen und Prometheus-Scrape-Konfiguration auch einen kompakten Grafana-Query-Spickzettel. Das Grafana-Dashboard enthaelt zusaetzlich Panels fuer Alert-Incidents, Product-Security-Coverage, CVE-Review-Trend und Importvalidierung.
 
 Der Product-Security-Bereich zeigt zusaetzlich Trenddaten fuer SBOM-/CSAF-/Threat-Coverage, offene CVE-Reviews, fehlende Evidence, Importvalidierung und Snapshot-Verlauf. Maschinenlesbar sind diese Daten ueber `GET /api/v1/product-security/trends` und ueber Prometheus-Metriken wie `iscy_product_security_trend_signal`, `iscy_product_security_coverage_percent` und `iscy_product_security_import_validation_total`.
 

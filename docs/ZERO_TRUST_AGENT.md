@@ -1,6 +1,6 @@
 # Zero-Trust Agent
 
-Version: ISCY Rust Backend `0.3.6`
+Version: ISCY Rust Backend `0.3.7`
 
 ## Zielbild
 
@@ -147,7 +147,7 @@ Die Plattform kann zusaetzlich diese Zero-Trust-Pruefpunkte ueber dieselben Find
 - Softwareinventar fuer CVE-Korrelation
 - Removable-Media-Policy
 
-Wichtig: In `0.3.6` liest der Agent lokale OS-/MDM-/EDR-Signale nur read-only und konservativ. Wenn ein Signal nicht sicher bestaetigt werden kann, wird das als offene Evidenzluecke gemeldet statt als erfundener Compliance-Nachweis.
+Wichtig: In `0.3.7` liest der Agent lokale OS-/MDM-/EDR-Signale nur read-only und konservativ. Wenn ein Signal nicht sicher bestaetigt werden kann, wird das als offene Evidenzluecke gemeldet statt als erfundener Compliance-Nachweis.
 
 ## Deployment-Zielpfade
 

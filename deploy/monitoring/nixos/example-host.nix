@@ -18,8 +18,9 @@
     grafanaPort = 3000;
     alertWebhookUrl = "http://127.0.0.1:9000/api/v1/operations/alertmanager";
     alertTenantId = 1;
-    alertUserId = 1;
-    alertRoles = [ "ADMIN" ];
+    alertUserId = 2;
+    alertRoles = [ "CONTRIBUTOR" ];
+    alertTokenFile = "/etc/iscy/alertmanager-token";
   };
 
   networking.firewall.allowedTCPPorts = [
@@ -33,4 +34,6 @@
   environment.systemPackages = [
     pkgs.curl
   ];
+
+  environment.etc."iscy/alertmanager-token".text = "change-me\n";
 }

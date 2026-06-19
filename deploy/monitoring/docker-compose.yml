@@ -27,6 +27,7 @@ services:
       - "${ISCY_ALERTMANAGER_PORT:-9093}:9093"
     volumes:
       - ./alertmanager/iscy-alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ${ISCY_ALERTMANAGER_TOKEN_FILE:-./alertmanager/secrets/iscy-alertmanager-token.example}:/etc/alertmanager/secrets/iscy-alertmanager-token:ro
       - alertmanager_data:/alertmanager
 
   grafana:

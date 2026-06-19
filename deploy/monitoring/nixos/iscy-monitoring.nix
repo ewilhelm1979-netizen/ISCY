@@ -11,7 +11,7 @@ let
     mkdir -p "$out"
     cp ${../grafana/iscy-operations-dashboard.json} "$out/iscy-operations-dashboard.json"
   '';
-  alertHttpConfig =
+  alertHeaderConfig =
     lib.optionalAttrs (cfg.alertTenantId != null && cfg.alertUserId != null)
       {
         http_headers = {
@@ -26,6 +26,13 @@ let
           };
         };
       };
+  alertAuthConfig = lib.optionalAttrs (cfg.alertTokenFile != null) {
+    authorization = {
+      type = "Bearer";
+      credentials_file = cfg.alertTokenFile;
+    };
+  };
+  alertHttpConfig = alertHeaderConfig // alertAuthConfig;
 in
 {
   options.services.iscy.monitoring = {
@@ -75,8 +82,14 @@ in
 
     alertRoles = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ "ADMIN" ];
+      default = [ "CONTRIBUTOR" ];
       description = "ISCY role header values used by Alertmanager when alertTenantId and alertUserId are set.";
+    };
+
+    alertTokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Optional file path read by Alertmanager as Bearer token credentials_file for ISCY_ALERTMANAGER_TOKEN.";
     };
   };
 
