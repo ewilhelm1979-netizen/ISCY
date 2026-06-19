@@ -6,7 +6,7 @@
 - Product Security verarbeitet CSAF-/CycloneDX-/SPDX-Importe, CVE-Asset-Korrelationen, automatisch erzeugte CVE-Risiken und Product-Security-Roadmap-Tasks.
 - Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence und eine gebuendelte CVE-Risiko-Review-Queue mit Filtern und Bulk-Aktionen.
 - Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck.
-- Der Rust-only-Betrieb liefert Statusseite, JSON-Drilldown, Prometheus-Metriken, Alertmanager-Webhook mit optionaler Incident-/Evidence-Persistenz, Grafana-Dashboard, Compose-Beispiel und NixOS-Modul samt Beispielhost.
+- Der Rust-only-Betrieb liefert Statusseite, JSON-Drilldown, Prometheus-Metriken, Alertmanager-Webhook mit optionaler Incident-/Evidence-Persistenz, Grafana-Dashboard inklusive Product-Security-Panels, Compose-Beispiel und NixOS-Modul samt Beispielhost.
 
 ## Prioritaet P0 (vor breitem Produktivrollout)
 

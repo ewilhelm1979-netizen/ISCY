@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.5\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.6\""));
 }
 
 #[tokio::test]

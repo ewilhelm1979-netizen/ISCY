@@ -11,6 +11,21 @@ let
     mkdir -p "$out"
     cp ${../grafana/iscy-operations-dashboard.json} "$out/iscy-operations-dashboard.json"
   '';
+  alertHttpConfig =
+    lib.optionalAttrs (cfg.alertTenantId != null && cfg.alertUserId != null)
+      {
+        http_headers = {
+          "x-iscy-tenant-id" = {
+            values = [ (toString cfg.alertTenantId) ];
+          };
+          "x-iscy-user-id" = {
+            values = [ (toString cfg.alertUserId) ];
+          };
+          "x-iscy-roles" = {
+            values = cfg.alertRoles;
+          };
+        };
+      };
 in
 {
   options.services.iscy.monitoring = {
@@ -44,6 +59,24 @@ in
       type = lib.types.str;
       default = "http://127.0.0.1:9000/api/v1/operations/alertmanager";
       description = "ISCY Alertmanager webhook URL.";
+    };
+
+    alertTenantId = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      description = "Optional ISCY tenant id header for persisting Alertmanager alerts as incidents.";
+    };
+
+    alertUserId = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      description = "Optional ISCY user id header for persisting Alertmanager alerts as incidents.";
+    };
+
+    alertRoles = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ "ADMIN" ];
+      description = "ISCY role header values used by Alertmanager when alertTenantId and alertUserId are set.";
     };
   };
 
@@ -101,19 +134,27 @@ in
           {
             name = "iscy-operations";
             webhook_configs = [
-              {
-                url = cfg.alertWebhookUrl;
-                send_resolved = true;
-              }
+              (
+                {
+                  url = cfg.alertWebhookUrl;
+                  send_resolved = true;
+                } // lib.optionalAttrs (alertHttpConfig != { }) {
+                  http_config = alertHttpConfig;
+                }
+              )
             ];
           }
           {
             name = "iscy-critical";
             webhook_configs = [
-              {
-                url = cfg.alertWebhookUrl;
-                send_resolved = true;
-              }
+              (
+                {
+                  url = cfg.alertWebhookUrl;
+                  send_resolved = true;
+                } // lib.optionalAttrs (alertHttpConfig != { }) {
+                  http_config = alertHttpConfig;
+                }
+              )
             ];
           }
         ];

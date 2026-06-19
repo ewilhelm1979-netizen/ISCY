@@ -17,6 +17,9 @@
     alertmanagerPort = 9093;
     grafanaPort = 3000;
     alertWebhookUrl = "http://127.0.0.1:9000/api/v1/operations/alertmanager";
+    alertTenantId = 1;
+    alertUserId = 1;
+    alertRoles = [ "ADMIN" ];
   };
 
   networking.firewall.allowedTCPPorts = [

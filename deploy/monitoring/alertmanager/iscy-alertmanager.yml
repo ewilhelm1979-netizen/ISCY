@@ -21,21 +21,35 @@ receivers:
     webhook_configs:
       - url: http://host.docker.internal:9000/api/v1/operations/alertmanager
         send_resolved: true
-        # Wenn ISCY_ALERTMANAGER_TOKEN gesetzt ist, hier denselben Wert hinterlegen.
-        # http_config:
-        #   authorization:
-        #     type: Bearer
-        #     credentials: change-me
+        http_config:
+          http_headers:
+            x-iscy-tenant-id:
+              values: ["1"]
+            x-iscy-user-id:
+              values: ["1"]
+            x-iscy-roles:
+              values: ["ADMIN"]
+          # Wenn ISCY_ALERTMANAGER_TOKEN gesetzt ist, hier denselben Wert hinterlegen.
+          # authorization:
+          #   type: Bearer
+          #   credentials: change-me
 
   - name: iscy-critical
     webhook_configs:
       - url: http://host.docker.internal:9000/api/v1/operations/alertmanager
         send_resolved: true
-        # Wenn ISCY_ALERTMANAGER_TOKEN gesetzt ist, hier denselben Wert hinterlegen.
-        # http_config:
-        #   authorization:
-        #     type: Bearer
-        #     credentials: change-me
+        http_config:
+          http_headers:
+            x-iscy-tenant-id:
+              values: ["1"]
+            x-iscy-user-id:
+              values: ["1"]
+            x-iscy-roles:
+              values: ["ADMIN"]
+          # Wenn ISCY_ALERTMANAGER_TOKEN gesetzt ist, hier denselben Wert hinterlegen.
+          # authorization:
+          #   type: Bearer
+          #   credentials: change-me
 
 inhibit_rules:
   - source_matchers:

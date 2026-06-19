@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.9 / Rust 0.3.5)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.10 / Rust 0.3.6)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -662,7 +662,7 @@ curl -fsS -X POST http://127.0.0.1:9000/api/v1/operations/alertmanager \
   -d '{"receiver":"iscy-operations","status":"firing","alerts":[]}'
 ```
 
-Ohne Tenant-/User-Kontext wird der Alert nur normalisiert. Mit schreibendem Tenant-Kontext erzeugt ISCY fuer firing Alerts automatisch eine Incident-Fallakte, verknuepfte Evidence und einen Timeline-Eintrag.
+Ohne Tenant-/User-Kontext wird der Alert nur normalisiert. Mit schreibendem Tenant-Kontext erzeugt ISCY fuer firing Alerts automatisch eine Incident-Fallakte, verknuepfte Evidence und einen Timeline-Eintrag. Das Monitoring-Beispiel nutzt fuer lokale Demo-Stacks Tenant `1`, User `1` und Rolle `ADMIN`; produktiv sollte dafuer ein dedizierter technischer Operations-User verwendet werden.
 
 Mit Tenant-Kontext enthaelt der Betriebsstatus zusaetzlich fachliche Signale zu ISCY-27, Product Security, offenen CVE-Reviews, fehlender Evidence, Migrationen, Runtime-Flags und verbundenen Rust-Modulen:
 
@@ -685,9 +685,17 @@ Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:
 - `deploy/monitoring/nixos/iscy-monitoring.nix`
 - `deploy/monitoring/nixos/example-host.nix`
 
-Die Statusseite `/status/` zeigt neben Health, Migrationen, Modulen, offenen Signalen und Prometheus-Scrape-Konfiguration auch einen kompakten Grafana-Query-Spickzettel.
+Die Statusseite `/status/` zeigt neben Health, Migrationen, Modulen, offenen Signalen und Prometheus-Scrape-Konfiguration auch einen kompakten Grafana-Query-Spickzettel. Das Grafana-Dashboard enthaelt zusaetzlich Product-Security-Panels fuer Coverage, CVE-Review-Trend und Importvalidierung.
 
 Der Product-Security-Bereich zeigt zusaetzlich Trenddaten fuer SBOM-/CSAF-/Threat-Coverage, offene CVE-Reviews, fehlende Evidence, Importvalidierung und Snapshot-Verlauf. Maschinenlesbar sind diese Daten ueber `GET /api/v1/product-security/trends` und ueber Prometheus-Metriken wie `iscy_product_security_trend_signal`, `iscy_product_security_coverage_percent` und `iscy_product_security_import_validation_total`.
+
+Runbook fuer automatisch erzeugte Alert-Incidents:
+
+1. Neue Fallakte in `/incidents/` oeffnen.
+2. Severity, Scope und betroffene Services pruefen.
+3. Automatische Evidence kontrollieren und bei Bedarf Grafana-/Log-Nachweise nachreichen.
+4. Owner, Eindaemmung, Kommunikation und regulatorische Relevanz bewerten.
+5. Nach Behebung Timeline, Lessons Learned und Alert-Schwelle reviewen.
 
 Wichtige lokale Pruefbefehle:
 

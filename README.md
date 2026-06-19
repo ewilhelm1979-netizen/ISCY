@@ -1,4 +1,4 @@
-# ISCY V23.7.9 / Rust 0.3.5
+# ISCY V23.7.10 / Rust 0.3.6
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -59,7 +59,7 @@ curl -fsS -X POST http://127.0.0.1:9000/api/v1/operations/alertmanager \
   -d '{"receiver":"iscy-operations","status":"firing","alerts":[]}'
 ```
 
-Ohne Tenant-/User-Kontext normalisiert der Webhook Alerts nur. Mit schreibendem Tenant-Kontext legt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege an.
+Ohne Tenant-/User-Kontext normalisiert der Webhook Alerts nur. Mit schreibendem Tenant-Kontext legt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege an. Das Monitoring-Beispiel sendet fuer lokale Demo-Stacks bereits `x-iscy-tenant-id: 1`, `x-iscy-user-id: 1` und `x-iscy-roles: ADMIN`; produktiv muessen diese Werte bewusst auf den technischen Operations-User gesetzt werden.
 
 Mit Tenant-Kontext liefert ISCY zusaetzlich fachliche Drilldowns fuer ISCY-27-Gaps, CVE-Review-Rueckstand, Evidence-Luecken, Migrationen, Runtime-Flags und Modulstatus:
 
@@ -77,7 +77,7 @@ Monitoring-Artefakte fuer den direkten Betrieb:
 - Prometheus Scrape Config: [deploy/monitoring/prometheus/iscy-scrape.yml](deploy/monitoring/prometheus/iscy-scrape.yml)
 - Prometheus Alert Rules: [deploy/monitoring/prometheus/iscy-operations-alerts.yml](deploy/monitoring/prometheus/iscy-operations-alerts.yml)
 - Alertmanager Routing-Beispiel: [deploy/monitoring/alertmanager/iscy-alertmanager.yml](deploy/monitoring/alertmanager/iscy-alertmanager.yml)
-- Grafana Dashboard JSON: [deploy/monitoring/grafana/iscy-operations-dashboard.json](deploy/monitoring/grafana/iscy-operations-dashboard.json)
+- Grafana Dashboard JSON: [deploy/monitoring/grafana/iscy-operations-dashboard.json](deploy/monitoring/grafana/iscy-operations-dashboard.json) inklusive Product-Security-Coverage, CVE-Review-Trend und Importvalidierung
 - Monitoring Compose Stack: [deploy/monitoring/docker-compose.yml](deploy/monitoring/docker-compose.yml)
 - NixOS Monitoring Modulbeispiel: [deploy/monitoring/nixos/iscy-monitoring.nix](deploy/monitoring/nixos/iscy-monitoring.nix)
 - NixOS Beispielhost: [deploy/monitoring/nixos/example-host.nix](deploy/monitoring/nixos/example-host.nix)
@@ -161,7 +161,7 @@ Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel,
 
 ## Zero-Trust Agent
 
-ISCY `0.3.5` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.6` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 
