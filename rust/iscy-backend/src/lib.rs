@@ -787,6 +787,7 @@ pub struct AlertmanagerWebhookAlert {
     pub labels: HashMap<String, String>,
     #[serde(default)]
     pub annotations: HashMap<String, String>,
+    pub fingerprint: Option<String>,
     #[serde(rename = "startsAt")]
     pub starts_at: Option<String>,
     #[serde(rename = "endsAt")]
@@ -816,6 +817,7 @@ pub struct AlertmanagerPersistenceSummary {
     pub enabled: bool,
     pub created_incidents: i64,
     pub created_evidence: i64,
+    pub deduplicated_incidents: i64,
     pub skipped_reason: Option<String>,
     pub errors: Vec<String>,
 }
@@ -823,6 +825,7 @@ pub struct AlertmanagerPersistenceSummary {
 #[derive(Debug, Serialize)]
 pub struct AlertmanagerAlertSummary {
     pub alertname: String,
+    pub fingerprint: Option<String>,
     pub status: String,
     pub severity: String,
     pub service: String,
@@ -1714,6 +1717,12 @@ async fn operations_alertmanager_webhook(
             *severity_counts.entry(severity.clone()).or_insert(0) += 1;
             AlertmanagerAlertSummary {
                 alertname: alert_label(alert, &payload, "alertname", "unknown"),
+                fingerprint: alert
+                    .fingerprint
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string),
                 status: alert.status.clone().unwrap_or_else(|| "firing".to_string()),
                 severity: severity.clone(),
                 service: alert_label(alert, &payload, "service", "iscy"),
@@ -1868,6 +1877,46 @@ async fn persist_alertmanager_alerts(
         .iter()
         .filter(|alert| !alert.status.eq_ignore_ascii_case("resolved"))
     {
+        let authority_reference = alertmanager_authority_reference(alert);
+        match incident_store
+            .open_alertmanager_incident_by_reference(context.tenant_id, &authority_reference)
+            .await
+        {
+            Ok(Some(existing)) => {
+                summary.deduplicated_incidents += 1;
+                if let Err(err) = incident_store
+                    .append_incident_event(
+                        context.tenant_id,
+                        existing.id,
+                        Some(context.user_id),
+                        incident_store::IncidentEventWriteRequest::timeline_note(
+                            Some("Alertmanager-Alert dedupliziert"),
+                            &format!(
+                                "Alertmanager-Alert '{}' wurde erneut empfangen und der bestehenden Fallakte #{} zugeordnet. Fingerprint: {}.",
+                                alert.alertname,
+                                existing.id,
+                                alert.fingerprint.as_deref().unwrap_or("-"),
+                            ),
+                        ),
+                    )
+                    .await
+                {
+                    summary.errors.push(format!(
+                        "Deduplizierungsnotiz fuer {} konnte nicht erstellt werden: {err}",
+                        alert.alertname
+                    ));
+                }
+                continue;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                summary.errors.push(format!(
+                    "Deduplizierungspruefung fuer {} konnte nicht ausgefuehrt werden: {err}",
+                    alert.alertname
+                ));
+                continue;
+            }
+        }
         let payload = alertmanager_incident_payload(alert);
         match incident_store
             .create_incident(context.tenant_id, Some(context.user_id), payload)
@@ -1904,7 +1953,10 @@ async fn persist_alertmanager_alerts(
             )),
         }
     }
-    if summary.created_incidents == 0 && summary.errors.is_empty() {
+    if summary.created_incidents == 0
+        && summary.deduplicated_incidents == 0
+        && summary.errors.is_empty()
+    {
         summary.skipped_reason = Some("no_firing_alerts".to_string());
     }
     summary
@@ -1949,10 +2001,28 @@ fn alertmanager_incident_payload(
         early_warning_sent_at: None,
         notification_sent_at: None,
         final_report_sent_at: None,
-        authority_reference: Some(format!("Alertmanager:{}", alert.alertname)),
+        authority_reference: Some(alertmanager_authority_reference(alert)),
         stakeholder_summary: Some(alert.summary.clone()),
         lessons_learned: None,
     }
+}
+
+fn alertmanager_authority_reference(alert: &AlertmanagerAlertSummary) -> String {
+    if let Some(fingerprint) = alert
+        .fingerprint
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return format!(
+            "Alertmanager:fp:{}",
+            alertmanager_limit_text(fingerprint, 190)
+        );
+    }
+    format!(
+        "Alertmanager:{}",
+        alertmanager_limit_text(&alert.alertname, 220)
+    )
 }
 
 fn alertmanager_evidence_payload(
@@ -1978,6 +2048,10 @@ fn alertmanager_evidence_payload(
 fn alertmanager_alert_detail(alert: &AlertmanagerAlertSummary) -> String {
     [
         format!("Alert: {}", alert.alertname),
+        format!(
+            "Fingerprint: {}",
+            alert.fingerprint.as_deref().unwrap_or("-")
+        ),
         format!("Status: {}", alert.status),
         format!("Severity: {}", alert.severity),
         format!("Service: {}", alert.service),
@@ -9290,6 +9364,11 @@ async fn web_status(
             "Product Security",
             &web_path_with_context("/product-security/", context.as_ref()),
             "SBOM, CSAF, CVE-Reviews und CRA/AI-Act-Signale",
+        ),
+        web_link_card(
+            "Incidents",
+            &web_path_with_context("/incidents/", context.as_ref()),
+            "Alert-Fallakten, Runbooks, Evidence und Meldepakete",
         ),
         web_link_card(
             "ISCY-27",

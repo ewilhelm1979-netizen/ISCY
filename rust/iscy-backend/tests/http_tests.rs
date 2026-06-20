@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.7\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.8\""));
 }
 
 #[tokio::test]
@@ -176,7 +176,8 @@ async fn alertmanager_webhook_normalizes_operations_alerts() {
                         "labels":{"alertname":"ISCYOperationsCritical","service":"iscy"},
                         "annotations":{"description":"Statusseite pruefen"},
                         "startsAt":"2026-06-15T14:45:00Z",
-                        "generatorURL":"http://prometheus.local/graph"
+                        "generatorURL":"http://prometheus.local/graph",
+                        "fingerprint":"firing-abc123"
                       }]
                     }"#,
                 ))
@@ -253,7 +254,8 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
                         "labels":{"alertname":"ISCYOperationsCritical","service":"iscy"},
                         "annotations":{"description":"Statusseite pruefen"},
                         "startsAt":"2026-06-15T14:45:00Z",
-                        "generatorURL":"http://prometheus.local/graph"
+                        "generatorURL":"http://prometheus.local/graph",
+                        "fingerprint":"firing-abc123"
                       }]
                     }"#,
                 ))
@@ -273,8 +275,14 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
         .unwrap()
         .is_empty());
 
-    let (incident_id, title, severity, status): (i64, String, String, String) = sqlx::query_as(
-        "SELECT id, title, severity, status FROM incidents_incident WHERE tenant_id = 42",
+    let (incident_id, title, severity, status, authority_reference): (
+        i64,
+        String,
+        String,
+        String,
+        String,
+    ) = sqlx::query_as(
+        "SELECT id, title, severity, status, authority_reference FROM incidents_incident WHERE tenant_id = 42",
     )
     .fetch_one(&pool)
     .await
@@ -282,6 +290,7 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
     assert!(title.contains("ISCYOperationsCritical"));
     assert_eq!(severity, "CRITICAL");
     assert_eq!(status, "TRIAGE");
+    assert_eq!(authority_reference, "Alertmanager:fp:firing-abc123");
 
     let (evidence_title, linked_requirement, linked_incident_id): (String, String, Option<i64>) =
         sqlx::query_as(
@@ -305,6 +314,67 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
     .await
     .unwrap();
     assert_eq!(event_count, 1);
+
+    let duplicate_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/operations/alertmanager")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(
+                    r#"{
+                      "receiver":"iscy-critical",
+                      "status":"firing",
+                      "groupLabels":{"service":"iscy"},
+                      "commonLabels":{"severity":"critical","tenant_id":"42"},
+                      "commonAnnotations":{"summary":"ISCY meldet kritischen Betriebsstatus"},
+                      "externalURL":"http://alertmanager.local",
+                      "alerts":[{
+                        "status":"firing",
+                        "labels":{"alertname":"ISCYOperationsCritical","service":"iscy"},
+                        "annotations":{"description":"Statusseite pruefen"},
+                        "startsAt":"2026-06-15T14:45:00Z",
+                        "generatorURL":"http://prometheus.local/graph",
+                        "fingerprint":"firing-abc123"
+                      }]
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate_response.status(), StatusCode::ACCEPTED);
+    let duplicate_body = to_bytes(duplicate_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let duplicate_payload: serde_json::Value = serde_json::from_slice(&duplicate_body).unwrap();
+    assert_eq!(duplicate_payload["persistence"]["enabled"], true);
+    assert_eq!(duplicate_payload["persistence"]["created_incidents"], 0);
+    assert_eq!(duplicate_payload["persistence"]["created_evidence"], 0);
+    assert_eq!(
+        duplicate_payload["persistence"]["deduplicated_incidents"],
+        1
+    );
+
+    let incident_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM incidents_incident WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(incident_count, 1);
+
+    let dedupe_note_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM incidents_incidentevent WHERE tenant_id = 42 AND incident_id = ? AND event_type = 'TIMELINE_NOTE' AND summary = 'Alertmanager-Alert dedupliziert'",
+    )
+    .bind(incident_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(dedupe_note_count, 1);
 
     let metrics_response = app
         .oneshot(

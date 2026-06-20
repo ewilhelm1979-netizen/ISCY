@@ -834,7 +834,13 @@
               }
             ]
           },
-          "unit": "short"
+          "unit": "short",
+          "links": [
+            {
+              "title": "ISCY Incident-Fallakten",
+              "url": "http://127.0.0.1:9000/incidents/?tenant_id=1&user_id=2"
+            }
+          ]
         },
         "overrides": []
       },

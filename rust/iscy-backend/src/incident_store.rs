@@ -686,6 +686,27 @@ impl IncidentStore {
             Self::Sqlite(pool) => alertmanager_metrics_sqlite(pool, tenant_id).await,
         }
     }
+
+    pub async fn open_alertmanager_incident_by_reference(
+        &self,
+        tenant_id: i64,
+        authority_reference: &str,
+    ) -> anyhow::Result<Option<IncidentSummary>> {
+        match self {
+            Self::Postgres(pool) => {
+                open_alertmanager_incident_by_reference_postgres(
+                    pool,
+                    tenant_id,
+                    authority_reference,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                open_alertmanager_incident_by_reference_sqlite(pool, tenant_id, authority_reference)
+                    .await
+            }
+        }
+    }
 }
 
 async fn list_runbook_templates_postgres(
@@ -1186,6 +1207,44 @@ async fn alertmanager_metrics_sqlite(
         triage: row.try_get("triage")?,
         critical_open: row.try_get("critical_open")?,
     })
+}
+
+async fn open_alertmanager_incident_by_reference_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    authority_reference: &str,
+) -> anyhow::Result<Option<IncidentSummary>> {
+    let sql = incident_select_postgres_sql(
+        "WHERE incident.tenant_id = $1 AND incident.authority_reference = $2 AND incident.status NOT IN ('RESOLVED', 'CLOSED')",
+        "1",
+    );
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(authority_reference)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Alertmanager-Incident-Deduplizierung konnte nicht gelesen werden")?;
+    row.map(summary_from_pg_row).transpose().map_err(Into::into)
+}
+
+async fn open_alertmanager_incident_by_reference_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    authority_reference: &str,
+) -> anyhow::Result<Option<IncidentSummary>> {
+    let sql = incident_select_sqlite_sql(
+        "WHERE incident.tenant_id = ?1 AND incident.authority_reference = ?2 AND incident.status NOT IN ('RESOLVED', 'CLOSED')",
+        "1",
+    );
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(authority_reference)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Alertmanager-Incident-Deduplizierung konnte nicht gelesen werden")?;
+    row.map(summary_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
 }
 
 async fn incident_detail_postgres(

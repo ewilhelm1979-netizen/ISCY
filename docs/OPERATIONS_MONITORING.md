@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.11 / Rust 0.3.7
+Stand: ISCY V23.7.12 / Rust 0.3.8
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 
@@ -12,7 +12,7 @@ Fuer den direkten Betrieb liegen Monitoring-Beispiele im Repository:
 - `deploy/monitoring/prometheus/prometheus.yml`: vollstaendige Prometheus-Konfiguration fuer den Compose-Monitoring-Stack.
 - `deploy/monitoring/prometheus/iscy-operations-alerts.yml`: Alert-Regeln fuer kritische Statussignale, Warnungen, Migrationen, Modulstatus und Runtime-Flags.
 - `deploy/monitoring/alertmanager/iscy-alertmanager.yml`: Alertmanager-Routing-Beispiel mit getrennten Receivern fuer Warnungen und kritische Meldungen, ISCY-Kontext-Headern und Bearer-Token aus Secret-Datei fuer Incident-/Evidence-Persistenz.
-- `deploy/monitoring/grafana/iscy-operations-dashboard.json`: importierbares Grafana-Dashboard fuer Betriebsstatus, offene Signale, Migrationen, Module, Build-Info, Alert-Incidents, Product-Security-Coverage, CVE-Review-Trend und Importvalidierung.
+- `deploy/monitoring/grafana/iscy-operations-dashboard.json`: importierbares Grafana-Dashboard fuer Betriebsstatus, offene Signale, Migrationen, Module, Build-Info, Alert-Incidents mit Incident-Drilldown-Link, Product-Security-Coverage, CVE-Review-Trend und Importvalidierung.
 - `deploy/monitoring/docker-compose.yml`: lokaler Monitoring-Stack aus Prometheus, Alertmanager und Grafana.
 - `deploy/monitoring/nixos/iscy-monitoring.nix`: NixOS-Modulbeispiel fuer denselben Stack.
 - `deploy/monitoring/nixos/example-host.nix`: kleine Beispiel-Hostkonfiguration, die das Modul importiert, Ports freigibt und den lokalen ISCY-Webhook verdrahtet.
@@ -183,7 +183,7 @@ Alternativ liegt eine kleine Beispiel-Hostkonfiguration unter `deploy/monitoring
 
 ## Runbook: Alert erzeugt Incident
 
-Wenn Alertmanager einen firing Alert mit ISCY-Kontext an `POST /api/v1/operations/alertmanager` sendet, wird in ISCY automatisch ein Incident im Status `TRIAGE` erzeugt. Dazu entsteht eine verknuepfte Evidence mit `OPERATIONS:ALERTMANAGER:<alertname>` und ein Timeline-Eintrag in der Fallakte.
+Wenn Alertmanager einen firing Alert mit ISCY-Kontext an `POST /api/v1/operations/alertmanager` sendet, wird in ISCY automatisch ein Incident im Status `TRIAGE` erzeugt. Dazu entsteht eine verknuepfte Evidence mit `OPERATIONS:ALERTMANAGER:<alertname>` und ein Timeline-Eintrag in der Fallakte. Wiederholte firing Alerts werden ueber Alertmanager-`fingerprint` oder ersatzweise `alertname` dedupliziert und als Timeline-Notiz an die offene Fallakte gehaengt.
 
 1. In `/incidents/` die neue Fallakte oeffnen und Severity, Scope sowie betroffene Services bestaetigen.
 2. Die automatisch angelegte Evidence pruefen und bei Bedarf Monitoring-Screenshot, Grafana-Link oder Log-Auszug nachreichen.

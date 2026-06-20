@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.11 / Rust 0.3.7)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.12 / Rust 0.3.8)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -685,7 +685,7 @@ Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:
 - `deploy/monitoring/nixos/iscy-monitoring.nix`
 - `deploy/monitoring/nixos/example-host.nix`
 
-Die Statusseite `/status/` zeigt neben Health, Migrationen, Modulen, offenen Signalen und Prometheus-Scrape-Konfiguration auch einen kompakten Grafana-Query-Spickzettel. Das Grafana-Dashboard enthaelt zusaetzlich Panels fuer Alert-Incidents, Product-Security-Coverage, CVE-Review-Trend und Importvalidierung.
+Die Statusseite `/status/` zeigt neben Health, Migrationen, Modulen, offenen Signalen und Prometheus-Scrape-Konfiguration auch einen kompakten Grafana-Query-Spickzettel sowie einen direkten Link zu Incident-Fallakten. Das Grafana-Dashboard enthaelt zusaetzlich Panels fuer Alert-Incidents mit Incident-Drilldown-Link, Product-Security-Coverage, CVE-Review-Trend und Importvalidierung.
 
 Der Product-Security-Bereich zeigt zusaetzlich Trenddaten fuer SBOM-/CSAF-/Threat-Coverage, offene CVE-Reviews, fehlende Evidence, Importvalidierung und Snapshot-Verlauf. Maschinenlesbar sind diese Daten ueber `GET /api/v1/product-security/trends` und ueber Prometheus-Metriken wie `iscy_product_security_trend_signal`, `iscy_product_security_coverage_percent` und `iscy_product_security_import_validation_total`.
 
