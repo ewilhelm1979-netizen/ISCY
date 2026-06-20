@@ -1,4 +1,4 @@
-# ISCY V23.7.18 / Rust 0.3.14
+# ISCY V23.7.19 / Rust 0.3.15
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -155,6 +155,8 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 - `/cves/`
 - `/admin/users/`
 
+Organizations werden unter `/organizations/` als regulatorisches Tenant-Profil gefuehrt. Schreibberechtigte Nutzer koennen Laender, Sektor, Groesse, kritische Services, NIS2-/KRITIS-Bezug, DORA-Rolle, DSGVO-Rolle, CRA-Relevanz, AI-Act-Profil, TISAX-Scope, ISO-27001-Zielbild und regulatorische Notizen pflegen. Die Seite zeigt daraus eine regulatorische Matrix mit aktiven Pfaden und naechsten fachlichen Schritten. Maschinenlesbar steht derselbe Pfad ueber `GET` und `PATCH /api/v1/organizations/tenant-profile` bereit.
+
 Incidents werden als Rust-Fallakten unter `/incidents/` gefuehrt. Detailseiten unter `/incidents/{id}` erlauben die Bearbeitung von Typ, Runbook, Status, Severity, Erheblichkeitsentscheidung, Meldezeitpunkten und Behoerdenreferenz; Statuswechsel, NIS2-Erheblichkeitsbewertungen, Review-Anforderungen, Anlage, manuelle Timeline-Notizen und incidentbezogene Evidence-Uploads werden als Timeline-/Audit-Events in der Fallakte dokumentiert. Die Detailseite fuehrt den Entscheidungsfluss sichtbar von Vorfall ueber Erheblichkeit und Bearbeitung bis zum Meldepaket. ISCY trennt bewusst den Security Incident vom erheblichen Sicherheitsvorfall: Die Status `Nicht bewertet`, `Nicht erheblich`, `Wahrscheinlich erheblich` und `Erheblich / NIS2 meldepflichtig` koennen mit Kriterien, Begruendung, Referenz und Bewertungszeitpunkt dokumentiert werden. Wird ein Fall als `Nicht erheblich` entschieden, setzt ISCY die Fallakte automatisch in den Review-Status, bis die Nicht-Meldeentscheidung fachlich freigegeben ist. Die 24h-/72h-/30-Tage-Fristen werden erst aktiv, wenn die Bewertung auf `Erheblich / NIS2 meldepflichtig` steht. Das Dashboard zeigt Incidents ohne abgeschlossene Erheblichkeitsbewertung als klickbare Kachel und oeffnet direkt die gefilterte Incident-Liste. Tenantbezogene Runbook-Vorlagen stehen ueber `/api/v1/incidents/runbook-templates` und im Incident-Formular bereit. Verknuepfte Evidence wird direkt in der Fallakte angezeigt und kann dort hochgeladen werden. Alertmanager-firing Alerts werden per Fingerprint oder Alertname dedupliziert, resolved Alerts schliessen offene Alert-Fallakten automatisch, und `/operations/incidents/` zeigt offene, kritische, Triage- und resolved Alert-Faelle mit direkten Filtern (`alert_filter=open|critical|resolved`) sowie optionaler Review-Pflicht fuer fehlende Root-Cause-/Lessons-Learned-Dokumentation. Das NIS2-Meldepaket inklusive Erheblichkeitsentscheidung, regulatorischer NIS2/DORA/DSGVO-Entscheidungsmatrix und Audit-Timeline kann als Markdown, HTML oder PDF ueber `/incidents/{id}/nis2-export`, `/incidents/{id}/nis2-export.html`, `/incidents/{id}/nis2-export.pdf` sowie die entsprechenden `/api/v1/incidents/{id}/...` Endpunkte exportiert werden. Zusaetzlich stehen DORA-Pruefpakete ueber `/incidents/{id}/dora-export(.html|.pdf)` und DSGVO-Pruefpakete ueber `/incidents/{id}/dsgvo-export(.html|.pdf)` bereit.
 
 Product Security wird unter `/product-security/` als Rust-Arbeitsbereich gefuehrt. CSAF-, CycloneDX- und SPDX-Importe werden historisiert, validiert und ueber Detailseiten mit Validierungsfehlern sowie Komponenten-Matches angezeigt. CVE-Asset-Korrelationen koennen vorgeschlagen, akzeptiert oder abgelehnt werden; akzeptierte Korrelationen erzeugen bei Bedarf Risiko- und Roadmap-Arbeit mit stabilem Evidence-Key. Das Dashboard zeigt offene CVE-Reviews und fehlende Evidence, buendelt automatisch erzeugte CVE-Risiken in einer Review-Queue, filtert nach offenen Reviews, fehlender Evidence oder fehlendem Risiko, bietet Bulk-Aktionen fuer ausgewaehlte CVE-Reviews und verlinkt Evidence-Uploads nach dem Speichern zur Ausgangsseite zurueck. Die Product-Security-Trends sind zusaetzlich ueber Prometheus-Metriken fuer Coverage, Importvalidierung, Trend-Signale und Snapshot-Verlauf verfuegbar.
@@ -163,19 +165,18 @@ Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel,
 
 ## Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Die naechste Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
+Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 als erster strategischer Baustein umgesetzt. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
 
-1. Regulatorisches Organisationsprofil
-2. Management-Review- und Audit-Paket
-3. Evidence-Qualitaet und Nachweisreife
-4. Third-Party- und Supplier-Risk
-5. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-6. AI-Governance-Modul
-7. Agent-Flottenbetrieb und Benachrichtigungen
+1. Management-Review- und Audit-Paket
+2. Evidence-Qualitaet und Nachweisreife
+3. Third-Party- und Supplier-Risk
+4. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+5. AI-Governance-Modul
+6. Agent-Flottenbetrieb und Benachrichtigungen
 
 ## Zero-Trust Agent
 
-ISCY `0.3.14` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.15` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 

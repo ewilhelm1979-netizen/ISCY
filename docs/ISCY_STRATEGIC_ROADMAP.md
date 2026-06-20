@@ -21,10 +21,19 @@ Die fachliche Ausrichtung orientiert sich an:
 
 Ziel: ISCY soll pro Tenant zentral verstehen, in welchem regulatorischen Kontext die Organisation arbeitet.
 
-Umsetzungsidee:
+Status: In V23.7.19 als Rust-Web-/API-Pfad umgesetzt.
 
-- Organisationsprofil um strukturierte Angaben zu Branche, Laendern, Groesse, kritischen Services, NIS2-Scope, KRITIS-Bezug, DORA-Finanzsektor- oder IKT-Drittparteienbezug, DSGVO-Rolle, CRA-Produktbezug, AI-Act-Relevanz, TISAX-Scope und ISO-27001-Zielbild erweitern.
-- Incident-, Control-, Evidence- und Product-Security-Flows aus diesem Profil vorsteuern.
+Umgesetzt:
+
+- Organisationsprofil mit strukturierten Angaben zu Branche, Laendern, Groesse, kritischen Services, NIS2-Scope, KRITIS-Bezug, DORA-Finanzsektor- oder IKT-Drittparteienbezug, DSGVO-Rolle, CRA-Produktbezug, AI-Act-Relevanz, TISAX-Scope und ISO-27001-Zielbild.
+- Schreibbare Weboberflaeche unter `/organizations/`.
+- API-Pfad `GET` und `PATCH /api/v1/organizations/tenant-profile`.
+- Regulatorische Matrix fuer aktive Pfade, Begruendung und naechsten fachlichen Schritt.
+- Demo-Seed und Migration `0018_rust_tenant_regulatory_profile`.
+
+Naechste Vertiefung:
+
+- Incident-, Control-, Evidence- und Product-Security-Flows noch staerker aus diesem Profil vorsteuern.
 - NIS2-/DORA-/DSGVO-Pruefpakete kontextsensitiv vorausfuellen, statt generische Hinweise zu erzeugen.
 - Dashboard-Badges fuer regulatorische Betroffenheit anzeigen.
 
@@ -126,13 +135,12 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Regulatorisches Organisationsprofil als Grundlage fuer Kontext und automatische Vorsteuerung.
-2. Management-Review-/Audit-Paket als sichtbarer Governance-Nutzen.
-3. Evidence-Qualitaet, damit Reports und Audits belastbarer werden.
-4. Third-Party-/Supplier-Risk, weil externe Abhaengigkeiten fuer NIS2, DORA, ISO 27001, CRA und TISAX zentral sind.
-5. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness.
-6. AI-Governance-Modul als aktueller, aber klar abgegrenzter Erweiterungsbereich.
-7. Agent-Flottenbetrieb und Benachrichtigungen fuer Skalierung und Alltagstauglichkeit.
+1. Management-Review-/Audit-Paket als sichtbarer Governance-Nutzen.
+2. Evidence-Qualitaet, damit Reports und Audits belastbarer werden.
+3. Third-Party-/Supplier-Risk, weil externe Abhaengigkeiten fuer NIS2, DORA, ISO 27001, CRA und TISAX zentral sind.
+4. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness.
+5. AI-Governance-Modul als aktueller, aber klar abgegrenzter Erweiterungsbereich.
+6. Agent-Flottenbetrieb und Benachrichtigungen fuer Skalierung und Alltagstauglichkeit.
 
 ## Abgrenzung
 

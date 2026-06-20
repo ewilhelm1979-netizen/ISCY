@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.18 / Rust 0.3.14)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.19 / Rust 0.3.15)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -117,6 +117,12 @@ Was hier gepflegt wird:
 - Groessenindikatoren wie Mitarbeitendenzahl und Umsatz
 - kritische Dienstleistungen
 - Relevanz fuer NIS2 oder KRITIS
+- DORA-Rolle, also Finanzunternehmen oder IKT-Drittdienstleister
+- DSGVO-Rolle, also Verantwortlicher, Auftragsverarbeiter und besondere Datenkategorien
+- CRA-Relevanz fuer digitale Produkte
+- AI-Act-Profil und Hochrisiko-Hinweis
+- TISAX-Scope und ISO-27001-Zielbild
+- regulatorische Notizen fuer Scope- und Managemententscheidungen
 - Product-Security-Kontext
 
 Fachlicher Nutzen:
@@ -124,6 +130,10 @@ Fachlicher Nutzen:
 - Grundlage fuer regulatorische Einordnung
 - Grundlage fuer spaetere Berichte und Filter
 - Entscheidungshilfe fuer NIS2-/KRITIS-Betroffenheit
+- zentrale Vorsteuerung fuer DORA, DSGVO, CRA, AI Act, TISAX und ISO-27001-Arbeit
+
+Technischer Stand:
+Schreibberechtigte Nutzer koennen dieses Profil direkt in `/organizations/` pflegen. Die Seite zeigt eine regulatorische Matrix mit aktiven Pfaden, Begruendung und naechsten fachlichen Schritten. Die API stellt dasselbe Profil ueber `GET` und `PATCH /api/v1/organizations/tenant-profile` bereit.
 
 Fuer Nicht-Sicherheitsleute:
 Dies ist die Stammdatenakte des Unternehmens in ISCY.
@@ -899,17 +909,16 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Regulatorisches Organisationsprofil
-2. Management-Review- und Audit-Paket
-3. Evidence-Qualitaet und Nachweisreife
-4. Third-Party- und Supplier-Risk
-5. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-6. AI-Governance-Modul
-7. Agent-Flottenbetrieb und Benachrichtigungen
+1. Management-Review- und Audit-Paket
+2. Evidence-Qualitaet und Nachweisreife
+3. Third-Party- und Supplier-Risk
+4. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+5. AI-Governance-Modul
+6. Agent-Flottenbetrieb und Benachrichtigungen
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 

@@ -127,6 +127,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_INCIDENT_NIS2_SIGNIFICANCE_SCHEMA,
         postgres_sql: POSTGRES_INCIDENT_NIS2_SIGNIFICANCE_SCHEMA,
     },
+    Migration {
+        version: "0018_rust_tenant_regulatory_profile",
+        sqlite_sql: SQLITE_TENANT_REGULATORY_PROFILE_SCHEMA,
+        postgres_sql: POSTGRES_TENANT_REGULATORY_PROFILE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -727,6 +732,46 @@ SET nis2_significance_status = CASE WHEN nis2_reportable THEN 'SIGNIFICANT' ELSE
     nis2_significance_justification = CASE WHEN nis2_reportable AND nis2_significance_justification = '' THEN 'Aus bestehendem NIS2-Meldeflag migriert; fachliche Erheblichkeitsbewertung bitte bestaetigen.' ELSE nis2_significance_justification END,
     nis2_significance_assessed_at = CASE WHEN nis2_reportable THEN updated_at ELSE nis2_significance_assessed_at END;
 CREATE INDEX IF NOT EXISTS idx_incidents_tenant_nis2_significance ON incidents_incident(tenant_id, nis2_significance_status, nis2_reportable);
+"#;
+
+const SQLITE_TENANT_REGULATORY_PROFILE_SCHEMA: &str = r#"
+ALTER TABLE organizations_tenant ADD COLUMN dora_relevant bool NOT NULL DEFAULT 0;
+ALTER TABLE organizations_tenant ADD COLUMN dora_financial_entity bool NOT NULL DEFAULT 0;
+ALTER TABLE organizations_tenant ADD COLUMN dora_ict_third_party_provider bool NOT NULL DEFAULT 0;
+ALTER TABLE organizations_tenant ADD COLUMN processes_personal_data bool NOT NULL DEFAULT 0;
+ALTER TABLE organizations_tenant ADD COLUMN gdpr_controller bool NOT NULL DEFAULT 0;
+ALTER TABLE organizations_tenant ADD COLUMN gdpr_processor bool NOT NULL DEFAULT 0;
+ALTER TABLE organizations_tenant ADD COLUMN gdpr_special_categories bool NOT NULL DEFAULT 0;
+ALTER TABLE organizations_tenant ADD COLUMN cra_relevant bool NOT NULL DEFAULT 0;
+ALTER TABLE organizations_tenant ADD COLUMN ai_act_profile varchar(64) NOT NULL DEFAULT 'NOT_ASSESSED';
+ALTER TABLE organizations_tenant ADD COLUMN ai_act_high_risk bool NOT NULL DEFAULT 0;
+ALTER TABLE organizations_tenant ADD COLUMN tisax_relevant bool NOT NULL DEFAULT 0;
+ALTER TABLE organizations_tenant ADD COLUMN iso27001_target varchar(64) NOT NULL DEFAULT 'NOT_DEFINED';
+ALTER TABLE organizations_tenant ADD COLUMN regulatory_profile_notes TEXT NOT NULL DEFAULT '';
+UPDATE organizations_tenant
+SET cra_relevant = CASE WHEN develops_digital_products THEN 1 ELSE cra_relevant END,
+    processes_personal_data = CASE WHEN nis2_relevant OR kritis_relevant THEN 1 ELSE processes_personal_data END,
+    ai_act_profile = CASE WHEN uses_ai_systems AND ai_act_profile = 'NOT_ASSESSED' THEN 'LIMITED_RISK' ELSE ai_act_profile END;
+"#;
+
+const POSTGRES_TENANT_REGULATORY_PROFILE_SCHEMA: &str = r#"
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS dora_relevant BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS dora_financial_entity BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS dora_ict_third_party_provider BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS processes_personal_data BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS gdpr_controller BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS gdpr_processor BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS gdpr_special_categories BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS cra_relevant BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS ai_act_profile varchar(64) NOT NULL DEFAULT 'NOT_ASSESSED';
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS ai_act_high_risk BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS tisax_relevant BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS iso27001_target varchar(64) NOT NULL DEFAULT 'NOT_DEFINED';
+ALTER TABLE organizations_tenant ADD COLUMN IF NOT EXISTS regulatory_profile_notes TEXT NOT NULL DEFAULT '';
+UPDATE organizations_tenant
+SET cra_relevant = CASE WHEN develops_digital_products THEN TRUE ELSE cra_relevant END,
+    processes_personal_data = CASE WHEN nis2_relevant OR kritis_relevant THEN TRUE ELSE processes_personal_data END,
+    ai_act_profile = CASE WHEN uses_ai_systems AND ai_act_profile = 'NOT_ASSESSED' THEN 'LIMITED_RISK' ELSE ai_act_profile END;
 "#;
 
 const SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"
@@ -2974,12 +3019,18 @@ INSERT OR IGNORE INTO organizations_tenant (
     id, created_at, updated_at, name, slug, country, operation_countries, description, sector,
     employee_count, annual_revenue_million, balance_sheet_million, critical_services,
     supply_chain_role, nis2_relevant, kritis_relevant, develops_digital_products, uses_ai_systems,
-    ot_iacs_scope, automotive_scope, psirt_defined, sbom_required, product_security_scope
+    ot_iacs_scope, automotive_scope, psirt_defined, sbom_required, product_security_scope,
+    dora_relevant, dora_financial_entity, dora_ict_third_party_provider,
+    processes_personal_data, gdpr_controller, gdpr_processor, gdpr_special_categories,
+    cra_relevant, ai_act_profile, ai_act_high_risk, tisax_relevant, iso27001_target,
+    regulatory_profile_notes
 ) VALUES (
     1, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z', 'ISCY Demo Tenant', 'demo',
     'DE', '["DE"]', 'Rust-only demo tenant', 'MSSP', 80, '12.50', '8.00',
     'Managed security services', 'B2B security provider', 1, 0, 1, 1, 0, 0, 1, 1,
-    'Product security scope prepared for Rust cutover'
+    'Product security scope prepared for Rust cutover',
+    1, 0, 1, 1, 1, 1, 0, 1, 'LIMITED_RISK', 0, 0, 'ISMS_BUILDUP',
+    'Demo-Profil: NIS2, DORA-Pruefpfad, DSGVO, CRA und AI Act sind als fachliche Arbeitsspuren gesetzt.'
 );
 INSERT INTO accounts_user (
     id, password, is_superuser, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id
@@ -3346,12 +3397,18 @@ INSERT INTO organizations_tenant (
     id, created_at, updated_at, name, slug, country, operation_countries, description, sector,
     employee_count, annual_revenue_million, balance_sheet_million, critical_services,
     supply_chain_role, nis2_relevant, kritis_relevant, develops_digital_products, uses_ai_systems,
-    ot_iacs_scope, automotive_scope, psirt_defined, sbom_required, product_security_scope
+    ot_iacs_scope, automotive_scope, psirt_defined, sbom_required, product_security_scope,
+    dora_relevant, dora_financial_entity, dora_ict_third_party_provider,
+    processes_personal_data, gdpr_controller, gdpr_processor, gdpr_special_categories,
+    cra_relevant, ai_act_profile, ai_act_high_risk, tisax_relevant, iso27001_target,
+    regulatory_profile_notes
 ) VALUES (
     1, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z', 'ISCY Demo Tenant', 'demo',
     'DE', '["DE"]', 'Rust-only demo tenant', 'MSSP', 80, '12.50', '8.00',
     'Managed security services', 'B2B security provider', TRUE, FALSE, TRUE, TRUE, FALSE, FALSE, TRUE, TRUE,
-    'Product security scope prepared for Rust cutover'
+    'Product security scope prepared for Rust cutover',
+    TRUE, FALSE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, 'LIMITED_RISK', FALSE, FALSE, 'ISMS_BUILDUP',
+    'Demo-Profil: NIS2, DORA-Pruefpfad, DSGVO, CRA und AI Act sind als fachliche Arbeitsspuren gesetzt.'
 ) ON CONFLICT (id) DO NOTHING;
 INSERT INTO accounts_user (
     id, password, is_superuser, username, first_name, last_name, email, is_staff, is_active, date_joined, role, job_title, tenant_id

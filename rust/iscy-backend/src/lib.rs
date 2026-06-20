@@ -491,6 +491,41 @@ struct WebControlStatusForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct WebTenantRegulatoryProfileForm {
+    country: Option<String>,
+    operation_countries: Option<String>,
+    description: Option<String>,
+    sector: Option<String>,
+    employee_count: Option<String>,
+    annual_revenue_million: Option<String>,
+    balance_sheet_million: Option<String>,
+    critical_services: Option<String>,
+    supply_chain_role: Option<String>,
+    nis2_relevant: Option<String>,
+    kritis_relevant: Option<String>,
+    develops_digital_products: Option<String>,
+    uses_ai_systems: Option<String>,
+    ot_iacs_scope: Option<String>,
+    automotive_scope: Option<String>,
+    psirt_defined: Option<String>,
+    sbom_required: Option<String>,
+    product_security_scope: Option<String>,
+    dora_relevant: Option<String>,
+    dora_financial_entity: Option<String>,
+    dora_ict_third_party_provider: Option<String>,
+    processes_personal_data: Option<String>,
+    gdpr_controller: Option<String>,
+    gdpr_processor: Option<String>,
+    gdpr_special_categories: Option<String>,
+    cra_relevant: Option<String>,
+    ai_act_profile: Option<String>,
+    ai_act_high_risk: Option<String>,
+    tisax_relevant: Option<String>,
+    iso27001_target: Option<String>,
+    regulatory_profile_notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebCveCorrelationDecisionForm {
     status: String,
     rationale: Option<String>,
@@ -667,6 +702,13 @@ where
 
 #[derive(Debug, Serialize)]
 pub struct TenantProfileResponse {
+    pub api_version: &'static str,
+    pub tenant: tenant_store::TenantProfile,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TenantProfileUpdateResponse {
+    pub accepted: bool,
     pub api_version: &'static str,
     pub tenant: tenant_store::TenantProfile,
 }
@@ -3645,6 +3687,81 @@ async fn organization_tenant_profile(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Tenant-Profil konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn organization_tenant_profile_update(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<tenant_store::TenantRegulatoryProfileUpdateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+
+    let Some(store) = state.tenant_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Tenant-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .update_regulatory_profile(context.tenant_id, payload)
+        .await
+    {
+        Ok(Some(tenant)) => (
+            StatusCode::OK,
+            Json(TenantProfileUpdateResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "tenant_not_found",
+                message: format!("Tenant {} wurde nicht gefunden.", context.tenant_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "tenant_profile_invalid",
+                message: format!(
+                    "Tenant-Regulierungsprofil konnte nicht gespeichert werden: {err}"
+                ),
             }),
         )
             .into_response(),
@@ -11483,9 +11600,12 @@ async fn web_organizations(
     let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Organizations", "/organizations/");
     };
-    let Some(store) = state.tenant_store else {
+    let Some(store) = state.tenant_store.as_ref() else {
         return web_store_missing("Organizations", "/organizations/", &context, "Tenant");
     };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
     match store.tenant_profile(context.tenant_id).await {
         Ok(Some(tenant)) => {
             let operation_countries = if tenant.operation_countries.is_empty() {
@@ -11493,10 +11613,17 @@ async fn web_organizations(
             } else {
                 html_escape(&tenant.operation_countries.join(", "))
             };
+            let regulatory_rows = tenant_regulatory_profile_rows(&tenant);
+            let edit_panel = if can_write {
+                tenant_regulatory_profile_form(&tenant, &context)
+            } else {
+                r#"<section class="panel wide"><h2>Regulatorisches Organisationsprofil</h2><p>Dieses Profil ist lesbar. Zum Speichern wird eine schreibende ISCY-Rolle benoetigt.</p></section>"#.to_string()
+            };
             let body = format!(
                 r#"
                 <section class="hero compact"><h1>Organizations</h1><p>{}</p></section>
                 <section class="metrics">
+                  {}
                   {}
                   {}
                   {}
@@ -11522,15 +11649,37 @@ async fn web_organizations(
                       <tr><th>PSIRT definiert</th><td>{}</td></tr>
                       <tr><th>SBOM erforderlich</th><td>{}</td></tr>
                       <tr><th>Product Security Scope</th><td>{}</td></tr>
+                      <tr><th>DORA relevant</th><td>{}</td></tr>
+                      <tr><th>DORA Finanzunternehmen</th><td>{}</td></tr>
+                      <tr><th>DORA IKT-Drittdienstleister</th><td>{}</td></tr>
+                      <tr><th>Personenbezogene Daten</th><td>{}</td></tr>
+                      <tr><th>DSGVO Verantwortlicher</th><td>{}</td></tr>
+                      <tr><th>DSGVO Auftragsverarbeiter</th><td>{}</td></tr>
+                      <tr><th>Besondere Datenkategorien</th><td>{}</td></tr>
+                      <tr><th>CRA relevant</th><td>{}</td></tr>
+                      <tr><th>AI-Act-Profil</th><td>{}</td></tr>
+                      <tr><th>AI Act Hochrisiko</th><td>{}</td></tr>
+                      <tr><th>TISAX relevant</th><td>{}</td></tr>
+                      <tr><th>ISO-27001 Zielbild</th><td>{}</td></tr>
+                      <tr><th>Regulatorische Notizen</th><td>{}</td></tr>
                       <tr><th>Beschreibung</th><td>{}</td></tr>
                     </tbody>
                   </table>
                 </section>
+                <section class="panel wide">
+                  <h2>Regulatorische Matrix</h2>
+                  <table>
+                    <thead><tr><th>Pfad</th><th>Status</th><th>Warum</th><th>Naechster Schritt</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                {}
                 "#,
                 html_escape(&tenant.name),
                 metric_card("Mitarbeitende", tenant.employee_count),
                 metric_card("Laender", tenant.operation_countries.len() as i64),
                 metric_card("Tenant-ID", tenant.id),
+                metric_card("Aktive Pfade", tenant_regulatory_active_count(&tenant)),
                 html_escape(&tenant.slug),
                 html_escape(&tenant.country),
                 operation_countries,
@@ -11549,7 +11698,22 @@ async fn web_organizations(
                 yes_no(tenant.psirt_defined),
                 yes_no(tenant.sbom_required),
                 html_escape(&tenant.product_security_scope),
+                yes_no(tenant.dora_relevant),
+                yes_no(tenant.dora_financial_entity),
+                yes_no(tenant.dora_ict_third_party_provider),
+                yes_no(tenant.processes_personal_data),
+                yes_no(tenant.gdpr_controller),
+                yes_no(tenant.gdpr_processor),
+                yes_no(tenant.gdpr_special_categories),
+                yes_no(tenant.cra_relevant),
+                html_escape(&tenant.ai_act_profile),
+                yes_no(tenant.ai_act_high_risk),
+                yes_no(tenant.tisax_relevant),
+                html_escape(&tenant.iso27001_target),
+                html_escape(&tenant.regulatory_profile_notes),
                 html_escape(&tenant.description),
+                regulatory_rows,
+                edit_panel,
             );
             web_page("Organizations", "/organizations/", Some(&context), &body)
         }
@@ -11565,6 +11729,72 @@ async fn web_organizations(
             &context,
             &err.to_string(),
         ),
+    }
+}
+
+async fn web_organizations_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebTenantRegulatoryProfileForm>,
+) -> Response {
+    let display_context = web_context_from_request(&query, &headers, &state).await;
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            if let Some(context) = display_context.as_ref() {
+                return web_error_page("Organizations", "/organizations/", context, err.message())
+                    .into_response();
+            }
+            return web_missing_context("Organizations", "/organizations/").into_response();
+        }
+    };
+    let context = display_context.unwrap_or_else(|| WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    });
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Organizations",
+            "/organizations/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.tenant_store else {
+        return web_store_missing("Organizations", "/organizations/", &context, "Tenant")
+            .into_response();
+    };
+    let payload = match tenant_regulatory_profile_form_request(form) {
+        Ok(payload) => payload,
+        Err(err) => {
+            return web_error_page("Organizations", "/organizations/", &context, &err)
+                .into_response();
+        }
+    };
+    match store
+        .update_regulatory_profile(context.tenant_id, payload)
+        .await
+    {
+        Ok(Some(_)) => {
+            Redirect::to(&web_path_with_context("/organizations/", Some(&context))).into_response()
+        }
+        Ok(None) => web_error_page(
+            "Organizations",
+            "/organizations/",
+            &context,
+            "Tenant wurde fuer diesen Kontext nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Organizations",
+            "/organizations/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
     }
 }
 async fn web_admin_users(
@@ -13391,6 +13621,46 @@ fn web_cve_assessment_form_request(
         existing_controls: form.existing_controls,
         auto_create_risk: form.auto_create_risk.is_some(),
         run_llm: form.run_llm.is_some(),
+    })
+}
+
+fn tenant_regulatory_profile_form_request(
+    form: WebTenantRegulatoryProfileForm,
+) -> Result<tenant_store::TenantRegulatoryProfileUpdateRequest, String> {
+    Ok(tenant_store::TenantRegulatoryProfileUpdateRequest {
+        country: normalized_optional_form_text(form.country),
+        operation_countries: Some(comma_separated_form_list(form.operation_countries)),
+        description: normalized_optional_form_text(form.description),
+        sector: normalized_optional_form_text(form.sector),
+        employee_count: optional_form_i64_nonnegative(form.employee_count, "Mitarbeitende")?,
+        annual_revenue_million: normalized_optional_form_text(form.annual_revenue_million),
+        balance_sheet_million: normalized_optional_form_text(form.balance_sheet_million),
+        critical_services: normalized_optional_form_text(form.critical_services),
+        supply_chain_role: normalized_optional_form_text(form.supply_chain_role),
+        nis2_relevant: Some(form_checkbox_value(form.nis2_relevant)),
+        kritis_relevant: Some(form_checkbox_value(form.kritis_relevant)),
+        develops_digital_products: Some(form_checkbox_value(form.develops_digital_products)),
+        uses_ai_systems: Some(form_checkbox_value(form.uses_ai_systems)),
+        ot_iacs_scope: Some(form_checkbox_value(form.ot_iacs_scope)),
+        automotive_scope: Some(form_checkbox_value(form.automotive_scope)),
+        psirt_defined: Some(form_checkbox_value(form.psirt_defined)),
+        sbom_required: Some(form_checkbox_value(form.sbom_required)),
+        product_security_scope: normalized_optional_form_text(form.product_security_scope),
+        dora_relevant: Some(form_checkbox_value(form.dora_relevant)),
+        dora_financial_entity: Some(form_checkbox_value(form.dora_financial_entity)),
+        dora_ict_third_party_provider: Some(form_checkbox_value(
+            form.dora_ict_third_party_provider,
+        )),
+        processes_personal_data: Some(form_checkbox_value(form.processes_personal_data)),
+        gdpr_controller: Some(form_checkbox_value(form.gdpr_controller)),
+        gdpr_processor: Some(form_checkbox_value(form.gdpr_processor)),
+        gdpr_special_categories: Some(form_checkbox_value(form.gdpr_special_categories)),
+        cra_relevant: Some(form_checkbox_value(form.cra_relevant)),
+        ai_act_profile: normalized_optional_form_text(form.ai_act_profile),
+        ai_act_high_risk: Some(form_checkbox_value(form.ai_act_high_risk)),
+        tisax_relevant: Some(form_checkbox_value(form.tisax_relevant)),
+        iso27001_target: normalized_optional_form_text(form.iso27001_target),
+        regulatory_profile_notes: normalized_optional_form_text(form.regulatory_profile_notes),
     })
 }
 
@@ -18533,6 +18803,25 @@ fn optional_form_i64(value: Option<String>, field_label: &str) -> Result<Option<
     Ok(Some(parsed))
 }
 
+fn optional_form_i64_nonnegative(
+    value: Option<String>,
+    field_label: &str,
+) -> Result<Option<i64>, String> {
+    let Some(value) = value.map(|item| item.trim().to_string()) else {
+        return Ok(None);
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let parsed = value
+        .parse::<i64>()
+        .map_err(|_| format!("{field_label} muss eine ganze Zahl sein."))?;
+    if parsed < 0 {
+        return Err(format!("{field_label} darf nicht negativ sein."));
+    }
+    Ok(Some(parsed))
+}
+
 fn optional_form_f64(value: Option<String>, field_label: &str) -> Result<Option<f64>, String> {
     let Some(value) = value.map(|item| item.trim().to_string()) else {
         return Ok(None);
@@ -18694,6 +18983,311 @@ fn truncate_ascii(value: &str, max_len: usize) -> String {
         .collect::<String>()
         .trim_matches('.')
         .to_string()
+}
+
+fn tenant_regulatory_active_count(tenant: &tenant_store::TenantProfile) -> i64 {
+    [
+        tenant.nis2_relevant || tenant.kritis_relevant,
+        tenant.dora_relevant
+            || tenant.dora_financial_entity
+            || tenant.dora_ict_third_party_provider,
+        tenant.processes_personal_data || tenant.gdpr_controller || tenant.gdpr_processor,
+        tenant.cra_relevant || tenant.develops_digital_products,
+        tenant.uses_ai_systems
+            || tenant.ai_act_high_risk
+            || !matches!(
+                tenant.ai_act_profile.as_str(),
+                "" | "NOT_ASSESSED" | "NOT_RELEVANT"
+            ),
+        tenant.tisax_relevant || tenant.automotive_scope,
+        !matches!(
+            tenant.iso27001_target.as_str(),
+            "" | "NOT_DEFINED" | "NOT_RELEVANT"
+        ),
+    ]
+    .into_iter()
+    .filter(|enabled| *enabled)
+    .count() as i64
+}
+
+fn tenant_regulatory_profile_rows(tenant: &tenant_store::TenantProfile) -> String {
+    let rows = [
+        (
+            "NIS2 / KRITIS",
+            tenant.nis2_relevant || tenant.kritis_relevant,
+            if tenant.kritis_relevant {
+                "KRITIS- oder kritischer Service-Kontext ist gesetzt."
+            } else if tenant.nis2_relevant {
+                "NIS2-Betroffenheit ist im Organisationsprofil gesetzt."
+            } else {
+                "Keine NIS2-/KRITIS-Betroffenheit im Profil gesetzt."
+            },
+            if tenant.nis2_relevant || tenant.kritis_relevant {
+                "Controls, Incidents und Evidence gegen NIS2-Scope fuehren."
+            } else {
+                "Betroffenheit fachlich pruefen und Entscheidung dokumentieren."
+            },
+        ),
+        (
+            "DORA",
+            tenant.dora_relevant
+                || tenant.dora_financial_entity
+                || tenant.dora_ict_third_party_provider,
+            if tenant.dora_financial_entity {
+                "Finanzunternehmen-Kontext ist gesetzt."
+            } else if tenant.dora_ict_third_party_provider {
+                "IKT-Drittdienstleister-Kontext ist gesetzt."
+            } else if tenant.dora_relevant {
+                "DORA-Relevanz wurde fachlich markiert."
+            } else {
+                "Kein DORA-Kontext im Profil gesetzt."
+            },
+            if tenant.dora_relevant
+                || tenant.dora_financial_entity
+                || tenant.dora_ict_third_party_provider
+            {
+                "IKT-Risiko, IKT-Vorfallprozess und Drittparteienbezug pruefen."
+            } else {
+                "Finanzsektor- oder IKT-Drittparteienrolle pruefen."
+            },
+        ),
+        (
+            "DSGVO",
+            tenant.processes_personal_data || tenant.gdpr_controller || tenant.gdpr_processor,
+            if tenant.gdpr_controller && tenant.gdpr_processor {
+                "Verantwortlicher- und Auftragsverarbeiterrolle sind gesetzt."
+            } else if tenant.gdpr_controller {
+                "Verantwortlichenrolle ist gesetzt."
+            } else if tenant.gdpr_processor {
+                "Auftragsverarbeiterrolle ist gesetzt."
+            } else if tenant.processes_personal_data {
+                "Personenbezogene Daten sind im Scope."
+            } else {
+                "Kein Personenbezug im Profil gesetzt."
+            },
+            if tenant.gdpr_special_categories {
+                "Datenarten, TOMs, Meldepfad und Betroffenenrisiko priorisiert pruefen."
+            } else if tenant.processes_personal_data
+                || tenant.gdpr_controller
+                || tenant.gdpr_processor
+            {
+                "Datenschutzrolle, TOMs und Incident-Meldepfad pruefen."
+            } else {
+                "Personenbezug und Datenschutzrolle fachlich bestaetigen."
+            },
+        ),
+        (
+            "CRA / Product Security",
+            tenant.cra_relevant || tenant.develops_digital_products,
+            if tenant.cra_relevant {
+                "CRA-Relevanz wurde fachlich markiert."
+            } else if tenant.develops_digital_products {
+                "Produkte mit digitalen Elementen sind im Profil gesetzt."
+            } else {
+                "Kein CRA-/Digitalprodukt-Fokus im Profil gesetzt."
+            },
+            if tenant.cra_relevant || tenant.develops_digital_products {
+                "SBOM, PSIRT, Vulnerability Handling und Supportfenster steuern."
+            } else {
+                "Produkt-/Herstellerrolle und digitale Elemente pruefen."
+            },
+        ),
+        (
+            "EU AI Act",
+            tenant.uses_ai_systems
+                || tenant.ai_act_high_risk
+                || !matches!(
+                    tenant.ai_act_profile.as_str(),
+                    "" | "NOT_ASSESSED" | "NOT_RELEVANT"
+                ),
+            if tenant.ai_act_high_risk {
+                "Hochrisiko-KI wurde markiert."
+            } else if tenant.uses_ai_systems {
+                "KI-Systeme sind im Profil gesetzt."
+            } else {
+                "Kein aktiver KI-Scope im Profil gesetzt."
+            },
+            if tenant.ai_act_high_risk {
+                "KI-Risikomanagement, Logging, Human Oversight und Security priorisieren."
+            } else if tenant.uses_ai_systems {
+                "KI-Inventar und AI-Act-Klassifizierung ergaenzen."
+            } else {
+                "KI-Nutzung und Anbieter-/Betreiberrolle pruefen."
+            },
+        ),
+        (
+            "TISAX / Automotive",
+            tenant.tisax_relevant || tenant.automotive_scope,
+            if tenant.tisax_relevant {
+                "TISAX-Scope ist gesetzt."
+            } else if tenant.automotive_scope {
+                "Automotive-Scope ist gesetzt."
+            } else {
+                "Kein TISAX-/Automotive-Scope im Profil gesetzt."
+            },
+            if tenant.tisax_relevant || tenant.automotive_scope {
+                "Supplier-, Prototypen-, Informations- und Produktsecurity-Nachweise pruefen."
+            } else {
+                "Automotive-Kunden- oder TISAX-Anforderung pruefen."
+            },
+        ),
+        (
+            "ISO 27001",
+            !matches!(
+                tenant.iso27001_target.as_str(),
+                "" | "NOT_DEFINED" | "NOT_RELEVANT"
+            ),
+            if tenant.iso27001_target.is_empty() || tenant.iso27001_target == "NOT_DEFINED" {
+                "Kein ISO-27001-Zielbild gesetzt."
+            } else {
+                "ISO-27001-Zielbild ist gesetzt."
+            },
+            "Management Review, SoA, Risk Treatment und Evidence-Reife steuern.",
+        ),
+    ];
+    rows.iter()
+        .map(|(label, active, reason, next_step)| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(label),
+                if *active {
+                    web_badge("Aktiv", "ok")
+                } else {
+                    web_badge("Pruefen", "muted-badge")
+                },
+                html_escape(reason),
+                html_escape(next_step),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn tenant_regulatory_profile_form(
+    tenant: &tenant_store::TenantProfile,
+    context: &WebContext,
+) -> String {
+    let action = web_path_with_context("/organizations/", Some(context));
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Regulatorisches Organisationsprofil bearbeiten</h2>
+          <form method="post" action="{}">
+            <div class="form-grid">
+              <label>Land<input name="country" value="{}"></label>
+              <label>Operationslaender<input name="operation_countries" value="{}"></label>
+              <label>Sektor<input name="sector" value="{}"></label>
+              <label>Mitarbeitende<input name="employee_count" type="number" min="0" value="{}"></label>
+              <label>Umsatz Mio.<input name="annual_revenue_million" value="{}"></label>
+              <label>Bilanzsumme Mio.<input name="balance_sheet_million" value="{}"></label>
+              <label>AI-Act-Profil<select name="ai_act_profile">{}</select></label>
+              <label>ISO-27001 Zielbild<select name="iso27001_target">{}</select></label>
+            </div>
+            <div class="form-grid">
+              <label>Kritische Services<textarea name="critical_services" rows="3">{}</textarea></label>
+              <label>Supply Chain Rolle<textarea name="supply_chain_role" rows="3">{}</textarea></label>
+              <label>Product Security Scope<textarea name="product_security_scope" rows="3">{}</textarea></label>
+              <label>Beschreibung<textarea name="description" rows="3">{}</textarea></label>
+            </div>
+            <div class="form-grid">
+              <label class="checkbox-row"><input name="nis2_relevant" type="checkbox" value="1"{}> NIS2 relevant</label>
+              <label class="checkbox-row"><input name="kritis_relevant" type="checkbox" value="1"{}> KRITIS relevant</label>
+              <label class="checkbox-row"><input name="dora_relevant" type="checkbox" value="1"{}> DORA relevant</label>
+              <label class="checkbox-row"><input name="dora_financial_entity" type="checkbox" value="1"{}> DORA Finanzunternehmen</label>
+              <label class="checkbox-row"><input name="dora_ict_third_party_provider" type="checkbox" value="1"{}> DORA IKT-Drittdienstleister</label>
+              <label class="checkbox-row"><input name="processes_personal_data" type="checkbox" value="1"{}> Personenbezogene Daten</label>
+              <label class="checkbox-row"><input name="gdpr_controller" type="checkbox" value="1"{}> DSGVO Verantwortlicher</label>
+              <label class="checkbox-row"><input name="gdpr_processor" type="checkbox" value="1"{}> DSGVO Auftragsverarbeiter</label>
+              <label class="checkbox-row"><input name="gdpr_special_categories" type="checkbox" value="1"{}> Besondere Datenkategorien</label>
+              <label class="checkbox-row"><input name="develops_digital_products" type="checkbox" value="1"{}> Digitale Produkte</label>
+              <label class="checkbox-row"><input name="cra_relevant" type="checkbox" value="1"{}> CRA relevant</label>
+              <label class="checkbox-row"><input name="uses_ai_systems" type="checkbox" value="1"{}> KI-Systeme</label>
+              <label class="checkbox-row"><input name="ai_act_high_risk" type="checkbox" value="1"{}> AI Act Hochrisiko</label>
+              <label class="checkbox-row"><input name="ot_iacs_scope" type="checkbox" value="1"{}> OT / IACS</label>
+              <label class="checkbox-row"><input name="automotive_scope" type="checkbox" value="1"{}> Automotive</label>
+              <label class="checkbox-row"><input name="tisax_relevant" type="checkbox" value="1"{}> TISAX relevant</label>
+              <label class="checkbox-row"><input name="psirt_defined" type="checkbox" value="1"{}> PSIRT definiert</label>
+              <label class="checkbox-row"><input name="sbom_required" type="checkbox" value="1"{}> SBOM erforderlich</label>
+            </div>
+            <label>Regulatorische Notizen<textarea name="regulatory_profile_notes" rows="4">{}</textarea></label>
+            <button type="submit">Regulierungsprofil speichern</button>
+          </form>
+        </section>
+        "#,
+        html_escape(&action),
+        html_escape(&tenant.country),
+        html_escape(&tenant.operation_countries.join(", ")),
+        html_escape(&tenant.sector),
+        tenant.employee_count,
+        html_escape(&tenant.annual_revenue_million),
+        html_escape(&tenant.balance_sheet_million),
+        tenant_profile_ai_act_options(&tenant.ai_act_profile),
+        tenant_profile_iso27001_options(&tenant.iso27001_target),
+        html_escape(&tenant.critical_services),
+        html_escape(&tenant.supply_chain_role),
+        html_escape(&tenant.product_security_scope),
+        html_escape(&tenant.description),
+        checked_attr(tenant.nis2_relevant),
+        checked_attr(tenant.kritis_relevant),
+        checked_attr(tenant.dora_relevant),
+        checked_attr(tenant.dora_financial_entity),
+        checked_attr(tenant.dora_ict_third_party_provider),
+        checked_attr(tenant.processes_personal_data),
+        checked_attr(tenant.gdpr_controller),
+        checked_attr(tenant.gdpr_processor),
+        checked_attr(tenant.gdpr_special_categories),
+        checked_attr(tenant.develops_digital_products),
+        checked_attr(tenant.cra_relevant),
+        checked_attr(tenant.uses_ai_systems),
+        checked_attr(tenant.ai_act_high_risk),
+        checked_attr(tenant.ot_iacs_scope),
+        checked_attr(tenant.automotive_scope),
+        checked_attr(tenant.tisax_relevant),
+        checked_attr(tenant.psirt_defined),
+        checked_attr(tenant.sbom_required),
+        html_escape(&tenant.regulatory_profile_notes),
+    )
+}
+
+fn tenant_profile_ai_act_options(selected: &str) -> String {
+    tenant_profile_select_options(
+        selected,
+        &[
+            ("NOT_ASSESSED", "Nicht bewertet"),
+            ("NOT_RELEVANT", "Nicht relevant"),
+            ("MINIMAL_RISK", "Minimales Risiko"),
+            ("LIMITED_RISK", "Begrenztes Risiko"),
+            ("HIGH_RISK", "Hochrisiko"),
+        ],
+    )
+}
+
+fn tenant_profile_iso27001_options(selected: &str) -> String {
+    tenant_profile_select_options(
+        selected,
+        &[
+            ("NOT_DEFINED", "Nicht definiert"),
+            ("NOT_RELEVANT", "Nicht relevant"),
+            ("ISMS_BUILDUP", "ISMS-Aufbau"),
+            ("CERTIFICATION_READY", "Zertifizierungsreif"),
+            ("CERTIFIED", "Zertifiziert"),
+        ],
+    )
+}
+
+fn tenant_profile_select_options(selected: &str, options: &[(&str, &str)]) -> String {
+    options
+        .iter()
+        .map(|(value, label)| {
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                html_escape(value),
+                selected_attr(*value == selected),
+                html_escape(label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn yes_no(value: bool) -> &'static str {
@@ -19933,7 +20527,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/accounts/permissions", get(account_permissions))
         .route(
             "/api/v1/organizations/tenant-profile",
-            get(organization_tenant_profile),
+            get(organization_tenant_profile).patch(organization_tenant_profile_update),
         )
         .route("/api/v1/catalog/domains", get(catalog_domains))
         .route("/api/v1/controls", get(control_library))
@@ -20240,7 +20834,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/risks/", get(web_risks))
         .route("/risks/{risk_id}/review", post(web_risk_review_submit))
         .route("/assessments/", get(web_assessments))
-        .route("/organizations/", get(web_organizations))
+        .route(
+            "/organizations/",
+            get(web_organizations).post(web_organizations_submit),
+        )
         .route(
             "/admin/users/",
             get(web_admin_users).post(web_admin_users_submit),

@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.14\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.15\""));
 }
 
 #[tokio::test]
@@ -559,8 +559,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0017_rust_incident_nis2_significance"));
-    assert!(html.contains("17/17 angewendet"));
+    assert!(html.contains("0018_rust_tenant_regulatory_profile"));
+    assert!(html.contains("18/18 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -1520,6 +1520,67 @@ async fn organization_tenant_profile_returns_tenant_from_database() {
     assert_eq!(payload["tenant"]["sector"], "MSSP");
     assert_eq!(payload["tenant"]["nis2_relevant"], true);
     assert_eq!(payload["tenant"]["uses_ai_systems"], true);
+    assert_eq!(payload["tenant"]["dora_relevant"], true);
+    assert_eq!(payload["tenant"]["dora_ict_third_party_provider"], true);
+    assert_eq!(payload["tenant"]["gdpr_controller"], true);
+    assert_eq!(payload["tenant"]["cra_relevant"], true);
+    assert_eq!(payload["tenant"]["ai_act_profile"], "LIMITED_RISK");
+    assert_eq!(payload["tenant"]["tisax_relevant"], true);
+}
+
+#[tokio::test]
+async fn organization_tenant_profile_update_persists_regulatory_context() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_tenant_table(&pool).await;
+    insert_tenant(&pool).await;
+    let app = app_router_with_state(AppState::with_stores(
+        None,
+        Some(TenantStore::from_sqlite_pool(pool.clone())),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/organizations/tenant-profile")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{
+                        "dora_financial_entity": true,
+                        "gdpr_special_categories": true,
+                        "ai_act_profile": "HIGH_RISK",
+                        "ai_act_high_risk": true,
+                        "iso27001_target": "CERTIFICATION_READY",
+                        "operation_countries": ["DE", "NL", "DE"],
+                        "regulatory_profile_notes": "Board approved regulated context"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["tenant"]["dora_financial_entity"], true);
+    assert_eq!(payload["tenant"]["gdpr_special_categories"], true);
+    assert_eq!(payload["tenant"]["ai_act_profile"], "HIGH_RISK");
+    assert_eq!(payload["tenant"]["ai_act_high_risk"], true);
+    assert_eq!(payload["tenant"]["iso27001_target"], "CERTIFICATION_READY");
+    assert_eq!(payload["tenant"]["operation_countries"][0], "DE");
+    assert_eq!(payload["tenant"]["operation_countries"][1], "NL");
+    assert_eq!(
+        payload["tenant"]["regulatory_profile_notes"],
+        "Board approved regulated context"
+    );
 }
 
 #[tokio::test]
@@ -6808,6 +6869,8 @@ async fn rust_web_organizations_renders_tenant_profile_from_database() {
         .oneshot(
             Request::builder()
                 .uri("/organizations/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -6821,7 +6884,66 @@ async fn rust_web_organizations_renders_tenant_profile_from_database() {
     assert!(html.contains("Managed Security Provider"));
     assert!(html.contains("SOC und Incident Response"));
     assert!(html.contains("tenant-soc"));
+    assert!(html.contains("Regulatorische Matrix"));
+    assert!(html.contains("DORA IKT-Drittdienstleister"));
+    assert!(html.contains("AI-Act-Profil"));
+    assert!(html.contains("Regulierungsprofil speichern"));
     assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_organizations_updates_regulatory_profile_from_form() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_tenant_table(&pool).await;
+    insert_tenant(&pool).await;
+    let app = app_router_with_state(AppState::with_stores(
+        None,
+        Some(TenantStore::from_sqlite_pool(pool.clone())),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/organizations/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "country=DE&operation_countries=DE%2CNL&sector=FINTECH&employee_count=300&annual_revenue_million=42.0&balance_sheet_million=21.0&critical_services=Payment+SOC&supply_chain_role=ICT+provider&description=Updated+tenant&nis2_relevant=1&dora_relevant=1&dora_financial_entity=1&processes_personal_data=1&gdpr_controller=1&gdpr_special_categories=1&develops_digital_products=1&cra_relevant=1&uses_ai_systems=1&ai_act_profile=HIGH_RISK&ai_act_high_risk=1&tisax_relevant=1&iso27001_target=CERTIFICATION_READY&product_security_scope=Regulated+portfolio&regulatory_profile_notes=Approved+by+board",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/organizations/?tenant_id=42&user_id=7"
+    );
+    let row = sqlx::query(
+        "SELECT sector, dora_financial_entity, gdpr_special_categories, ai_act_profile, iso27001_target, regulatory_profile_notes FROM organizations_tenant WHERE id = 42",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let sector: String = row.try_get("sector").unwrap();
+    let dora_financial_entity: bool = row.try_get("dora_financial_entity").unwrap();
+    let gdpr_special_categories: bool = row.try_get("gdpr_special_categories").unwrap();
+    let ai_act_profile: String = row.try_get("ai_act_profile").unwrap();
+    let iso27001_target: String = row.try_get("iso27001_target").unwrap();
+    let notes: String = row.try_get("regulatory_profile_notes").unwrap();
+    assert_eq!(sector, "FINTECH");
+    assert!(dora_financial_entity);
+    assert!(gdpr_special_categories);
+    assert_eq!(ai_act_profile, "HIGH_RISK");
+    assert_eq!(iso27001_target, "CERTIFICATION_READY");
+    assert_eq!(notes, "Approved by board");
 }
 
 #[tokio::test]
@@ -7708,7 +7830,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0014_rust_review_supply_chain_metadata",
             "0015_rust_iscy27_control_core",
             "0016_rust_control_evidence_product_imports",
-            "0017_rust_incident_nis2_significance"
+            "0017_rust_incident_nis2_significance",
+            "0018_rust_tenant_regulatory_profile"
         ]
     );
     assert!(
@@ -9684,7 +9807,20 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             automotive_scope bool NOT NULL,
             psirt_defined bool NOT NULL DEFAULT 0,
             sbom_required bool NOT NULL DEFAULT 0,
-            product_security_scope TEXT NOT NULL DEFAULT ''
+            product_security_scope TEXT NOT NULL DEFAULT '',
+            dora_relevant bool NOT NULL DEFAULT 0,
+            dora_financial_entity bool NOT NULL DEFAULT 0,
+            dora_ict_third_party_provider bool NOT NULL DEFAULT 0,
+            processes_personal_data bool NOT NULL DEFAULT 0,
+            gdpr_controller bool NOT NULL DEFAULT 0,
+            gdpr_processor bool NOT NULL DEFAULT 0,
+            gdpr_special_categories bool NOT NULL DEFAULT 0,
+            cra_relevant bool NOT NULL DEFAULT 0,
+            ai_act_profile varchar(64) NOT NULL DEFAULT 'NOT_ASSESSED',
+            ai_act_high_risk bool NOT NULL DEFAULT 0,
+            tisax_relevant bool NOT NULL DEFAULT 0,
+            iso27001_target varchar(64) NOT NULL DEFAULT 'NOT_DEFINED',
+            regulatory_profile_notes TEXT NOT NULL DEFAULT ''
         )
         "#,
     )
@@ -14248,7 +14384,20 @@ async fn create_guidance_tables(pool: &SqlitePool) {
             automotive_scope bool NOT NULL,
             psirt_defined bool NOT NULL,
             sbom_required bool NOT NULL,
-            product_security_scope TEXT NOT NULL
+            product_security_scope TEXT NOT NULL,
+            dora_relevant bool NOT NULL DEFAULT 0,
+            dora_financial_entity bool NOT NULL DEFAULT 0,
+            dora_ict_third_party_provider bool NOT NULL DEFAULT 0,
+            processes_personal_data bool NOT NULL DEFAULT 0,
+            gdpr_controller bool NOT NULL DEFAULT 0,
+            gdpr_processor bool NOT NULL DEFAULT 0,
+            gdpr_special_categories bool NOT NULL DEFAULT 0,
+            cra_relevant bool NOT NULL DEFAULT 0,
+            ai_act_profile varchar(64) NOT NULL DEFAULT 'NOT_ASSESSED',
+            ai_act_high_risk bool NOT NULL DEFAULT 0,
+            tisax_relevant bool NOT NULL DEFAULT 0,
+            iso27001_target varchar(64) NOT NULL DEFAULT 'NOT_DEFINED',
+            regulatory_profile_notes TEXT NOT NULL DEFAULT ''
         )
         "#,
     )
@@ -14702,7 +14851,20 @@ async fn create_tenant_table(pool: &SqlitePool) {
             automotive_scope bool NOT NULL,
             psirt_defined bool NOT NULL,
             sbom_required bool NOT NULL,
-            product_security_scope TEXT NOT NULL
+            product_security_scope TEXT NOT NULL,
+            dora_relevant bool NOT NULL DEFAULT 0,
+            dora_financial_entity bool NOT NULL DEFAULT 0,
+            dora_ict_third_party_provider bool NOT NULL DEFAULT 0,
+            processes_personal_data bool NOT NULL DEFAULT 0,
+            gdpr_controller bool NOT NULL DEFAULT 0,
+            gdpr_processor bool NOT NULL DEFAULT 0,
+            gdpr_special_categories bool NOT NULL DEFAULT 0,
+            cra_relevant bool NOT NULL DEFAULT 0,
+            ai_act_profile varchar(64) NOT NULL DEFAULT 'NOT_ASSESSED',
+            ai_act_high_risk bool NOT NULL DEFAULT 0,
+            tisax_relevant bool NOT NULL DEFAULT 0,
+            iso27001_target varchar(64) NOT NULL DEFAULT 'NOT_DEFINED',
+            regulatory_profile_notes TEXT NOT NULL DEFAULT ''
         )
         "#,
     )
@@ -14737,7 +14899,20 @@ async fn insert_tenant(pool: &SqlitePool) {
             automotive_scope,
             psirt_defined,
             sbom_required,
-            product_security_scope
+            product_security_scope,
+            dora_relevant,
+            dora_financial_entity,
+            dora_ict_third_party_provider,
+            processes_personal_data,
+            gdpr_controller,
+            gdpr_processor,
+            gdpr_special_categories,
+            cra_relevant,
+            ai_act_profile,
+            ai_act_high_risk,
+            tisax_relevant,
+            iso27001_target,
+            regulatory_profile_notes
         )
         VALUES (
             42,
@@ -14762,7 +14937,20 @@ async fn insert_tenant(pool: &SqlitePool) {
             0,
             1,
             1,
-            'Sichere Entwicklung und PSIRT'
+            'Sichere Entwicklung und PSIRT',
+            1,
+            0,
+            1,
+            1,
+            1,
+            1,
+            0,
+            1,
+            'LIMITED_RISK',
+            0,
+            1,
+            'ISMS_BUILDUP',
+            'Regulatorisches Demo-Profil'
         )
         "#,
     )
