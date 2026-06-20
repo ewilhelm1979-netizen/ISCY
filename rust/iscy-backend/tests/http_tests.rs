@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.10\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.11\""));
 }
 
 #[tokio::test]
@@ -559,8 +559,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0016_rust_control_evidence_product_imports"));
-    assert!(html.contains("16/16 angewendet"));
+    assert!(html.contains("0017_rust_incident_nis2_significance"));
+    assert!(html.contains("17/17 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -3393,6 +3393,10 @@ async fn incident_register_returns_tenant_incidents_from_database() {
     assert_eq!(payload["incidents"][0]["status"], "CONFIRMED");
     assert_eq!(payload["incidents"][0]["nis2_reportable"], true);
     assert_eq!(
+        payload["incidents"][0]["nis2_significance_status"],
+        "SIGNIFICANT"
+    );
+    assert_eq!(
         payload["incidents"][0]["related_risk_title"],
         "Credential Phishing"
     );
@@ -3463,6 +3467,10 @@ async fn incident_create_persists_nis2_deadlines_and_links() {
     assert_eq!(payload["incident"]["severity"], "CRITICAL");
     assert_eq!(payload["incident"]["nis2_reportable"], true);
     assert_eq!(
+        payload["incident"]["nis2_significance_status"],
+        "SIGNIFICANT"
+    );
+    assert_eq!(
         payload["incident"]["related_risk_title"],
         "Credential Phishing"
     );
@@ -3484,6 +3492,65 @@ async fn incident_create_persists_nis2_deadlines_and_links() {
         .as_str()
         .unwrap()
         .contains("NIS2 reportable outage"));
+}
+
+#[tokio::test]
+async fn incident_create_not_significant_keeps_nis2_deadlines_inactive() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "title":"Security incident without NIS2 significance",
+                        "summary":"Contained alert without material impact",
+                        "severity":"MEDIUM",
+                        "status":"TRIAGE",
+                        "detected_at":"2026-06-08T10:00:00Z",
+                        "nis2_significance_status":"NOT_SIGNIFICANT",
+                        "nis2_significance_criteria":"No severe service disruption, no material financial loss, no considerable third-party damage.",
+                        "nis2_significance_justification":"SOC triage found no significant operational impact; continue monitoring.",
+                        "stakeholder_summary":"No external notification required based on current evidence."
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["incident"]["title"],
+        "Security incident without NIS2 significance"
+    );
+    assert_eq!(
+        payload["incident"]["nis2_significance_status"],
+        "NOT_SIGNIFICANT"
+    );
+    assert_eq!(payload["incident"]["nis2_reportable"], false);
+    assert!(payload["incident"]["early_warning_due_at"].is_null());
+    assert!(payload["incident"]["notification_due_at"].is_null());
+    assert!(payload["incident"]["final_report_due_at"].is_null());
 }
 
 #[tokio::test]
@@ -7506,7 +7573,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0013_rust_incident_runbook_tasks_timeline_markers",
             "0014_rust_review_supply_chain_metadata",
             "0015_rust_iscy27_control_core",
-            "0016_rust_control_evidence_product_imports"
+            "0016_rust_control_evidence_product_imports",
+            "0017_rust_incident_nis2_significance"
         ]
     );
     assert!(
@@ -10947,6 +11015,11 @@ async fn create_incident_table(pool: &SqlitePool) {
             contained_at TEXT NULL,
             resolved_at TEXT NULL,
             nis2_reportable bool NOT NULL DEFAULT 0,
+            nis2_significance_status varchar(32) NOT NULL DEFAULT 'NOT_ASSESSED',
+            nis2_significance_criteria TEXT NOT NULL DEFAULT '',
+            nis2_significance_justification TEXT NOT NULL DEFAULT '',
+            nis2_significance_reference TEXT NOT NULL DEFAULT '',
+            nis2_significance_assessed_at TEXT NULL,
             early_warning_due_at TEXT NULL,
             early_warning_sent_at TEXT NULL,
             notification_due_at TEXT NULL,
@@ -11206,6 +11279,11 @@ async fn insert_incident_fixture(pool: &SqlitePool) {
             contained_at,
             resolved_at,
             nis2_reportable,
+            nis2_significance_status,
+            nis2_significance_criteria,
+            nis2_significance_justification,
+            nis2_significance_reference,
+            nis2_significance_assessed_at,
             early_warning_due_at,
             early_warning_sent_at,
             notification_due_at,
@@ -11240,6 +11318,11 @@ async fn insert_incident_fixture(pool: &SqlitePool) {
                 NULL,
                 NULL,
                 1,
+                'SIGNIFICANT',
+                'Erhebliche Betriebsstoerung und potenzieller Schaden fuer Kundenprozesse.',
+                'Fixture behandelt den Fall als erheblichen Sicherheitsvorfall.',
+                'NIS2 Article 23; Commission Implementing Regulation (EU) 2024/2690 Article 3 as best-practice',
+                '2026-04-20T11:00:00Z',
                 '2026-04-21T10:00:00Z',
                 '2026-04-20T18:00:00Z',
                 '2026-04-23T10:00:00Z',
@@ -11271,6 +11354,11 @@ async fn insert_incident_fixture(pool: &SqlitePool) {
                 NULL,
                 NULL,
                 0,
+                'NOT_ASSESSED',
+                '',
+                '',
+                '',
+                NULL,
                 NULL,
                 NULL,
                 NULL,

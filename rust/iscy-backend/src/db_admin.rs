@@ -122,6 +122,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_CONTROL_EVIDENCE_PRODUCT_IMPORT_SCHEMA,
         postgres_sql: POSTGRES_CONTROL_EVIDENCE_PRODUCT_IMPORT_SCHEMA,
     },
+    Migration {
+        version: "0017_rust_incident_nis2_significance",
+        sqlite_sql: SQLITE_INCIDENT_NIS2_SIGNIFICANCE_SCHEMA,
+        postgres_sql: POSTGRES_INCIDENT_NIS2_SIGNIFICANCE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -696,6 +701,34 @@ CREATE INDEX IF NOT EXISTS idx_incidents_related_asset ON incidents_incident(ten
 CREATE INDEX IF NOT EXISTS idx_incidents_related_process ON incidents_incident(tenant_id, related_process_id);
 "#;
 
+const SQLITE_INCIDENT_NIS2_SIGNIFICANCE_SCHEMA: &str = r#"
+ALTER TABLE incidents_incident ADD COLUMN nis2_significance_status varchar(32) NOT NULL DEFAULT 'NOT_ASSESSED';
+ALTER TABLE incidents_incident ADD COLUMN nis2_significance_criteria TEXT NOT NULL DEFAULT '';
+ALTER TABLE incidents_incident ADD COLUMN nis2_significance_justification TEXT NOT NULL DEFAULT '';
+ALTER TABLE incidents_incident ADD COLUMN nis2_significance_reference TEXT NOT NULL DEFAULT '';
+ALTER TABLE incidents_incident ADD COLUMN nis2_significance_assessed_at TEXT NULL;
+UPDATE incidents_incident
+SET nis2_significance_status = CASE WHEN nis2_reportable THEN 'SIGNIFICANT' ELSE 'NOT_ASSESSED' END,
+    nis2_significance_reference = CASE WHEN nis2_reportable THEN 'NIS2 Article 23; Commission Implementing Regulation (EU) 2024/2690 Article 3 as best-practice' ELSE '' END,
+    nis2_significance_justification = CASE WHEN nis2_reportable AND nis2_significance_justification = '' THEN 'Aus bestehendem NIS2-Meldeflag migriert; fachliche Erheblichkeitsbewertung bitte bestaetigen.' ELSE nis2_significance_justification END,
+    nis2_significance_assessed_at = CASE WHEN nis2_reportable THEN updated_at ELSE nis2_significance_assessed_at END;
+CREATE INDEX IF NOT EXISTS idx_incidents_tenant_nis2_significance ON incidents_incident(tenant_id, nis2_significance_status, nis2_reportable);
+"#;
+
+const POSTGRES_INCIDENT_NIS2_SIGNIFICANCE_SCHEMA: &str = r#"
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS nis2_significance_status varchar(32) NOT NULL DEFAULT 'NOT_ASSESSED';
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS nis2_significance_criteria TEXT NOT NULL DEFAULT '';
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS nis2_significance_justification TEXT NOT NULL DEFAULT '';
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS nis2_significance_reference TEXT NOT NULL DEFAULT '';
+ALTER TABLE incidents_incident ADD COLUMN IF NOT EXISTS nis2_significance_assessed_at TEXT NULL;
+UPDATE incidents_incident
+SET nis2_significance_status = CASE WHEN nis2_reportable THEN 'SIGNIFICANT' ELSE 'NOT_ASSESSED' END,
+    nis2_significance_reference = CASE WHEN nis2_reportable THEN 'NIS2 Article 23; Commission Implementing Regulation (EU) 2024/2690 Article 3 as best-practice' ELSE '' END,
+    nis2_significance_justification = CASE WHEN nis2_reportable AND nis2_significance_justification = '' THEN 'Aus bestehendem NIS2-Meldeflag migriert; fachliche Erheblichkeitsbewertung bitte bestaetigen.' ELSE nis2_significance_justification END,
+    nis2_significance_assessed_at = CASE WHEN nis2_reportable THEN updated_at ELSE nis2_significance_assessed_at END;
+CREATE INDEX IF NOT EXISTS idx_incidents_tenant_nis2_significance ON incidents_incident(tenant_id, nis2_significance_status, nis2_reportable);
+"#;
+
 const SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"
 ALTER TABLE incidents_incident ADD COLUMN incident_type varchar(32) NOT NULL DEFAULT 'GENERAL';
 ALTER TABLE incidents_incident ADD COLUMN runbook_template TEXT NOT NULL DEFAULT '';
@@ -789,7 +822,7 @@ SELECT
     'MEDIUM',
     '1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.
 2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.
-3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.
+3. Bewertung: Schweregrad, NIS2-Erheblichkeit, Datenbezug und Business Impact pruefen.
 4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.
 5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren.',
     1,
@@ -810,7 +843,7 @@ SELECT
     '1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.
 2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.
 3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.
-4. Meldung: Betroffenheit, Datenarten und NIS2-Fristen bewerten.
+4. Erheblichkeit: Betroffenheit, Datenarten und NIS2-Meldepflicht bewerten.
 5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren.',
     1,
     20,
@@ -868,7 +901,7 @@ SELECT
     'MEDIUM',
     '1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.
 2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.
-3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.
+3. Bewertung: Schweregrad, NIS2-Erheblichkeit, Datenbezug und Business Impact pruefen.
 4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.
 5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren.',
     TRUE,
@@ -890,7 +923,7 @@ SELECT
     '1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.
 2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.
 3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.
-4. Meldung: Betroffenheit, Datenarten und NIS2-Fristen bewerten.
+4. Erheblichkeit: Betroffenheit, Datenarten und NIS2-Meldepflicht bewerten.
 5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren.',
     TRUE,
     20,
@@ -3072,7 +3105,9 @@ INSERT OR IGNORE INTO risks_risk (
 INSERT OR IGNORE INTO incidents_incident (
     id, tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id, related_process_id,
     title, summary, incident_type, runbook_template, severity, status, detected_at, confirmed_at, contained_at, resolved_at,
-    nis2_reportable, early_warning_due_at, early_warning_sent_at, notification_due_at,
+    nis2_reportable, nis2_significance_status, nis2_significance_criteria,
+    nis2_significance_justification, nis2_significance_reference, nis2_significance_assessed_at,
+    early_warning_due_at, early_warning_sent_at, notification_due_at,
     notification_sent_at, final_report_due_at, final_report_sent_at, authority_reference,
     stakeholder_summary, lessons_learned, created_at, updated_at
 ) VALUES (
@@ -3080,7 +3115,12 @@ INSERT OR IGNORE INTO incidents_incident (
     'Credential phishing campaign', 'Demo incident with NIS2 notification tracking.',
     'PHISHING', '1. Scope erfassen; 2. Eindaemmung durchfuehren; 3. Meldung bewerten',
     'HIGH', 'CONFIRMED', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z', NULL, NULL,
-    1, '2026-04-23T10:00:00Z', NULL, '2026-04-25T10:00:00Z',
+    1, 'SIGNIFICANT',
+    'Potentiell erhebliche Betriebsstoerung fuer ein kritisches Kundenportal; NIS2 Article 23 und EU 2024/2690 Article 3 als Best-Practice-Kriterien.',
+    'Demo-Entscheidung: meldepflichtig behandeln, weil Scope und Business Impact noch hoch bewertet werden.',
+    'NIS2 Article 23; Commission Implementing Regulation (EU) 2024/2690 Article 3 as best-practice',
+    '2026-04-22T11:00:00Z',
+    '2026-04-23T10:00:00Z', NULL, '2026-04-25T10:00:00Z',
     NULL, '2026-05-22T10:00:00Z', NULL, '',
     'Credential phishing affects the customer portal operating process.',
     '', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z'
@@ -3094,7 +3134,7 @@ INSERT OR IGNORE INTO incidents_runbooktemplate (
         'GENERAL', 'MEDIUM',
         '1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.
 2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.
-3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.
+3. Bewertung: Schweregrad, NIS2-Erheblichkeit, Datenbezug und Business Impact pruefen.
 4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.
 5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren.',
         1, 10, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
@@ -3106,7 +3146,7 @@ INSERT OR IGNORE INTO incidents_runbooktemplate (
         '1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.
 2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.
 3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.
-4. Meldung: Betroffenheit, Datenarten und NIS2-Fristen bewerten.
+4. Erheblichkeit: Betroffenheit, Datenarten und NIS2-Meldepflicht bewerten.
 5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren.',
         1, 20, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
     ),
@@ -3455,7 +3495,9 @@ INSERT INTO risks_risk (
 INSERT INTO incidents_incident (
     id, tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id, related_process_id,
     title, summary, incident_type, runbook_template, severity, status, detected_at, confirmed_at, contained_at, resolved_at,
-    nis2_reportable, early_warning_due_at, early_warning_sent_at, notification_due_at,
+    nis2_reportable, nis2_significance_status, nis2_significance_criteria,
+    nis2_significance_justification, nis2_significance_reference, nis2_significance_assessed_at,
+    early_warning_due_at, early_warning_sent_at, notification_due_at,
     notification_sent_at, final_report_due_at, final_report_sent_at, authority_reference,
     stakeholder_summary, lessons_learned, created_at, updated_at
 ) VALUES (
@@ -3463,7 +3505,12 @@ INSERT INTO incidents_incident (
     'Credential phishing campaign', 'Demo incident with NIS2 notification tracking.',
     'PHISHING', '1. Scope erfassen; 2. Eindaemmung durchfuehren; 3. Meldung bewerten',
     'HIGH', 'CONFIRMED', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z', NULL, NULL,
-    TRUE, '2026-04-23T10:00:00Z', NULL, '2026-04-25T10:00:00Z',
+    TRUE, 'SIGNIFICANT',
+    'Potentiell erhebliche Betriebsstoerung fuer ein kritisches Kundenportal; NIS2 Article 23 und EU 2024/2690 Article 3 als Best-Practice-Kriterien.',
+    'Demo-Entscheidung: meldepflichtig behandeln, weil Scope und Business Impact noch hoch bewertet werden.',
+    'NIS2 Article 23; Commission Implementing Regulation (EU) 2024/2690 Article 3 as best-practice',
+    '2026-04-22T11:00:00Z',
+    '2026-04-23T10:00:00Z', NULL, '2026-04-25T10:00:00Z',
     NULL, '2026-05-22T10:00:00Z', NULL, '',
     'Credential phishing affects the customer portal operating process.',
     '', '2026-04-22T10:00:00Z', '2026-04-22T11:00:00Z'
@@ -3477,7 +3524,7 @@ INSERT INTO incidents_runbooktemplate (
         'GENERAL', 'MEDIUM',
         '1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.
 2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.
-3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.
+3. Bewertung: Schweregrad, NIS2-Erheblichkeit, Datenbezug und Business Impact pruefen.
 4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.
 5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren.',
         TRUE, 10, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
@@ -3489,7 +3536,7 @@ INSERT INTO incidents_runbooktemplate (
         '1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.
 2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.
 3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.
-4. Meldung: Betroffenheit, Datenarten und NIS2-Fristen bewerten.
+4. Erheblichkeit: Betroffenheit, Datenarten und NIS2-Meldepflicht bewerten.
 5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren.',
         TRUE, 20, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
     ),

@@ -29,7 +29,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Assessments
 - Organizations
 - Risks
-- Incidents inklusive NIS2-Meldefristen, Fallakten, Detailbearbeitung, tenantbezogener Runbook-Template-Bibliothek, manueller Timeline-Notizen, Timeline-/Audit-Events und Markdown-/HTML-/PDF-Meldepaket mit Audit-Timeline
+- Incidents inklusive NIS2-Erheblichkeitsentscheidung, Meldefristen erst bei erheblichen Sicherheitsvorfaellen, Fallakten, Detailbearbeitung, tenantbezogener Runbook-Template-Bibliothek, manueller Timeline-Notizen, Timeline-/Audit-Events und Markdown-/HTML-/PDF-Meldepaket mit Audit-Timeline
 - Evidence inklusive Upload, Incident-Verknuepfung, direktem Fallakten-Upload, automatischem Timeline-Ereignis, Context-Prefill und Ruecksprung zur Ausgangsseite
 - Reports
 - Roadmap

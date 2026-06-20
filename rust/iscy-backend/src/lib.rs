@@ -559,6 +559,11 @@ struct WebIncidentForm {
     contained_at: Option<String>,
     resolved_at: Option<String>,
     nis2_reportable: Option<String>,
+    nis2_significance_status: Option<String>,
+    nis2_significance_criteria: Option<String>,
+    nis2_significance_justification: Option<String>,
+    nis2_significance_reference: Option<String>,
+    nis2_significance_assessed_at: Option<String>,
     early_warning_sent_at: Option<String>,
     notification_sent_at: Option<String>,
     final_report_sent_at: Option<String>,
@@ -2087,6 +2092,14 @@ fn alertmanager_incident_payload(
         contained_at: None,
         resolved_at: None,
         nis2_reportable: Some(false),
+        nis2_significance_status: Some("NOT_ASSESSED".to_string()),
+        nis2_significance_criteria: Some(String::new()),
+        nis2_significance_justification: Some(
+            "Automatisch aus Alertmanager erzeugt; noch keine NIS2-Erheblichkeitsentscheidung."
+                .to_string(),
+        ),
+        nis2_significance_reference: Some(String::new()),
+        nis2_significance_assessed_at: None,
         early_warning_sent_at: None,
         notification_sent_at: None,
         final_report_sent_at: None,
@@ -2121,6 +2134,11 @@ fn alertmanager_resolved_incident_payload(
         contained_at: None,
         resolved_at: Some(Some(resolved_at)),
         nis2_reportable: None,
+        nis2_significance_status: None,
+        nis2_significance_criteria: None,
+        nis2_significance_justification: None,
+        nis2_significance_reference: None,
+        nis2_significance_assessed_at: None,
         early_warning_sent_at: None,
         notification_sent_at: None,
         final_report_sent_at: None,
@@ -7653,7 +7671,7 @@ async fn web_incidents(
                 .iter()
                 .map(|incident| {
                     format!(
-                        r#"<tr><td><a href="{}">{}</a><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        r#"<tr><td><a href="{}">{}</a><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                         web_path_with_context(
                             &format!("/incidents/{}", incident.id),
                             Some(&context)
@@ -7663,6 +7681,7 @@ async fn web_incidents(
                         html_escape(&incident.incident_type_label),
                         html_escape(&incident.severity_label),
                         html_escape(&incident.status_label),
+                        html_escape(&incident.nis2_significance_label),
                         html_escape(&incident.nis2_reportability_label),
                         html_escape(&incident.early_warning_state_label),
                         html_escape(&incident.notification_state_label),
@@ -7690,7 +7709,9 @@ async fn web_incidents(
                           <label>Process-ID<input name="related_process_id" type="number" min="1"></label>
                           <label>Erkannt am<input name="detected_at" type="date"></label>
                         </div>
-                        <label><input name="nis2_reportable" type="checkbox"> NIS2-meldepflichtig behandeln</label>
+                        <label>NIS2-Erheblichkeitsstatus<select name="nis2_significance_status">{}</select></label>
+                        <label>Kriterien nach NIS2 Art. 23 / EU 2024/2690<textarea name="nis2_significance_criteria" rows="4" placeholder="z.B. erhebliche Betriebsstoerung, finanzieller Schaden, betroffene Personen, malicious unauthorized access, wiederholte Incidents mit gleicher Root Cause"></textarea></label>
+                        <label>Begruendung der Entscheidung<textarea name="nis2_significance_justification" rows="3" placeholder="Warum ist der Incident erheblich, wahrscheinlich erheblich oder nicht erheblich?"></textarea></label>
                         <label>Kurzbeschreibung<textarea name="summary" rows="4"></textarea></label>
                         <label>Stakeholder-Zusammenfassung<textarea name="stakeholder_summary" rows="3"></textarea></label>
                         <label>Behoerden-/Case-Referenz<input name="authority_reference" type="text"></label>
@@ -7703,6 +7724,7 @@ async fn web_incidents(
                     incident_severity_options_for("HIGH"),
                     incident_status_options_for("TRIAGE"),
                     incident_runbook_template_options(&runbook_templates, None),
+                    incident_nis2_significance_options_for("NOT_ASSESSED"),
                 )
             } else {
                 r#"<article class="panel wide"><h2>Incident erfassen</h2><p>Fuer neue Incidents ist eine schreibende ISCY-Rolle notwendig.</p></article>"#.to_string()
@@ -7721,7 +7743,7 @@ async fn web_incidents(
                 <section class="grid">
                   <article class="panel wide">
                     <table>
-                      <thead><tr><th>Incident</th><th>Typ</th><th>Severity</th><th>Status</th><th>NIS2</th><th>24h</th><th>72h</th><th>Owner</th></tr></thead>
+                      <thead><tr><th>Incident</th><th>Typ</th><th>Severity</th><th>Status</th><th>Erheblichkeit</th><th>NIS2</th><th>24h</th><th>72h</th><th>Owner</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                   </article>
@@ -7733,7 +7755,7 @@ async fn web_incidents(
                 metric_card("NIS2", reportable_count),
                 metric_card("Ueberfaellig", overdue_count),
                 if rows.is_empty() {
-                    web_empty_row(8, "Keine Incidents vorhanden.")
+                    web_empty_row(9, "Keine Incidents vorhanden.")
                 } else {
                     rows
                 },
@@ -8328,7 +8350,8 @@ async fn web_incident_detail(
                       <tbody>
                         <tr><th>Status</th><td>{}</td><th>Severity</th><td>{}</td></tr>
                         <tr><th>Typ</th><td>{}</td><th>Runbook</th><td>{} Schritte</td></tr>
-                        <tr><th>NIS2</th><td>{}</td><th>Owner</th><td>{}</td></tr>
+                        <tr><th>Erheblichkeit</th><td>{}</td><th>NIS2</th><td>{}</td></tr>
+                        <tr><th>Bewertet am</th><td>{}</td><th>Owner</th><td>{}</td></tr>
                         <tr><th>Reporter</th><td>{}</td><th>Behoerdenreferenz</th><td>{}</td></tr>
                         <tr><th>Risiko</th><td>{}</td><th>Asset</th><td>{}</td></tr>
                         <tr><th>Prozess</th><td>{}</td><th>Erkannt</th><td>{}</td></tr>
@@ -8344,6 +8367,10 @@ async fn web_incident_detail(
                     <p>{}</p>
                     <h2>Stakeholder</h2>
                     <p>{}</p>
+                    <h2>NIS2-Erheblichkeitspruefung</h2>
+                    <p><strong>Kriterien:</strong> {}</p>
+                    <p><strong>Begruendung:</strong> {}</p>
+                    <p><strong>Referenz:</strong> {}</p>
                     <h2>Lessons Learned</h2>
                     <p>{}</p>
                   </article>
@@ -8396,7 +8423,14 @@ async fn web_incident_detail(
                 html_escape(&incident.severity_label),
                 html_escape(&incident.incident_type_label),
                 runbook_step_count,
+                html_escape(&incident.nis2_significance_label),
                 html_escape(&incident.nis2_reportability_label),
+                html_escape(
+                    incident
+                        .nis2_significance_assessed_at
+                        .as_deref()
+                        .unwrap_or("-"),
+                ),
                 html_escape(owner),
                 html_escape(reporter),
                 html_escape(&incident.authority_reference),
@@ -8416,6 +8450,9 @@ async fn web_incident_detail(
                 review_panel,
                 html_escape(&incident.summary),
                 html_escape(&incident.stakeholder_summary),
+                html_escape(&incident.nis2_significance_criteria),
+                html_escape(&incident.nis2_significance_justification),
+                html_escape(&incident.nis2_significance_reference),
                 html_escape(&incident.lessons_learned),
                 runbook_step_rows,
                 html_escape(&incident.runbook_template),
@@ -13005,6 +13042,12 @@ fn web_cve_assessment_form_request(
 fn web_incident_form_request(
     form: WebIncidentForm,
 ) -> Result<incident_store::IncidentWriteRequest, String> {
+    let nis2_significance_status = form.nis2_significance_status;
+    let nis2_reportable = nis2_significance_status
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case("SIGNIFICANT"))
+        || form.nis2_reportable.is_some();
     Ok(incident_store::IncidentWriteRequest {
         reporter_id: Some(optional_form_i64(form.reporter_id, "Reporter")?),
         owner_id: Some(optional_form_i64(form.owner_id, "Owner")?),
@@ -13021,7 +13064,14 @@ fn web_incident_form_request(
         confirmed_at: optional_form_text_for_write(form.confirmed_at),
         contained_at: optional_form_text_for_write(form.contained_at),
         resolved_at: optional_form_text_for_write(form.resolved_at),
-        nis2_reportable: Some(form.nis2_reportable.is_some()),
+        nis2_reportable: Some(nis2_reportable),
+        nis2_significance_status,
+        nis2_significance_criteria: form.nis2_significance_criteria,
+        nis2_significance_justification: form.nis2_significance_justification,
+        nis2_significance_reference: form.nis2_significance_reference,
+        nis2_significance_assessed_at: optional_form_text_for_write(
+            form.nis2_significance_assessed_at,
+        ),
         early_warning_sent_at: optional_form_text_for_write(form.early_warning_sent_at),
         notification_sent_at: optional_form_text_for_write(form.notification_sent_at),
         final_report_sent_at: optional_form_text_for_write(form.final_report_sent_at),
@@ -13158,9 +13208,14 @@ fn incident_edit_form_panel(
               <label>24h gesendet<input name="early_warning_sent_at" type="text" value="{}"></label>
               <label>72h gesendet<input name="notification_sent_at" type="text" value="{}"></label>
               <label>Final gesendet<input name="final_report_sent_at" type="text" value="{}"></label>
+              <label>NIS2-Erheblichkeit<select name="nis2_significance_status">{}</select></label>
+              <label>Erheblichkeit bewertet am<input name="nis2_significance_assessed_at" type="text" value="{}"></label>
               <label>Behoerden-/Case-Referenz<input name="authority_reference" type="text" value="{}"></label>
             </div>
-            <label class="checkbox-row"><input name="nis2_reportable" type="checkbox" value="1"{}> NIS2-meldepflichtig behandeln</label>
+            <p class="muted">24h-/72h-/30-Tage-Fristen werden erst aktiv, wenn die Erheblichkeitsentscheidung auf "Erheblich / NIS2 meldepflichtig" steht.</p>
+            <label>Kriterien nach NIS2 Art. 23 / EU 2024/2690<textarea name="nis2_significance_criteria" rows="4">{}</textarea></label>
+            <label>Begruendung der Entscheidung<textarea name="nis2_significance_justification" rows="4">{}</textarea></label>
+            <label>Referenz / Rechtsgrundlage<input name="nis2_significance_reference" type="text" value="{}"></label>
             <label>Kurzbeschreibung<textarea name="summary" rows="4">{}</textarea></label>
             <label>Runbook<textarea name="runbook_template" rows="7">{}</textarea></label>
             <label>Stakeholder-Zusammenfassung<textarea name="stakeholder_summary" rows="3">{}</textarea></label>
@@ -13191,8 +13246,17 @@ fn incident_edit_form_panel(
         html_escape(incident.early_warning_sent_at.as_deref().unwrap_or("")),
         html_escape(incident.notification_sent_at.as_deref().unwrap_or("")),
         html_escape(incident.final_report_sent_at.as_deref().unwrap_or("")),
+        incident_nis2_significance_options_for(&incident.nis2_significance_status),
+        html_escape(
+            incident
+                .nis2_significance_assessed_at
+                .as_deref()
+                .unwrap_or("")
+        ),
         html_escape(&incident.authority_reference),
-        checked_attr(incident.nis2_reportable),
+        html_escape(&incident.nis2_significance_criteria),
+        html_escape(&incident.nis2_significance_justification),
+        html_escape(&incident.nis2_significance_reference),
         html_escape(&incident.summary),
         html_escape(&incident.runbook_template),
         html_escape(&incident.stakeholder_summary),
@@ -13221,6 +13285,8 @@ fn incident_nis2_markdown(
 | Incident-Typ | {} |
 | Severity | {} |
 | Status | {} |
+| Erheblichkeitsstatus | {} |
+| Erheblich bewertet am | {} |
 | NIS2-Einstufung | {} |
 | Behoerden-/Case-Referenz | {} |
 | Meldepaket-Review | {} |
@@ -13237,6 +13303,14 @@ fn incident_nis2_markdown(
 | Risiko | {} |
 | Asset | {} |
 | Prozess | {} |
+
+## NIS2-Erheblichkeitsentscheidung
+
+| Feld | Wert |
+| --- | --- |
+| Kriterien | {} |
+| Begruendung | {} |
+| Referenz | {} |
 
 ## Meldefristen
 
@@ -13292,6 +13366,8 @@ fn incident_nis2_markdown(
         md_value(&incident.incident_type_label),
         md_value(&incident.severity_label),
         md_value(&incident.status_label),
+        md_value(&incident.nis2_significance_label),
+        md_optional(incident.nis2_significance_assessed_at.as_deref()),
         md_value(&incident.nis2_reportability_label),
         md_value(&incident.authority_reference),
         md_value(&incident.review_state_label),
@@ -13305,6 +13381,9 @@ fn incident_nis2_markdown(
         md_optional(incident.related_risk_title.as_deref()),
         md_optional(incident.related_asset_name.as_deref()),
         md_optional(incident.related_process_name.as_deref()),
+        md_block(&incident.nis2_significance_criteria),
+        md_block(&incident.nis2_significance_justification),
+        md_block(&incident.nis2_significance_reference),
         md_optional(incident.early_warning_due_at.as_deref()),
         md_optional(incident.early_warning_sent_at.as_deref()),
         md_value(&incident.early_warning_state_label),
@@ -13572,6 +13651,7 @@ fn incident_nis2_html(
       <tr><th>Incident-ID</th><td>{}</td><th>Tenant-ID</th><td>{}</td></tr>
       <tr><th>Titel</th><td>{}</td><th>Typ</th><td>{}</td></tr>
       <tr><th>Severity</th><td>{}</td><th>Status</th><td>{}</td></tr>
+      <tr><th>Erheblichkeitsstatus</th><td>{}</td><th>Erheblich bewertet am</th><td>{}</td></tr>
       <tr><th>NIS2</th><td>{}</td><th>Behoerden-/Case-Referenz</th><td>{}</td></tr>
       <tr><th>Meldepaket-Review</th><td>{}</td><th>Version</th><td>{}</td></tr>
       <tr><th>Geprueft</th><td>{} ({})</td><th>Freigegeben</th><td>{} ({})</td></tr>
@@ -13583,6 +13663,14 @@ fn incident_nis2_html(
   <p>{}</p>
   <h2>Stakeholder</h2>
   <p>{}</p>
+  <h2>NIS2-Erheblichkeitsentscheidung</h2>
+  <table>
+    <tbody>
+      <tr><th>Kriterien</th><td>{}</td></tr>
+      <tr><th>Begruendung</th><td>{}</td></tr>
+      <tr><th>Referenz</th><td>{}</td></tr>
+    </tbody>
+  </table>
   <h2>Runbook</h2>
   <pre>{}</pre>
   <h2>Evidence</h2>
@@ -13608,6 +13696,13 @@ fn incident_nis2_html(
         html_escape(&incident.incident_type_label),
         html_escape(&incident.severity_label),
         html_escape(&incident.status_label),
+        html_escape(&incident.nis2_significance_label),
+        html_escape(
+            incident
+                .nis2_significance_assessed_at
+                .as_deref()
+                .unwrap_or("-")
+        ),
         html_escape(&incident.nis2_reportability_label),
         html_escape(&incident.authority_reference),
         html_escape(&incident.review_state_label),
@@ -13625,6 +13720,9 @@ fn incident_nis2_html(
         html_escape(incident.final_report_sent_at.as_deref().unwrap_or("-")),
         html_escape(&incident.summary),
         html_escape(&incident.stakeholder_summary),
+        html_escape(&incident.nis2_significance_criteria),
+        html_escape(&incident.nis2_significance_justification),
+        html_escape(&incident.nis2_significance_reference),
         html_escape(&incident.runbook_template),
         evidence_rows,
         event_rows,
@@ -13644,6 +13742,14 @@ fn incident_nis2_pdf(
         format!("Typ: {}", incident.incident_type_label),
         format!("Severity: {}", incident.severity_label),
         format!("Status: {}", incident.status_label),
+        format!("Erheblichkeitsstatus: {}", incident.nis2_significance_label),
+        format!(
+            "Erheblich bewertet am: {}",
+            incident
+                .nis2_significance_assessed_at
+                .as_deref()
+                .unwrap_or("-")
+        ),
         format!("NIS2: {}", incident.nis2_reportability_label),
         format!("Behoerden-/Case-Referenz: {}", incident.authority_reference),
         format!(
@@ -13679,6 +13785,14 @@ fn incident_nis2_pdf(
         "Beschreibung:".to_string(),
     ];
     lines.extend(wrap_pdf_text(&incident.summary, 92));
+    lines.push(String::new());
+    lines.push("NIS2-Erheblichkeitsentscheidung:".to_string());
+    lines.push("Kriterien:".to_string());
+    lines.extend(wrap_pdf_text(&incident.nis2_significance_criteria, 92));
+    lines.push("Begruendung:".to_string());
+    lines.extend(wrap_pdf_text(&incident.nis2_significance_justification, 92));
+    lines.push("Referenz:".to_string());
+    lines.extend(wrap_pdf_text(&incident.nis2_significance_reference, 92));
     lines.push(String::new());
     lines.push("Runbook:".to_string());
     for line in incident.runbook_template.lines() {
@@ -14107,7 +14221,7 @@ fn incident_runbook_template_create_panel(context: &WebContext, can_write: bool)
 }
 
 fn incident_store_default_runbook() -> &'static str {
-    "1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.\n2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.\n3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.\n4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.\n5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren."
+    "1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.\n2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.\n3. Bewertung: Schweregrad, NIS2-Erheblichkeit, Datenbezug und Business Impact pruefen.\n4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.\n5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren."
 }
 
 fn incident_runbook_step_rows(
@@ -14562,6 +14676,26 @@ fn incident_status_options_for(selected_status: &str) -> String {
         ("CONTAINED", "Eingedaemmt"),
         ("RESOLVED", "Behoben"),
         ("CLOSED", "Geschlossen"),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            value,
+            selected_attr(value == &selected_status),
+            label
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn incident_nis2_significance_options_for(selected_status: &str) -> String {
+    [
+        ("NOT_ASSESSED", "Nicht bewertet"),
+        ("NOT_SIGNIFICANT", "Nicht erheblich"),
+        ("LIKELY_SIGNIFICANT", "Wahrscheinlich erheblich"),
+        ("SIGNIFICANT", "Erheblich / NIS2 meldepflichtig"),
     ]
     .iter()
     .map(|(value, label)| {

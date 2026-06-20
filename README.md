@@ -1,4 +1,4 @@
-# ISCY V23.7.14 / Rust 0.3.10
+# ISCY V23.7.15 / Rust 0.3.11
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -12,7 +12,8 @@ Der Stand ist damit fachlich konsistent und nach aktuellem Architekturverstaendn
 
 Fachliche Referenzen:
 
-- NIS2: [Richtlinie (EU) 2022/2555](https://eur-lex.europa.eu/eli/dir/2022/2555/oj), insbesondere Cybersecurity-Risikomanagement und Meldepflichten
+- NIS2: [Richtlinie (EU) 2022/2555](https://eur-lex.europa.eu/eli/dir/2022/2555/oj), insbesondere Cybersecurity-Risikomanagement und Meldepflichten fuer erhebliche Sicherheitsvorfaelle
+- NIS2-Erheblichkeitskriterien: [Durchfuehrungsverordnung (EU) 2024/2690](https://eur-lex.europa.eu/eli/reg_impl/2024/2690/oj), insbesondere Art. 3 als Best-Practice-Referenz fuer die Einstufung erheblicher Sicherheitsvorfaelle
 - DORA: [Verordnung (EU) 2022/2554](https://eur-lex.europa.eu/eli/reg/2022/2554/oj), insbesondere IKT-Risikomanagement, Incident Management, Resilienztests und IKT-Drittparteienrisiko
 - Cyber Resilience Act: [Verordnung (EU) 2024/2847](https://eur-lex.europa.eu/eli/reg/2024/2847/oj), insbesondere Product Security, Support-Zeitraeume, Vulnerability Handling und Security Updates
 - EU AI Act: [Verordnung (EU) 2024/1689](https://eur-lex.europa.eu/eli/reg/2024/1689/oj), insbesondere Risk Management, Logging, Transparenz, Robustheit und Cybersecurity fuer Hochrisiko-KI
@@ -154,7 +155,7 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 - `/cves/`
 - `/admin/users/`
 
-Incidents werden als Rust-Fallakten unter `/incidents/` gefuehrt. Detailseiten unter `/incidents/{id}` erlauben die Bearbeitung von Typ, Runbook, Status, Severity, Meldezeitpunkten und Behoerdenreferenz; Statuswechsel, Anlage, manuelle Timeline-Notizen und incidentbezogene Evidence-Uploads werden als Timeline-/Audit-Events in der Fallakte dokumentiert. Tenantbezogene Runbook-Vorlagen stehen ueber `/api/v1/incidents/runbook-templates` und im Incident-Formular bereit. Verknuepfte Evidence wird direkt in der Fallakte angezeigt und kann dort hochgeladen werden. Alertmanager-firing Alerts werden per Fingerprint oder Alertname dedupliziert, resolved Alerts schliessen offene Alert-Fallakten automatisch, und `/operations/incidents/` zeigt offene, kritische, Triage- und resolved Alert-Faelle mit direkten Filtern (`alert_filter=open|critical|resolved`) sowie optionaler Review-Pflicht fuer fehlende Root-Cause-/Lessons-Learned-Dokumentation. Das NIS2-Meldepaket inklusive Audit-Timeline kann als Markdown, HTML oder PDF ueber `/incidents/{id}/nis2-export`, `/incidents/{id}/nis2-export.html`, `/incidents/{id}/nis2-export.pdf` sowie die entsprechenden `/api/v1/incidents/{id}/...` Endpunkte exportiert werden.
+Incidents werden als Rust-Fallakten unter `/incidents/` gefuehrt. Detailseiten unter `/incidents/{id}` erlauben die Bearbeitung von Typ, Runbook, Status, Severity, Erheblichkeitsentscheidung, Meldezeitpunkten und Behoerdenreferenz; Statuswechsel, NIS2-Erheblichkeitsbewertungen, Anlage, manuelle Timeline-Notizen und incidentbezogene Evidence-Uploads werden als Timeline-/Audit-Events in der Fallakte dokumentiert. ISCY trennt bewusst den Security Incident vom erheblichen Sicherheitsvorfall: Die Status `Nicht bewertet`, `Nicht erheblich`, `Wahrscheinlich erheblich` und `Erheblich / NIS2 meldepflichtig` koennen mit Kriterien, Begruendung, Referenz und Bewertungszeitpunkt dokumentiert werden. Die 24h-/72h-/30-Tage-Fristen werden erst aktiv, wenn die Bewertung auf `Erheblich / NIS2 meldepflichtig` steht. Tenantbezogene Runbook-Vorlagen stehen ueber `/api/v1/incidents/runbook-templates` und im Incident-Formular bereit. Verknuepfte Evidence wird direkt in der Fallakte angezeigt und kann dort hochgeladen werden. Alertmanager-firing Alerts werden per Fingerprint oder Alertname dedupliziert, resolved Alerts schliessen offene Alert-Fallakten automatisch, und `/operations/incidents/` zeigt offene, kritische, Triage- und resolved Alert-Faelle mit direkten Filtern (`alert_filter=open|critical|resolved`) sowie optionaler Review-Pflicht fuer fehlende Root-Cause-/Lessons-Learned-Dokumentation. Das NIS2-Meldepaket inklusive Erheblichkeitsentscheidung und Audit-Timeline kann als Markdown, HTML oder PDF ueber `/incidents/{id}/nis2-export`, `/incidents/{id}/nis2-export.html`, `/incidents/{id}/nis2-export.pdf` sowie die entsprechenden `/api/v1/incidents/{id}/...` Endpunkte exportiert werden.
 
 Product Security wird unter `/product-security/` als Rust-Arbeitsbereich gefuehrt. CSAF-, CycloneDX- und SPDX-Importe werden historisiert, validiert und ueber Detailseiten mit Validierungsfehlern sowie Komponenten-Matches angezeigt. CVE-Asset-Korrelationen koennen vorgeschlagen, akzeptiert oder abgelehnt werden; akzeptierte Korrelationen erzeugen bei Bedarf Risiko- und Roadmap-Arbeit mit stabilem Evidence-Key. Das Dashboard zeigt offene CVE-Reviews und fehlende Evidence, buendelt automatisch erzeugte CVE-Risiken in einer Review-Queue, filtert nach offenen Reviews, fehlender Evidence oder fehlendem Risiko, bietet Bulk-Aktionen fuer ausgewaehlte CVE-Reviews und verlinkt Evidence-Uploads nach dem Speichern zur Ausgangsseite zurueck. Die Product-Security-Trends sind zusaetzlich ueber Prometheus-Metriken fuer Coverage, Importvalidierung, Trend-Signale und Snapshot-Verlauf verfuegbar.
 
@@ -162,7 +163,7 @@ Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel,
 
 ## Zero-Trust Agent
 
-ISCY `0.3.10` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.11` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 

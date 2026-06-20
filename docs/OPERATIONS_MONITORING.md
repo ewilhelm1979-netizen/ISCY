@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.14 / Rust 0.3.10
+Stand: ISCY V23.7.15 / Rust 0.3.11
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 
@@ -190,7 +190,7 @@ Wenn Alertmanager einen firing Alert mit ISCY-Kontext an `POST /api/v1/operation
 
 1. In `/operations/incidents/` offene Alert-Fallakten sichten; Filter `open`, `critical` und `resolved` nutzen und bei Bedarf die Detailfallakte oeffnen.
 2. Die automatisch angelegte Evidence pruefen und bei Bedarf Monitoring-Screenshot, Grafana-Link oder Log-Auszug nachreichen.
-3. Im Incident-Runbook Owner, Eindaemmung, Kommunikationsbedarf und regulatorische Relevanz bewerten.
+3. Im Incident-Runbook Owner, Eindaemmung, Kommunikationsbedarf und NIS2-Erheblichkeit bewerten; Fristen starten erst bei `Erheblich / NIS2 meldepflichtig`.
 4. Falls ein Control-, CVE- oder Product-Security-Bezug besteht, Risk-/Roadmap-Arbeit verknuepfen oder neu erzeugen.
 5. Nach Behebung Timeline, Root Cause, Lessons Learned und Alert-Schwelle reviewen.
 

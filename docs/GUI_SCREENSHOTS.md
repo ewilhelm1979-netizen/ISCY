@@ -1,6 +1,6 @@
 # ISCY GUI Screenshots
 
-Stand: ISCY V23.7.14 / Rust 0.3.10
+Stand: ISCY V23.7.15 / Rust 0.3.11
 
 Diese Screenshots dokumentieren die aktuelle serverseitige ISCY-Weboberflaeche fuer die wichtigsten Tabs und Funktionsbereiche.
 

@@ -53,6 +53,12 @@ pub struct IncidentSummary {
     pub resolved_at: Option<String>,
     pub nis2_reportable: bool,
     pub nis2_reportability_label: String,
+    pub nis2_significance_status: String,
+    pub nis2_significance_label: String,
+    pub nis2_significance_criteria: String,
+    pub nis2_significance_justification: String,
+    pub nis2_significance_reference: String,
+    pub nis2_significance_assessed_at: Option<String>,
     pub early_warning_due_at: Option<String>,
     pub early_warning_sent_at: Option<String>,
     pub early_warning_state: String,
@@ -189,6 +195,12 @@ pub struct IncidentWriteRequest {
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub resolved_at: Option<Option<String>>,
     pub nis2_reportable: Option<bool>,
+    pub nis2_significance_status: Option<String>,
+    pub nis2_significance_criteria: Option<String>,
+    pub nis2_significance_justification: Option<String>,
+    pub nis2_significance_reference: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub nis2_significance_assessed_at: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub early_warning_sent_at: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -2175,13 +2187,16 @@ async fn create_incident_postgres(
             tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id,
             related_process_id, title, summary, incident_type, runbook_template, severity, status, detected_at,
             confirmed_at, contained_at, resolved_at, nis2_reportable,
+            nis2_significance_status, nis2_significance_criteria, nis2_significance_justification,
+            nis2_significance_reference, nis2_significance_assessed_at,
             early_warning_due_at, early_warning_sent_at, notification_due_at,
             notification_sent_at, final_report_due_at, final_report_sent_at,
             authority_reference, stakeholder_summary, lessons_learned, created_at, updated_at
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-            $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28
+            $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+            $31, $32, $33
         )
         RETURNING id
         "#,
@@ -2203,6 +2218,11 @@ async fn create_incident_postgres(
     .bind(write.contained_at.as_deref())
     .bind(write.resolved_at.as_deref())
     .bind(write.nis2_reportable)
+    .bind(&write.nis2_significance_status)
+    .bind(&write.nis2_significance_criteria)
+    .bind(&write.nis2_significance_justification)
+    .bind(&write.nis2_significance_reference)
+    .bind(write.nis2_significance_assessed_at.as_deref())
     .bind(write.early_warning_due_at.as_deref())
     .bind(write.early_warning_sent_at.as_deref())
     .bind(write.notification_due_at.as_deref())
@@ -2249,13 +2269,16 @@ async fn create_incident_sqlite(
             tenant_id, reporter_id, owner_id, related_risk_id, related_asset_id,
             related_process_id, title, summary, incident_type, runbook_template, severity, status, detected_at,
             confirmed_at, contained_at, resolved_at, nis2_reportable,
+            nis2_significance_status, nis2_significance_criteria, nis2_significance_justification,
+            nis2_significance_reference, nis2_significance_assessed_at,
             early_warning_due_at, early_warning_sent_at, notification_due_at,
             notification_sent_at, final_report_due_at, final_report_sent_at,
             authority_reference, stakeholder_summary, lessons_learned, created_at, updated_at
         )
         VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
+            ?31, ?32, ?33
         )
         "#,
     )
@@ -2276,6 +2299,11 @@ async fn create_incident_sqlite(
     .bind(write.contained_at.as_deref())
     .bind(write.resolved_at.as_deref())
     .bind(write.nis2_reportable)
+    .bind(&write.nis2_significance_status)
+    .bind(&write.nis2_significance_criteria)
+    .bind(&write.nis2_significance_justification)
+    .bind(&write.nis2_significance_reference)
+    .bind(write.nis2_significance_assessed_at.as_deref())
     .bind(write.early_warning_due_at.as_deref())
     .bind(write.early_warning_sent_at.as_deref())
     .bind(write.notification_due_at.as_deref())
@@ -2327,10 +2355,13 @@ async fn update_incident_postgres(
             related_process_id = $7, title = $8, summary = $9, incident_type = $10,
             runbook_template = $11, severity = $12, status = $13, detected_at = $14,
             confirmed_at = $15, contained_at = $16, resolved_at = $17, nis2_reportable = $18,
-            early_warning_due_at = $19, early_warning_sent_at = $20,
-            notification_due_at = $21, notification_sent_at = $22, final_report_due_at = $23,
-            final_report_sent_at = $24, authority_reference = $25,
-            stakeholder_summary = $26, lessons_learned = $27, updated_at = $28
+            nis2_significance_status = $19, nis2_significance_criteria = $20,
+            nis2_significance_justification = $21, nis2_significance_reference = $22,
+            nis2_significance_assessed_at = $23,
+            early_warning_due_at = $24, early_warning_sent_at = $25,
+            notification_due_at = $26, notification_sent_at = $27, final_report_due_at = $28,
+            final_report_sent_at = $29, authority_reference = $30,
+            stakeholder_summary = $31, lessons_learned = $32, updated_at = $33
         WHERE tenant_id = $1 AND id = $2
         "#,
     )
@@ -2352,6 +2383,11 @@ async fn update_incident_postgres(
     .bind(write.contained_at.as_deref())
     .bind(write.resolved_at.as_deref())
     .bind(write.nis2_reportable)
+    .bind(&write.nis2_significance_status)
+    .bind(&write.nis2_significance_criteria)
+    .bind(&write.nis2_significance_justification)
+    .bind(&write.nis2_significance_reference)
+    .bind(write.nis2_significance_assessed_at.as_deref())
     .bind(write.early_warning_due_at.as_deref())
     .bind(write.early_warning_sent_at.as_deref())
     .bind(write.notification_due_at.as_deref())
@@ -2399,10 +2435,13 @@ async fn update_incident_sqlite(
             related_process_id = ?7, title = ?8, summary = ?9, incident_type = ?10,
             runbook_template = ?11, severity = ?12, status = ?13, detected_at = ?14,
             confirmed_at = ?15, contained_at = ?16, resolved_at = ?17, nis2_reportable = ?18,
-            early_warning_due_at = ?19, early_warning_sent_at = ?20,
-            notification_due_at = ?21, notification_sent_at = ?22, final_report_due_at = ?23,
-            final_report_sent_at = ?24, authority_reference = ?25,
-            stakeholder_summary = ?26, lessons_learned = ?27, updated_at = ?28
+            nis2_significance_status = ?19, nis2_significance_criteria = ?20,
+            nis2_significance_justification = ?21, nis2_significance_reference = ?22,
+            nis2_significance_assessed_at = ?23,
+            early_warning_due_at = ?24, early_warning_sent_at = ?25,
+            notification_due_at = ?26, notification_sent_at = ?27, final_report_due_at = ?28,
+            final_report_sent_at = ?29, authority_reference = ?30,
+            stakeholder_summary = ?31, lessons_learned = ?32, updated_at = ?33
         WHERE tenant_id = ?1 AND id = ?2
         "#,
     )
@@ -2424,6 +2463,11 @@ async fn update_incident_sqlite(
     .bind(write.contained_at.as_deref())
     .bind(write.resolved_at.as_deref())
     .bind(write.nis2_reportable)
+    .bind(&write.nis2_significance_status)
+    .bind(&write.nis2_significance_criteria)
+    .bind(&write.nis2_significance_justification)
+    .bind(&write.nis2_significance_reference)
+    .bind(write.nis2_significance_assessed_at.as_deref())
     .bind(write.early_warning_due_at.as_deref())
     .bind(write.early_warning_sent_at.as_deref())
     .bind(write.notification_due_at.as_deref())
@@ -2464,6 +2508,11 @@ struct NewIncident {
     contained_at: Option<String>,
     resolved_at: Option<String>,
     nis2_reportable: bool,
+    nis2_significance_status: String,
+    nis2_significance_criteria: String,
+    nis2_significance_justification: String,
+    nis2_significance_reference: String,
+    nis2_significance_assessed_at: Option<String>,
     early_warning_due_at: Option<String>,
     early_warning_sent_at: Option<String>,
     notification_due_at: Option<String>,
@@ -2494,6 +2543,11 @@ struct ExistingIncident {
     contained_at: Option<String>,
     resolved_at: Option<String>,
     nis2_reportable: bool,
+    nis2_significance_status: String,
+    nis2_significance_criteria: String,
+    nis2_significance_justification: String,
+    nis2_significance_reference: String,
+    nis2_significance_assessed_at: Option<String>,
     early_warning_due_at: Option<String>,
     early_warning_sent_at: Option<String>,
     notification_due_at: Option<String>,
@@ -2706,6 +2760,32 @@ async fn incident_update_events_postgres(
             .await?,
         );
     }
+    if current.nis2_significance_status != updated.nis2_significance_status
+        || current.nis2_reportable != updated.nis2_reportable
+    {
+        events.push(
+            append_incident_event_postgres(
+                pool,
+                tenant_id,
+                incident_id,
+                actor_id,
+                IncidentEventWriteRequest::timeline_note(
+                    Some("NIS2-Erheblichkeit bewertet"),
+                    &format!(
+                        "NIS2-Erheblichkeitsstatus von '{}' auf '{}' geaendert. Meldepflicht: {}.",
+                        current.nis2_significance_label,
+                        updated.nis2_significance_label,
+                        if updated.nis2_reportable {
+                            "ja"
+                        } else {
+                            "nein"
+                        },
+                    ),
+                ),
+            )
+            .await?,
+        );
+    }
     Ok(events)
 }
 
@@ -2730,6 +2810,32 @@ async fn incident_update_events_sqlite(
                     &updated.status,
                     &current.status_label,
                     &updated.status_label,
+                ),
+            )
+            .await?,
+        );
+    }
+    if current.nis2_significance_status != updated.nis2_significance_status
+        || current.nis2_reportable != updated.nis2_reportable
+    {
+        events.push(
+            append_incident_event_sqlite(
+                pool,
+                tenant_id,
+                incident_id,
+                actor_id,
+                IncidentEventWriteRequest::timeline_note(
+                    Some("NIS2-Erheblichkeit bewertet"),
+                    &format!(
+                        "NIS2-Erheblichkeitsstatus von '{}' auf '{}' geaendert. Meldepflicht: {}.",
+                        current.nis2_significance_label,
+                        updated.nis2_significance_label,
+                        if updated.nis2_reportable {
+                            "ja"
+                        } else {
+                            "nein"
+                        },
+                    ),
                 ),
             )
             .await?,
@@ -2881,7 +2987,30 @@ impl NewIncident {
         let confirmed_at = normalize_optional_datetime(payload.confirmed_at.flatten().as_deref())?;
         let contained_at = normalize_optional_datetime(payload.contained_at.flatten().as_deref())?;
         let resolved_at = normalize_optional_datetime(payload.resolved_at.flatten().as_deref())?;
-        let nis2_reportable = payload.nis2_reportable.unwrap_or(false);
+        let legacy_nis2_reportable = payload.nis2_reportable.unwrap_or(false);
+        let nis2_significance_status = normalize_nis2_significance_status(
+            payload.nis2_significance_status.as_deref(),
+            legacy_nis2_reportable,
+        );
+        let nis2_reportable = nis2_significance_status == "SIGNIFICANT";
+        let nis2_significance_criteria =
+            normalize_nis2_significance_text(payload.nis2_significance_criteria.as_deref());
+        let nis2_significance_justification =
+            normalize_nis2_significance_text(payload.nis2_significance_justification.as_deref());
+        let nis2_significance_reference = normalize_nis2_significance_reference(
+            payload.nis2_significance_reference.as_deref(),
+            &nis2_significance_status,
+        );
+        let nis2_significance_assessed_at = normalize_optional_datetime(
+            payload.nis2_significance_assessed_at.flatten().as_deref(),
+        )?
+        .or_else(|| {
+            if nis2_significance_status != "NOT_ASSESSED" {
+                Some(now.clone())
+            } else {
+                None
+            }
+        });
         let deadlines = nis2_deadlines(nis2_reportable, detected_at.as_deref());
         Ok(Self {
             reporter_id: payload.reporter_id.flatten(),
@@ -2900,6 +3029,11 @@ impl NewIncident {
             contained_at,
             resolved_at,
             nis2_reportable,
+            nis2_significance_status,
+            nis2_significance_criteria,
+            nis2_significance_justification,
+            nis2_significance_reference,
+            nis2_significance_assessed_at,
             early_warning_due_at: deadlines.early_warning_due_at,
             early_warning_sent_at: normalize_optional_datetime(
                 payload.early_warning_sent_at.flatten().as_deref(),
@@ -2966,7 +3100,41 @@ impl ExistingIncident {
             Some(value) => normalize_optional_datetime(value.as_deref())?,
             None => current.resolved_at,
         };
-        let nis2_reportable = payload.nis2_reportable.unwrap_or(current.nis2_reportable);
+        let nis2_significance_status = normalize_nis2_significance_status_for_update(
+            payload.nis2_significance_status.as_deref(),
+            payload.nis2_reportable,
+            &current.nis2_significance_status,
+        );
+        let nis2_reportable = nis2_significance_status == "SIGNIFICANT";
+        let nis2_significance_criteria = payload
+            .nis2_significance_criteria
+            .map(|value| normalize_nis2_significance_text(Some(&value)))
+            .unwrap_or(current.nis2_significance_criteria);
+        let nis2_significance_justification = payload
+            .nis2_significance_justification
+            .map(|value| normalize_nis2_significance_text(Some(&value)))
+            .unwrap_or(current.nis2_significance_justification);
+        let nis2_significance_reference = payload
+            .nis2_significance_reference
+            .map(|value| {
+                normalize_nis2_significance_reference(Some(&value), &nis2_significance_status)
+            })
+            .unwrap_or_else(|| {
+                normalize_nis2_significance_reference(
+                    Some(&current.nis2_significance_reference),
+                    &nis2_significance_status,
+                )
+            });
+        let nis2_significance_assessed_at = match payload.nis2_significance_assessed_at {
+            Some(value) => normalize_optional_datetime(value.as_deref())?,
+            None if nis2_significance_status != current.nis2_significance_status
+                && nis2_significance_status != "NOT_ASSESSED" =>
+            {
+                Some(now.clone())
+            }
+            None if nis2_significance_status == "NOT_ASSESSED" => None,
+            None => current.nis2_significance_assessed_at,
+        };
         let deadlines = nis2_deadlines(nis2_reportable, detected_at.as_deref());
         Ok(Self {
             reporter_id: payload.reporter_id.unwrap_or(current.reporter_id),
@@ -2987,6 +3155,11 @@ impl ExistingIncident {
             contained_at,
             resolved_at,
             nis2_reportable,
+            nis2_significance_status,
+            nis2_significance_criteria,
+            nis2_significance_justification,
+            nis2_significance_reference,
+            nis2_significance_assessed_at,
             early_warning_due_at: deadlines.early_warning_due_at,
             early_warning_sent_at: match payload.early_warning_sent_at {
                 Some(value) => normalize_optional_datetime(value.as_deref())?,
@@ -3036,6 +3209,11 @@ impl ExistingIncident {
             contained_at: self.contained_at.clone(),
             resolved_at: self.resolved_at.clone(),
             nis2_reportable: self.nis2_reportable,
+            nis2_significance_status: self.nis2_significance_status.clone(),
+            nis2_significance_criteria: self.nis2_significance_criteria.clone(),
+            nis2_significance_justification: self.nis2_significance_justification.clone(),
+            nis2_significance_reference: self.nis2_significance_reference.clone(),
+            nis2_significance_assessed_at: self.nis2_significance_assessed_at.clone(),
             early_warning_due_at: self.early_warning_due_at.clone(),
             early_warning_sent_at: self.early_warning_sent_at.clone(),
             notification_due_at: self.notification_due_at.clone(),
@@ -3233,6 +3411,11 @@ fn incident_select_postgres_sql(where_clause: &str, limit_placeholder: &str) -> 
             incident.contained_at::text AS contained_at,
             incident.resolved_at::text AS resolved_at,
             incident.nis2_reportable,
+            incident.nis2_significance_status,
+            incident.nis2_significance_criteria,
+            incident.nis2_significance_justification,
+            incident.nis2_significance_reference,
+            incident.nis2_significance_assessed_at::text AS nis2_significance_assessed_at,
             incident.early_warning_due_at::text AS early_warning_due_at,
             incident.early_warning_sent_at::text AS early_warning_sent_at,
             incident.notification_due_at::text AS notification_due_at,
@@ -3313,6 +3496,11 @@ fn incident_select_sqlite_sql(where_clause: &str, limit_placeholder: &str) -> St
             CAST(incident.contained_at AS TEXT) AS contained_at,
             CAST(incident.resolved_at AS TEXT) AS resolved_at,
             incident.nis2_reportable,
+            incident.nis2_significance_status,
+            incident.nis2_significance_criteria,
+            incident.nis2_significance_justification,
+            incident.nis2_significance_reference,
+            CAST(incident.nis2_significance_assessed_at AS TEXT) AS nis2_significance_assessed_at,
             CAST(incident.early_warning_due_at AS TEXT) AS early_warning_due_at,
             CAST(incident.early_warning_sent_at AS TEXT) AS early_warning_sent_at,
             CAST(incident.notification_due_at AS TEXT) AS notification_due_at,
@@ -3367,6 +3555,7 @@ fn summary_from_pg_row(row: PgRow) -> Result<IncidentSummary, sqlx::Error> {
     let status: String = row.try_get("status")?;
     let incident_type: String = row.try_get("incident_type")?;
     let review_state: String = row.try_get("review_state")?;
+    let nis2_significance_status: String = row.try_get("nis2_significance_status")?;
     let nis2_reportable: bool = row.try_get("nis2_reportable")?;
     let early_warning_due_at: Option<String> = row.try_get("early_warning_due_at")?;
     let early_warning_sent_at: Option<String> = row.try_get("early_warning_sent_at")?;
@@ -3413,6 +3602,12 @@ fn summary_from_pg_row(row: PgRow) -> Result<IncidentSummary, sqlx::Error> {
         resolved_at: row.try_get("resolved_at")?,
         nis2_reportability_label: reportability_label(nis2_reportable).to_string(),
         nis2_reportable,
+        nis2_significance_label: nis2_significance_label(&nis2_significance_status).to_string(),
+        nis2_significance_status,
+        nis2_significance_criteria: row.try_get("nis2_significance_criteria")?,
+        nis2_significance_justification: row.try_get("nis2_significance_justification")?,
+        nis2_significance_reference: row.try_get("nis2_significance_reference")?,
+        nis2_significance_assessed_at: row.try_get("nis2_significance_assessed_at")?,
         early_warning_due_at,
         early_warning_sent_at,
         early_warning_state_label: deadline_state_label(&early_warning_state).to_string(),
@@ -3457,6 +3652,7 @@ fn summary_from_sqlite_row(row: SqliteRow) -> Result<IncidentSummary, sqlx::Erro
     let status: String = row.try_get("status")?;
     let incident_type: String = row.try_get("incident_type")?;
     let review_state: String = row.try_get("review_state")?;
+    let nis2_significance_status: String = row.try_get("nis2_significance_status")?;
     let nis2_reportable: bool = row.try_get("nis2_reportable")?;
     let early_warning_due_at: Option<String> = row.try_get("early_warning_due_at")?;
     let early_warning_sent_at: Option<String> = row.try_get("early_warning_sent_at")?;
@@ -3503,6 +3699,12 @@ fn summary_from_sqlite_row(row: SqliteRow) -> Result<IncidentSummary, sqlx::Erro
         resolved_at: row.try_get("resolved_at")?,
         nis2_reportability_label: reportability_label(nis2_reportable).to_string(),
         nis2_reportable,
+        nis2_significance_label: nis2_significance_label(&nis2_significance_status).to_string(),
+        nis2_significance_status,
+        nis2_significance_criteria: row.try_get("nis2_significance_criteria")?,
+        nis2_significance_justification: row.try_get("nis2_significance_justification")?,
+        nis2_significance_reference: row.try_get("nis2_significance_reference")?,
+        nis2_significance_assessed_at: row.try_get("nis2_significance_assessed_at")?,
         early_warning_due_at,
         early_warning_sent_at,
         early_warning_state_label: deadline_state_label(&early_warning_state).to_string(),
@@ -3881,25 +4083,25 @@ fn normalize_runbook_template(value: Option<&str>, incident_type: &str) -> Strin
 fn runbook_template_for(incident_type: &str) -> &'static str {
     match incident_type {
         "PHISHING" => {
-            "1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.\n2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.\n3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.\n4. Meldung: Betroffenheit, Datenarten und NIS2-Fristen bewerten.\n5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren."
+            "1. Scope: betroffene Postfaecher, URLs, Absender und Zeitfenster erfassen.\n2. Eindaemmung: URLs blocken, Mails zurueckrufen, kompromittierte Sessions widerrufen.\n3. Identitaet: MFA/Passwort-Reset, Token-Review und privilegierte Konten pruefen.\n4. Erheblichkeit: Betroffenheit, Datenarten und NIS2-Meldepflicht bewerten.\n5. Abschluss: Awareness-, Mail-Gateway- und Detection-Regeln aktualisieren."
         }
         "MALWARE" => {
             "1. Scope: betroffene Hosts, Hashes, Prozesse und C2-Indikatoren sichern.\n2. Eindaemmung: Hosts isolieren, IOC-Blocklisten verteilen und Backups schuetzen.\n3. Analyse: Entry Point, Persistenz, Lateralmovement und Datenabfluss pruefen.\n4. Wiederherstellung: Systeme neu aufsetzen oder bereinigen, Monitoring erhoehen.\n5. Abschluss: Controls, EDR-Regeln und Patch-Status aktualisieren."
         }
         "DATA_BREACH" => {
-            "1. Scope: Datenarten, betroffene Personen/Systeme und Zeitraum bestimmen.\n2. Eindaemmung: Zugriff stoppen, Berechtigungen entziehen und Logs sichern.\n3. Bewertung: Meldepflichten nach NIS2/DSGVO und Kundenpflichten entscheiden.\n4. Kommunikation: Legal, Datenschutz, Management und Kunden abgestimmt informieren.\n5. Abschluss: Root Cause, Control-Gaps und Nachweise dokumentieren."
+            "1. Scope: Datenarten, betroffene Personen/Systeme und Zeitraum bestimmen.\n2. Eindaemmung: Zugriff stoppen, Berechtigungen entziehen und Logs sichern.\n3. Bewertung: NIS2-Erheblichkeit, DSGVO-Meldepflicht und Kundenpflichten entscheiden.\n4. Kommunikation: Legal, Datenschutz, Management und Kunden abgestimmt informieren.\n5. Abschluss: Root Cause, Control-Gaps und Nachweise dokumentieren."
         }
         "OUTAGE" => {
             "1. Scope: betroffene Services, SLAs, kritische Prozesse und Nutzerkreis erfassen.\n2. Stabilisierung: Workarounds, Failover und Wiederanlauf priorisieren.\n3. Ursache: Infrastruktur, Changes, Abhaengigkeiten und Kapazitaeten pruefen.\n4. Kommunikation: Status, ETA und Auswirkungen fuer Stakeholder aktualisieren.\n5. Abschluss: Resilienz-, Monitoring- und Recovery-Massnahmen nachziehen."
         }
         "SUPPLIER" => {
-            "1. Scope: betroffene Lieferanten, Services, Datenfluesse und Vertraege erfassen.\n2. Eindaemmung: Schnittstellen, Zugriffe und Abhaengigkeiten kontrollieren.\n3. Nachweise: Lieferantenstatement, IOCs, SLA-Auswirkung und Audit-Trails sichern.\n4. Bewertung: NIS2/KRITIS-Auswirkung und Kundenkommunikation festlegen.\n5. Abschluss: Third-Party-Risiko, Vertragscontrols und Exit-Optionen aktualisieren."
+            "1. Scope: betroffene Lieferanten, Services, Datenfluesse und Vertraege erfassen.\n2. Eindaemmung: Schnittstellen, Zugriffe und Abhaengigkeiten kontrollieren.\n3. Nachweise: Lieferantenstatement, IOCs, SLA-Auswirkung und Audit-Trails sichern.\n4. Bewertung: NIS2-Erheblichkeit, KRITIS-Auswirkung und Kundenkommunikation festlegen.\n5. Abschluss: Third-Party-Risiko, Vertragscontrols und Exit-Optionen aktualisieren."
         }
         "VULNERABILITY" => {
             "1. Scope: betroffene Produkte, Versionen, Assets und Exposure erfassen.\n2. Priorisierung: CVSS, EPSS, KEV, Exploit-Reife und Business-Kontext bewerten.\n3. Eindaemmung: Workarounds, WAF/EDR-Regeln und Netzwerkbegrenzung setzen.\n4. Behebung: Patch, Upgrade oder Konfigurationsfix mit Evidence verknuepfen.\n5. Abschluss: Risiko, SBOM/Product-Security und Detection-Content aktualisieren."
         }
         _ => {
-            "1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.\n2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.\n3. Bewertung: Schweregrad, NIS2-Relevanz, Datenbezug und Business Impact pruefen.\n4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.\n5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren."
+            "1. Scope: betroffene Systeme, Prozesse, Personen und Zeitraum erfassen.\n2. Eindaemmung: unmittelbare Schutzmassnahmen und Verantwortliche festlegen.\n3. Bewertung: Schweregrad, NIS2-Erheblichkeit, Datenbezug und Business Impact pruefen.\n4. Kommunikation: Owner, Management, Legal und externe Stellen abstimmen.\n5. Abschluss: Root Cause, Evidence, Lessons Learned und Massnahmen dokumentieren."
         }
     }
 }
@@ -3934,6 +4136,60 @@ fn normalize_status(value: Option<&str>) -> String {
         "RESOLVED" => "RESOLVED".to_string(),
         "CLOSED" => "CLOSED".to_string(),
         _ => "TRIAGE".to_string(),
+    }
+}
+
+fn normalize_nis2_significance_status(value: Option<&str>, legacy_reportable: bool) -> String {
+    let normalized = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_uppercase());
+    match normalized.as_deref() {
+        Some("NOT_SIGNIFICANT") => "NOT_SIGNIFICANT".to_string(),
+        Some("LIKELY_SIGNIFICANT") => "LIKELY_SIGNIFICANT".to_string(),
+        Some("SIGNIFICANT") => "SIGNIFICANT".to_string(),
+        Some("NOT_ASSESSED") => "NOT_ASSESSED".to_string(),
+        _ if legacy_reportable => "SIGNIFICANT".to_string(),
+        _ => "NOT_ASSESSED".to_string(),
+    }
+}
+
+fn normalize_nis2_significance_status_for_update(
+    value: Option<&str>,
+    legacy_reportable: Option<bool>,
+    current: &str,
+) -> String {
+    let normalized = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_uppercase());
+    match normalized.as_deref() {
+        Some("NOT_SIGNIFICANT") => "NOT_SIGNIFICANT".to_string(),
+        Some("LIKELY_SIGNIFICANT") => "LIKELY_SIGNIFICANT".to_string(),
+        Some("SIGNIFICANT") => "SIGNIFICANT".to_string(),
+        Some("NOT_ASSESSED") => "NOT_ASSESSED".to_string(),
+        _ => match legacy_reportable {
+            Some(true) => "SIGNIFICANT".to_string(),
+            Some(false) if current == "SIGNIFICANT" => "NOT_SIGNIFICANT".to_string(),
+            Some(false) => current.to_string(),
+            None => current.to_string(),
+        },
+    }
+}
+
+fn normalize_nis2_significance_text(value: Option<&str>) -> String {
+    limit_chars(&normalize_optional_text(value), 4000)
+}
+
+fn normalize_nis2_significance_reference(value: Option<&str>, status: &str) -> String {
+    let value = normalize_optional_text(value);
+    if !value.is_empty() {
+        return limit_chars(&value, 1000);
+    }
+    if status == "NOT_ASSESSED" {
+        String::new()
+    } else {
+        "NIS2 Article 23; Commission Implementing Regulation (EU) 2024/2690 Article 3 as best-practice".to_string()
     }
 }
 
@@ -4035,6 +4291,15 @@ fn reportability_label(value: bool) -> &'static str {
         "NIS2 meldepflichtig"
     } else {
         "Noch nicht NIS2 meldepflichtig"
+    }
+}
+
+fn nis2_significance_label(value: &str) -> &'static str {
+    match value {
+        "NOT_SIGNIFICANT" => "Nicht erheblich",
+        "LIKELY_SIGNIFICANT" => "Wahrscheinlich erheblich",
+        "SIGNIFICANT" => "Erheblich / NIS2 meldepflichtig",
+        _ => "Nicht bewertet",
     }
 }
 
