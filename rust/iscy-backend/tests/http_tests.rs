@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.11\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.12\""));
 }
 
 #[tokio::test]
@@ -5994,6 +5994,11 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Fallakte bearbeiten"));
+    assert!(html.contains("Incident-Entscheidungsfluss"));
+    assert!(html.contains("href=\"/incidents/1?tenant_id=42&amp;user_id=7#incident-case\""));
+    assert!(html.contains("href=\"/incidents/1?tenant_id=42&amp;user_id=7#incident-significance\""));
+    assert!(html.contains("Runbook / Evidence"));
+    assert!(html.contains("id=\"incident-package\""));
     assert!(html.contains("Markdown herunterladen"));
     assert!(html.contains("HTML herunterladen"));
     assert!(html.contains("PDF herunterladen"));

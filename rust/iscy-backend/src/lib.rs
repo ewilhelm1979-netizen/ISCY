@@ -8304,6 +8304,7 @@ async fn web_incident_detail(
             } else {
                 runbook_steps.len()
             };
+            let runbook_done_count = runbook_steps.iter().filter(|step| step.is_done).count();
             let evidence_upload_panel = incident_evidence_upload_panel(
                 &context,
                 incident.id,
@@ -8340,85 +8341,33 @@ async fn web_incident_detail(
             } else {
                 r#"<article class="panel wide"><h2>Bearbeiten</h2><p>Fuer Aenderungen ist eine schreibende ISCY-Rolle notwendig.</p></article>"#.to_string()
             };
-            let body = format!(
+            let workflow_panel = incident_decision_flow_panel(
+                &context,
+                &incident,
+                runbook_done_count,
+                runbook_step_count,
+                evidence_items.len(),
+            );
+            let case_panel = format!(
                 r#"
-                <section class="hero compact"><h1>{}</h1><p>NIS2-Fallakte und Meldepaket</p></section>
-                <section class="grid">
-                  <article class="panel wide">
-                    <h2>Fallakte</h2>
-                    <table>
-                      <tbody>
-                        <tr><th>Status</th><td>{}</td><th>Severity</th><td>{}</td></tr>
-                        <tr><th>Typ</th><td>{}</td><th>Runbook</th><td>{} Schritte</td></tr>
-                        <tr><th>Erheblichkeit</th><td>{}</td><th>NIS2</th><td>{}</td></tr>
-                        <tr><th>Bewertet am</th><td>{}</td><th>Owner</th><td>{}</td></tr>
-                        <tr><th>Reporter</th><td>{}</td><th>Behoerdenreferenz</th><td>{}</td></tr>
-                        <tr><th>Risiko</th><td>{}</td><th>Asset</th><td>{}</td></tr>
-                        <tr><th>Prozess</th><td>{}</td><th>Erkannt</th><td>{}</td></tr>
-                        <tr><th>24h-Fruehwarnung</th><td>{} ({})</td><th>72h-Meldung</th><td>{} ({})</td></tr>
-                        <tr><th>30-Tage-Bericht</th><td>{} ({})</td><th>Final gemeldet</th><td>{}</td></tr>
-                        <tr><th>Meldepaket</th><td>{}</td><th>Version</th><td>{}</td></tr>
-                      </tbody>
-                    </table>
-                  </article>
-                  {}
-                  <article class="panel wide">
-                    <h2>Beschreibung</h2>
-                    <p>{}</p>
-                    <h2>Stakeholder</h2>
-                    <p>{}</p>
-                    <h2>NIS2-Erheblichkeitspruefung</h2>
-                    <p><strong>Kriterien:</strong> {}</p>
-                    <p><strong>Begruendung:</strong> {}</p>
-                    <p><strong>Referenz:</strong> {}</p>
-                    <h2>Lessons Learned</h2>
-                    <p>{}</p>
-                  </article>
-                  <article class="panel wide">
-                    <h2>Runbook</h2>
-                    <table>
-                      <thead><tr><th>Schritt</th><th>Status</th><th>Erledigt von</th><th>Aktion</th></tr></thead>
-                      <tbody>{}</tbody>
-                    </table>
-                    <details><summary>Vorlagentext</summary><pre>{}</pre></details>
-                  </article>
-                  <article class="panel wide">
-                    <h2>Runbook-Bibliothek</h2>
-                    <table>
-                      <thead><tr><th>Vorlage</th><th>Typ</th><th>Severity</th><th>Beschreibung</th></tr></thead>
-                      <tbody>{}</tbody>
-                    </table>
-                  </article>
-                  <article class="panel wide">
-                    <h2>Timeline</h2>
-                    {}
-                    <table>
-                      <thead><tr><th>Zeitpunkt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Actor</th><th>Detail</th><th>Export</th></tr></thead>
-                      <tbody>{}</tbody>
-                    </table>
-                    {}
-                  </article>
-                  <article class="panel wide">
-                    <h2>Evidence</h2>
-                    <table>
-                      <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
-                      <tbody>{}</tbody>
-                    </table>
-                    {}
-                  </article>
-                  <article class="panel wide">
-                    <h2>Meldepaket</h2>
-                    <p><a href="{}">Markdown herunterladen</a></p>
-                    <p><a href="{}">HTML herunterladen</a></p>
-                    <p><a href="{}">PDF herunterladen</a></p>
-                    <p><a href="{}">Timeline CSV herunterladen</a></p>
-                    <p><a href="{}">Timeline JSON herunterladen</a></p>
-                    <p><a href="{}">API-Export oeffnen</a></p>
-                  </article>
-                  {}
-                </section>
+                <article id="incident-case" class="panel wide">
+                  <h2>Fallakte</h2>
+                  <table>
+                    <tbody>
+                      <tr><th>Status</th><td>{}</td><th>Severity</th><td>{}</td></tr>
+                      <tr><th>Typ</th><td>{}</td><th>Runbook</th><td>{} Schritte</td></tr>
+                      <tr><th>Erheblichkeit</th><td>{}</td><th>NIS2</th><td>{}</td></tr>
+                      <tr><th>Bewertet am</th><td>{}</td><th>Owner</th><td>{}</td></tr>
+                      <tr><th>Reporter</th><td>{}</td><th>Behoerdenreferenz</th><td>{}</td></tr>
+                      <tr><th>Risiko</th><td>{}</td><th>Asset</th><td>{}</td></tr>
+                      <tr><th>Prozess</th><td>{}</td><th>Erkannt</th><td>{}</td></tr>
+                      <tr><th>24h-Fruehwarnung</th><td>{} ({})</td><th>72h-Meldung</th><td>{} ({})</td></tr>
+                      <tr><th>30-Tage-Bericht</th><td>{} ({})</td><th>Final gemeldet</th><td>{}</td></tr>
+                      <tr><th>Meldepaket</th><td>{}</td><th>Version</th><td>{}</td></tr>
+                    </tbody>
+                  </table>
+                </article>
                 "#,
-                html_escape(&incident.title),
                 html_escape(&incident.status_label),
                 html_escape(&incident.severity_label),
                 html_escape(&incident.incident_type_label),
@@ -8447,27 +8396,150 @@ async fn web_incident_detail(
                 html_escape(incident.final_report_sent_at.as_deref().unwrap_or("-")),
                 html_escape(&incident.review_state_label),
                 html_escape(&incident.report_package_version),
-                review_panel,
-                html_escape(&incident.summary),
-                html_escape(&incident.stakeholder_summary),
+            );
+            let significance_panel = format!(
+                r#"
+                <article id="incident-significance" class="panel wide">
+                  <h2>NIS2-Erheblichkeitsentscheidung</h2>
+                  <table>
+                    <tbody>
+                      <tr><th>Status</th><td>{}</td><th>NIS2</th><td>{}</td></tr>
+                      <tr><th>Bewertet am</th><td>{}</td><th>Referenz</th><td>{}</td></tr>
+                    </tbody>
+                  </table>
+                  <h3>Kriterien</h3>
+                  <p>{}</p>
+                  <h3>Begruendung</h3>
+                  <p>{}</p>
+                </article>
+                "#,
+                html_escape(&incident.nis2_significance_label),
+                html_escape(&incident.nis2_reportability_label),
+                html_escape(
+                    incident
+                        .nis2_significance_assessed_at
+                        .as_deref()
+                        .unwrap_or("-"),
+                ),
+                html_escape(&incident.nis2_significance_reference),
                 html_escape(&incident.nis2_significance_criteria),
                 html_escape(&incident.nis2_significance_justification),
-                html_escape(&incident.nis2_significance_reference),
+            );
+            let context_panel = format!(
+                r#"
+                <article id="incident-context" class="panel wide">
+                  <h2>Beschreibung</h2>
+                  <p>{}</p>
+                  <h2>Stakeholder</h2>
+                  <p>{}</p>
+                  <h2>Lessons Learned</h2>
+                  <p>{}</p>
+                </article>
+                "#,
+                html_escape(&incident.summary),
+                html_escape(&incident.stakeholder_summary),
                 html_escape(&incident.lessons_learned),
+            );
+            let runbook_panel = format!(
+                r#"
+                <article id="incident-runbook" class="panel wide">
+                  <h2>Runbook</h2>
+                  <table>
+                    <thead><tr><th>Schritt</th><th>Status</th><th>Erledigt von</th><th>Aktion</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                  <details><summary>Vorlagentext</summary><pre>{}</pre></details>
+                </article>
+                "#,
                 runbook_step_rows,
                 html_escape(&incident.runbook_template),
-                runbook_template_rows,
-                timeline_filter_links,
-                timeline_rows,
-                timeline_note_panel,
-                evidence_rows,
-                evidence_upload_panel,
+            );
+            let runbook_library_panel = format!(
+                r#"
+                <article class="panel wide">
+                  <h2>Runbook-Bibliothek</h2>
+                  <table>
+                    <thead><tr><th>Vorlage</th><th>Typ</th><th>Severity</th><th>Beschreibung</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </article>
+                "#,
+                runbook_template_rows
+            );
+            let timeline_panel = format!(
+                r#"
+                <article id="incident-timeline" class="panel wide">
+                  <h2>Timeline</h2>
+                  {}
+                  <table>
+                    <thead><tr><th>Zeitpunkt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Actor</th><th>Detail</th><th>Export</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                  {}
+                </article>
+                "#,
+                timeline_filter_links, timeline_rows, timeline_note_panel,
+            );
+            let evidence_panel = format!(
+                r#"
+                <article id="incident-evidence" class="panel wide">
+                  <h2>Evidence</h2>
+                  <table>
+                    <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                  {}
+                </article>
+                "#,
+                evidence_rows, evidence_upload_panel,
+            );
+            let package_panel = format!(
+                r#"
+                <article id="incident-package" class="panel wide">
+                  <h2>Meldepaket</h2>
+                  <p><a href="{}">Markdown herunterladen</a></p>
+                  <p><a href="{}">HTML herunterladen</a></p>
+                  <p><a href="{}">PDF herunterladen</a></p>
+                  <p><a href="{}">Timeline CSV herunterladen</a></p>
+                  <p><a href="{}">Timeline JSON herunterladen</a></p>
+                  <p><a href="{}">API-Export oeffnen</a></p>
+                </article>
+                "#,
                 html_escape(&markdown_export_href),
                 html_escape(&html_export_href),
                 html_escape(&pdf_export_href),
                 html_escape(&timeline_csv_href),
                 html_escape(&timeline_json_href),
                 html_escape(&api_export_href),
+            );
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>{}</h1><p>NIS2-Fallakte und Meldepaket</p></section>
+                {}
+                <section class="grid">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  <div id="incident-edit" class="wide-anchor">{}</div>
+                </section>
+                "#,
+                html_escape(&incident.title),
+                workflow_panel,
+                case_panel,
+                significance_panel,
+                context_panel,
+                review_panel,
+                runbook_panel,
+                runbook_library_panel,
+                timeline_panel,
+                evidence_panel,
+                package_panel,
                 edit_panel,
             );
             web_page("Incidents", "/incidents/", Some(&context), &body)
@@ -13152,6 +13224,144 @@ fn incident_timeline_note_payload(
     ))
 }
 
+fn incident_decision_flow_panel(
+    context: &WebContext,
+    incident: &incident_store::IncidentSummary,
+    runbook_done_count: usize,
+    runbook_total_count: usize,
+    evidence_count: usize,
+) -> String {
+    let case_href = incident_detail_anchor_href(context, incident.id, "incident-case");
+    let significance_href =
+        incident_detail_anchor_href(context, incident.id, "incident-significance");
+    let handling_href = incident_detail_anchor_href(context, incident.id, "incident-runbook");
+    let package_href = incident_detail_anchor_href(context, incident.id, "incident-package");
+
+    let case_detail = format!(
+        "{} · {}",
+        incident.incident_type_label, incident.severity_label
+    );
+    let significance_detail = incident
+        .nis2_significance_assessed_at
+        .as_deref()
+        .map(|value| format!("Bewertet am {value}"))
+        .unwrap_or_else(|| "Bewertung offen".to_string());
+    let handling_detail = if runbook_total_count == 0 {
+        format!("{evidence_count} Evidence · Runbook offen")
+    } else {
+        format!("{runbook_done_count}/{runbook_total_count} Runbook · {evidence_count} Evidence")
+    };
+    let (package_class, package_value, package_detail) = incident_package_flow_state(incident);
+
+    format!(
+        r##"
+        <section class="incident-flow" aria-label="Incident-Entscheidungsfluss">
+          {}
+          {}
+          {}
+          {}
+        </section>
+        "##,
+        incident_flow_step(
+            "1",
+            "Vorfall",
+            &incident.status_label,
+            &case_detail,
+            incident_status_badge_class(&incident.status),
+            &case_href,
+        ),
+        incident_flow_step(
+            "2",
+            "Erheblichkeit",
+            &incident.nis2_significance_label,
+            &significance_detail,
+            incident_significance_badge_class(&incident.nis2_significance_status),
+            &significance_href,
+        ),
+        incident_flow_step(
+            "3",
+            "Bearbeitung",
+            "Runbook / Evidence",
+            &handling_detail,
+            incident_handling_flow_class(runbook_done_count, runbook_total_count, evidence_count),
+            &handling_href,
+        ),
+        incident_flow_step(
+            "4",
+            "Meldepaket",
+            package_value,
+            package_detail,
+            package_class,
+            &package_href,
+        ),
+    )
+}
+
+fn incident_flow_step(
+    index: &str,
+    title: &str,
+    value: &str,
+    detail: &str,
+    class_name: &str,
+    href: &str,
+) -> String {
+    format!(
+        r##"<a class="flow-step {}" href="{}"><span class="flow-index">{}</span><span class="eyebrow">{}</span><strong>{}</strong><small>{}</small></a>"##,
+        html_escape(class_name),
+        html_escape(href),
+        html_escape(index),
+        html_escape(title),
+        html_escape(value),
+        html_escape(detail),
+    )
+}
+
+fn incident_detail_anchor_href(context: &WebContext, incident_id: i64, anchor: &str) -> String {
+    format!(
+        "{}#{}",
+        web_path_with_context(&format!("/incidents/{incident_id}"), Some(context)),
+        anchor
+    )
+}
+
+fn incident_package_flow_state(
+    incident: &incident_store::IncidentSummary,
+) -> (&'static str, &'static str, &'static str) {
+    if !incident.nis2_reportable {
+        return ("muted-badge", "Nicht aktiv", "Fristen nicht gestartet");
+    }
+    if incident.final_report_state == "SENT" {
+        return ("ok", "Vollstaendig", "Finalbericht gemeldet");
+    }
+    if incident.early_warning_state == "OVERDUE"
+        || incident.notification_state == "OVERDUE"
+        || incident.final_report_state == "OVERDUE"
+    {
+        return ("danger", "Ueberfaellig", "Meldepaket priorisieren");
+    }
+    if incident.early_warning_state == "DUE_SOON"
+        || incident.notification_state == "DUE_SOON"
+        || incident.final_report_state == "DUE_SOON"
+    {
+        return ("warn", "Faellig bald", "Meldeschritte vorbereiten");
+    }
+    ("info", "Aktiv", "Meldeschritte im Blick")
+}
+
+fn incident_handling_flow_class(
+    runbook_done_count: usize,
+    runbook_total_count: usize,
+    evidence_count: usize,
+) -> &'static str {
+    if runbook_total_count == 0 || evidence_count == 0 {
+        "warn"
+    } else if runbook_done_count >= runbook_total_count {
+        "ok"
+    } else {
+        "info"
+    }
+}
+
 fn optional_form_text_for_write(value: Option<String>) -> Option<Option<String>> {
     value
         .map(|value| value.trim().to_string())
@@ -14711,13 +14921,25 @@ fn incident_nis2_significance_options_for(selected_status: &str) -> String {
 }
 
 fn incident_status_badge(status: &str, label: &str) -> String {
-    let class_name = match status {
+    web_badge(label, incident_status_badge_class(status))
+}
+
+fn incident_status_badge_class(status: &str) -> &'static str {
+    match status {
         "RESOLVED" | "CLOSED" => "ok",
         "TRIAGE" => "warn",
         "CONFIRMED" | "CONTAINED" => "info",
         _ => "muted-badge",
-    };
-    web_badge(label, class_name)
+    }
+}
+
+fn incident_significance_badge_class(status: &str) -> &'static str {
+    match status {
+        "NOT_SIGNIFICANT" => "ok",
+        "LIKELY_SIGNIFICANT" => "warn",
+        "SIGNIFICANT" => "danger",
+        _ => "warn",
+    }
 }
 
 fn incident_severity_badge(severity: &str, label: &str) -> String {
@@ -16076,9 +16298,23 @@ fn web_page(
     p {{ margin:0 0 8px; color:var(--muted); overflow-wrap:anywhere; }}
     .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:14px; }}
     .metrics {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:16px; }}
+    .incident-flow {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px; margin:0 0 16px; }}
+    .flow-step {{ display:grid; grid-template-columns:auto minmax(0, 1fr); gap:4px 10px; align-items:start; min-height:116px; padding:14px; color:var(--ink); text-decoration:none; background:#fff; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(20,30,40,.04); }}
+    .flow-step:hover {{ border-color:#b8d8d0; box-shadow:0 8px 22px rgba(20,30,40,.08); }}
+    .flow-step strong, .flow-step small {{ grid-column:2; overflow-wrap:anywhere; }}
+    .flow-step strong {{ font-size:18px; line-height:1.2; }}
+    .flow-step small {{ color:var(--muted); }}
+    .flow-step .eyebrow {{ grid-column:2; }}
+    .flow-index {{ grid-row:1 / span 3; display:grid; place-items:center; width:32px; height:32px; border-radius:999px; background:var(--soft); color:var(--ink); font-weight:900; }}
+    .flow-step.ok {{ border-color:#abefc6; background:#f6fef9; }}
+    .flow-step.warn {{ border-color:#fedf89; background:#fffcf2; }}
+    .flow-step.info {{ border-color:#bfdbfe; background:#f8fbff; }}
+    .flow-step.danger {{ border-color:#fecdca; background:#fff8f7; }}
+    .flow-step.muted-badge {{ background:#fff; }}
     .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px; box-shadow:0 1px 2px rgba(20, 30, 40, 0.04); }}
     .panel.wide {{ grid-column:1 / -1; overflow-x:auto; }}
     .panel.error {{ border-color:#fed7aa; background:#fff7ed; }}
+    .wide-anchor {{ grid-column:1 / -1; }}
     .form-panel {{ max-width:520px; }}
     .card-link {{ display:block; min-height:120px; color:var(--ink); text-decoration:none; }}
     .card-link:hover {{ border-color:#b8d8d0; box-shadow:0 8px 22px rgba(20,30,40,.08); }}
