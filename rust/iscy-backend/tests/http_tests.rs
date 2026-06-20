@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.13\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.14\""));
 }
 
 #[tokio::test]
@@ -4053,6 +4053,7 @@ async fn incident_nis2_export_returns_markdown_package() {
     assert!(html.contains("Status von Triage auf Bestaetigt geaendert."));
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/incidents/1/nis2-export.pdf")
@@ -4074,6 +4075,59 @@ async fn incident_nis2_export_returns_markdown_package() {
     assert!(pdf.contains("Regulatorische Entscheidungsmatrix"));
     assert!(pdf.contains("Audit-Timeline"));
     assert!(pdf.contains("Statuswechsel"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/dora-export")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let dora_markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(dora_markdown.contains("# ISCY DORA-IKT-Vorfallpaket"));
+    assert!(dora_markdown.contains("Schwerwiegender IKT-bezogener Vorfall"));
+    assert!(dora_markdown.contains("Fachlich pruefen"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/dsgvo-export.html")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let dsgvo_html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(dsgvo_html.contains("DSGVO-Datenschutzvorfallpaket"));
+    assert!(dsgvo_html.contains("Verletzung personenbezogener Daten"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/dora-export.pdf")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(body.starts_with(b"%PDF-1.4"));
+    assert!(String::from_utf8_lossy(&body).contains("DORA-IKT-Vorfallpaket"));
 }
 
 #[tokio::test]
@@ -5961,6 +6015,8 @@ async fn rust_web_dashboard_renders_summary_from_database() {
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Dashboard"));
     assert!(html.contains("Prozesse"));
+    assert!(html.contains("Erheblichkeit offen"));
+    assert!(html.contains("/incidents/?incident_filter=unassessed&amp;tenant_id=42&amp;user_id=7&amp;user_email=ada%40example.test"));
     assert!(html.contains("April Readiness"));
     assert!(html.contains("ISO 78%"));
     assert!(html.contains("ada@example.test"));
@@ -6070,9 +6126,11 @@ async fn rust_web_incidents_renders_and_creates_incident() {
     assert!(html.contains("href=\"/incidents/1?tenant_id=42&amp;user_id=7#incident-significance\""));
     assert!(html.contains("Runbook / Evidence"));
     assert!(html.contains("id=\"incident-package\""));
-    assert!(html.contains("Markdown herunterladen"));
-    assert!(html.contains("HTML herunterladen"));
-    assert!(html.contains("PDF herunterladen"));
+    assert!(html.contains("NIS2 Markdown herunterladen"));
+    assert!(html.contains("DORA Markdown herunterladen"));
+    assert!(html.contains("DSGVO Markdown herunterladen"));
+    assert!(html.contains("/incidents/1/dora-export?tenant_id=42&amp;user_id=7"));
+    assert!(html.contains("/incidents/1/dsgvo-export?tenant_id=42&amp;user_id=7"));
     assert!(html.contains("Phishing"));
     assert!(html.contains("Eindaemmung durchfuehren"));
     assert!(html.contains("Evidence zum Incident hochladen"));

@@ -4,7 +4,7 @@ COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
 COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 RUST_BACKEND_MANIFEST=rust/iscy-backend/Cargo.toml
 
-.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
+.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke docs-pdf canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
 
 local-bootstrap: rust-init
 
@@ -42,6 +42,9 @@ rust-run:
 
 rust-init:
 	cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- init-demo
+
+docs-pdf:
+	cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-doc-pdf -- docs/ISCY_Handbuch.md docs/ISCY_Handbuch.pdf
 
 rust-smoke:
 	@tmpdir=$$(mktemp -d); \
@@ -85,6 +88,8 @@ rust-smoke:
 	curl -fsS -b "$$cookie_file" "$$url/incidents/1/nis2-export" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/incidents/1/nis2-export.html" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/incidents/1/nis2-export.pdf" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/incidents/1/dora-export" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/incidents/1/dsgvo-export.html" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/users" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/roles" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/accounts/groups" >/dev/null; \
@@ -99,6 +104,8 @@ rust-smoke:
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/incidents/1/nis2-export" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/incidents/1/nis2-export.html" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/incidents/1/nis2-export.pdf" >/dev/null; \
+	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/incidents/1/dora-export" >/dev/null; \
+	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/incidents/1/dsgvo-export.pdf" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/product-security/overview" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/status/metrics?tenant_id=1&user_id=1" >/dev/null; \
 	echo "Rust smoke OK: $$url"

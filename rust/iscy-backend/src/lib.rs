@@ -1005,6 +1005,7 @@ pub struct WebContextQuery {
     pub return_to: Option<String>,
     pub review_filter: Option<String>,
     pub alert_filter: Option<String>,
+    pub incident_filter: Option<String>,
     pub control_id: Option<i64>,
     pub incident_id: Option<i64>,
     pub requirement_id: Option<i64>,
@@ -5539,7 +5540,14 @@ async fn incident_nis2_export(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    incident_nis2_export_format(incident_id, state, headers, IncidentExportFormat::Markdown).await
+    incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        IncidentPackageKind::Nis2,
+        IncidentExportFormat::Markdown,
+    )
+    .await
 }
 
 async fn incident_nis2_export_html(
@@ -5547,7 +5555,14 @@ async fn incident_nis2_export_html(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    incident_nis2_export_format(incident_id, state, headers, IncidentExportFormat::Html).await
+    incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        IncidentPackageKind::Nis2,
+        IncidentExportFormat::Html,
+    )
+    .await
 }
 
 async fn incident_nis2_export_pdf(
@@ -5555,7 +5570,104 @@ async fn incident_nis2_export_pdf(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    incident_nis2_export_format(incident_id, state, headers, IncidentExportFormat::Pdf).await
+    incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        IncidentPackageKind::Nis2,
+        IncidentExportFormat::Pdf,
+    )
+    .await
+}
+
+async fn incident_dora_export(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        IncidentPackageKind::Dora,
+        IncidentExportFormat::Markdown,
+    )
+    .await
+}
+
+async fn incident_dora_export_html(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        IncidentPackageKind::Dora,
+        IncidentExportFormat::Html,
+    )
+    .await
+}
+
+async fn incident_dora_export_pdf(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        IncidentPackageKind::Dora,
+        IncidentExportFormat::Pdf,
+    )
+    .await
+}
+
+async fn incident_dsgvo_export(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        IncidentPackageKind::Dsgvo,
+        IncidentExportFormat::Markdown,
+    )
+    .await
+}
+
+async fn incident_dsgvo_export_html(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        IncidentPackageKind::Dsgvo,
+        IncidentExportFormat::Html,
+    )
+    .await
+}
+
+async fn incident_dsgvo_export_pdf(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        IncidentPackageKind::Dsgvo,
+        IncidentExportFormat::Pdf,
+    )
+    .await
 }
 
 async fn incident_timeline_export_csv(
@@ -5662,10 +5774,11 @@ async fn incident_timeline_export_format(
     }
 }
 
-async fn incident_nis2_export_format(
+async fn incident_regulatory_export_format(
     incident_id: i64,
     state: AppState,
     headers: HeaderMap,
+    package_kind: IncidentPackageKind,
     export_format: IncidentExportFormat,
 ) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
@@ -5709,6 +5822,7 @@ async fn incident_nis2_export_format(
                     &incident,
                     &evidence_items,
                     &events,
+                    package_kind,
                     export_format,
                 ),
                 Err(err) => (
@@ -7271,6 +7385,8 @@ async fn web_dashboard(
     };
     match store.dashboard_summary(context.tenant_id).await {
         Ok(summary) => {
+            let unassessed_incident_href =
+                web_path_with_context("/incidents/?incident_filter=unassessed", Some(&context));
             let latest_report = summary
                 .latest_report
                 .map(|report| {
@@ -7304,7 +7420,11 @@ async fn web_dashboard(
                 metric_card("Offene Risiken", summary.open_risk_count),
                 metric_card("Evidenzen", summary.evidence_count),
                 metric_card("Offene Tasks", summary.open_task_count),
-                metric_card("Erheblichkeit offen", summary.unassessed_incident_count),
+                metric_link_card(
+                    "Erheblichkeit offen",
+                    summary.unassessed_incident_count,
+                    &unassessed_incident_href,
+                ),
                 latest_report,
             );
             web_page("Dashboard", "/dashboard/", Some(&context), &body)
@@ -7648,20 +7768,23 @@ async fn web_incidents(
         .await
         .is_ok_and(|auth_context| auth_context.can_write());
     match store.list_incidents(context.tenant_id, 50).await {
-        Ok(incidents) => {
+        Ok(all_incidents) => {
+            let incident_filter =
+                normalize_incident_register_filter(query.incident_filter.as_deref());
+            let incidents = filter_incident_register_rows(&all_incidents, incident_filter.as_str());
             let runbook_templates = store
                 .list_runbook_templates(context.tenant_id, 25)
                 .await
                 .unwrap_or_default();
-            let reportable_count = incidents
+            let reportable_count = all_incidents
                 .iter()
                 .filter(|incident| incident.nis2_reportable)
                 .count() as i64;
-            let open_count = incidents
+            let open_count = all_incidents
                 .iter()
                 .filter(|incident| !matches!(incident.status.as_str(), "RESOLVED" | "CLOSED"))
                 .count() as i64;
-            let overdue_count = incidents
+            let overdue_count = all_incidents
                 .iter()
                 .filter(|incident| {
                     matches!(incident.early_warning_state.as_str(), "OVERDUE")
@@ -7669,6 +7792,14 @@ async fn web_incidents(
                         || matches!(incident.final_report_state.as_str(), "OVERDUE")
                 })
                 .count() as i64;
+            let unassessed_count = all_incidents
+                .iter()
+                .filter(|incident| {
+                    incident.nis2_significance_status == "NOT_ASSESSED"
+                        && !matches!(incident.status.as_str(), "RESOLVED" | "CLOSED")
+                })
+                .count() as i64;
+            let filter_links = incident_register_filter_links(&context, incident_filter.as_str());
             let rows = incidents
                 .iter()
                 .map(|incident| {
@@ -7741,9 +7872,11 @@ async fn web_incidents(
                   {}
                   {}
                   {}
+                  {}
                 </section>
                 <section class="grid">
                   <article class="panel wide">
+                    {}
                     <table>
                       <thead><tr><th>Incident</th><th>Typ</th><th>Severity</th><th>Status</th><th>Erheblichkeit</th><th>NIS2</th><th>24h</th><th>72h</th><th>Owner</th></tr></thead>
                       <tbody>{}</tbody>
@@ -7756,6 +7889,8 @@ async fn web_incidents(
                 metric_card("Offen", open_count),
                 metric_card("NIS2", reportable_count),
                 metric_card("Ueberfaellig", overdue_count),
+                metric_card("Erheblichkeit offen", unassessed_count),
+                filter_links,
                 if rows.is_empty() {
                     web_empty_row(9, "Keine Incidents vorhanden.")
                 } else {
@@ -8325,6 +8460,30 @@ async fn web_incident_detail(
                 &format!("/incidents/{}/nis2-export.pdf", incident.id),
                 Some(&context),
             );
+            let dora_markdown_export_href = web_path_with_context(
+                &format!("/incidents/{}/dora-export", incident.id),
+                Some(&context),
+            );
+            let dora_html_export_href = web_path_with_context(
+                &format!("/incidents/{}/dora-export.html", incident.id),
+                Some(&context),
+            );
+            let dora_pdf_export_href = web_path_with_context(
+                &format!("/incidents/{}/dora-export.pdf", incident.id),
+                Some(&context),
+            );
+            let dsgvo_markdown_export_href = web_path_with_context(
+                &format!("/incidents/{}/dsgvo-export", incident.id),
+                Some(&context),
+            );
+            let dsgvo_html_export_href = web_path_with_context(
+                &format!("/incidents/{}/dsgvo-export.html", incident.id),
+                Some(&context),
+            );
+            let dsgvo_pdf_export_href = web_path_with_context(
+                &format!("/incidents/{}/dsgvo-export.pdf", incident.id),
+                Some(&context),
+            );
             let timeline_csv_href = web_path_with_context(
                 &format!("/incidents/{}/timeline.csv", incident.id),
                 Some(&context),
@@ -8499,9 +8658,18 @@ async fn web_incident_detail(
                 r#"
                 <article id="incident-package" class="panel wide">
                   <h2>Meldepaket</h2>
-                  <p><a href="{}">Markdown herunterladen</a></p>
-                  <p><a href="{}">HTML herunterladen</a></p>
-                  <p><a href="{}">PDF herunterladen</a></p>
+                  <h3>NIS2</h3>
+                  <p><a href="{}">NIS2 Markdown herunterladen</a></p>
+                  <p><a href="{}">NIS2 HTML herunterladen</a></p>
+                  <p><a href="{}">NIS2 PDF herunterladen</a></p>
+                  <h3>DORA</h3>
+                  <p><a href="{}">DORA Markdown herunterladen</a></p>
+                  <p><a href="{}">DORA HTML herunterladen</a></p>
+                  <p><a href="{}">DORA PDF herunterladen</a></p>
+                  <h3>DSGVO</h3>
+                  <p><a href="{}">DSGVO Markdown herunterladen</a></p>
+                  <p><a href="{}">DSGVO HTML herunterladen</a></p>
+                  <p><a href="{}">DSGVO PDF herunterladen</a></p>
                   <p><a href="{}">Timeline CSV herunterladen</a></p>
                   <p><a href="{}">Timeline JSON herunterladen</a></p>
                   <p><a href="{}">API-Export oeffnen</a></p>
@@ -8510,6 +8678,12 @@ async fn web_incident_detail(
                 html_escape(&markdown_export_href),
                 html_escape(&html_export_href),
                 html_escape(&pdf_export_href),
+                html_escape(&dora_markdown_export_href),
+                html_escape(&dora_html_export_href),
+                html_escape(&dora_pdf_export_href),
+                html_escape(&dsgvo_markdown_export_href),
+                html_escape(&dsgvo_html_export_href),
+                html_escape(&dsgvo_pdf_export_href),
                 html_escape(&timeline_csv_href),
                 html_escape(&timeline_json_href),
                 html_escape(&api_export_href),
@@ -8867,11 +9041,12 @@ async fn web_incident_nis2_export(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Response {
-    web_incident_nis2_export_format(
+    web_incident_regulatory_export_format(
         incident_id,
         state,
         headers,
         query,
+        IncidentPackageKind::Nis2,
         IncidentExportFormat::Markdown,
     )
     .await
@@ -8883,11 +9058,12 @@ async fn web_incident_nis2_export_html(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Response {
-    web_incident_nis2_export_format(
+    web_incident_regulatory_export_format(
         incident_id,
         state,
         headers,
         query,
+        IncidentPackageKind::Nis2,
         IncidentExportFormat::Html,
     )
     .await
@@ -8899,11 +9075,114 @@ async fn web_incident_nis2_export_pdf(
     headers: HeaderMap,
     Query(query): Query<WebContextQuery>,
 ) -> Response {
-    web_incident_nis2_export_format(
+    web_incident_regulatory_export_format(
         incident_id,
         state,
         headers,
         query,
+        IncidentPackageKind::Nis2,
+        IncidentExportFormat::Pdf,
+    )
+    .await
+}
+
+async fn web_incident_dora_export(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        query,
+        IncidentPackageKind::Dora,
+        IncidentExportFormat::Markdown,
+    )
+    .await
+}
+
+async fn web_incident_dora_export_html(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        query,
+        IncidentPackageKind::Dora,
+        IncidentExportFormat::Html,
+    )
+    .await
+}
+
+async fn web_incident_dora_export_pdf(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        query,
+        IncidentPackageKind::Dora,
+        IncidentExportFormat::Pdf,
+    )
+    .await
+}
+
+async fn web_incident_dsgvo_export(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        query,
+        IncidentPackageKind::Dsgvo,
+        IncidentExportFormat::Markdown,
+    )
+    .await
+}
+
+async fn web_incident_dsgvo_export_html(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        query,
+        IncidentPackageKind::Dsgvo,
+        IncidentExportFormat::Html,
+    )
+    .await
+}
+
+async fn web_incident_dsgvo_export_pdf(
+    Path(incident_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_incident_regulatory_export_format(
+        incident_id,
+        state,
+        headers,
+        query,
+        IncidentPackageKind::Dsgvo,
         IncidentExportFormat::Pdf,
     )
     .await
@@ -8978,11 +9257,12 @@ async fn web_incident_timeline_export_format(
     }
 }
 
-async fn web_incident_nis2_export_format(
+async fn web_incident_regulatory_export_format(
     incident_id: i64,
     state: AppState,
     headers: HeaderMap,
     query: WebContextQuery,
+    package_kind: IncidentPackageKind,
     export_format: IncidentExportFormat,
 ) -> Response {
     let Some(context) = web_context_from_request(&query, &headers, &state).await else {
@@ -9003,6 +9283,7 @@ async fn web_incident_nis2_export_format(
                     &incident,
                     &evidence_items,
                     &events,
+                    package_kind,
                     export_format,
                 ),
                 Err(err) => web_error_page("Incidents", "/incidents/", &context, &err.to_string())
@@ -13706,6 +13987,79 @@ fn incident_nis2_markdown(
 }
 
 #[derive(Debug, Clone, Copy)]
+enum IncidentPackageKind {
+    Nis2,
+    Dora,
+    Dsgvo,
+}
+
+impl IncidentPackageKind {
+    fn slug(self) -> &'static str {
+        match self {
+            Self::Nis2 => "nis2",
+            Self::Dora => "dora",
+            Self::Dsgvo => "dsgvo",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Nis2 => "NIS2",
+            Self::Dora => "DORA",
+            Self::Dsgvo => "DSGVO",
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Nis2 => "NIS2-Meldepaket",
+            Self::Dora => "DORA-IKT-Vorfallpaket",
+            Self::Dsgvo => "DSGVO-Datenschutzvorfallpaket",
+        }
+    }
+
+    fn trigger_question(self) -> &'static str {
+        match self {
+            Self::Nis2 => {
+                "Erheblicher Sicherheitsvorfall nach NIS2 Art. 23 und EU 2024/2690 Art. 3?"
+            }
+            Self::Dora => {
+                "Schwerwiegender IKT-bezogener Vorfall im Finanz-/IKT-Dienstleister-Kontext?"
+            }
+            Self::Dsgvo => "Verletzung personenbezogener Daten mit Risiko fuer Betroffene?",
+        }
+    }
+
+    fn decision_note(self) -> &'static str {
+        match self {
+            Self::Nis2 => {
+                "ISCY aktiviert NIS2-Fristen erst bei der Einstufung Erheblich / NIS2 meldepflichtig."
+            }
+            Self::Dora => {
+                "ISCY bereitet die fachliche DORA-Klassifizierung vor; Meldepflicht und Fristen haengen vom Finanzsektor-/IKT-Dienstleister-Kontext und der Major-Incident-Bewertung ab."
+            }
+            Self::Dsgvo => {
+                "ISCY bereitet die Datenschutzpruefung vor; eine 72h-Meldung ist erst bei meldepflichtiger Verletzung personenbezogener Daten relevant."
+            }
+        }
+    }
+
+    fn next_step(self) -> &'static str {
+        match self {
+            Self::Nis2 => {
+                "Erheblichkeitsentscheidung mit Kriterien, Begruendung und Referenz abschliessen."
+            }
+            Self::Dora => {
+                "Finanz-/IKT-Dienstleister-Bezug, Auswirkungen auf IKT-Services, Kunden und Kritikalitaet pruefen; bei Major Incident DORA-Meldeweg ableiten."
+            }
+            Self::Dsgvo => {
+                "Personenbezug, Risiko fuer Betroffene, Schutzmassnahmen und Benachrichtigungspflichten mit Datenschutzrolle pruefen."
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 enum IncidentExportFormat {
     Markdown,
     Html,
@@ -13728,22 +14082,54 @@ fn incident_export_download_response(
     incident: &incident_store::IncidentSummary,
     evidence_items: &[evidence_store::EvidenceItemSummary],
     events: &[incident_store::IncidentEventSummary],
+    package_kind: IncidentPackageKind,
     export_format: IncidentExportFormat,
 ) -> Response {
     match export_format {
-        IncidentExportFormat::Markdown => markdown_download_response(
-            &format!("iscy-incident-{}-nis2.md", incident.id),
-            incident_nis2_markdown(incident, evidence_items, events),
-        ),
-        IncidentExportFormat::Html => html_download_response(
-            &format!("iscy-incident-{}-nis2.html", incident.id),
-            incident_nis2_html(incident, evidence_items, events),
-        ),
-        IncidentExportFormat::Pdf => binary_download_response(
-            &format!("iscy-incident-{}-nis2.pdf", incident.id),
-            "application/pdf",
-            incident_nis2_pdf(incident, evidence_items, events),
-        ),
+        IncidentExportFormat::Markdown => {
+            let body = match package_kind {
+                IncidentPackageKind::Nis2 => {
+                    incident_nis2_markdown(incident, evidence_items, events)
+                }
+                IncidentPackageKind::Dora | IncidentPackageKind::Dsgvo => {
+                    incident_regulatory_package_markdown(
+                        incident,
+                        evidence_items,
+                        events,
+                        package_kind,
+                    )
+                }
+            };
+            markdown_download_response(
+                &format!("iscy-incident-{}-{}.md", incident.id, package_kind.slug()),
+                body,
+            )
+        }
+        IncidentExportFormat::Html => {
+            let body = match package_kind {
+                IncidentPackageKind::Nis2 => incident_nis2_html(incident, evidence_items, events),
+                IncidentPackageKind::Dora | IncidentPackageKind::Dsgvo => {
+                    incident_regulatory_package_html(incident, evidence_items, events, package_kind)
+                }
+            };
+            html_download_response(
+                &format!("iscy-incident-{}-{}.html", incident.id, package_kind.slug()),
+                body,
+            )
+        }
+        IncidentExportFormat::Pdf => {
+            let body = match package_kind {
+                IncidentPackageKind::Nis2 => incident_nis2_pdf(incident, evidence_items, events),
+                IncidentPackageKind::Dora | IncidentPackageKind::Dsgvo => {
+                    incident_regulatory_package_pdf(incident, evidence_items, events, package_kind)
+                }
+            };
+            binary_download_response(
+                &format!("iscy-incident-{}-{}.pdf", incident.id, package_kind.slug()),
+                "application/pdf",
+                body,
+            )
+        }
     }
 }
 
@@ -14156,6 +14542,263 @@ fn incident_nis2_pdf(
     simple_pdf_document(&lines)
 }
 
+fn incident_regulatory_package_markdown(
+    incident: &incident_store::IncidentSummary,
+    evidence_items: &[evidence_store::EvidenceItemSummary],
+    events: &[incident_store::IncidentEventSummary],
+    package_kind: IncidentPackageKind,
+) -> String {
+    let evidence_rows = incident_evidence_markdown_rows(evidence_items);
+    let event_rows = incident_event_markdown_rows(events);
+    format!(
+        r#"# ISCY {}: {}
+
+## Fallakte
+
+| Feld | Wert |
+| --- | --- |
+| Incident-ID | {} |
+| Tenant-ID | {} |
+| Titel | {} |
+| Incident-Typ | {} |
+| Severity | {} |
+| Status | {} |
+| NIS2-Erheblichkeit | {} |
+| Meldepaket-Review | {} |
+| Behoerden-/Case-Referenz | {} |
+
+## Entscheidung und Pruefpfad
+
+| Feld | Wert |
+| --- | --- |
+| Regelwerk | {} |
+| Prueffrage | {} |
+| Status in ISCY | Fachlich pruefen |
+| Einordnung | {} |
+| Naechster Schritt | {} |
+
+## Beschreibung
+
+{}
+
+## Stakeholder-Zusammenfassung
+
+{}
+
+## Evidence
+
+| Titel | Status | Requirement | Datei |
+| --- | --- | --- | --- |
+{}
+
+## Audit-Timeline
+
+| Zeitpunkt | Ereignis | Zusammenfassung | Actor | Detail | Export |
+| --- | --- | --- | --- | --- | --- |
+{}
+
+## Zeitlinie
+
+| Ereignis | Zeitpunkt |
+| --- | --- |
+| Erkannt | {} |
+| Bestaetigt | {} |
+| Eingedaemmt | {} |
+| Behoben | {} |
+| Erstellt | {} |
+| Aktualisiert | {} |
+"#,
+        package_kind.title(),
+        md_value(&incident.title),
+        incident.id,
+        incident.tenant_id,
+        md_value(&incident.title),
+        md_value(&incident.incident_type_label),
+        md_value(&incident.severity_label),
+        md_value(&incident.status_label),
+        md_value(&incident.nis2_significance_label),
+        md_value(&incident.review_state_label),
+        md_value(&incident.authority_reference),
+        package_kind.label(),
+        md_value(package_kind.trigger_question()),
+        md_value(package_kind.decision_note()),
+        md_value(package_kind.next_step()),
+        md_block(&incident.summary),
+        md_block(&incident.stakeholder_summary),
+        evidence_rows,
+        event_rows,
+        md_optional(incident.detected_at.as_deref()),
+        md_optional(incident.confirmed_at.as_deref()),
+        md_optional(incident.contained_at.as_deref()),
+        md_optional(incident.resolved_at.as_deref()),
+        md_value(&incident.created_at),
+        md_value(&incident.updated_at),
+    )
+}
+
+fn incident_regulatory_package_html(
+    incident: &incident_store::IncidentSummary,
+    evidence_items: &[evidence_store::EvidenceItemSummary],
+    events: &[incident_store::IncidentEventSummary],
+    package_kind: IncidentPackageKind,
+) -> String {
+    let evidence_rows = incident_evidence_rows(evidence_items);
+    let event_rows = incident_event_rows(events);
+    format!(
+        r#"<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>ISCY {} {}</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; margin: 32px; color: #172026; }}
+    h1, h2 {{ color: #0f3d3e; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 12px 0 24px; }}
+    th, td {{ border: 1px solid #ccd6d8; padding: 8px; text-align: left; vertical-align: top; }}
+    th {{ background: #eef5f4; }}
+  </style>
+</head>
+<body>
+  <h1>ISCY {}: {}</h1>
+  <h2>Fallakte</h2>
+  <table>
+    <tbody>
+      <tr><th>Incident-ID</th><td>{}</td><th>Tenant-ID</th><td>{}</td></tr>
+      <tr><th>Titel</th><td>{}</td><th>Typ</th><td>{}</td></tr>
+      <tr><th>Severity</th><td>{}</td><th>Status</th><td>{}</td></tr>
+      <tr><th>NIS2-Erheblichkeit</th><td>{}</td><th>Review</th><td>{}</td></tr>
+      <tr><th>Behoerden-/Case-Referenz</th><td colspan="3">{}</td></tr>
+    </tbody>
+  </table>
+  <h2>Entscheidung und Pruefpfad</h2>
+  <table>
+    <tbody>
+      <tr><th>Regelwerk</th><td>{}</td></tr>
+      <tr><th>Prueffrage</th><td>{}</td></tr>
+      <tr><th>Status in ISCY</th><td>Fachlich pruefen</td></tr>
+      <tr><th>Einordnung</th><td>{}</td></tr>
+      <tr><th>Naechster Schritt</th><td>{}</td></tr>
+    </tbody>
+  </table>
+  <h2>Beschreibung</h2>
+  <p>{}</p>
+  <h2>Stakeholder</h2>
+  <p>{}</p>
+  <h2>Evidence</h2>
+  <table>
+    <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
+    <tbody>{}</tbody>
+  </table>
+  <h2>Audit-Timeline</h2>
+  <table>
+    <thead><tr><th>Zeitpunkt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Actor</th><th>Detail</th><th>Export</th></tr></thead>
+    <tbody>{}</tbody>
+  </table>
+</body>
+</html>
+"#,
+        package_kind.title(),
+        incident.id,
+        package_kind.title(),
+        html_escape(&incident.title),
+        incident.id,
+        incident.tenant_id,
+        html_escape(&incident.title),
+        html_escape(&incident.incident_type_label),
+        html_escape(&incident.severity_label),
+        html_escape(&incident.status_label),
+        html_escape(&incident.nis2_significance_label),
+        html_escape(&incident.review_state_label),
+        html_escape(&incident.authority_reference),
+        package_kind.label(),
+        html_escape(package_kind.trigger_question()),
+        html_escape(package_kind.decision_note()),
+        html_escape(package_kind.next_step()),
+        html_escape(&incident.summary),
+        html_escape(&incident.stakeholder_summary),
+        evidence_rows,
+        event_rows,
+    )
+}
+
+fn incident_regulatory_package_pdf(
+    incident: &incident_store::IncidentSummary,
+    evidence_items: &[evidence_store::EvidenceItemSummary],
+    events: &[incident_store::IncidentEventSummary],
+    package_kind: IncidentPackageKind,
+) -> Vec<u8> {
+    let mut lines = vec![
+        format!("ISCY {}: {}", package_kind.title(), incident.title),
+        format!("Incident-ID: {}", incident.id),
+        format!("Tenant-ID: {}", incident.tenant_id),
+        format!("Typ: {}", incident.incident_type_label),
+        format!("Severity: {}", incident.severity_label),
+        format!("Status: {}", incident.status_label),
+        format!("NIS2-Erheblichkeit: {}", incident.nis2_significance_label),
+        format!("Review: {}", incident.review_state_label),
+        format!("Behoerden-/Case-Referenz: {}", incident.authority_reference),
+        String::new(),
+        "Entscheidung und Pruefpfad:".to_string(),
+    ];
+    lines.extend(wrap_pdf_text(
+        &format!("Regelwerk: {}", package_kind.label()),
+        92,
+    ));
+    lines.extend(wrap_pdf_text(
+        &format!("Prueffrage: {}", package_kind.trigger_question()),
+        92,
+    ));
+    lines.extend(wrap_pdf_text("Status in ISCY: Fachlich pruefen", 92));
+    lines.extend(wrap_pdf_text(
+        &format!("Einordnung: {}", package_kind.decision_note()),
+        92,
+    ));
+    lines.extend(wrap_pdf_text(
+        &format!("Naechster Schritt: {}", package_kind.next_step()),
+        92,
+    ));
+    lines.push(String::new());
+    lines.push("Beschreibung:".to_string());
+    lines.extend(wrap_pdf_text(&incident.summary, 92));
+    lines.push(String::new());
+    lines.push("Evidence:".to_string());
+    if evidence_items.is_empty() {
+        lines.push("-".to_string());
+    } else {
+        for item in evidence_items {
+            lines.extend(wrap_pdf_text(
+                &format!(
+                    "{} | {} | {} | {}",
+                    item.title,
+                    item.status_label,
+                    item.requirement_code.as_deref().unwrap_or("-"),
+                    item.file_name.as_deref().unwrap_or("-")
+                ),
+                92,
+            ));
+        }
+    }
+    lines.push(String::new());
+    lines.push("Audit-Timeline:".to_string());
+    if events.is_empty() {
+        lines.push("-".to_string());
+    } else {
+        for event in events {
+            lines.extend(wrap_pdf_text(
+                &format!(
+                    "{} | {} | {} | {}",
+                    event.created_at,
+                    event.event_type_label,
+                    event.summary,
+                    event.actor_display.as_deref().unwrap_or("-")
+                ),
+                92,
+            ));
+        }
+    }
+    simple_pdf_document(&lines)
+}
+
 fn simple_pdf_document(lines: &[String]) -> Vec<u8> {
     let mut content = String::from("BT\n/F1 9 Tf\n50 800 Td\n10 TL\n");
     for line in lines.iter().take(76) {
@@ -14178,9 +14821,9 @@ fn simple_pdf_document(lines: &[String]) -> Vec<u8> {
     }
     let xref_start = pdf.len();
     pdf.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
-    pdf.push_str("0000000000 65535 f \n");
+    pdf.push_str("0000000000 65535 f\n");
     for offset in offsets {
-        pdf.push_str(&format!("{offset:010} 00000 n \n"));
+        pdf.push_str(&format!("{offset:010} 00000 n\n"));
     }
     pdf.push_str(&format!(
         "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
@@ -14752,6 +15395,58 @@ fn normalize_incident_timeline_filter(value: Option<&str>) -> String {
         "review" => "review".to_string(),
         _ => "all".to_string(),
     }
+}
+
+fn normalize_incident_register_filter(value: Option<&str>) -> String {
+    match value.unwrap_or("all").trim().to_ascii_lowercase().as_str() {
+        "unassessed" | "erheblichkeit_offen" | "open_significance" => "unassessed".to_string(),
+        _ => "all".to_string(),
+    }
+}
+
+fn filter_incident_register_rows(
+    incidents: &[incident_store::IncidentSummary],
+    register_filter: &str,
+) -> Vec<incident_store::IncidentSummary> {
+    incidents
+        .iter()
+        .filter(|incident| match register_filter {
+            "unassessed" => {
+                incident.nis2_significance_status == "NOT_ASSESSED"
+                    && !matches!(incident.status.as_str(), "RESOLVED" | "CLOSED")
+            }
+            _ => true,
+        })
+        .cloned()
+        .collect()
+}
+
+fn incident_register_filter_links(context: &WebContext, selected_filter: &str) -> String {
+    [("all", "Alle"), ("unassessed", "Erheblichkeit offen")]
+        .iter()
+        .map(|(value, label)| {
+            let href = if *value == "all" {
+                web_path_with_context("/incidents/", Some(context))
+            } else {
+                web_path_with_context(
+                    &format!("/incidents/?incident_filter={value}"),
+                    Some(context),
+                )
+            };
+            let class_attr = if *value == selected_filter {
+                r#" class="active""#
+            } else {
+                ""
+            };
+            format!(
+                r#"<a{} href="{}">{}</a>"#,
+                class_attr,
+                html_escape(&href),
+                html_escape(label)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 fn filter_incident_events(
@@ -16473,6 +17168,15 @@ fn web_page(
 fn metric_card(label: &str, value: i64) -> String {
     format!(
         r#"<article class="panel metric"><span>{}</span><strong>{}</strong></article>"#,
+        html_escape(label),
+        value,
+    )
+}
+
+fn metric_link_card(label: &str, value: i64, href: &str) -> String {
+    format!(
+        r#"<a class="panel metric" href="{}"><span>{}</span><strong>{}</strong></a>"#,
+        html_escape(href),
         html_escape(label),
         value,
     )
@@ -19357,6 +20061,30 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(incident_nis2_export_pdf),
         )
         .route(
+            "/api/v1/incidents/{incident_id}/dora-export",
+            get(incident_dora_export),
+        )
+        .route(
+            "/api/v1/incidents/{incident_id}/dora-export.html",
+            get(incident_dora_export_html),
+        )
+        .route(
+            "/api/v1/incidents/{incident_id}/dora-export.pdf",
+            get(incident_dora_export_pdf),
+        )
+        .route(
+            "/api/v1/incidents/{incident_id}/dsgvo-export",
+            get(incident_dsgvo_export),
+        )
+        .route(
+            "/api/v1/incidents/{incident_id}/dsgvo-export.html",
+            get(incident_dsgvo_export_html),
+        )
+        .route(
+            "/api/v1/incidents/{incident_id}/dsgvo-export.pdf",
+            get(incident_dsgvo_export_pdf),
+        )
+        .route(
             "/api/v1/incidents/{incident_id}/timeline.csv",
             get(incident_timeline_export_csv),
         )
@@ -19458,6 +20186,30 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/incidents/{incident_id}/nis2-export.pdf",
             get(web_incident_nis2_export_pdf),
+        )
+        .route(
+            "/incidents/{incident_id}/dora-export",
+            get(web_incident_dora_export),
+        )
+        .route(
+            "/incidents/{incident_id}/dora-export.html",
+            get(web_incident_dora_export_html),
+        )
+        .route(
+            "/incidents/{incident_id}/dora-export.pdf",
+            get(web_incident_dora_export_pdf),
+        )
+        .route(
+            "/incidents/{incident_id}/dsgvo-export",
+            get(web_incident_dsgvo_export),
+        )
+        .route(
+            "/incidents/{incident_id}/dsgvo-export.html",
+            get(web_incident_dsgvo_export_html),
+        )
+        .route(
+            "/incidents/{incident_id}/dsgvo-export.pdf",
+            get(web_incident_dsgvo_export_pdf),
         )
         .route(
             "/incidents/{incident_id}/timeline.csv",
