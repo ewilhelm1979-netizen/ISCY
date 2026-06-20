@@ -21,6 +21,7 @@ pub struct IncidentAlertmanagerMetrics {
     pub open: i64,
     pub triage: i64,
     pub critical_open: i64,
+    pub resolved: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1165,7 +1166,8 @@ async fn alertmanager_metrics_postgres(
             COUNT(*)::bigint AS total,
             COALESCE(SUM(CASE WHEN status NOT IN ('RESOLVED', 'CLOSED') THEN 1 ELSE 0 END), 0)::bigint AS open,
             COALESCE(SUM(CASE WHEN status = 'TRIAGE' THEN 1 ELSE 0 END), 0)::bigint AS triage,
-            COALESCE(SUM(CASE WHEN status NOT IN ('RESOLVED', 'CLOSED') AND severity = 'CRITICAL' THEN 1 ELSE 0 END), 0)::bigint AS critical_open
+            COALESCE(SUM(CASE WHEN status NOT IN ('RESOLVED', 'CLOSED') AND severity = 'CRITICAL' THEN 1 ELSE 0 END), 0)::bigint AS critical_open,
+            COALESCE(SUM(CASE WHEN status IN ('RESOLVED', 'CLOSED') THEN 1 ELSE 0 END), 0)::bigint AS resolved
         FROM incidents_incident
         WHERE tenant_id = $1 AND authority_reference LIKE 'Alertmanager:%'
         "#,
@@ -1179,6 +1181,7 @@ async fn alertmanager_metrics_postgres(
         open: row.try_get("open")?,
         triage: row.try_get("triage")?,
         critical_open: row.try_get("critical_open")?,
+        resolved: row.try_get("resolved")?,
     })
 }
 
@@ -1192,7 +1195,8 @@ async fn alertmanager_metrics_sqlite(
             COUNT(*) AS total,
             COALESCE(SUM(CASE WHEN status NOT IN ('RESOLVED', 'CLOSED') THEN 1 ELSE 0 END), 0) AS open,
             COALESCE(SUM(CASE WHEN status = 'TRIAGE' THEN 1 ELSE 0 END), 0) AS triage,
-            COALESCE(SUM(CASE WHEN status NOT IN ('RESOLVED', 'CLOSED') AND severity = 'CRITICAL' THEN 1 ELSE 0 END), 0) AS critical_open
+            COALESCE(SUM(CASE WHEN status NOT IN ('RESOLVED', 'CLOSED') AND severity = 'CRITICAL' THEN 1 ELSE 0 END), 0) AS critical_open,
+            COALESCE(SUM(CASE WHEN status IN ('RESOLVED', 'CLOSED') THEN 1 ELSE 0 END), 0) AS resolved
         FROM incidents_incident
         WHERE tenant_id = ?1 AND authority_reference LIKE 'Alertmanager:%'
         "#,
@@ -1206,6 +1210,7 @@ async fn alertmanager_metrics_sqlite(
         open: row.try_get("open")?,
         triage: row.try_get("triage")?,
         critical_open: row.try_get("critical_open")?,
+        resolved: row.try_get("resolved")?,
     })
 }
 

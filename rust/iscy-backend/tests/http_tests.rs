@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.9\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.10\""));
 }
 
 #[tokio::test]
@@ -376,6 +376,43 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
     .unwrap();
     assert_eq!(dedupe_note_count, 1);
 
+    let open_operations_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/operations/incidents/?tenant_id=42&user_id=7&alert_filter=open")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(open_operations_response.status(), StatusCode::OK);
+    let open_operations_body = to_bytes(open_operations_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let open_operations_html = String::from_utf8(open_operations_body.to_vec()).unwrap();
+    assert!(open_operations_html.contains("Open (1)"));
+    assert!(open_operations_html.contains("Critical (1)"));
+    assert!(open_operations_html.contains("ISCYOperationsCritical"));
+    assert!(open_operations_html.contains("In Arbeit"));
+
+    let critical_operations_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/operations/incidents/?tenant_id=42&user_id=7&alert_filter=critical")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(critical_operations_response.status(), StatusCode::OK);
+    let critical_operations_body = to_bytes(critical_operations_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let critical_operations_html = String::from_utf8(critical_operations_body.to_vec()).unwrap();
+    assert!(critical_operations_html.contains("ISCYOperationsCritical"));
+
     let resolved_response = app
         .clone()
         .oneshot(
@@ -446,7 +483,7 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/operations/incidents/?tenant_id=42&user_id=7")
+                .uri("/operations/incidents/?tenant_id=42&user_id=7&alert_filter=resolved")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -461,6 +498,8 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
     assert!(operations_html.contains("ISCYOperationsCritical"));
     assert!(operations_html.contains("Alertmanager:fp:firing-abc123"));
     assert!(operations_html.contains("2026-06-15T15:00:00+00:00"));
+    assert!(operations_html.contains("Resolved (1)"));
+    assert!(operations_html.contains("Abgeschlossen"));
 
     let metrics_response = app
         .oneshot(
@@ -485,6 +524,13 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
     assert!(
         metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"critical_open\"} 0")
     );
+    assert!(metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"resolved\"} 1"));
+    assert!(metrics.contains("# TYPE iscy_operations_alertmanager_incident_info gauge"));
+    assert!(metrics.contains("iscy_operations_alertmanager_incident_info{incident_id=\"1\""));
+    assert!(metrics.contains("status=\"RESOLVED\""));
+    assert!(metrics.contains("state=\"resolved\""));
+    assert!(metrics.contains("review_required=\"false\""));
+    assert!(metrics.contains("href=\"/incidents/1?tenant_id=42&user_id=7\""));
 }
 
 #[tokio::test]

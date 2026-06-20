@@ -999,6 +999,7 @@ pub struct WebContextQuery {
     pub evidence_status: Option<String>,
     pub return_to: Option<String>,
     pub review_filter: Option<String>,
+    pub alert_filter: Option<String>,
     pub control_id: Option<i64>,
     pub incident_id: Option<i64>,
     pub requirement_id: Option<i64>,
@@ -1086,7 +1087,20 @@ struct StatusOperationsJsonResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     alertmanager_incidents: Option<IncidentAlertmanagerMetrics>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    alertmanager_incident_details: Option<Vec<StatusAlertmanagerIncidentDetail>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     product_security_trends: Option<product_security_store::ProductSecurityTrendDashboard>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StatusAlertmanagerIncidentDetail {
+    id: i64,
+    title: String,
+    severity: String,
+    status: String,
+    state: String,
+    review_required: bool,
+    href: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1875,6 +1889,7 @@ async fn persist_alertmanager_alerts(
         enabled: true,
         ..Default::default()
     };
+    let require_resolution_review = alertmanager_resolution_review_required();
     for alert in alerts {
         let authority_reference = alertmanager_authority_reference(alert);
         let existing_incident = match incident_store
@@ -1905,8 +1920,29 @@ async fn persist_alertmanager_alerts(
                 )
                 .await
             {
-                Ok(Some(_)) => {
+                Ok(Some(result)) => {
                     summary.resolved_incidents += 1;
+                    if alertmanager_resolution_review_required_for_incident(
+                        &result.incident,
+                        require_resolution_review,
+                    ) {
+                        let review_note = "Root Cause und Lessons Learned fehlen nach automatischem Alertmanager-Resolved; bitte fachlichen Abschluss in der Fallakte dokumentieren.";
+                        if let Err(err) = incident_store
+                            .update_incident_review_state(
+                                context.tenant_id,
+                                existing.id,
+                                context.user_id,
+                                "request_changes",
+                                Some(review_note),
+                            )
+                            .await
+                        {
+                            summary.errors.push(format!(
+                                "Resolved-Reviewpflicht fuer {} konnte nicht gesetzt werden: {err}",
+                                alert.alertname
+                            ));
+                        }
+                    }
                     if let Err(err) = incident_store
                         .append_incident_event(
                             context.tenant_id,
@@ -2092,6 +2128,21 @@ fn alertmanager_resolved_incident_payload(
         stakeholder_summary: None,
         lessons_learned: None,
     }
+}
+
+fn alertmanager_resolution_review_required() -> bool {
+    env_flag_enabled("ISCY_ALERTMANAGER_REQUIRE_RESOLUTION_REVIEW")
+        || env_flag_enabled("ISCY_REQUIRE_INCIDENT_ROOT_CAUSE_ON_RESOLVE")
+}
+
+fn alertmanager_resolution_review_required_for_incident(
+    incident: &incident_store::IncidentSummary,
+    required_enabled: bool,
+) -> bool {
+    required_enabled
+        && incident.authority_reference.starts_with("Alertmanager:")
+        && matches!(incident.status.as_str(), "RESOLVED" | "CLOSED")
+        && incident.lessons_learned.trim().is_empty()
 }
 
 fn alertmanager_authority_reference(alert: &AlertmanagerAlertSummary) -> String {
@@ -7712,6 +7763,8 @@ async fn web_operations_incidents(
     };
     match store.list_incidents(context.tenant_id, 200).await {
         Ok(incidents) => {
+            let require_resolution_review = alertmanager_resolution_review_required();
+            let active_filter = alert_operations_filter(query.alert_filter.as_deref());
             let alert_incidents = incidents
                 .iter()
                 .filter(|incident| incident.authority_reference.starts_with("Alertmanager:"))
@@ -7736,18 +7789,39 @@ async fn web_operations_incidents(
                 .iter()
                 .filter(|incident| matches!(incident.status.as_str(), "RESOLVED" | "CLOSED"))
                 .count() as i64;
+            let review_required_count = alert_incidents
+                .iter()
+                .filter(|incident| {
+                    alertmanager_resolution_review_required_for_incident(
+                        incident,
+                        require_resolution_review,
+                    )
+                })
+                .count() as i64;
+            let filter_links = alert_operations_filter_links(
+                &context,
+                active_filter,
+                total_count,
+                open_count,
+                critical_open_count,
+                resolved_count,
+            );
             let rows = alert_incidents
                 .iter()
+                .filter(|incident| alert_operations_filter_matches(incident, active_filter))
                 .take(75)
                 .map(|incident| {
+                    let detail_href =
+                        web_path_with_context(&format!("/incidents/{}", incident.id), Some(&context));
                     format!(
-                        r#"<tr><td><a href="{}">{}</a><p>{}</p><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
-                        web_path_with_context(&format!("/incidents/{}", incident.id), Some(&context)),
+                        r#"<tr><td><a href="{}">{}</a><p>{}</p><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        detail_href,
                         html_escape(&incident.title),
                         html_escape(&incident.summary),
                         html_escape(&incident.authority_reference),
                         incident_severity_badge(&incident.severity, &incident.severity_label),
                         incident_status_badge(&incident.status, &incident.status_label),
+                        alertmanager_resolution_review_badge(incident, require_resolution_review),
                         html_escape(incident.detected_at.as_deref().unwrap_or("-")),
                         html_escape(incident.resolved_at.as_deref().unwrap_or("-")),
                         html_escape(incident.owner_display.as_deref().unwrap_or("-")),
@@ -7765,14 +7839,16 @@ async fn web_operations_incidents(
                   {}
                   {}
                   {}
+                  {}
                 </section>
                 <section class="grid">
                   {}
                   {}
                   <article class="panel wide">
                     <h2>Alertmanager-Fallakten</h2>
+                    {}
                     <table>
-                      <thead><tr><th>Fallakte</th><th>Severity</th><th>Status</th><th>Erkannt</th><th>Resolved</th><th>Owner</th><th>Aktualisiert</th></tr></thead>
+                      <thead><tr><th>Fallakte</th><th>Severity</th><th>Status</th><th>Abschluss</th><th>Erkannt</th><th>Resolved</th><th>Owner</th><th>Aktualisiert</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                   </article>
@@ -7783,6 +7859,7 @@ async fn web_operations_incidents(
                 metric_card("Triage", triage_count),
                 metric_card("Kritisch offen", critical_open_count),
                 metric_card("Resolved", resolved_count),
+                metric_card("Review Pflicht", review_required_count),
                 web_link_card(
                     "Incident-Fallakten",
                     &web_path_with_context("/incidents/", Some(&context)),
@@ -7793,8 +7870,12 @@ async fn web_operations_incidents(
                     &web_path_with_context("/status/operations.json", Some(&context)),
                     "Maschinenlesbarer Drilldown fuer Monitoring und Agenten",
                 ),
+                filter_links,
                 if rows.is_empty() {
-                    web_empty_row(7, "Noch keine Alertmanager-Fallakten vorhanden.")
+                    web_empty_row(
+                        8,
+                        "Keine Alertmanager-Fallakten fuer diesen Filter vorhanden.",
+                    )
                 } else {
                     rows
                 },
@@ -7813,6 +7894,83 @@ async fn web_operations_incidents(
             &err.to_string(),
         ),
     }
+}
+
+fn alert_operations_filter(value: Option<&str>) -> &'static str {
+    match value.unwrap_or_default().trim() {
+        "open" => "open",
+        "critical" => "critical",
+        "resolved" => "resolved",
+        _ => "all",
+    }
+}
+
+fn alert_operations_filter_matches(
+    incident: &incident_store::IncidentSummary,
+    filter: &str,
+) -> bool {
+    match alert_operations_filter(Some(filter)) {
+        "open" => !matches!(incident.status.as_str(), "RESOLVED" | "CLOSED"),
+        "critical" => {
+            incident.severity == "CRITICAL"
+                && !matches!(incident.status.as_str(), "RESOLVED" | "CLOSED")
+        }
+        "resolved" => matches!(incident.status.as_str(), "RESOLVED" | "CLOSED"),
+        _ => true,
+    }
+}
+
+fn alert_operations_filter_path(context: &WebContext, filter: &str) -> String {
+    match alert_operations_filter(Some(filter)) {
+        "all" => web_path_with_context("/operations/incidents/", Some(context)),
+        normalized => web_path_with_context(
+            &format!("/operations/incidents/?alert_filter={normalized}"),
+            Some(context),
+        ),
+    }
+}
+
+fn alert_operations_filter_links(
+    context: &WebContext,
+    active_filter: &str,
+    all_count: i64,
+    open_count: i64,
+    critical_count: i64,
+    resolved_count: i64,
+) -> String {
+    let links = [
+        ("all", "Alle", all_count),
+        ("open", "Open", open_count),
+        ("critical", "Critical", critical_count),
+        ("resolved", "Resolved", resolved_count),
+    ]
+    .iter()
+    .map(|(filter, label, count)| {
+        let active = alert_operations_filter(Some(active_filter)) == *filter;
+        format!(
+            r#"<a href="{}"{}>{} ({})</a>"#,
+            alert_operations_filter_path(context, filter),
+            if active { r#" class="active""# } else { "" },
+            html_escape(label),
+            count,
+        )
+    })
+    .collect::<Vec<_>>()
+    .join(" ");
+    format!(r#"<div class="filter-links">{links}</div>"#)
+}
+
+fn alertmanager_resolution_review_badge(
+    incident: &incident_store::IncidentSummary,
+    require_resolution_review: bool,
+) -> String {
+    if alertmanager_resolution_review_required_for_incident(incident, require_resolution_review) {
+        return web_badge("Root Cause fehlt", "warn");
+    }
+    if matches!(incident.status.as_str(), "RESOLVED" | "CLOSED") {
+        return web_badge("Abgeschlossen", "ok");
+    }
+    web_badge("In Arbeit", "info")
 }
 
 async fn web_incidents_submit(
@@ -9744,8 +9902,13 @@ fn grafana_query_cheatsheet_panel() -> String {
         ),
         (
             "Alert-Incidents",
-            r#"iscy_operations_alertmanager_incidents_total{state=~"open|critical_open"}"#,
-            "Persistierte Alertmanager-Fallakten",
+            r#"iscy_operations_alertmanager_incidents_total{state!="all"}"#,
+            "Persistierte Alertmanager-Fallakten nach open, critical_open und resolved",
+        ),
+        (
+            "Alert-Drilldown",
+            "iscy_operations_alertmanager_incident_info",
+            "Konkrete Incident-Fallakten fuer Grafana-Links",
         ),
     ]
     .iter()
@@ -9831,6 +9994,8 @@ async fn status_operations_payload(
     let product_security_trends = product_security_trends_for_status(state, context.as_ref()).await;
     let alertmanager_incidents =
         alertmanager_incident_metrics_for_status(state, context.as_ref()).await;
+    let alertmanager_incident_details =
+        alertmanager_incident_details_for_status(state, context.as_ref()).await;
     StatusOperationsJsonResponse {
         accepted: true,
         api_version: "v1",
@@ -9863,6 +10028,7 @@ async fn status_operations_payload(
         modules: store_statuses,
         signals: operations_overview.signals,
         alertmanager_incidents,
+        alertmanager_incident_details,
         product_security_trends,
     }
 }
@@ -9994,6 +10160,9 @@ fn status_operations_metrics_body(payload: &StatusOperationsJsonResponse) -> Str
     if let Some(metrics) = payload.alertmanager_incidents.as_ref() {
         push_alertmanager_incident_metrics(&mut body, metrics);
     }
+    if let Some(details) = payload.alertmanager_incident_details.as_ref() {
+        push_alertmanager_incident_detail_metrics(&mut body, details);
+    }
     if let Some(trends) = payload.product_security_trends.as_ref() {
         push_product_security_trend_metrics(&mut body, trends);
     }
@@ -10009,6 +10178,54 @@ async fn alertmanager_incident_metrics_for_status(
     store.alertmanager_metrics(context.tenant_id).await.ok()
 }
 
+async fn alertmanager_incident_details_for_status(
+    state: &AppState,
+    context: Option<&WebContext>,
+) -> Option<Vec<StatusAlertmanagerIncidentDetail>> {
+    let context = context?;
+    let store = state.incident_store.as_ref()?;
+    let require_resolution_review = alertmanager_resolution_review_required();
+    store
+        .list_incidents(context.tenant_id, 75)
+        .await
+        .ok()
+        .map(|incidents| {
+            incidents
+                .into_iter()
+                .filter(|incident| incident.authority_reference.starts_with("Alertmanager:"))
+                .map(|incident| {
+                    let state = alertmanager_incident_state(&incident).to_string();
+                    let review_required = alertmanager_resolution_review_required_for_incident(
+                        &incident,
+                        require_resolution_review,
+                    );
+                    StatusAlertmanagerIncidentDetail {
+                        id: incident.id,
+                        title: incident.title,
+                        severity: incident.severity,
+                        status: incident.status,
+                        state,
+                        review_required,
+                        href: web_path_with_context(
+                            &format!("/incidents/{}", incident.id),
+                            Some(context),
+                        ),
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+}
+
+fn alertmanager_incident_state(incident: &incident_store::IncidentSummary) -> &'static str {
+    if matches!(incident.status.as_str(), "RESOLVED" | "CLOSED") {
+        "resolved"
+    } else if incident.severity == "CRITICAL" {
+        "critical_open"
+    } else {
+        "open"
+    }
+}
+
 fn push_alertmanager_incident_metrics(body: &mut String, metrics: &IncidentAlertmanagerMetrics) {
     body.push_str(
         "# HELP iscy_operations_alertmanager_incidents_total Alertmanager-origin incidents by state.\n\
@@ -10019,10 +10236,33 @@ fn push_alertmanager_incident_metrics(body: &mut String, metrics: &IncidentAlert
         ("open", metrics.open),
         ("triage", metrics.triage),
         ("critical_open", metrics.critical_open),
+        ("resolved", metrics.resolved),
     ] {
         body.push_str(&format!(
             "iscy_operations_alertmanager_incidents_total{{state=\"{}\"}} {}\n",
             state, value,
+        ));
+    }
+}
+
+fn push_alertmanager_incident_detail_metrics(
+    body: &mut String,
+    details: &[StatusAlertmanagerIncidentDetail],
+) {
+    body.push_str(
+        "# HELP iscy_operations_alertmanager_incident_info Alertmanager-origin incident detail labels for Grafana drilldowns.\n\
+         # TYPE iscy_operations_alertmanager_incident_info gauge\n",
+    );
+    for incident in details {
+        body.push_str(&format!(
+            "iscy_operations_alertmanager_incident_info{{incident_id=\"{}\",title=\"{}\",severity=\"{}\",status=\"{}\",state=\"{}\",review_required=\"{}\",href=\"{}\"}} 1\n",
+            incident.id,
+            prometheus_label_value(&incident.title),
+            prometheus_label_value(&incident.severity),
+            prometheus_label_value(&incident.status),
+            prometheus_label_value(&incident.state),
+            incident.review_required,
+            prometheus_label_value(&incident.href),
         ));
     }
 }
@@ -15711,6 +15951,9 @@ fn web_page(
     .metric {{ min-height:96px; }}
     .metric span, .eyebrow {{ display:block; color:var(--muted); font-size:12px; font-weight:700; text-transform:uppercase; }}
     .metric strong {{ display:block; font-size:30px; line-height:1.05; margin-top:8px; }}
+    .filter-links {{ display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px; }}
+    .filter-links a {{ color:var(--ink); text-decoration:none; white-space:nowrap; padding:7px 10px; border:1px solid var(--line); border-radius:999px; background:#fff; font-size:13px; font-weight:700; }}
+    .filter-links a.active, .filter-links a:hover {{ color:var(--accent); border-color:#b8d8d0; background:var(--accent-weak); }}
     .zt-focus {{ display:grid; grid-template-columns:minmax(190px,260px) minmax(0,1fr); gap:14px; margin-bottom:16px; }}
     .zt-score {{ display:grid; align-content:start; gap:10px; min-height:138px; }}
     .zt-score strong {{ font-size:52px; line-height:1; }}
