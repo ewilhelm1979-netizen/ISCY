@@ -161,6 +161,18 @@ Product Security wird unter `/product-security/` als Rust-Arbeitsbereich gefuehr
 
 Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel, Beschreibung, Linked Requirement, Status und Ruecksprungziel vor. Dadurch kann ein Nachweis direkt aus dem fachlichen Kontext erstellt werden und landet nach dem Upload wieder dort, wo die Arbeit begonnen hat.
 
+## Strategische Weiterentwicklung
+
+Die Rust-Migration ist abgeschlossen. Die naechste Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
+
+1. Regulatorisches Organisationsprofil
+2. Management-Review- und Audit-Paket
+3. Evidence-Qualitaet und Nachweisreife
+4. Third-Party- und Supplier-Risk
+5. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+6. AI-Governance-Modul
+7. Agent-Flottenbetrieb und Benachrichtigungen
+
 ## Zero-Trust Agent
 
 ISCY `0.3.14` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
@@ -248,6 +260,7 @@ GitHub Actions prueft:
 
 - Handbuch: `docs/ISCY_Handbuch.md`
 - PDF-Handbuch reproduzierbar erzeugen: `make docs-pdf`
+- Strategische Produktroadmap: `docs/ISCY_STRATEGIC_ROADMAP.md`
 - GUI-Screenshots: `docs/GUI_SCREENSHOTS.md`
 - Zero-Trust-Agent: `docs/ZERO_TRUST_AGENT.md`
 - Proxmox-Produktiv-Runbook: `docs/PROXMOX_PRODUCTION_RUNBOOK.md`

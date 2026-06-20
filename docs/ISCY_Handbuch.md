@@ -897,7 +897,23 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 - Risiken nicht technisch, sondern geschaeftlich formulieren
 - Produkt- und Schwachstellenlogik nur dort aktivieren, wo sie wirklich gebraucht wird
 
-## 10. Git-Bezug dieses Handbuchs
+## 10. Strategische Weiterentwicklung
+
+Die Rust-Migration ist abgeschlossen. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+
+Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
+
+1. Regulatorisches Organisationsprofil
+2. Management-Review- und Audit-Paket
+3. Evidence-Qualitaet und Nachweisreife
+4. Third-Party- und Supplier-Risk
+5. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+6. AI-Governance-Modul
+7. Agent-Flottenbetrieb und Benachrichtigungen
+
+Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
+
+## 11. Git-Bezug dieses Handbuchs
 
 Dieses Handbuch ist bewusst als Markdown-Datei im Repository abgelegt, damit es:
 

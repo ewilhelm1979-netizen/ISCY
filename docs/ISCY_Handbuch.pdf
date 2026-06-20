@@ -2053,7 +2053,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
 endobj
 31 0 obj
-<< /Length 3770 >>
+<< /Length 3852 >>
 stream
 BT
 /F1 9 Tf
@@ -2189,7 +2189,58 @@ T*
 T*
 () Tj
 T*
-(10. Git-Bezug dieses Handbuchs:) Tj
+(10. Strategische Weiterentwicklung:) Tj
+T*
+() Tj
+T*
+(Die Rust-Migration ist abgeschlossen. Die weitere ISCY-Agenda konzentriert sich deshalb nicht) Tj
+T*
+(mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.) Tj
+T*
+() Tj
+T*
+(Die priorisierte Roadmap liegt in docs/ISCYSTRATEGICROADMAP.md und umfasst:) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 1063 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
+(1. Regulatorisches Organisationsprofil) Tj
+T*
+(2. Management-Review- und Audit-Paket) Tj
+T*
+(3. Evidence-Qualitaet und Nachweisreife) Tj
+T*
+(4. Third-Party- und Supplier-Risk) Tj
+T*
+(5. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness) Tj
+T*
+(6. AI-Governance-Modul) Tj
+T*
+(7. Agent-Flottenbetrieb und Benachrichtigungen) Tj
+T*
+() Tj
+T*
+(Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern) Tj
+T*
+(Organisation, Assets, Produkte, Controls, Risiken, Evidence, Incidents, Product Security,) Tj
+T*
+(Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.) Tj
+T*
+() Tj
+T*
+(11. Git-Bezug dieses Handbuchs:) Tj
 T*
 () Tj
 T*
@@ -2203,19 +2254,6 @@ T*
 T*
 (- in Pull Requests geprueft werden kann) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 160 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Das PDF-Handbuch docs/ISCYHandbuch.pdf wird reproduzierbar aus Markdown erzeugt:) Tj
@@ -2261,10 +2299,10 @@ xref
 0000038863 00000 n
 0000042305 00000 n
 0000042433 00000 n
-0000046255 00000 n
-0000046383 00000 n
+0000046337 00000 n
+0000046465 00000 n
 trailer
 << /Size 34 /Root 1 0 R >>
 startxref
-46594
+47580
 %%EOF

@@ -31,3 +31,17 @@
 2. Visuelle Regressionstests
 3. Dedizierte Review-Ansichten fuer groessere PSIRT-/Risk-Teams
 4. Optional: Rust-Nebenservice fuer Performance-kritische Teilbereiche
+
+## Strategische Produktagenda
+
+Die technische Rust-Migration ist abgeschlossen. Die fachliche Weiterentwicklung wird in `docs/ISCY_STRATEGIC_ROADMAP.md` gefuehrt.
+
+Die dort priorisierten naechsten Produktbereiche sind:
+
+1. Regulatorisches Organisationsprofil
+2. Management-Review- und Audit-Paket
+3. Evidence-Qualitaet und Nachweisreife
+4. Third-Party- und Supplier-Risk
+5. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+6. AI-Governance-Modul
+7. Agent-Flottenbetrieb und Benachrichtigungen
