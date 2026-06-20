@@ -2191,12 +2191,13 @@ async fn create_incident_postgres(
             nis2_significance_reference, nis2_significance_assessed_at,
             early_warning_due_at, early_warning_sent_at, notification_due_at,
             notification_sent_at, final_report_due_at, final_report_sent_at,
-            authority_reference, stakeholder_summary, lessons_learned, created_at, updated_at
+            authority_reference, stakeholder_summary, lessons_learned, review_state,
+            review_notes, created_at, updated_at
         )
         VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
             $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-            $31, $32, $33
+            $31, $32, $33, $34, $35
         )
         RETURNING id
         "#,
@@ -2232,6 +2233,8 @@ async fn create_incident_postgres(
     .bind(&write.authority_reference)
     .bind(&write.stakeholder_summary)
     .bind(&write.lessons_learned)
+    .bind(&write.review_state)
+    .bind(&write.review_notes)
     .bind(&write.now)
     .bind(&write.now)
     .fetch_one(pool)
@@ -2273,12 +2276,13 @@ async fn create_incident_sqlite(
             nis2_significance_reference, nis2_significance_assessed_at,
             early_warning_due_at, early_warning_sent_at, notification_due_at,
             notification_sent_at, final_report_due_at, final_report_sent_at,
-            authority_reference, stakeholder_summary, lessons_learned, created_at, updated_at
+            authority_reference, stakeholder_summary, lessons_learned, review_state,
+            review_notes, created_at, updated_at
         )
         VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
             ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-            ?31, ?32, ?33
+            ?31, ?32, ?33, ?34, ?35
         )
         "#,
     )
@@ -2313,6 +2317,8 @@ async fn create_incident_sqlite(
     .bind(&write.authority_reference)
     .bind(&write.stakeholder_summary)
     .bind(&write.lessons_learned)
+    .bind(&write.review_state)
+    .bind(&write.review_notes)
     .bind(&write.now)
     .bind(&write.now)
     .execute(pool)
@@ -2361,7 +2367,8 @@ async fn update_incident_postgres(
             early_warning_due_at = $24, early_warning_sent_at = $25,
             notification_due_at = $26, notification_sent_at = $27, final_report_due_at = $28,
             final_report_sent_at = $29, authority_reference = $30,
-            stakeholder_summary = $31, lessons_learned = $32, updated_at = $33
+            stakeholder_summary = $31, lessons_learned = $32, review_state = $33,
+            review_notes = $34, updated_at = $35
         WHERE tenant_id = $1 AND id = $2
         "#,
     )
@@ -2397,6 +2404,8 @@ async fn update_incident_postgres(
     .bind(&write.authority_reference)
     .bind(&write.stakeholder_summary)
     .bind(&write.lessons_learned)
+    .bind(&write.review_state)
+    .bind(&write.review_notes)
     .bind(&write.now)
     .execute(pool)
     .await
@@ -2441,7 +2450,8 @@ async fn update_incident_sqlite(
             early_warning_due_at = ?24, early_warning_sent_at = ?25,
             notification_due_at = ?26, notification_sent_at = ?27, final_report_due_at = ?28,
             final_report_sent_at = ?29, authority_reference = ?30,
-            stakeholder_summary = ?31, lessons_learned = ?32, updated_at = ?33
+            stakeholder_summary = ?31, lessons_learned = ?32, review_state = ?33,
+            review_notes = ?34, updated_at = ?35
         WHERE tenant_id = ?1 AND id = ?2
         "#,
     )
@@ -2477,6 +2487,8 @@ async fn update_incident_sqlite(
     .bind(&write.authority_reference)
     .bind(&write.stakeholder_summary)
     .bind(&write.lessons_learned)
+    .bind(&write.review_state)
+    .bind(&write.review_notes)
     .bind(&write.now)
     .execute(pool)
     .await
@@ -2522,6 +2534,8 @@ struct NewIncident {
     authority_reference: String,
     stakeholder_summary: String,
     lessons_learned: String,
+    review_state: String,
+    review_notes: String,
     now: String,
 }
 
@@ -2557,6 +2571,8 @@ struct ExistingIncident {
     authority_reference: String,
     stakeholder_summary: String,
     lessons_learned: String,
+    review_state: String,
+    review_notes: String,
     now: String,
 }
 
@@ -2786,6 +2802,21 @@ async fn incident_update_events_postgres(
             .await?,
         );
     }
+    if current.review_state != updated.review_state {
+        events.push(
+            append_incident_event_postgres(
+                pool,
+                tenant_id,
+                incident_id,
+                actor_id,
+                IncidentEventWriteRequest::review_state_changed(
+                    &updated.review_state_label,
+                    &updated.review_notes,
+                ),
+            )
+            .await?,
+        );
+    }
     Ok(events)
 }
 
@@ -2836,6 +2867,21 @@ async fn incident_update_events_sqlite(
                             "nein"
                         },
                     ),
+                ),
+            )
+            .await?,
+        );
+    }
+    if current.review_state != updated.review_state {
+        events.push(
+            append_incident_event_sqlite(
+                pool,
+                tenant_id,
+                incident_id,
+                actor_id,
+                IncidentEventWriteRequest::review_state_changed(
+                    &updated.review_state_label,
+                    &updated.review_notes,
                 ),
             )
             .await?,
@@ -3012,6 +3058,10 @@ impl NewIncident {
             }
         });
         let deadlines = nis2_deadlines(nis2_reportable, detected_at.as_deref());
+        let review_state =
+            review_state_for_significance_decision(&nis2_significance_status, None, None);
+        let review_notes =
+            review_notes_for_significance_decision(&nis2_significance_status, &review_state, "");
         Ok(Self {
             reporter_id: payload.reporter_id.flatten(),
             owner_id: payload.owner_id.flatten(),
@@ -3049,6 +3099,8 @@ impl NewIncident {
             authority_reference: normalize_optional_text(payload.authority_reference.as_deref()),
             stakeholder_summary: normalize_optional_text(payload.stakeholder_summary.as_deref()),
             lessons_learned: normalize_optional_text(payload.lessons_learned.as_deref()),
+            review_state,
+            review_notes,
             now,
         })
     }
@@ -3136,6 +3188,16 @@ impl ExistingIncident {
             None => current.nis2_significance_assessed_at,
         };
         let deadlines = nis2_deadlines(nis2_reportable, detected_at.as_deref());
+        let review_state = review_state_for_significance_decision(
+            &nis2_significance_status,
+            Some(&current.nis2_significance_status),
+            Some(&current.review_state),
+        );
+        let review_notes = review_notes_for_significance_decision(
+            &nis2_significance_status,
+            &review_state,
+            &current.review_notes,
+        );
         Ok(Self {
             reporter_id: payload.reporter_id.unwrap_or(current.reporter_id),
             owner_id: payload.owner_id.unwrap_or(current.owner_id),
@@ -3187,6 +3249,8 @@ impl ExistingIncident {
                 .lessons_learned
                 .map(|value| normalize_optional_text(Some(&value)))
                 .unwrap_or(current.lessons_learned),
+            review_state,
+            review_notes,
             now,
         })
     }
@@ -3223,9 +3287,45 @@ impl ExistingIncident {
             authority_reference: self.authority_reference.clone(),
             stakeholder_summary: self.stakeholder_summary.clone(),
             lessons_learned: self.lessons_learned.clone(),
+            review_state: self.review_state.clone(),
+            review_notes: self.review_notes.clone(),
             now: self.now.clone(),
         }
     }
+}
+
+const NOT_SIGNIFICANT_REVIEW_NOTE: &str =
+    "Nicht erheblicher Sicherheitsvorfall: fachliche Review/Freigabe erforderlich.";
+
+fn review_state_for_significance_decision(
+    significance_status: &str,
+    previous_significance_status: Option<&str>,
+    current_review_state: Option<&str>,
+) -> String {
+    let current_review_state = current_review_state.unwrap_or("DRAFT");
+    if significance_status == "NOT_SIGNIFICANT" {
+        let approved_same_decision = previous_significance_status == Some("NOT_SIGNIFICANT")
+            && current_review_state == "APPROVED";
+        if approved_same_decision {
+            return "APPROVED".to_string();
+        }
+        return "IN_REVIEW".to_string();
+    }
+    current_review_state.to_string()
+}
+
+fn review_notes_for_significance_decision(
+    significance_status: &str,
+    review_state: &str,
+    current_review_notes: &str,
+) -> String {
+    if significance_status == "NOT_SIGNIFICANT"
+        && review_state == "IN_REVIEW"
+        && current_review_notes.trim().is_empty()
+    {
+        return NOT_SIGNIFICANT_REVIEW_NOTE.to_string();
+    }
+    current_review_notes.to_string()
 }
 
 struct NIS2Deadlines {

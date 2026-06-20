@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.12\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.13\""));
 }
 
 #[tokio::test]
@@ -1792,6 +1792,7 @@ async fn dashboard_summary_returns_counts_from_database() {
     assert_eq!(payload["open_risk_count"], 2);
     assert_eq!(payload["evidence_count"], 4);
     assert_eq!(payload["open_task_count"], 2);
+    assert_eq!(payload["unassessed_incident_count"], 2);
     assert_eq!(payload["latest_report"]["id"], 11);
     assert_eq!(payload["latest_report"]["title"], "April Readiness");
     assert_eq!(payload["latest_report"]["iso_readiness_percent"], 78);
@@ -3548,6 +3549,11 @@ async fn incident_create_not_significant_keeps_nis2_deadlines_inactive() {
         "NOT_SIGNIFICANT"
     );
     assert_eq!(payload["incident"]["nis2_reportable"], false);
+    assert_eq!(payload["incident"]["review_state"], "IN_REVIEW");
+    assert!(payload["incident"]["review_notes"]
+        .as_str()
+        .unwrap()
+        .contains("fachliche Review/Freigabe erforderlich"));
     assert!(payload["incident"]["early_warning_due_at"].is_null());
     assert!(payload["incident"]["notification_due_at"].is_null());
     assert!(payload["incident"]["final_report_due_at"].is_null());
@@ -3835,6 +3841,66 @@ async fn incident_update_updates_status_and_sent_marker() {
 }
 
 #[tokio::test]
+async fn incident_update_to_not_significant_requests_review() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/incidents/1")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "nis2_significance_status":"NOT_SIGNIFICANT",
+                        "nis2_significance_criteria":"No material service disruption after containment.",
+                        "nis2_significance_justification":"SOC and process owner classify the case as security incident, not significant incident."
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["incident"]["nis2_significance_status"],
+        "NOT_SIGNIFICANT"
+    );
+    assert_eq!(payload["incident"]["nis2_reportable"], false);
+    assert_eq!(payload["incident"]["review_state"], "IN_REVIEW");
+    assert!(payload["incident"]["early_warning_due_at"].is_null());
+    assert!(payload["incident"]["notification_due_at"].is_null());
+    assert!(payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["event_type"] == "TIMELINE_NOTE"));
+    assert!(payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["event_type"] == "INCIDENT_REVIEW_UPDATED"));
+}
+
+#[tokio::test]
 async fn incident_timeline_note_create_appends_manual_event() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -3951,6 +4017,9 @@ async fn incident_nis2_export_returns_markdown_package() {
     assert!(markdown.contains("Eindaemmung durchfuehren"));
     assert!(markdown.contains("24h-Fruehwarnung"));
     assert!(markdown.contains("BSI-CASE-1"));
+    assert!(markdown.contains("## Regulatorische Entscheidungsmatrix"));
+    assert!(markdown.contains("| DORA | Fachlich pruefen |"));
+    assert!(markdown.contains("| DSGVO | Fachlich pruefen |"));
     assert!(markdown.contains("## Audit-Timeline"));
     assert!(markdown.contains("Statuswechsel"));
     assert!(markdown.contains("SOC hat die Fallakte fuer das Meldepaket bestaetigt."));
@@ -3978,6 +4047,7 @@ async fn incident_nis2_export_returns_markdown_package() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("ISCY NIS2-Meldepaket"));
+    assert!(html.contains("Regulatorische Entscheidungsmatrix"));
     assert!(html.contains("Runbook"));
     assert!(html.contains("Audit-Timeline"));
     assert!(html.contains("Status von Triage auf Bestaetigt geaendert."));
@@ -4001,6 +4071,7 @@ async fn incident_nis2_export_returns_markdown_package() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert!(body.starts_with(b"%PDF-1.4"));
     let pdf = String::from_utf8_lossy(&body);
+    assert!(pdf.contains("Regulatorische Entscheidungsmatrix"));
     assert!(pdf.contains("Audit-Timeline"));
     assert!(pdf.contains("Statuswechsel"));
 }
@@ -13532,6 +13603,19 @@ async fn create_dashboard_tables(pool: &SqlitePool) {
     .execute(pool)
     .await
     .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE incidents_incident (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            status varchar(32) NOT NULL,
+            nis2_significance_status varchar(32) NOT NULL DEFAULT 'NOT_ASSESSED'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn insert_dashboard_fixture(pool: &SqlitePool) {
@@ -13612,6 +13696,20 @@ async fn insert_dashboard_fixture(pool: &SqlitePool) {
             (10, 42, 'March Readiness', '2026-03-01T10:00:00Z', 65, 70),
             (11, 42, 'April Readiness', '2026-04-01T10:00:00Z', 78, 82),
             (12, 99, 'Other Tenant Readiness', '2026-04-02T10:00:00Z', 90, 91)
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO incidents_incident (id, tenant_id, status, nis2_significance_status)
+        VALUES
+            (1, 42, 'TRIAGE', 'NOT_ASSESSED'),
+            (2, 42, 'CONFIRMED', 'NOT_ASSESSED'),
+            (3, 42, 'RESOLVED', 'NOT_ASSESSED'),
+            (4, 42, 'CONFIRMED', 'SIGNIFICANT'),
+            (5, 99, 'CONFIRMED', 'NOT_ASSESSED')
         "#,
     )
     .execute(pool)

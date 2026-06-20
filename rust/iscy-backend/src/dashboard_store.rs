@@ -31,6 +31,7 @@ pub struct DashboardSummary {
     pub open_risk_count: i64,
     pub evidence_count: i64,
     pub open_task_count: i64,
+    pub unassessed_incident_count: i64,
     pub latest_report: Option<DashboardLatestReport>,
 }
 
@@ -86,7 +87,14 @@ async fn dashboard_summary_postgres(
                 JOIN roadmap_roadmapphase phase ON task.phase_id = phase.id
                 JOIN roadmap_roadmapplan plan ON phase.plan_id = plan.id
                 WHERE plan.tenant_id = $1 AND task.status <> 'DONE'
-            )::bigint AS open_task_count
+            )::bigint AS open_task_count,
+            (
+                SELECT COUNT(*)
+                FROM incidents_incident
+                WHERE tenant_id = $1
+                  AND nis2_significance_status = 'NOT_ASSESSED'
+                  AND status NOT IN ('RESOLVED', 'CLOSED')
+            )::bigint AS unassessed_incident_count
         "#,
     )
     .bind(tenant_id)
@@ -135,7 +143,14 @@ async fn dashboard_summary_sqlite(
                 JOIN roadmap_roadmapphase phase ON task.phase_id = phase.id
                 JOIN roadmap_roadmapplan plan ON phase.plan_id = plan.id
                 WHERE plan.tenant_id = ?1 AND task.status <> 'DONE'
-            ) AS open_task_count
+            ) AS open_task_count,
+            (
+                SELECT COUNT(*)
+                FROM incidents_incident
+                WHERE tenant_id = ?1
+                  AND nis2_significance_status = 'NOT_ASSESSED'
+                  AND status NOT IN ('RESOLVED', 'CLOSED')
+            ) AS unassessed_incident_count
         "#,
     )
     .bind(tenant_id)
@@ -179,6 +194,7 @@ fn summary_from_pg_row(
         open_risk_count: row.try_get("open_risk_count")?,
         evidence_count: row.try_get("evidence_count")?,
         open_task_count: row.try_get("open_task_count")?,
+        unassessed_incident_count: row.try_get("unassessed_incident_count")?,
         latest_report,
     })
 }
@@ -195,6 +211,7 @@ fn summary_from_sqlite_row(
         open_risk_count: row.try_get("open_risk_count")?,
         evidence_count: row.try_get("evidence_count")?,
         open_task_count: row.try_get("open_task_count")?,
+        unassessed_incident_count: row.try_get("unassessed_incident_count")?,
         latest_report,
     })
 }

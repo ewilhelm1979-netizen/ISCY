@@ -7294,6 +7294,7 @@ async fn web_dashboard(
                   {}
                   {}
                   {}
+                  {}
                 </section>
                 <section class="grid">{}</section>
                 "#,
@@ -7303,6 +7304,7 @@ async fn web_dashboard(
                 metric_card("Offene Risiken", summary.open_risk_count),
                 metric_card("Evidenzen", summary.evidence_count),
                 metric_card("Offene Tasks", summary.open_task_count),
+                metric_card("Erheblichkeit offen", summary.unassessed_incident_count),
                 latest_report,
             );
             web_page("Dashboard", "/dashboard/", Some(&context), &body)
@@ -13475,6 +13477,87 @@ fn incident_edit_form_panel(
     )
 }
 
+fn incident_regulatory_decision_matrix_markdown(
+    incident: &incident_store::IncidentSummary,
+) -> String {
+    let (nis2_status, nis2_next_step) = incident_nis2_matrix_status(incident);
+    format!(
+        r#"## Regulatorische Entscheidungsmatrix
+
+| Regelwerk | Status in ISCY | Ausloeser / Prueffrage | Frist / naechster Schritt |
+| --- | --- | --- | --- |
+| NIS2 | {} | Erheblicher Sicherheitsvorfall nach NIS2 Art. 23 und EU 2024/2690 Art. 3? | {} |
+| DORA | Fachlich pruefen | Schwerwiegender IKT-bezogener Vorfall im Finanz-/IKT-Dienstleister-Kontext? | Klassifizieren und ggf. DORA-Meldepaket ableiten. |
+| DSGVO | Fachlich pruefen | Verletzung personenbezogener Daten mit Risiko fuer Betroffene? | Datenschutzreview, ggf. 72h-Meldung an Aufsicht. |"#,
+        md_value(&nis2_status),
+        md_value(&nis2_next_step),
+    )
+}
+
+fn incident_regulatory_decision_matrix_html(incident: &incident_store::IncidentSummary) -> String {
+    let (nis2_status, nis2_next_step) = incident_nis2_matrix_status(incident);
+    format!(
+        r#"
+  <h2>Regulatorische Entscheidungsmatrix</h2>
+  <table>
+    <thead><tr><th>Regelwerk</th><th>Status in ISCY</th><th>Ausloeser / Prueffrage</th><th>Frist / naechster Schritt</th></tr></thead>
+    <tbody>
+      <tr><td>NIS2</td><td>{}</td><td>Erheblicher Sicherheitsvorfall nach NIS2 Art. 23 und EU 2024/2690 Art. 3?</td><td>{}</td></tr>
+      <tr><td>DORA</td><td>Fachlich pruefen</td><td>Schwerwiegender IKT-bezogener Vorfall im Finanz-/IKT-Dienstleister-Kontext?</td><td>Klassifizieren und ggf. DORA-Meldepaket ableiten.</td></tr>
+      <tr><td>DSGVO</td><td>Fachlich pruefen</td><td>Verletzung personenbezogener Daten mit Risiko fuer Betroffene?</td><td>Datenschutzreview, ggf. 72h-Meldung an Aufsicht.</td></tr>
+    </tbody>
+  </table>
+"#,
+        html_escape(&nis2_status),
+        html_escape(&nis2_next_step),
+    )
+}
+
+fn incident_regulatory_decision_matrix_pdf_lines(
+    incident: &incident_store::IncidentSummary,
+) -> Vec<String> {
+    let (nis2_status, nis2_next_step) = incident_nis2_matrix_status(incident);
+    let mut lines = vec!["Regulatorische Entscheidungsmatrix:".to_string()];
+    lines.extend(wrap_pdf_text(
+        &format!("NIS2: {} | {}", nis2_status, nis2_next_step),
+        92,
+    ));
+    lines.extend(wrap_pdf_text(
+        "DORA: Fachlich pruefen | Schwerwiegender IKT-bezogener Vorfall im Finanz-/IKT-Dienstleister-Kontext?",
+        92,
+    ));
+    lines.extend(wrap_pdf_text(
+        "DSGVO: Fachlich pruefen | Datenschutzreview, ggf. 72h-Meldung bei meldepflichtiger Verletzung personenbezogener Daten.",
+        92,
+    ));
+    lines
+}
+
+fn incident_nis2_matrix_status(incident: &incident_store::IncidentSummary) -> (String, String) {
+    if incident.nis2_reportable {
+        return (
+            "Meldepflichtig / Fristen aktiv".to_string(),
+            "24h-Fruehwarnung, 72h-Meldung und 30-Tage-Abschlussbericht fuehren.".to_string(),
+        );
+    }
+    match incident.nis2_significance_status.as_str() {
+        "NOT_SIGNIFICANT" if incident.review_state == "APPROVED" => (
+            "Nicht erheblich / freigegeben".to_string(),
+            "Keine NIS2-Fristen aktiv; Freigabe und Begruendung im Meldepaket dokumentiert."
+                .to_string(),
+        ),
+        "NOT_SIGNIFICANT" => (
+            "Nicht erheblich / Review erforderlich".to_string(),
+            "Fachliche Freigabe einholen; keine NIS2-Fristen aktiv.".to_string(),
+        ),
+        _ => (
+            "Bewertung offen".to_string(),
+            "Erheblichkeitsbewertung abschliessen, bevor Meldefristen aktiviert werden."
+                .to_string(),
+        ),
+    }
+}
+
 fn incident_nis2_markdown(
     incident: &incident_store::IncidentSummary,
     evidence_items: &[evidence_store::EvidenceItemSummary],
@@ -13482,6 +13565,7 @@ fn incident_nis2_markdown(
 ) -> String {
     let evidence_rows = incident_evidence_markdown_rows(evidence_items);
     let event_rows = incident_event_markdown_rows(events);
+    let decision_matrix = incident_regulatory_decision_matrix_markdown(incident);
     format!(
         r#"# ISCY NIS2-Meldepaket: {}
 
@@ -13521,6 +13605,8 @@ fn incident_nis2_markdown(
 | Kriterien | {} |
 | Begruendung | {} |
 | Referenz | {} |
+
+{}
 
 ## Meldefristen
 
@@ -13594,6 +13680,7 @@ fn incident_nis2_markdown(
         md_block(&incident.nis2_significance_criteria),
         md_block(&incident.nis2_significance_justification),
         md_block(&incident.nis2_significance_reference),
+        decision_matrix,
         md_optional(incident.early_warning_due_at.as_deref()),
         md_optional(incident.early_warning_sent_at.as_deref()),
         md_value(&incident.early_warning_state_label),
@@ -13838,6 +13925,7 @@ fn incident_nis2_html(
 ) -> String {
     let evidence_rows = incident_evidence_rows(evidence_items);
     let event_rows = incident_event_rows(events);
+    let decision_matrix = incident_regulatory_decision_matrix_html(incident);
     format!(
         r#"<!doctype html>
 <html lang="de">
@@ -13881,6 +13969,7 @@ fn incident_nis2_html(
       <tr><th>Referenz</th><td>{}</td></tr>
     </tbody>
   </table>
+  {}
   <h2>Runbook</h2>
   <pre>{}</pre>
   <h2>Evidence</h2>
@@ -13933,6 +14022,7 @@ fn incident_nis2_html(
         html_escape(&incident.nis2_significance_criteria),
         html_escape(&incident.nis2_significance_justification),
         html_escape(&incident.nis2_significance_reference),
+        decision_matrix,
         html_escape(&incident.runbook_template),
         evidence_rows,
         event_rows,
@@ -14004,6 +14094,8 @@ fn incident_nis2_pdf(
     lines.push("Referenz:".to_string());
     lines.extend(wrap_pdf_text(&incident.nis2_significance_reference, 92));
     lines.push(String::new());
+    lines.extend(incident_regulatory_decision_matrix_pdf_lines(incident));
+    lines.push(String::new());
     lines.push("Runbook:".to_string());
     for line in incident.runbook_template.lines() {
         lines.extend(wrap_pdf_text(line, 92));
@@ -14065,8 +14157,8 @@ fn incident_nis2_pdf(
 }
 
 fn simple_pdf_document(lines: &[String]) -> Vec<u8> {
-    let mut content = String::from("BT\n/F1 10 Tf\n50 800 Td\n13 TL\n");
-    for line in lines.iter().take(58) {
+    let mut content = String::from("BT\n/F1 9 Tf\n50 800 Td\n10 TL\n");
+    for line in lines.iter().take(76) {
         content.push_str(&format!("({}) Tj\nT*\n", pdf_escape(line)));
     }
     content.push_str("ET\n");
