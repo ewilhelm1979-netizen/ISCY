@@ -1,4 +1,4 @@
-# ISCY V23.7.19 / Rust 0.3.15
+# ISCY V23.7.20 / Rust 0.3.16
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -147,6 +147,7 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 - `/operations/incidents/`
 - `/evidence/`
 - `/reports/`
+- `/management-reviews/`
 - `/roadmap/`
 - `/assets/`
 - `/imports/`
@@ -163,20 +164,21 @@ Product Security wird unter `/product-security/` als Rust-Arbeitsbereich gefuehr
 
 Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel, Beschreibung, Linked Requirement, Status und Ruecksprungziel vor. Dadurch kann ein Nachweis direkt aus dem fachlichen Kontext erstellt werden und landet nach dem Upload wieder dort, wo die Arbeit begonnen hat.
 
+Management Reviews werden unter `/management-reviews/` als auditierbare Steuerungspakete gefuehrt. Schreibberechtigte Nutzer koennen aus aktuellen ISCY-Daten ein Paket fuer einen Zeitraum erzeugen: Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage und Agent-Posture werden als Snapshot gespeichert. Detailseiten zeigen Kennzahlen und Entscheidungstabellen, der Review-Status kann von Draft ueber In Review bis Approved/Archived gefuehrt werden; Freigaben speichern Entscheidung, naechste Massnahmen, User und Zeitpunkt.
+
 ## Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 als erster strategischer Baustein umgesetzt. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
+Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 umgesetzt; V23.7.20 ergaenzt darauf aufbauend das Management-Review- und Audit-Paket. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
 
-1. Management-Review- und Audit-Paket
-2. Evidence-Qualitaet und Nachweisreife
-3. Third-Party- und Supplier-Risk
-4. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-5. AI-Governance-Modul
-6. Agent-Flottenbetrieb und Benachrichtigungen
+1. Evidence-Qualitaet und Nachweisreife
+2. Third-Party- und Supplier-Risk
+3. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+4. AI-Governance-Modul
+5. Agent-Flottenbetrieb und Benachrichtigungen
 
 ## Zero-Trust Agent
 
-ISCY `0.3.15` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.16` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 

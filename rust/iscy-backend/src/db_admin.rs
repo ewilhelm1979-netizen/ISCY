@@ -132,6 +132,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_TENANT_REGULATORY_PROFILE_SCHEMA,
         postgres_sql: POSTGRES_TENANT_REGULATORY_PROFILE_SCHEMA,
     },
+    Migration {
+        version: "0019_rust_management_review_packages",
+        sqlite_sql: SQLITE_MANAGEMENT_REVIEW_PACKAGE_SCHEMA,
+        postgres_sql: POSTGRES_MANAGEMENT_REVIEW_PACKAGE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -772,6 +777,64 @@ UPDATE organizations_tenant
 SET cra_relevant = CASE WHEN develops_digital_products THEN TRUE ELSE cra_relevant END,
     processes_personal_data = CASE WHEN nis2_relevant OR kritis_relevant THEN TRUE ELSE processes_personal_data END,
     ai_act_profile = CASE WHEN uses_ai_systems AND ai_act_profile = 'NOT_ASSESSED' THEN 'LIMITED_RISK' ELSE ai_act_profile END;
+"#;
+
+const SQLITE_MANAGEMENT_REVIEW_PACKAGE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS reports_managementreviewpackage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    title varchar(255) NOT NULL,
+    period_start date NULL,
+    period_end date NULL,
+    status varchar(24) NOT NULL DEFAULT 'DRAFT',
+    generated_by_id INTEGER NULL,
+    approved_by_id INTEGER NULL,
+    approved_at TEXT NULL,
+    executive_summary TEXT NOT NULL DEFAULT '',
+    decision_notes TEXT NOT NULL DEFAULT '',
+    next_actions TEXT NOT NULL DEFAULT '',
+    metrics_json TEXT NOT NULL DEFAULT '{}',
+    top_risks_json TEXT NOT NULL DEFAULT '[]',
+    control_gaps_json TEXT NOT NULL DEFAULT '[]',
+    evidence_gaps_json TEXT NOT NULL DEFAULT '[]',
+    incident_decisions_json TEXT NOT NULL DEFAULT '[]',
+    roadmap_json TEXT NOT NULL DEFAULT '[]',
+    product_security_json TEXT NOT NULL DEFAULT '{}',
+    agent_posture_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_management_review_tenant_status
+    ON reports_managementreviewpackage(tenant_id, status, created_at);
+"#;
+
+const POSTGRES_MANAGEMENT_REVIEW_PACKAGE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS reports_managementreviewpackage (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    title varchar(255) NOT NULL,
+    period_start date NULL,
+    period_end date NULL,
+    status varchar(24) NOT NULL DEFAULT 'DRAFT',
+    generated_by_id BIGINT NULL,
+    approved_by_id BIGINT NULL,
+    approved_at TEXT NULL,
+    executive_summary TEXT NOT NULL DEFAULT '',
+    decision_notes TEXT NOT NULL DEFAULT '',
+    next_actions TEXT NOT NULL DEFAULT '',
+    metrics_json TEXT NOT NULL DEFAULT '{}',
+    top_risks_json TEXT NOT NULL DEFAULT '[]',
+    control_gaps_json TEXT NOT NULL DEFAULT '[]',
+    evidence_gaps_json TEXT NOT NULL DEFAULT '[]',
+    incident_decisions_json TEXT NOT NULL DEFAULT '[]',
+    roadmap_json TEXT NOT NULL DEFAULT '[]',
+    product_security_json TEXT NOT NULL DEFAULT '{}',
+    agent_posture_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_management_review_tenant_status
+    ON reports_managementreviewpackage(tenant_id, status, created_at);
 "#;
 
 const SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"
@@ -3273,6 +3336,25 @@ INSERT OR IGNORE INTO reports_reportsnapshot (
     '[{"domain":"Identity","score_percent":81}]', '{"dependencies":[]}',
     '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
 );
+INSERT OR IGNORE INTO reports_managementreviewpackage (
+    id, tenant_id, title, period_start, period_end, status, generated_by_id, approved_by_id,
+    approved_at, executive_summary, decision_notes, next_actions, metrics_json, top_risks_json,
+    control_gaps_json, evidence_gaps_json, incident_decisions_json, roadmap_json,
+    product_security_json, agent_posture_json, created_at, updated_at
+) VALUES (
+    1, 1, 'Demo Management Review Q2/2026', '2026-04-01', '2026-06-30', 'IN_REVIEW',
+    1, NULL, NULL,
+    'Automatisch vorbereitetes Demo-Management-Review fuer Risiken, Controls, Evidence, Incidents, Product Security und Roadmap.',
+    '', 'Management soll Top-Risiken, Evidence-Luecken und Roadmap-Fokus freigeben.',
+    '{"open_risks":1,"critical_open_risks":1,"open_control_gaps":0,"missing_control_evidence":0,"open_evidence_needs":0,"approved_evidence_items":1,"open_incidents":1,"unassessed_incidents":0,"open_roadmap_tasks":1}',
+    '[{"id":1,"title":"Credential Phishing","status":"TREATING","impact":5,"likelihood":4,"score":20}]',
+    '[]', '[]',
+    '[{"id":1,"title":"Credential phishing campaign","severity":"HIGH","status":"CONFIRMED","nis2_significance_status":"SIGNIFICANT","nis2_reportable":true}]',
+    '[{"id":1,"title":"Replace Django migration dependency","priority":"HIGH","status":"OPEN","plan_title":"Rust Cutover Roadmap"}]',
+    '{"products":1,"open_vulnerabilities":2,"critical_open_vulnerabilities":1,"open_cve_correlation_reviews":0,"invalid_imports":0}',
+    '{"devices":0,"active_devices":0,"open_findings":0,"critical_findings":0}',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+);
 INSERT OR IGNORE INTO roadmap_roadmapplan (
     id, tenant_id, session_id, title, summary, overall_priority, planned_start, created_at, updated_at
 ) VALUES (
@@ -3668,6 +3750,25 @@ INSERT INTO reports_reportsnapshot (
     '{"sbom_required":true}', '[{"title":"MFA rollout gap"}]',
     '[{"title":"Complete MFA rollout","priority":"HIGH"}]', '[{"name":"Phase 1"}]',
     '[{"domain":"Identity","score_percent":81}]', '{"dependencies":[]}',
+    '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO reports_managementreviewpackage (
+    id, tenant_id, title, period_start, period_end, status, generated_by_id, approved_by_id,
+    approved_at, executive_summary, decision_notes, next_actions, metrics_json, top_risks_json,
+    control_gaps_json, evidence_gaps_json, incident_decisions_json, roadmap_json,
+    product_security_json, agent_posture_json, created_at, updated_at
+) VALUES (
+    1, 1, 'Demo Management Review Q2/2026', '2026-04-01', '2026-06-30', 'IN_REVIEW',
+    1, NULL, NULL,
+    'Automatisch vorbereitetes Demo-Management-Review fuer Risiken, Controls, Evidence, Incidents, Product Security und Roadmap.',
+    '', 'Management soll Top-Risiken, Evidence-Luecken und Roadmap-Fokus freigeben.',
+    '{"open_risks":1,"critical_open_risks":1,"open_control_gaps":0,"missing_control_evidence":0,"open_evidence_needs":0,"approved_evidence_items":1,"open_incidents":1,"unassessed_incidents":0,"open_roadmap_tasks":1}',
+    '[{"id":1,"title":"Credential Phishing","status":"TREATING","impact":5,"likelihood":4,"score":20}]',
+    '[]', '[]',
+    '[{"id":1,"title":"Credential phishing campaign","severity":"HIGH","status":"CONFIRMED","nis2_significance_status":"SIGNIFICANT","nis2_reportable":true}]',
+    '[{"id":1,"title":"Replace Django migration dependency","priority":"HIGH","status":"OPEN","plan_title":"Rust Cutover Roadmap"}]',
+    '{"products":1,"open_vulnerabilities":2,"critical_open_vulnerabilities":1,"open_cve_correlation_reviews":0,"invalid_imports":0}',
+    '{"devices":0,"active_devices":0,"open_findings":0,"critical_findings":0}',
     '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
 ) ON CONFLICT (id) DO NOTHING;
 INSERT INTO roadmap_roadmapplan (

@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.19 / Rust 0.3.15)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.20 / Rust 0.3.16)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -420,12 +420,21 @@ Ausgaben:
 - Report-Detailseite
 - einfaches PDF
 - audit-faehiges PDF
+- Management-Review-Pakete unter `/management-reviews/`
+
+Management-Review-Pakete:
+
+- werden aus aktuellen ISCY-Daten fuer einen Zeitraum erzeugt
+- speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage und Agent-Posture als Snapshot
+- koennen von Draft ueber In Review bis Approved oder Archived gefuehrt werden
+- dokumentieren Entscheidung, naechste Massnahmen, freigebenden User und Freigabezeitpunkt
 
 Fachlicher Nutzen:
 
 - Management-Kommunikation
 - Dokumentationsstand
 - Vorlagen fuer Kunden, Auditoren oder interne Gremien
+- belastbare Vorbereitung von Management Review, Audit und Steering Committee
 
 Fuer Nicht-Sicherheitsleute:
 Reports sind die offizielle Zusammenfassung des Stands.
@@ -909,16 +918,15 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Management-Review- und Audit-Paket
-2. Evidence-Qualitaet und Nachweisreife
-3. Third-Party- und Supplier-Risk
-4. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-5. AI-Governance-Modul
-6. Agent-Flottenbetrieb und Benachrichtigungen
+1. Evidence-Qualitaet und Nachweisreife
+2. Third-Party- und Supplier-Risk
+3. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+4. AI-Governance-Modul
+5. Agent-Flottenbetrieb und Benachrichtigungen
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 

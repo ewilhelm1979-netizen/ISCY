@@ -45,12 +45,22 @@ Erfolgskriterium:
 
 Ziel: ISCY soll aus vorhandenen Daten automatisch ein Management-Review- und Audit-Paket erzeugen.
 
-Umsetzungsidee:
+Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt.
 
-- Quartals- oder Stichtagsreport mit Top-Risiken, offenen ISCY-27-Gaps, Evidence-Luecken, offenen CVE-Reviews, Incident-Entscheidungen, Roadmap-Fortschritt, Agent-Posture und Product-Security-Lage.
-- Export als Markdown, HTML, PDF und spaeter JSON.
-- Review-Freigabe mit Verantwortlichem, Datum, Ergebnis und naechsten Massnahmen.
-- Verlinkung zu Evidence, Controls, Risiken, Roadmap-Tasks und Incident-Fallakten.
+Umgesetzt:
+
+- Weboberflaeche unter `/management-reviews/`.
+- API-Pfade `GET` und `POST /api/v1/reports/management-reviews`.
+- API-Pfade `GET` und `PATCH /api/v1/reports/management-reviews/{review_id}` fuer Detail und Status.
+- Persistierte Review-Pakete mit Zeitraum, Status, Executive Summary, Entscheidung, naechsten Massnahmen, freigebendem User und Freigabezeitpunkt.
+- Automatisch erzeugter Snapshot mit Kennzahlen, Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage und Agent-Posture.
+- Demo-Seed und Migration `0019_rust_management_review_packages`.
+
+Naechste Vertiefung:
+
+- Export als Markdown, HTML, PDF und JSON.
+- Direkte Links aus jedem Snapshot-Eintrag zu Controls, Risiken, Evidence, Roadmap-Tasks, Product-Security-Objekten und Incident-Fallakten.
+- Review-Templates fuer Quartal, internes Audit, Management Review nach ISO 27001 und regulatorische Steering-Sitzung.
 
 Erfolgskriterium:
 

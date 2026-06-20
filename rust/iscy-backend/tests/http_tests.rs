@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.15\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.16\""));
 }
 
 #[tokio::test]
@@ -559,8 +559,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0018_rust_tenant_regulatory_profile"));
-    assert!(html.contains("18/18 angewendet"));
+    assert!(html.contains("0019_rust_management_review_packages"));
+    assert!(html.contains("19/19 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -5995,6 +5995,164 @@ async fn report_snapshot_detail_blocks_foreign_tenant_report() {
 }
 
 #[tokio::test]
+async fn management_review_packages_return_tenant_reviews_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_management_review_table(&pool).await;
+    insert_management_review_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["packages"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["packages"][0]["id"], 21);
+    assert_eq!(payload["packages"][0]["title"], "Q2 Steering Review");
+    assert_eq!(payload["packages"][0]["status"], "IN_REVIEW");
+}
+
+#[tokio::test]
+async fn management_review_detail_and_status_update_roundtrip() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_management_review_table(&pool).await;
+    insert_management_review_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews/21")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["package"]["id"], 21);
+    assert_eq!(
+        payload["package"]["top_risks_json"][0]["title"],
+        "ERP Risiko"
+    );
+    assert_eq!(
+        payload["package"]["control_gaps_json"][0]["code"],
+        "ISCY-04"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/reports/management-reviews/21")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"status":"APPROVED","decision_notes":"Freigegeben","next_actions":"Roadmap nachziehen"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["package"]["status"], "APPROVED");
+    assert_eq!(payload["package"]["approved_by_id"], 7);
+    assert_eq!(payload["package"]["decision_notes"], "Freigegeben");
+}
+
+#[tokio::test]
+async fn management_review_generate_creates_demo_audit_snapshot() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/reports/management-reviews")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"title":"June Steering Package","period_start":"2026-06-01","period_end":"2026-06-30"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["package"]["title"], "June Steering Package");
+    assert_eq!(payload["package"]["status"], "DRAFT");
+    assert_eq!(payload["package"]["generated_by_id"], 1);
+    assert!(
+        payload["package"]["metrics_json"]["open_risks"]
+            .as_i64()
+            .unwrap()
+            >= 1
+    );
+    assert!(
+        payload["package"]["metrics_json"]["snapshot_items"]["roadmap"]
+            .as_i64()
+            .unwrap()
+            >= 1
+    );
+    assert!(
+        payload["package"]["product_security_json"]["products"]
+            .as_i64()
+            .unwrap()
+            >= 1
+    );
+}
+
+#[tokio::test]
 async fn rust_web_surface_routes_return_ok() {
     let paths = vec![
         "/",
@@ -6645,6 +6803,89 @@ async fn rust_web_reports_renders_snapshots_from_database() {
     assert!(html.contains("78%"));
     assert!(html.contains("82%"));
     assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_management_reviews_renders_packages_and_updates_status() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_management_review_table(&pool).await;
+    insert_management_review_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/management-reviews/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Management Reviews"));
+    assert!(html.contains("Q2 Steering Review"));
+    assert!(html.contains("Management-Review-Paket erzeugen"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/management-reviews/21?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Top-Risiken"));
+    assert!(html.contains("ERP Risiko"));
+    assert!(html.contains("ISCY-27 Control-Gaps"));
+    assert!(html.contains("Review-Status speichern"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/management-reviews/21/status?tenant_id=42&user_id=7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "status=APPROVED&decision_notes=Web-Freigabe&next_actions=Naechste%20Review%20planen",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM reports_managementreviewpackage WHERE id = 21 AND tenant_id = 42",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "APPROVED");
 }
 
 #[tokio::test]
@@ -7831,7 +8072,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0015_rust_iscy27_control_core",
             "0016_rust_control_evidence_product_imports",
             "0017_rust_incident_nis2_significance",
-            "0018_rust_tenant_regulatory_profile"
+            "0018_rust_tenant_regulatory_profile",
+            "0019_rust_management_review_packages"
         ]
     );
     assert!(
@@ -7920,6 +8162,11 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     );
     assert!(
         db_admin::sqlite_table_exists(&pool, "product_security_cvecorrelation")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "reports_managementreviewpackage")
             .await
             .unwrap()
     );
@@ -13589,6 +13836,40 @@ async fn create_report_table(pool: &SqlitePool) {
     .unwrap();
 }
 
+async fn create_management_review_table(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE reports_managementreviewpackage (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            period_start date NULL,
+            period_end date NULL,
+            status varchar(24) NOT NULL DEFAULT 'DRAFT',
+            generated_by_id INTEGER NULL,
+            approved_by_id INTEGER NULL,
+            approved_at TEXT NULL,
+            executive_summary TEXT NOT NULL DEFAULT '',
+            decision_notes TEXT NOT NULL DEFAULT '',
+            next_actions TEXT NOT NULL DEFAULT '',
+            metrics_json TEXT NOT NULL DEFAULT '{}',
+            top_risks_json TEXT NOT NULL DEFAULT '[]',
+            control_gaps_json TEXT NOT NULL DEFAULT '[]',
+            evidence_gaps_json TEXT NOT NULL DEFAULT '[]',
+            incident_decisions_json TEXT NOT NULL DEFAULT '[]',
+            roadmap_json TEXT NOT NULL DEFAULT '[]',
+            product_security_json TEXT NOT NULL DEFAULT '{}',
+            agent_posture_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn insert_report_fixture(pool: &SqlitePool) {
     sqlx::query(
         r#"
@@ -13692,6 +13973,83 @@ async fn insert_report_fixture(pool: &SqlitePool) {
                 '{}',
                 '2026-04-02T10:00:00Z',
                 '2026-04-02T11:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_management_review_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO reports_managementreviewpackage (
+            id,
+            tenant_id,
+            title,
+            period_start,
+            period_end,
+            status,
+            generated_by_id,
+            executive_summary,
+            decision_notes,
+            next_actions,
+            metrics_json,
+            top_risks_json,
+            control_gaps_json,
+            evidence_gaps_json,
+            incident_decisions_json,
+            roadmap_json,
+            product_security_json,
+            agent_posture_json,
+            created_at,
+            updated_at
+        )
+        VALUES
+            (
+                21,
+                42,
+                'Q2 Steering Review',
+                '2026-04-01',
+                '2026-06-30',
+                'IN_REVIEW',
+                7,
+                'Review-Paket fuer Vorstand und Audit.',
+                '',
+                '',
+                '{"open_risks":2,"open_control_gaps":1,"missing_control_evidence":1,"snapshot_items":{"top_risks":1,"control_gaps":1,"evidence_gaps":1,"incidents":1,"roadmap":1}}',
+                '[{"id":1,"title":"ERP Risiko","status":"OPEN","impact":5,"likelihood":4,"score":20,"treatment_plan":"MFA erzwingen"}]',
+                '[{"id":4,"control_number":4,"code":"ISCY-04","title":"Incident Response","status":"PARTIAL","evidence_status":"MISSING"}]',
+                '[{"id":5,"title":"Incident Runbook Evidence","status":"OPEN","requirement_code":"NIS2-21"}]',
+                '[{"id":6,"title":"Security Incident","severity":"HIGH","nis2_significance_status":"SIGNIFICANT","review_state":"APPROVED"}]',
+                '[{"id":7,"title":"IR-Runbook abschliessen","priority":"HIGH","status":"OPEN","due_date":"2026-07-01"}]',
+                '{"products":2,"open_vulnerabilities":3}',
+                '{"active_agents":5,"stale_agents":1}',
+                '2026-06-30T09:00:00Z',
+                '2026-06-30T10:00:00Z'
+            ),
+            (
+                22,
+                99,
+                'Foreign Tenant Review',
+                '2026-04-01',
+                '2026-06-30',
+                'DRAFT',
+                9,
+                'Nicht fuer Tenant 42 sichtbar.',
+                '',
+                '',
+                '{}',
+                '[]',
+                '[]',
+                '[]',
+                '[]',
+                '[]',
+                '{}',
+                '{}',
+                '2026-06-29T09:00:00Z',
+                '2026-06-29T10:00:00Z'
             )
         "#,
     )

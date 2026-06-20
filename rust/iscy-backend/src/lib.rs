@@ -526,6 +526,21 @@ struct WebTenantRegulatoryProfileForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct WebManagementReviewGenerateForm {
+    title: Option<String>,
+    period_start: Option<String>,
+    period_end: Option<String>,
+    executive_summary: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebManagementReviewStatusForm {
+    status: String,
+    decision_notes: Option<String>,
+    next_actions: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebCveCorrelationDecisionForm {
     status: String,
     rationale: Option<String>,
@@ -1360,6 +1375,26 @@ pub struct ReportSnapshotsResponse {
 pub struct ReportSnapshotDetailResponse {
     pub api_version: &'static str,
     pub report: report_store::ReportSnapshotDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagementReviewPackagesResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub packages: Vec<report_store::ManagementReviewPackageSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagementReviewPackageResponse {
+    pub api_version: &'static str,
+    pub package: report_store::ManagementReviewPackageDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagementReviewPackageWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub package: report_store::ManagementReviewPackageDetail,
 }
 
 #[derive(Debug, Serialize)]
@@ -7134,6 +7169,257 @@ async fn report_snapshot_detail(
     }
 }
 
+async fn management_review_packages(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store.list_management_reviews(context.tenant_id, 50).await {
+        Ok(packages) => (
+            StatusCode::OK,
+            Json(ManagementReviewPackagesResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                packages,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Management-Reviews konnten nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn management_review_generate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<report_store::ManagementReviewGenerateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .generate_management_review(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(package) => (
+            StatusCode::CREATED,
+            Json(ManagementReviewPackageWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                package,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Management-Review konnte nicht erzeugt werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn management_review_detail(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .management_review_detail(context.tenant_id, review_id)
+        .await
+    {
+        Ok(Some(package)) => (
+            StatusCode::OK,
+            Json(ManagementReviewPackageResponse {
+                api_version: "v1",
+                package,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "management_review_not_found",
+                message: format!("Management-Review {} wurde nicht gefunden.", review_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Management-Review konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn management_review_status_update(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<report_store::ManagementReviewStatusUpdateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .update_management_review_status(context.tenant_id, context.user_id, review_id, payload)
+        .await
+    {
+        Ok(Some(package)) => (
+            StatusCode::OK,
+            Json(ManagementReviewPackageWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                package,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "management_review_not_found",
+                message: format!("Management-Review {} wurde nicht gefunden.", review_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "management_review_invalid",
+                message: format!("Management-Review konnte nicht aktualisiert werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn requirement_library(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(err) = authenticated_tenant_context(&state, &headers).await {
         return (
@@ -9760,6 +10046,10 @@ async fn web_reports(
                 r#"
                 <section class="hero compact"><h1>Reports</h1><p>{} Readiness-Snapshots</p></section>
                 <section class="panel wide">
+                  <h2>Management Review</h2>
+                  <p><a href="{}">Management-Review-/Audit-Pakete vorbereiten</a></p>
+                </section>
+                <section class="panel wide">
                   <table>
                     <thead><tr><th>Titel</th><th>Applicability</th><th>ISO</th><th>NIS2</th><th>Erstellt</th></tr></thead>
                     <tbody>{}</tbody>
@@ -9767,6 +10057,7 @@ async fn web_reports(
                 </section>
                 "#,
                 reports.len(),
+                web_path_with_context("/management-reviews/", Some(&context)),
                 if rows.is_empty() {
                     web_empty_row(5, "Keine Reports vorhanden.")
                 } else {
@@ -9776,6 +10067,385 @@ async fn web_reports(
             web_page("Reports", "/reports/", Some(&context), &body)
         }
         Err(err) => web_error_page("Reports", "/reports/", &context, &err.to_string()),
+    }
+}
+
+async fn web_management_reviews(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Management Reviews", "/management-reviews/");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    let Some(store) = state.report_store.as_ref() else {
+        return web_store_missing(
+            "Management Reviews",
+            "/management-reviews/",
+            &context,
+            "Report",
+        );
+    };
+    match store.list_management_reviews(context.tenant_id, 50).await {
+        Ok(packages) => {
+            let rows = packages
+                .iter()
+                .map(|package| {
+                    let detail_href = web_path_with_context(
+                        &format!("/management-reviews/{}", package.id),
+                        Some(&context),
+                    );
+                    format!(
+                        r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        detail_href,
+                        html_escape(&package.title),
+                        html_escape(&package.status_label),
+                        html_escape(package.period_start.as_deref().unwrap_or("-")),
+                        html_escape(package.period_end.as_deref().unwrap_or("-")),
+                        html_escape(&package.created_at),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let generate_panel = if can_write {
+                format!(
+                    r#"
+                    <section class="panel wide">
+                      <h2>Paket erzeugen</h2>
+                      <form method="post" action="{}">
+                        <div class="form-grid">
+                          <label>Titel<input name="title" value="Management Review {}"></label>
+                          <label>Zeitraum Start<input name="period_start" type="date"></label>
+                          <label>Zeitraum Ende<input name="period_end" type="date"></label>
+                        </div>
+                        <label>Executive Summary<textarea name="executive_summary" rows="4"></textarea></label>
+                        <button type="submit">Management-Review-Paket erzeugen</button>
+                      </form>
+                    </section>
+                    "#,
+                    web_path_with_context("/management-reviews/", Some(&context)),
+                    Utc::now().format("%Y-%m-%d"),
+                )
+            } else {
+                r#"<section class="panel wide"><h2>Paket erzeugen</h2><p>Zum Erzeugen oder Freigeben wird eine schreibende ISCY-Rolle benoetigt.</p></section>"#.to_string()
+            };
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Management Reviews</h1><p>{} Audit-/Review-Pakete</p></section>
+                {}
+                <section class="panel wide">
+                  <h2>Pakete</h2>
+                  <table>
+                    <thead><tr><th>Titel</th><th>Status</th><th>Start</th><th>Ende</th><th>Erstellt</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                packages.len(),
+                generate_panel,
+                if rows.is_empty() {
+                    web_empty_row(5, "Keine Management-Review-Pakete vorhanden.")
+                } else {
+                    rows
+                },
+            );
+            web_page(
+                "Management Reviews",
+                "/management-reviews/",
+                Some(&context),
+                &body,
+            )
+        }
+        Err(err) => web_error_page(
+            "Management Reviews",
+            "/management-reviews/",
+            &context,
+            &err.to_string(),
+        ),
+    }
+}
+
+async fn web_management_reviews_generate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebManagementReviewGenerateForm>,
+) -> Response {
+    let display_context = web_context_from_request(&query, &headers, &state).await;
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            if let Some(context) = display_context.as_ref() {
+                return web_error_page(
+                    "Management Reviews",
+                    "/management-reviews/",
+                    context,
+                    err.message(),
+                )
+                .into_response();
+            }
+            return web_missing_context("Management Reviews", "/management-reviews/")
+                .into_response();
+        }
+    };
+    let context = display_context.unwrap_or_else(|| WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    });
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Management Reviews",
+            "/management-reviews/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.report_store else {
+        return web_store_missing(
+            "Management Reviews",
+            "/management-reviews/",
+            &context,
+            "Report",
+        )
+        .into_response();
+    };
+    let payload = report_store::ManagementReviewGenerateRequest {
+        title: normalized_optional_form_text(form.title),
+        period_start: normalized_optional_form_text(form.period_start),
+        period_end: normalized_optional_form_text(form.period_end),
+        executive_summary: normalized_optional_form_text(form.executive_summary),
+    };
+    match store
+        .generate_management_review(auth_context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(package) => Redirect::to(&web_path_with_context(
+            &format!("/management-reviews/{}", package.id),
+            Some(&context),
+        ))
+        .into_response(),
+        Err(err) => web_error_page(
+            "Management Reviews",
+            "/management-reviews/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_management_review_detail(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Management Review", "/management-reviews/");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    let Some(store) = state.report_store.as_ref() else {
+        return web_store_missing(
+            "Management Review",
+            "/management-reviews/",
+            &context,
+            "Report",
+        );
+    };
+    match store
+        .management_review_detail(context.tenant_id, review_id)
+        .await
+    {
+        Ok(Some(package)) => {
+            let status_panel = management_review_status_panel(&package, &context, can_write);
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>{}</h1><p>{}</p></section>
+                <section class="metrics">{}</section>
+                <section class="panel wide">
+                  <h2>Executive Summary</h2>
+                  <p>{}</p>
+                </section>
+                {}
+                <section class="grid">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                "#,
+                html_escape(&package.title),
+                html_escape(&package.status_label),
+                management_review_metric_cards(&package.metrics_json),
+                html_escape(&package.executive_summary),
+                status_panel,
+                management_review_object_panel("Kennzahlen", &package.metrics_json),
+                management_review_array_panel(
+                    "Top-Risiken",
+                    &package.top_risks_json,
+                    &[
+                        ("title", "Titel"),
+                        ("status", "Status"),
+                        ("score", "Score"),
+                        ("treatment_plan", "Behandlung"),
+                    ],
+                ),
+                management_review_array_panel(
+                    "ISCY-27 Control-Gaps",
+                    &package.control_gaps_json,
+                    &[
+                        ("code", "Control"),
+                        ("title", "Titel"),
+                        ("status", "Status"),
+                        ("evidence_status", "Evidence"),
+                    ],
+                ),
+                management_review_array_panel(
+                    "Evidence-Luecken",
+                    &package.evidence_gaps_json,
+                    &[
+                        ("requirement_code", "Requirement"),
+                        ("title", "Evidence"),
+                        ("status", "Status"),
+                        ("covered_count", "Coverage"),
+                    ],
+                ),
+                management_review_array_panel(
+                    "Incident-Entscheidungen",
+                    &package.incident_decisions_json,
+                    &[
+                        ("title", "Incident"),
+                        ("severity", "Severity"),
+                        ("nis2_significance_status", "Erheblichkeit"),
+                        ("review_state", "Review"),
+                    ],
+                ),
+                management_review_array_panel(
+                    "Roadmap-Fokus",
+                    &package.roadmap_json,
+                    &[
+                        ("title", "Task"),
+                        ("priority", "Prioritaet"),
+                        ("status", "Status"),
+                        ("due_date", "Faellig"),
+                    ],
+                ),
+                management_review_object_panel("Product Security", &package.product_security_json),
+                management_review_object_panel("Agent Posture", &package.agent_posture_json),
+            );
+            web_page(
+                "Management Review",
+                "/management-reviews/",
+                Some(&context),
+                &body,
+            )
+        }
+        Ok(None) => web_error_page(
+            "Management Review",
+            "/management-reviews/",
+            &context,
+            "Management-Review wurde nicht gefunden.",
+        ),
+        Err(err) => web_error_page(
+            "Management Review",
+            "/management-reviews/",
+            &context,
+            &err.to_string(),
+        ),
+    }
+}
+
+async fn web_management_review_status_submit(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebManagementReviewStatusForm>,
+) -> Response {
+    let display_context = web_context_from_request(&query, &headers, &state).await;
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            if let Some(context) = display_context.as_ref() {
+                return web_error_page(
+                    "Management Review",
+                    "/management-reviews/",
+                    context,
+                    err.message(),
+                )
+                .into_response();
+            }
+            return web_missing_context("Management Review", "/management-reviews/")
+                .into_response();
+        }
+    };
+    let context = display_context.unwrap_or_else(|| WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    });
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Management Review",
+            "/management-reviews/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.report_store else {
+        return web_store_missing(
+            "Management Review",
+            "/management-reviews/",
+            &context,
+            "Report",
+        )
+        .into_response();
+    };
+    let payload = report_store::ManagementReviewStatusUpdateRequest {
+        status: form.status,
+        decision_notes: normalized_optional_form_text(form.decision_notes),
+        next_actions: normalized_optional_form_text(form.next_actions),
+    };
+    match store
+        .update_management_review_status(
+            auth_context.tenant_id,
+            auth_context.user_id,
+            review_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            &format!("/management-reviews/{review_id}"),
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Management Review",
+            "/management-reviews/",
+            &context,
+            "Management-Review wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Management Review",
+            "/management-reviews/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
     }
 }
 async fn web_roadmap(
@@ -17295,6 +17965,7 @@ fn web_page(
         ("/evidence/", "Evidence"),
         ("/roadmap/", "Roadmap"),
         ("/reports/", "Reports"),
+        ("/management-reviews/", "Reviews"),
         ("/assets/", "Assets"),
         ("/imports/", "Imports"),
         ("/processes/", "Processes"),
@@ -19290,6 +19961,218 @@ fn tenant_profile_select_options(selected: &str, options: &[(&str, &str)]) -> St
         .join("")
 }
 
+fn management_review_status_panel(
+    package: &report_store::ManagementReviewPackageDetail,
+    context: &WebContext,
+    can_write: bool,
+) -> String {
+    let decision_notes = if package.decision_notes.trim().is_empty() {
+        "-"
+    } else {
+        package.decision_notes.as_str()
+    };
+    let next_actions = if package.next_actions.trim().is_empty() {
+        "-"
+    } else {
+        package.next_actions.as_str()
+    };
+    let approval = package
+        .approved_at
+        .as_deref()
+        .map(|approved_at| {
+            format!(
+                "Freigegeben am {} durch User {}",
+                html_escape(approved_at),
+                package
+                    .approved_by_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            )
+        })
+        .unwrap_or_else(|| "Noch nicht freigegeben".to_string());
+    let form = if can_write {
+        format!(
+            r#"
+            <form method="post" action="{}">
+              <div class="form-grid">
+                <label>Status<select name="status">{}</select></label>
+              </div>
+              <label>Entscheidung / Freigabenotiz<textarea name="decision_notes" rows="3">{}</textarea></label>
+              <label>Naechste Massnahmen<textarea name="next_actions" rows="3">{}</textarea></label>
+              <button type="submit">Review-Status speichern</button>
+            </form>
+            "#,
+            web_path_with_context(
+                &format!("/management-reviews/{}/status", package.id),
+                Some(context)
+            ),
+            management_review_status_options(&package.status),
+            html_escape(&package.decision_notes),
+            html_escape(&package.next_actions),
+        )
+    } else {
+        "<p>Zum Bearbeiten oder Freigeben wird eine schreibende ISCY-Rolle benoetigt.</p>"
+            .to_string()
+    };
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Review und Freigabe</h2>
+          <table>
+            <tbody>
+              <tr><th>Status</th><td>{}</td><th>Freigabe</th><td>{}</td></tr>
+              <tr><th>Entscheidung</th><td colspan="3">{}</td></tr>
+              <tr><th>Naechste Massnahmen</th><td colspan="3">{}</td></tr>
+            </tbody>
+          </table>
+          {}
+        </section>
+        "#,
+        html_escape(&package.status_label),
+        approval,
+        html_escape(decision_notes),
+        html_escape(next_actions),
+        form,
+    )
+}
+
+fn management_review_status_options(selected: &str) -> String {
+    [
+        ("DRAFT", "Entwurf"),
+        ("IN_REVIEW", "In Review"),
+        ("APPROVED", "Freigegeben"),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            value,
+            selected_attr(*value == selected),
+            label,
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn management_review_metric_cards(metrics: &Value) -> String {
+    [
+        ("Risiken", "open_risks"),
+        ("Control-Gaps", "open_control_gaps"),
+        ("Evidence offen", "open_evidence_needs"),
+        ("Roadmap offen", "open_roadmap_tasks"),
+    ]
+    .iter()
+    .map(|(label, key)| {
+        metric_card(
+            label,
+            metrics.get(*key).and_then(Value::as_i64).unwrap_or(0),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn management_review_object_panel(title: &str, value: &Value) -> String {
+    let rows = value
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .map(|(key, value)| {
+                    format!(
+                        r#"<tr><th>{}</th><td>{}</td></tr>"#,
+                        html_escape(key),
+                        html_escape(&management_review_json_display(value)),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    format!(
+        r#"<article class="panel wide"><h2>{}</h2><table><tbody>{}</tbody></table></article>"#,
+        html_escape(title),
+        if rows.is_empty() {
+            web_empty_row(2, "Keine Daten vorhanden.")
+        } else {
+            rows
+        },
+    )
+}
+
+fn management_review_array_panel(title: &str, value: &Value, fields: &[(&str, &str)]) -> String {
+    let header = fields
+        .iter()
+        .map(|(_, label)| format!("<th>{}</th>", html_escape(label)))
+        .collect::<Vec<_>>()
+        .join("");
+    let rows = value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    let cells = fields
+                        .iter()
+                        .map(|(key, _)| {
+                            format!(
+                                "<td>{}</td>",
+                                html_escape(&management_review_json_display(
+                                    item.get(*key).unwrap_or(&Value::Null)
+                                ))
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    format!("<tr>{cells}</tr>")
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    format!(
+        r#"
+        <article class="panel wide">
+          <h2>{}</h2>
+          <table>
+            <thead><tr>{}</tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </article>
+        "#,
+        html_escape(title),
+        header,
+        if rows.is_empty() {
+            web_empty_row(fields.len(), "Keine Daten vorhanden.")
+        } else {
+            rows
+        },
+    )
+}
+
+fn management_review_json_display(value: &Value) -> String {
+    match value {
+        Value::Null => "-".to_string(),
+        Value::Bool(value) => {
+            if *value {
+                "Ja".to_string()
+            } else {
+                "Nein".to_string()
+            }
+        }
+        Value::Number(value) => value.to_string(),
+        Value::String(value) if value.trim().is_empty() => "-".to_string(),
+        Value::String(value) => value.clone(),
+        Value::Array(values) => values
+            .iter()
+            .map(management_review_json_display)
+            .collect::<Vec<_>>()
+            .join(", "),
+        Value::Object(_) => value.to_string(),
+    }
+}
+
 fn yes_no(value: bool) -> &'static str {
     if value {
         "Ja"
@@ -20717,6 +21600,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/reports/snapshots/{report_id}",
             get(report_snapshot_detail),
         )
+        .route(
+            "/api/v1/reports/management-reviews",
+            get(management_review_packages).post(management_review_generate),
+        )
+        .route(
+            "/api/v1/reports/management-reviews/{review_id}",
+            get(management_review_detail).patch(management_review_status_update),
+        )
         .route("/api/v1/cves", get(cve_feed))
         .route("/api/v1/cves/{cve_id}", get(cve_detail))
         .route(
@@ -20824,6 +21715,18 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/catalog/", get(web_catalog))
         .route("/reports/", get(web_reports))
+        .route(
+            "/management-reviews/",
+            get(web_management_reviews).post(web_management_reviews_generate),
+        )
+        .route(
+            "/management-reviews/{review_id}",
+            get(web_management_review_detail),
+        )
+        .route(
+            "/management-reviews/{review_id}/status",
+            post(web_management_review_status_submit),
+        )
         .route("/roadmap/", get(web_roadmap))
         .route("/evidence/", get(web_evidence).post(web_evidence_upload))
         .route("/assets/", get(web_assets))
