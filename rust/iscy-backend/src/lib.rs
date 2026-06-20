@@ -1939,34 +1939,31 @@ async fn persist_alertmanager_alerts(
             continue;
         }
 
-        match existing_incident {
-            Some(existing) => {
-                summary.deduplicated_incidents += 1;
-                if let Err(err) = incident_store
-                    .append_incident_event(
-                        context.tenant_id,
-                        existing.id,
-                        Some(context.user_id),
-                        incident_store::IncidentEventWriteRequest::timeline_note(
-                            Some("Alertmanager-Alert dedupliziert"),
-                            &format!(
-                                "Alertmanager-Alert '{}' wurde erneut empfangen und der bestehenden Fallakte #{} zugeordnet. Fingerprint: {}.",
-                                alert.alertname,
-                                existing.id,
-                                alert.fingerprint.as_deref().unwrap_or("-"),
-                            ),
+        if let Some(existing) = existing_incident {
+            summary.deduplicated_incidents += 1;
+            if let Err(err) = incident_store
+                .append_incident_event(
+                    context.tenant_id,
+                    existing.id,
+                    Some(context.user_id),
+                    incident_store::IncidentEventWriteRequest::timeline_note(
+                        Some("Alertmanager-Alert dedupliziert"),
+                        &format!(
+                            "Alertmanager-Alert '{}' wurde erneut empfangen und der bestehenden Fallakte #{} zugeordnet. Fingerprint: {}.",
+                            alert.alertname,
+                            existing.id,
+                            alert.fingerprint.as_deref().unwrap_or("-"),
                         ),
-                    )
-                    .await
-                {
-                    summary.errors.push(format!(
-                        "Deduplizierungsnotiz fuer {} konnte nicht erstellt werden: {err}",
-                        alert.alertname
-                    ));
-                }
-                continue;
+                    ),
+                )
+                .await
+            {
+                summary.errors.push(format!(
+                    "Deduplizierungsnotiz fuer {} konnte nicht erstellt werden: {err}",
+                    alert.alertname
+                ));
             }
-            None => {}
+            continue;
         }
         let payload = alertmanager_incident_payload(alert);
         match incident_store
