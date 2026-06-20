@@ -134,7 +134,7 @@ fn wrap_text(value: &str, width: usize) -> Vec<String> {
 }
 
 fn pdf_document(lines: &[String], lines_per_page: usize) -> Vec<u8> {
-    let page_count = (lines.len().max(1) + lines_per_page - 1) / lines_per_page;
+    let page_count = lines.len().max(1).div_ceil(lines_per_page);
     let object_count = 3 + (page_count * 2);
     let mut objects = vec![String::new(); object_count];
     let page_ids = (0..page_count)
