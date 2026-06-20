@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.8\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.9\""));
 }
 
 #[tokio::test]
@@ -376,6 +376,92 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
     .unwrap();
     assert_eq!(dedupe_note_count, 1);
 
+    let resolved_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/operations/alertmanager")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(
+                    r#"{
+                      "receiver":"iscy-critical",
+                      "status":"resolved",
+                      "groupLabels":{"service":"iscy"},
+                      "commonLabels":{"severity":"critical","tenant_id":"42"},
+                      "commonAnnotations":{"summary":"ISCY meldet kritischen Betriebsstatus"},
+                      "externalURL":"http://alertmanager.local",
+                      "alerts":[{
+                        "status":"resolved",
+                        "labels":{"alertname":"ISCYOperationsCritical","service":"iscy"},
+                        "annotations":{"description":"Statusseite wieder stabil"},
+                        "startsAt":"2026-06-15T14:45:00Z",
+                        "endsAt":"2026-06-15T15:00:00Z",
+                        "generatorURL":"http://prometheus.local/graph",
+                        "fingerprint":"firing-abc123"
+                      }]
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resolved_response.status(), StatusCode::ACCEPTED);
+    let resolved_body = to_bytes(resolved_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let resolved_payload: serde_json::Value = serde_json::from_slice(&resolved_body).unwrap();
+    assert_eq!(resolved_payload["persistence"]["enabled"], true);
+    assert_eq!(resolved_payload["persistence"]["created_incidents"], 0);
+    assert_eq!(resolved_payload["persistence"]["created_evidence"], 0);
+    assert_eq!(resolved_payload["persistence"]["resolved_incidents"], 1);
+    assert_eq!(
+        resolved_payload["persistence"]["ignored_resolved_alerts"],
+        0
+    );
+
+    let (resolved_status, resolved_at): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, resolved_at FROM incidents_incident WHERE tenant_id = 42 AND id = ?",
+    )
+    .bind(incident_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(resolved_status, "RESOLVED");
+    assert_eq!(resolved_at.as_deref(), Some("2026-06-15T15:00:00+00:00"));
+
+    let resolved_note_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM incidents_incidentevent WHERE tenant_id = 42 AND incident_id = ? AND event_type = 'TIMELINE_NOTE' AND summary = 'Alertmanager-Alert resolved'",
+    )
+    .bind(incident_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(resolved_note_count, 1);
+
+    let operations_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/operations/incidents/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(operations_response.status(), StatusCode::OK);
+    let operations_body = to_bytes(operations_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let operations_html = String::from_utf8(operations_body.to_vec()).unwrap();
+    assert!(operations_html.contains("Alert Operations"));
+    assert!(operations_html.contains("ISCYOperationsCritical"));
+    assert!(operations_html.contains("Alertmanager:fp:firing-abc123"));
+    assert!(operations_html.contains("2026-06-15T15:00:00+00:00"));
+
     let metrics_response = app
         .oneshot(
             Request::builder()
@@ -394,10 +480,10 @@ async fn alertmanager_webhook_persists_incident_and_evidence_with_write_context(
     let metrics = String::from_utf8(metrics_body.to_vec()).unwrap();
     assert!(metrics.contains("# TYPE iscy_operations_alertmanager_incidents_total gauge"));
     assert!(metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"all\"} 1"));
-    assert!(metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"open\"} 1"));
-    assert!(metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"triage\"} 1"));
+    assert!(metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"open\"} 0"));
+    assert!(metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"triage\"} 0"));
     assert!(
-        metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"critical_open\"} 1")
+        metrics.contains("iscy_operations_alertmanager_incidents_total{state=\"critical_open\"} 0")
     );
 }
 

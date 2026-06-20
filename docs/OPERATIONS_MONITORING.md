@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.12 / Rust 0.3.8
+Stand: ISCY V23.7.13 / Rust 0.3.9
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 
@@ -12,18 +12,19 @@ Fuer den direkten Betrieb liegen Monitoring-Beispiele im Repository:
 - `deploy/monitoring/prometheus/prometheus.yml`: vollstaendige Prometheus-Konfiguration fuer den Compose-Monitoring-Stack.
 - `deploy/monitoring/prometheus/iscy-operations-alerts.yml`: Alert-Regeln fuer kritische Statussignale, Warnungen, Migrationen, Modulstatus und Runtime-Flags.
 - `deploy/monitoring/alertmanager/iscy-alertmanager.yml`: Alertmanager-Routing-Beispiel mit getrennten Receivern fuer Warnungen und kritische Meldungen, ISCY-Kontext-Headern und Bearer-Token aus Secret-Datei fuer Incident-/Evidence-Persistenz.
-- `deploy/monitoring/grafana/iscy-operations-dashboard.json`: importierbares Grafana-Dashboard fuer Betriebsstatus, offene Signale, Migrationen, Module, Build-Info, Alert-Incidents mit Incident-Drilldown-Link, Product-Security-Coverage, CVE-Review-Trend und Importvalidierung.
+- `deploy/monitoring/grafana/iscy-operations-dashboard.json`: importierbares Grafana-Dashboard fuer Betriebsstatus, offene Signale, Migrationen, Module, Build-Info, Alert-Incidents mit konfigurierbarer `iscy_base_url`, Product-Security-Coverage, CVE-Review-Trend und Importvalidierung.
 - `deploy/monitoring/docker-compose.yml`: lokaler Monitoring-Stack aus Prometheus, Alertmanager und Grafana.
 - `deploy/monitoring/nixos/iscy-monitoring.nix`: NixOS-Modulbeispiel fuer denselben Stack.
 - `deploy/monitoring/nixos/example-host.nix`: kleine Beispiel-Hostkonfiguration, die das Modul importiert, Ports freigibt und den lokalen ISCY-Webhook verdrahtet.
 
-Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/operations/alertmanager` auf. Wenn `ISCY_ALERTMANAGER_TOKEN` gesetzt ist, muss Alertmanager denselben Wert per Bearer Token oder `x-iscy-alert-token` senden. Das Compose-Beispiel liest den Bearer Token aus `deploy/monitoring/alertmanager/secrets/iscy-alertmanager-token.example`; produktiv sollte `ISCY_ALERTMANAGER_TOKEN_FILE` auf eine lokale, nicht eingecheckte Secret-Datei zeigen. Ohne Tenant-/User-Kontext normalisiert der Webhook Alerts nur; mit schreibendem Kontext erzeugt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege. Das lokale Beispiel setzt `x-iscy-tenant-id: 1`, `x-iscy-user-id: 2` und `x-iscy-roles: CONTRIBUTOR`; User `2` ist der per Demo-Seed angelegte technische Operations-User `ops-alertmanager`.
+Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/operations/alertmanager` auf. Wenn `ISCY_ALERTMANAGER_TOKEN` gesetzt ist, muss Alertmanager denselben Wert per Bearer Token oder `x-iscy-alert-token` senden. Das Compose-Beispiel liest den Bearer Token aus `deploy/monitoring/alertmanager/secrets/iscy-alertmanager-token.example`; produktiv sollte `ISCY_ALERTMANAGER_TOKEN_FILE` auf eine lokale, nicht eingecheckte Secret-Datei zeigen. Ohne Tenant-/User-Kontext normalisiert der Webhook Alerts nur; mit schreibendem Kontext erzeugt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege. Wiederholte firing Alerts werden dedupliziert, resolved Alerts schliessen die passende offene Alert-Fallakte automatisch. Das lokale Beispiel setzt `x-iscy-tenant-id: 1`, `x-iscy-user-id: 2` und `x-iscy-roles: CONTRIBUTOR`; User `2` ist der per Demo-Seed angelegte technische Operations-User `ops-alertmanager`.
 
 ## Endpunkte
 
 - `GET /health/live`: einfacher Liveness-Check fuer Load Balancer, lokale Starts und CI.
 - `GET /health/ready`: Alias fuer Readiness-/Liveness-Probes.
 - `GET /status/operations.json`: JSON-Drilldown mit Runtime, Build, Migrationen, Modulen und fachlichen Signalen.
+- `GET /operations/incidents/`: kompakte Alert-Operations-Ansicht fuer Alertmanager-Fallakten, offene/kritische/Triage-Signale und resolved Faelle.
 - `GET /api/v1/status/operations`: API-Alias fuer denselben JSON-Drilldown.
 - `GET /metrics`: Prometheus-kompatible Textausgabe.
 - `GET /api/v1/status/metrics`: API-Alias fuer Prometheus-kompatible Textausgabe.
@@ -103,7 +104,7 @@ groups:
 
 ## Grafana
 
-Das Dashboard `deploy/monitoring/grafana/iscy-operations-dashboard.json` kann in Grafana ueber **Dashboards -> New -> Import -> Upload JSON file** importiert werden. Danach muss nur die Prometheus-Datasource im Importdialog ausgewaehlt werden.
+Das Dashboard `deploy/monitoring/grafana/iscy-operations-dashboard.json` kann in Grafana ueber **Dashboards -> New -> Import -> Upload JSON file** importiert werden. Danach muss die Prometheus-Datasource im Importdialog ausgewaehlt werden. Fuer Drilldown-Links nach ISCY kann die Dashboard-Variable `iscy_base_url` auf die erreichbare Basis-URL gesetzt werden, lokal also normalerweise `http://127.0.0.1:9000`.
 
 Die Statusseite `/status/` enthaelt zusaetzlich einen kompakten Grafana-Query-Spickzettel. Sinnvolle Panels:
 
@@ -183,9 +184,9 @@ Alternativ liegt eine kleine Beispiel-Hostkonfiguration unter `deploy/monitoring
 
 ## Runbook: Alert erzeugt Incident
 
-Wenn Alertmanager einen firing Alert mit ISCY-Kontext an `POST /api/v1/operations/alertmanager` sendet, wird in ISCY automatisch ein Incident im Status `TRIAGE` erzeugt. Dazu entsteht eine verknuepfte Evidence mit `OPERATIONS:ALERTMANAGER:<alertname>` und ein Timeline-Eintrag in der Fallakte. Wiederholte firing Alerts werden ueber Alertmanager-`fingerprint` oder ersatzweise `alertname` dedupliziert und als Timeline-Notiz an die offene Fallakte gehaengt.
+Wenn Alertmanager einen firing Alert mit ISCY-Kontext an `POST /api/v1/operations/alertmanager` sendet, wird in ISCY automatisch ein Incident im Status `TRIAGE` erzeugt. Dazu entsteht eine verknuepfte Evidence mit `OPERATIONS:ALERTMANAGER:<alertname>` und ein Timeline-Eintrag in der Fallakte. Wiederholte firing Alerts werden ueber Alertmanager-`fingerprint` oder ersatzweise `alertname` dedupliziert und als Timeline-Notiz an die offene Fallakte gehaengt. Ein resolved Alert mit derselben Referenz setzt die offene Fallakte automatisch auf `RESOLVED`, pflegt `resolved_at` und dokumentiert den Abschluss in der Timeline.
 
-1. In `/incidents/` die neue Fallakte oeffnen und Severity, Scope sowie betroffene Services bestaetigen.
+1. In `/operations/incidents/` offene Alert-Fallakten sichten und bei Bedarf die Detailfallakte oeffnen.
 2. Die automatisch angelegte Evidence pruefen und bei Bedarf Monitoring-Screenshot, Grafana-Link oder Log-Auszug nachreichen.
 3. Im Incident-Runbook Owner, Eindaemmung, Kommunikationsbedarf und regulatorische Relevanz bewerten.
 4. Falls ein Control-, CVE- oder Product-Security-Bezug besteht, Risk-/Roadmap-Arbeit verknuepfen oder neu erzeugen.

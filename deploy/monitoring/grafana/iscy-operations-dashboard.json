@@ -838,7 +838,7 @@
           "links": [
             {
               "title": "ISCY Incident-Fallakten",
-              "url": "http://127.0.0.1:9000/incidents/?tenant_id=1&user_id=2"
+              "url": "${iscy_base_url}/operations/incidents/?tenant_id=1&user_id=2"
             }
           ]
         },
@@ -905,6 +905,25 @@
         "refresh": 1,
         "regex": "",
         "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "http://127.0.0.1:9000",
+          "value": "http://127.0.0.1:9000"
+        },
+        "hide": 0,
+        "label": "ISCY Base URL",
+        "name": "iscy_base_url",
+        "options": [
+          {
+            "selected": true,
+            "text": "http://127.0.0.1:9000",
+            "value": "http://127.0.0.1:9000"
+          }
+        ],
+        "query": "http://127.0.0.1:9000",
+        "type": "constant"
       }
     ]
   },

@@ -1,6 +1,6 @@
 # ISCY Rust-Cutover-Status
 
-Stand: 2026-06-19
+Stand: 2026-06-20
 
 ## Kurzfassung
 
@@ -17,7 +17,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Healthchecks: `/health/live`, `/health/ready`
 - Operations-Drilldown: `/status/operations.json` und `/api/v1/status/operations`
 - Prometheus-kompatible Metriken: `/metrics` und `/api/v1/status/metrics`
-- Alertmanager-Webhook: `/api/v1/operations/alertmanager` mit optionaler Incident-/Evidence-Persistenz bei schreibendem Tenant-Kontext; Monitoring-Beispiele nutzen den technischen Operations-User `ops-alertmanager`, Secret-Datei fuer Bearer Token, Alert-Incident-Metriken und Deduplizierung ueber Fingerprint/Alertname
+- Alertmanager-Webhook: `/api/v1/operations/alertmanager` mit optionaler Incident-/Evidence-Persistenz bei schreibendem Tenant-Kontext; Monitoring-Beispiele nutzen den technischen Operations-User `ops-alertmanager`, Secret-Datei fuer Bearer Token, Alert-Incident-Metriken, Deduplizierung ueber Fingerprint/Alertname, automatische Schliessung bei resolved Alerts und die Webuebersicht `/operations/incidents/`
 - Monitoring-Doku: `docs/OPERATIONS_MONITORING.md`
 - Monitoring-Deploy-Artefakte: `deploy/monitoring/prometheus/`, `deploy/monitoring/alertmanager/`, `deploy/monitoring/grafana/`, `deploy/monitoring/docker-compose.yml` und `deploy/monitoring/nixos/`
 

@@ -11,7 +11,7 @@ use axum::{
     Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use chrono::Datelike;
+use chrono::{Datelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -818,6 +818,8 @@ pub struct AlertmanagerPersistenceSummary {
     pub created_incidents: i64,
     pub created_evidence: i64,
     pub deduplicated_incidents: i64,
+    pub resolved_incidents: i64,
+    pub ignored_resolved_alerts: i64,
     pub skipped_reason: Option<String>,
     pub errors: Vec<String>,
 }
@@ -1873,16 +1875,72 @@ async fn persist_alertmanager_alerts(
         enabled: true,
         ..Default::default()
     };
-    for alert in alerts
-        .iter()
-        .filter(|alert| !alert.status.eq_ignore_ascii_case("resolved"))
-    {
+    for alert in alerts {
         let authority_reference = alertmanager_authority_reference(alert);
-        match incident_store
+        let existing_incident = match incident_store
             .open_alertmanager_incident_by_reference(context.tenant_id, &authority_reference)
             .await
         {
-            Ok(Some(existing)) => {
+            Ok(existing) => existing,
+            Err(err) => {
+                summary.errors.push(format!(
+                    "Deduplizierungspruefung fuer {} konnte nicht ausgefuehrt werden: {err}",
+                    alert.alertname
+                ));
+                continue;
+            }
+        };
+
+        if alert.status.eq_ignore_ascii_case("resolved") {
+            let Some(existing) = existing_incident else {
+                summary.ignored_resolved_alerts += 1;
+                continue;
+            };
+            match incident_store
+                .update_incident(
+                    context.tenant_id,
+                    existing.id,
+                    Some(context.user_id),
+                    alertmanager_resolved_incident_payload(alert),
+                )
+                .await
+            {
+                Ok(Some(_)) => {
+                    summary.resolved_incidents += 1;
+                    if let Err(err) = incident_store
+                        .append_incident_event(
+                            context.tenant_id,
+                            existing.id,
+                            Some(context.user_id),
+                            incident_store::IncidentEventWriteRequest::timeline_note(
+                                Some("Alertmanager-Alert resolved"),
+                                &format!(
+                                    "Alertmanager meldet '{}' als resolved. Fingerprint: {}. Quelle: {}.",
+                                    alert.alertname,
+                                    alert.fingerprint.as_deref().unwrap_or("-"),
+                                    alert.source_url.as_deref().unwrap_or("-"),
+                                ),
+                            ),
+                        )
+                        .await
+                    {
+                        summary.errors.push(format!(
+                            "Resolved-Notiz fuer {} konnte nicht erstellt werden: {err}",
+                            alert.alertname
+                        ));
+                    }
+                }
+                Ok(None) => summary.ignored_resolved_alerts += 1,
+                Err(err) => summary.errors.push(format!(
+                    "Incident fuer resolved Alert {} konnte nicht geschlossen werden: {err}",
+                    alert.alertname
+                )),
+            }
+            continue;
+        }
+
+        match existing_incident {
+            Some(existing) => {
                 summary.deduplicated_incidents += 1;
                 if let Err(err) = incident_store
                     .append_incident_event(
@@ -1908,14 +1966,7 @@ async fn persist_alertmanager_alerts(
                 }
                 continue;
             }
-            Ok(None) => {}
-            Err(err) => {
-                summary.errors.push(format!(
-                    "Deduplizierungspruefung fuer {} konnte nicht ausgefuehrt werden: {err}",
-                    alert.alertname
-                ));
-                continue;
-            }
+            None => {}
         }
         let payload = alertmanager_incident_payload(alert);
         match incident_store
@@ -1955,9 +2006,14 @@ async fn persist_alertmanager_alerts(
     }
     if summary.created_incidents == 0
         && summary.deduplicated_incidents == 0
+        && summary.resolved_incidents == 0
         && summary.errors.is_empty()
     {
-        summary.skipped_reason = Some("no_firing_alerts".to_string());
+        summary.skipped_reason = Some(if summary.ignored_resolved_alerts > 0 {
+            "no_matching_open_alertmanager_incident".to_string()
+        } else {
+            "no_firing_alerts".to_string()
+        });
     }
     summary
 }
@@ -2003,6 +2059,40 @@ fn alertmanager_incident_payload(
         final_report_sent_at: None,
         authority_reference: Some(alertmanager_authority_reference(alert)),
         stakeholder_summary: Some(alert.summary.clone()),
+        lessons_learned: None,
+    }
+}
+
+fn alertmanager_resolved_incident_payload(
+    alert: &AlertmanagerAlertSummary,
+) -> incident_store::IncidentWriteRequest {
+    let resolved_at = alert
+        .ends_at
+        .clone()
+        .or_else(|| alert.starts_at.clone())
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    incident_store::IncidentWriteRequest {
+        reporter_id: None,
+        owner_id: None,
+        related_risk_id: None,
+        related_asset_id: None,
+        related_process_id: None,
+        title: None,
+        summary: None,
+        incident_type: None,
+        runbook_template: None,
+        severity: None,
+        status: Some("RESOLVED".to_string()),
+        detected_at: None,
+        confirmed_at: None,
+        contained_at: None,
+        resolved_at: Some(Some(resolved_at)),
+        nis2_reportable: None,
+        early_warning_sent_at: None,
+        notification_sent_at: None,
+        final_report_sent_at: None,
+        authority_reference: None,
+        stakeholder_summary: None,
         lessons_learned: None,
     }
 }
@@ -7607,6 +7697,127 @@ async fn web_incidents(
     }
 }
 
+async fn web_operations_incidents(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Alert Operations", "/operations/incidents/");
+    };
+    let Some(store) = state.incident_store.clone() else {
+        return web_store_missing(
+            "Alert Operations",
+            "/operations/incidents/",
+            &context,
+            "Incident",
+        );
+    };
+    match store.list_incidents(context.tenant_id, 200).await {
+        Ok(incidents) => {
+            let alert_incidents = incidents
+                .iter()
+                .filter(|incident| incident.authority_reference.starts_with("Alertmanager:"))
+                .collect::<Vec<_>>();
+            let total_count = alert_incidents.len() as i64;
+            let open_count = alert_incidents
+                .iter()
+                .filter(|incident| !matches!(incident.status.as_str(), "RESOLVED" | "CLOSED"))
+                .count() as i64;
+            let triage_count = alert_incidents
+                .iter()
+                .filter(|incident| incident.status == "TRIAGE")
+                .count() as i64;
+            let critical_open_count = alert_incidents
+                .iter()
+                .filter(|incident| {
+                    incident.severity == "CRITICAL"
+                        && !matches!(incident.status.as_str(), "RESOLVED" | "CLOSED")
+                })
+                .count() as i64;
+            let resolved_count = alert_incidents
+                .iter()
+                .filter(|incident| matches!(incident.status.as_str(), "RESOLVED" | "CLOSED"))
+                .count() as i64;
+            let rows = alert_incidents
+                .iter()
+                .take(75)
+                .map(|incident| {
+                    format!(
+                        r#"<tr><td><a href="{}">{}</a><p>{}</p><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        web_path_with_context(&format!("/incidents/{}", incident.id), Some(&context)),
+                        html_escape(&incident.title),
+                        html_escape(&incident.summary),
+                        html_escape(&incident.authority_reference),
+                        incident_severity_badge(&incident.severity, &incident.severity_label),
+                        incident_status_badge(&incident.status, &incident.status_label),
+                        html_escape(incident.detected_at.as_deref().unwrap_or("-")),
+                        html_escape(incident.resolved_at.as_deref().unwrap_or("-")),
+                        html_escape(incident.owner_display.as_deref().unwrap_or("-")),
+                        html_escape(&incident.updated_at),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Alert Operations</h1><p>Alertmanager-Fallakten, Deduplizierung und resolved Cutover im Rust-only-Betrieb.</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  {}
+                  {}
+                  <article class="panel wide">
+                    <h2>Alertmanager-Fallakten</h2>
+                    <table>
+                      <thead><tr><th>Fallakte</th><th>Severity</th><th>Status</th><th>Erkannt</th><th>Resolved</th><th>Owner</th><th>Aktualisiert</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                </section>
+                "#,
+                metric_card("Alert-Faelle", total_count),
+                metric_card("Offen", open_count),
+                metric_card("Triage", triage_count),
+                metric_card("Kritisch offen", critical_open_count),
+                metric_card("Resolved", resolved_count),
+                web_link_card(
+                    "Incident-Fallakten",
+                    &web_path_with_context("/incidents/", Some(&context)),
+                    "Vollstaendige Bearbeitung, Runbooks, Evidence und NIS2-Pakete",
+                ),
+                web_link_card(
+                    "Operations JSON",
+                    &web_path_with_context("/status/operations.json", Some(&context)),
+                    "Maschinenlesbarer Drilldown fuer Monitoring und Agenten",
+                ),
+                if rows.is_empty() {
+                    web_empty_row(7, "Noch keine Alertmanager-Fallakten vorhanden.")
+                } else {
+                    rows
+                },
+            );
+            web_page(
+                "Alert Operations",
+                "/operations/incidents/",
+                Some(&context),
+                &body,
+            )
+        }
+        Err(err) => web_error_page(
+            "Alert Operations",
+            "/operations/incidents/",
+            &context,
+            &err.to_string(),
+        ),
+    }
+}
+
 async fn web_incidents_submit(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -9369,6 +9580,11 @@ async fn web_status(
             "Incidents",
             &web_path_with_context("/incidents/", context.as_ref()),
             "Alert-Fallakten, Runbooks, Evidence und Meldepakete",
+        ),
+        web_link_card(
+            "Alert Operations",
+            &web_path_with_context("/operations/incidents/", context.as_ref()),
+            "Offene, deduplizierte und resolved Alertmanager-Fallakten",
         ),
         web_link_card(
             "ISCY-27",
@@ -14123,6 +14339,27 @@ fn incident_status_options_for(selected_status: &str) -> String {
     .join("")
 }
 
+fn incident_status_badge(status: &str, label: &str) -> String {
+    let class_name = match status {
+        "RESOLVED" | "CLOSED" => "ok",
+        "TRIAGE" => "warn",
+        "CONFIRMED" | "CONTAINED" => "info",
+        _ => "muted-badge",
+    };
+    web_badge(label, class_name)
+}
+
+fn incident_severity_badge(severity: &str, label: &str) -> String {
+    let class_name = match severity {
+        "CRITICAL" => "danger",
+        "HIGH" => "high",
+        "MEDIUM" => "warn",
+        "LOW" => "info",
+        _ => "muted-badge",
+    };
+    web_badge(label, class_name)
+}
+
 fn web_cve_assessment_form_panel(
     context: &WebContext,
     options: Option<&cve_store::CveAssessmentFormOptions>,
@@ -18477,6 +18714,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/status/control-gaps/generate",
             post(web_status_control_gaps_generate_submit),
         )
+        .route("/operations/incidents/", get(web_operations_incidents))
         .route("/zero-trust/", get(web_zero_trust))
         .route("/incidents/", get(web_incidents).post(web_incidents_submit))
         .route(
