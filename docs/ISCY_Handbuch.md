@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.20 / Rust 0.3.16)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.21 / Rust 0.3.17)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -399,6 +399,8 @@ Typische Funktionen:
 - Evidence Needs synchronisieren
 - Evidence direkt aus Risks, Roadmap-Tasks, Incidents und Product-Security-Kontexten vorbefuellen
 - nach dem Speichern automatisch zur Ausgangsseite zurueckkehren
+- Evidence-Qualitaet unter `/evidence/quality/` auswerten
+- Score, Reifegrad und Issues fuer Nachweise und Evidence Needs anzeigen
 
 Fachlicher Nutzen:
 
@@ -406,6 +408,7 @@ Fachlicher Nutzen:
 - bessere Auditfaehigkeit
 - weniger Suche nach Dokumenten
 - klarere Rueckverfolgbarkeit durch stabile Linked-Requirement- und Evidence-Key-Bezuege
+- belastbarere Aussage, ob Nachweise nur vorhanden oder wirklich reviewt und verwertbar sind
 
 Fuer Nicht-Sicherheitsleute:
 Evidence ist der Ordner mit den Belegen, aber strukturiert und auswertbar.
@@ -421,11 +424,13 @@ Ausgaben:
 - einfaches PDF
 - audit-faehiges PDF
 - Management-Review-Pakete unter `/management-reviews/`
+- Management-Review-Exporte als Markdown, HTML, PDF und JSON
 
 Management-Review-Pakete:
 
 - werden aus aktuellen ISCY-Daten fuer einen Zeitraum erzeugt
 - speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage und Agent-Posture als Snapshot
+- verlinken Snapshot-Zeilen zurueck zu Risiko, Control, Evidence, Incident und Roadmap
 - koennen von Draft ueber In Review bis Approved oder Archived gefuehrt werden
 - dokumentieren Entscheidung, naechste Massnahmen, freigebenden User und Freigabezeitpunkt
 
@@ -918,15 +923,14 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Evidence-Qualitaet und Nachweisreife
-2. Third-Party- und Supplier-Risk
-3. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-4. AI-Governance-Modul
-5. Agent-Flottenbetrieb und Benachrichtigungen
+1. Third-Party- und Supplier-Risk
+2. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+3. AI-Governance-Modul
+4. Agent-Flottenbetrieb und Benachrichtigungen
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 

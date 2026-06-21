@@ -45,7 +45,7 @@ Erfolgskriterium:
 
 Ziel: ISCY soll aus vorhandenen Daten automatisch ein Management-Review- und Audit-Paket erzeugen.
 
-Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt.
+Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt; V23.7.21 ergaenzt Exporte und Snapshot-Ruecklinks.
 
 Umgesetzt:
 
@@ -54,12 +54,12 @@ Umgesetzt:
 - API-Pfade `GET` und `PATCH /api/v1/reports/management-reviews/{review_id}` fuer Detail und Status.
 - Persistierte Review-Pakete mit Zeitraum, Status, Executive Summary, Entscheidung, naechsten Massnahmen, freigebendem User und Freigabezeitpunkt.
 - Automatisch erzeugter Snapshot mit Kennzahlen, Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage und Agent-Posture.
+- Direkte Ruecklinks aus Snapshot-Zeilen zu Risiken, Controls, Evidence, Incidents und Roadmap.
+- Export als Markdown, HTML, PDF und JSON.
 - Demo-Seed und Migration `0019_rust_management_review_packages`.
 
 Naechste Vertiefung:
 
-- Export als Markdown, HTML, PDF und JSON.
-- Direkte Links aus jedem Snapshot-Eintrag zu Controls, Risiken, Evidence, Roadmap-Tasks, Product-Security-Objekten und Incident-Fallakten.
 - Review-Templates fuer Quartal, internes Audit, Management Review nach ISO 27001 und regulatorische Steering-Sitzung.
 
 Erfolgskriterium:
@@ -70,12 +70,21 @@ Erfolgskriterium:
 
 Ziel: Evidence soll nicht nur vorhanden sein, sondern belastbar bewertet werden.
 
-Umsetzungsidee:
+Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt.
 
-- Evidence um Gueltigkeit, Ablaufdatum, Nachweisquelle, Owner, Review-Status, Hash, Version, Sensitivitaet und Retention-Klasse erweitern.
-- Evidence-Health je Control, Risiko, Incident, Product-Security-Finding und Roadmap-Task berechnen.
-- Warnungen fuer ablaufende oder ungepruefte Nachweise anzeigen.
+Umgesetzt:
+
+- Weboberflaeche unter `/evidence/quality/`.
+- API-Pfad `GET /api/v1/evidence/quality`.
+- Evidence-Quality-Score je Evidence Item aus Status, Review, Datei-/Artefaktreferenz, Traceability, Owner und Review-Notiz.
+- Issue-Queue fuer fehlende Datei, fehlenden Review, fehlenden Owner, fehlende Traceability oder fehlende Review-Notiz.
+- Evidence-Need-Reife mit offen, teilweise und abgedeckt.
 - Exportpakete sollen Evidence-Qualitaet und fehlende Nachweise explizit ausweisen.
+
+Naechste Vertiefung:
+
+- Evidence um Gueltigkeit, Ablaufdatum, Hash, Version, Sensitivitaet und Retention-Klasse erweitern.
+- Warnungen fuer ablaufende oder ungepruefte Nachweise anzeigen.
 
 Erfolgskriterium:
 

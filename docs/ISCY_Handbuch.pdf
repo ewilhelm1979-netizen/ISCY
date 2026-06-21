@@ -22,7 +22,7 @@ BT
 T*
 () Tj
 T*
-(Version: Arbeitsstand Juni 2026 \(ISCY V23.7.20 / Rust 0.3.16\)) Tj
+(Version: Arbeitsstand Juni 2026 \(ISCY V23.7.21 / Rust 0.3.17\)) Tj
 T*
 () Tj
 T*
@@ -954,7 +954,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 17 0 R >>
 endobj
 17 0 obj
-<< /Length 2530 >>
+<< /Length 2818 >>
 stream
 BT
 /F1 9 Tf
@@ -965,6 +965,10 @@ T*
 (vorbefuellen) Tj
 T*
 (- nach dem Speichern automatisch zur Ausgangsseite zurueckkehren) Tj
+T*
+(- Evidence-Qualitaet unter /evidence/quality/ auswerten) Tj
+T*
+(- Score, Reifegrad und Issues fuer Nachweise und Evidence Needs anzeigen) Tj
 T*
 () Tj
 T*
@@ -979,6 +983,8 @@ T*
 (- weniger Suche nach Dokumenten) Tj
 T*
 (- klarere Rueckverfolgbarkeit durch stabile Linked-Requirement- und Evidence-Key-Bezuege) Tj
+T*
+(- belastbarere Aussage, ob Nachweise nur vorhanden oder wirklich reviewt und verwertbar sind) Tj
 T*
 () Tj
 T*
@@ -1010,6 +1016,8 @@ T*
 T*
 (- Management-Review-Pakete unter /management-reviews/) Tj
 T*
+(- Management-Review-Exporte als Markdown, HTML, PDF und JSON) Tj
+T*
 () Tj
 T*
 (Management-Review-Pakete:) Tj
@@ -1021,6 +1029,8 @@ T*
 (- speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen,) Tj
 T*
 (Roadmap-Fokus, Product-Security-Lage und Agent-Posture als Snapshot) Tj
+T*
+(- verlinken Snapshot-Zeilen zurueck zu Risiko, Control, Evidence, Incident und Roadmap) Tj
 T*
 (- koennen von Draft ueber In Review bis Approved oder Archived gefuehrt werden) Tj
 T*
@@ -1094,6 +1104,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+18 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 19 0 R >>
+endobj
+19 0 obj
+<< /Length 2553 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (5.14 Import Center:) Tj
 T*
 () Tj
@@ -1104,19 +1127,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-18 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 19 0 R >>
-endobj
-19 0 obj
-<< /Length 2774 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Typische Funktionen:) Tj
 T*
 () Tj
@@ -1251,6 +1261,19 @@ T*
 T*
 (- gebuendelte CVE-Risiko-Review-Queue mit Filtern fuer offene Reviews, fehlende Evidence und) Tj
 T*
+ET
+endstream
+endobj
+20 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
+endobj
+21 0 obj
+<< /Length 2998 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (fehlende Risiken) Tj
 T*
 (- Bulk-Aktionen fuer ausgewaehlte CVE-Reviews: Risiko/Roadmap erzeugen, Behandlung freigeben,) Tj
@@ -1261,19 +1284,6 @@ T*
 T*
 (- Evidence-Vorbefuellung und Ruecksprung zur Ausgangsseite nach Upload) Tj
 T*
-ET
-endstream
-endobj
-20 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
-endobj
-21 0 obj
-<< /Length 2859 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (5.16 Vulnerability Intelligence:) Tj
@@ -1408,6 +1418,19 @@ T*
 T*
 (7. CVE-Risiko-Review-Queue abarbeiten) Tj
 T*
+ET
+endstream
+endobj
+22 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
+endobj
+23 0 obj
+<< /Length 5387 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (8. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen) Tj
 T*
 (9. Massnahmen ueber Roadmap oder Risiko-Behandlung steuern) Tj
@@ -1418,19 +1441,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-22 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
-endobj
-23 0 obj
-<< /Length 5353 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Die Rust-Webroute /incidents/ fuehrt operative Sicherheitsvorfaelle als mandantenfaehige) Tj
 T*
 (Fallakten. Ein Incident kann Reporter, Owner, Risiko, Asset und Prozess referenzieren und) Tj
@@ -1565,6 +1575,19 @@ T*
 T*
 (Erheblichkeitsbewertung als klickbare Kennzahl und fuehrt direkt zur gefilterten) Tj
 T*
+ET
+endstream
+endobj
+24 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
+endobj
+25 0 obj
+<< /Length 3637 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Incident-Liste.) Tj
 T*
 () Tj
@@ -1575,19 +1598,6 @@ T*
 T*
 (Empfohlene Kette fuer die operative Bearbeitung:) Tj
 T*
-ET
-endstream
-endobj
-24 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
-endobj
-25 0 obj
-<< /Length 3774 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (1. Scope bestimmen) Tj
@@ -1722,6 +1732,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+26 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
+endobj
+27 0 obj
+<< /Length 3640 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Mit Tenant-Kontext enthaelt der Betriebsstatus zusaetzlich fachliche Signale zu ISCY-27,) Tj
 T*
 (Product Security, offenen CVE-Reviews, fehlender Evidence, Migrationen, Runtime-Flags und) Tj
@@ -1732,19 +1755,6 @@ T*
 T*
 (curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \\) Tj
 T*
-ET
-endstream
-endobj
-26 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
-endobj
-27 0 obj
-<< /Length 3524 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 ('http://127.0.0.1:9000/api/v1/status/operations?tenant_id=1&user_id=1') Tj
 T*
 (curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \\) Tj
@@ -1879,6 +1889,19 @@ T*
 T*
 (Merksatz: Erst ISCY starten, dann den Agent per --self-test pruefen, danach mit Token oder) Tj
 T*
+ET
+endstream
+endobj
+28 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
+endobj
+29 0 obj
+<< /Length 3214 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Agent-Secret an die Plattform melden.) Tj
 T*
 () Tj
@@ -1889,19 +1912,6 @@ T*
 T*
 (Wenn du ISCY schnell und reproduzierbar starten willst, nutze Docker.) Tj
 T*
-ET
-endstream
-endobj
-28 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
-endobj
-29 0 obj
-<< /Length 3258 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (1. make docker-check) Tj
@@ -2036,6 +2046,19 @@ T*
 T*
 (- Cloud-Identitaeten/Schluessel folgen Least-Privilege.) Tj
 T*
+ET
+endstream
+endobj
+30 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
+endobj
+31 0 obj
+<< /Length 3916 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (4. Windows-Hardening umgesetzt) Tj
 T*
 (- Baselines sind definiert.) Tj
@@ -2046,19 +2069,6 @@ T*
 T*
 (- Zonen/Conduits sind dokumentiert.) Tj
 T*
-ET
-endstream
-endobj
-30 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
-endobj
-31 0 obj
-<< /Length 3828 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- OPC UA, MES, SCADA und Produktions-Identitaeten sind abgesichert.) Tj
 T*
 (6. Nachweise vorhanden) Tj
@@ -2193,6 +2203,19 @@ T*
 T*
 (8. Was ISCY ausdruecklich nicht ersetzt:) Tj
 T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 2435 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (ISCY ersetzt nicht:) Tj
@@ -2203,19 +2226,6 @@ T*
 T*
 (- eine vollautomatische Sicherheitsbewertung ohne Fachpruefung) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 2266 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- operative Patch- oder Deployment-Tools) Tj
 T*
 (- ein SIEM oder SOC) Tj
@@ -2256,11 +2266,11 @@ T*
 T*
 (als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und) Tj
 T*
-(Audit-Pakete als steuerbaren Review-Workflow. Die weitere ISCY-Agenda konzentriert sich) Tj
+(Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks) Tj
 T*
-(deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche) Tj
+(und Evidence-Qualitaet. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf) Tj
 T*
-(Produktreife.) Tj
+(Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.) Tj
 T*
 () Tj
 T*
@@ -2268,15 +2278,13 @@ T*
 T*
 () Tj
 T*
-(1. Evidence-Qualitaet und Nachweisreife) Tj
+(1. Third-Party- und Supplier-Risk) Tj
 T*
-(2. Third-Party- und Supplier-Risk) Tj
+(2. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness) Tj
 T*
-(3. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness) Tj
+(3. AI-Governance-Modul) Tj
 T*
-(4. AI-Governance-Modul) Tj
-T*
-(5. Agent-Flottenbetrieb und Benachrichtigungen) Tj
+(4. Agent-Flottenbetrieb und Benachrichtigungen) Tj
 T*
 () Tj
 T*
@@ -2333,24 +2341,24 @@ xref
 0000014882 00000 n
 0000017372 00000 n
 0000017500 00000 n
-0000020082 00000 n
-0000020210 00000 n
-0000023036 00000 n
-0000023164 00000 n
-0000026075 00000 n
-0000026203 00000 n
-0000031608 00000 n
-0000031736 00000 n
-0000035562 00000 n
-0000035690 00000 n
-0000039266 00000 n
-0000039394 00000 n
-0000042704 00000 n
-0000042832 00000 n
-0000046712 00000 n
-0000046840 00000 n
+0000020370 00000 n
+0000020498 00000 n
+0000023103 00000 n
+0000023231 00000 n
+0000026281 00000 n
+0000026409 00000 n
+0000031848 00000 n
+0000031976 00000 n
+0000035665 00000 n
+0000035793 00000 n
+0000039485 00000 n
+0000039613 00000 n
+0000042879 00000 n
+0000043007 00000 n
+0000046975 00000 n
+0000047103 00000 n
 trailer
 << /Size 34 /Root 1 0 R >>
 startxref
-49158
+49590
 %%EOF

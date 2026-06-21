@@ -22,6 +22,57 @@ pub struct EvidenceOverview {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct EvidenceQualityOverview {
+    pub summary: EvidenceQualitySummary,
+    pub items: Vec<EvidenceQualityItem>,
+    pub needs: Vec<EvidenceQualityNeed>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceQualitySummary {
+    pub total_items: i64,
+    pub approved_items: i64,
+    pub reviewed_items: i64,
+    pub items_with_file: i64,
+    pub linked_items: i64,
+    pub owner_assigned_items: i64,
+    pub open_needs: i64,
+    pub partial_needs: i64,
+    pub covered_needs: i64,
+    pub average_score: i64,
+    pub maturity_label: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceQualityItem {
+    pub id: i64,
+    pub title: String,
+    pub status: String,
+    pub status_label: String,
+    pub quality_score: i64,
+    pub quality_level: String,
+    pub issues: Vec<String>,
+    pub href: String,
+    pub owner_display: Option<String>,
+    pub reviewed_at: Option<String>,
+    pub file_name: Option<String>,
+    pub linked_requirement: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceQualityNeed {
+    pub id: i64,
+    pub title: String,
+    pub requirement_code: String,
+    pub status: String,
+    pub status_label: String,
+    pub covered_count: i64,
+    pub quality_level: String,
+    pub issues: Vec<String>,
+    pub href: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct EvidenceNeedSummary {
     pub open: i64,
     pub partial: i64,
@@ -189,6 +240,19 @@ impl EvidenceStore {
         }
     }
 
+    pub async fn evidence_quality(
+        &self,
+        tenant_id: i64,
+        session_id: Option<i64>,
+        item_limit: i64,
+        need_limit: i64,
+    ) -> anyhow::Result<EvidenceQualityOverview> {
+        let overview = self
+            .evidence_overview(tenant_id, session_id, item_limit, need_limit)
+            .await?;
+        Ok(evidence_quality_from_overview(overview))
+    }
+
     pub async fn sync_evidence_needs(
         &self,
         tenant_id: i64,
@@ -266,6 +330,173 @@ async fn evidence_overview_sqlite(
         evidence_needs: list_evidence_needs_sqlite(pool, tenant_id, session_id, need_limit).await?,
         need_summary: evidence_need_summary_sqlite(pool, tenant_id, session_id).await?,
     })
+}
+
+fn evidence_quality_from_overview(overview: EvidenceOverview) -> EvidenceQualityOverview {
+    let total_items = overview.evidence_items.len() as i64;
+    let approved_items = overview
+        .evidence_items
+        .iter()
+        .filter(|item| item.status.eq_ignore_ascii_case("APPROVED"))
+        .count() as i64;
+    let reviewed_items = overview
+        .evidence_items
+        .iter()
+        .filter(|item| item.reviewed_at.is_some())
+        .count() as i64;
+    let items_with_file = overview
+        .evidence_items
+        .iter()
+        .filter(|item| {
+            item.file_name
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        })
+        .count() as i64;
+    let linked_items = overview
+        .evidence_items
+        .iter()
+        .filter(|item| evidence_item_has_traceable_link(item))
+        .count() as i64;
+    let owner_assigned_items = overview
+        .evidence_items
+        .iter()
+        .filter(|item| item.owner_id.is_some())
+        .count() as i64;
+    let items = overview
+        .evidence_items
+        .iter()
+        .map(evidence_quality_item)
+        .collect::<Vec<_>>();
+    let needs = overview
+        .evidence_needs
+        .iter()
+        .map(evidence_quality_need)
+        .collect::<Vec<_>>();
+    let average_score = if items.is_empty() {
+        0
+    } else {
+        items.iter().map(|item| item.quality_score).sum::<i64>() / items.len() as i64
+    };
+    EvidenceQualityOverview {
+        summary: EvidenceQualitySummary {
+            total_items,
+            approved_items,
+            reviewed_items,
+            items_with_file,
+            linked_items,
+            owner_assigned_items,
+            open_needs: overview.need_summary.open,
+            partial_needs: overview.need_summary.partial,
+            covered_needs: overview.need_summary.covered,
+            average_score,
+            maturity_label: evidence_quality_level(average_score).to_string(),
+        },
+        items,
+        needs,
+    }
+}
+
+fn evidence_quality_item(item: &EvidenceItemSummary) -> EvidenceQualityItem {
+    let mut score = 0;
+    let mut issues = Vec::new();
+    if item.status.eq_ignore_ascii_case("APPROVED") {
+        score += 35;
+    } else if item.status.eq_ignore_ascii_case("SUBMITTED") {
+        score += 20;
+        issues.push("Evidence ist eingereicht, aber noch nicht freigegeben.".to_string());
+    } else {
+        score += 5;
+        issues.push("Evidence ist noch nicht im Review-/Freigabezustand.".to_string());
+    }
+    if item.reviewed_at.is_some() {
+        score += 20;
+    } else {
+        issues.push("Fachlicher Review-Zeitpunkt fehlt.".to_string());
+    }
+    if item
+        .file_name
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        score += 15;
+    } else {
+        issues.push("Datei oder Artefaktreferenz fehlt.".to_string());
+    }
+    if evidence_item_has_traceable_link(item) {
+        score += 15;
+    } else {
+        issues.push(
+            "Traceability zu Requirement, Control, Incident oder Evidence-Key fehlt.".to_string(),
+        );
+    }
+    if item.owner_id.is_some() {
+        score += 10;
+    } else {
+        issues.push("Owner fehlt.".to_string());
+    }
+    if !item.review_notes.trim().is_empty() {
+        score += 5;
+    } else {
+        issues.push("Review-Notiz fehlt.".to_string());
+    }
+    EvidenceQualityItem {
+        id: item.id,
+        title: item.title.clone(),
+        status: item.status.clone(),
+        status_label: item.status_label.clone(),
+        quality_score: score,
+        quality_level: evidence_quality_level(score).to_string(),
+        issues,
+        href: format!("/evidence/?evidence_id={}", item.id),
+        owner_display: item.owner_display.clone(),
+        reviewed_at: item.reviewed_at.clone(),
+        file_name: item.file_name.clone(),
+        linked_requirement: item.linked_requirement.clone(),
+    }
+}
+
+fn evidence_quality_need(need: &RequirementEvidenceNeedSummary) -> EvidenceQualityNeed {
+    let mut issues = Vec::new();
+    let quality_level = if need.status.eq_ignore_ascii_case("COVERED") && need.covered_count > 0 {
+        "reif"
+    } else if need.covered_count > 0 || need.status.eq_ignore_ascii_case("PARTIAL") {
+        issues.push("Evidence Need ist nur teilweise abgedeckt.".to_string());
+        "teilweise"
+    } else {
+        issues.push("Evidence Need ist offen und ohne abdeckenden Nachweis.".to_string());
+        "offen"
+    };
+    if need.is_mandatory && need.covered_count == 0 {
+        issues.push("Pflichtnachweis fehlt.".to_string());
+    }
+    EvidenceQualityNeed {
+        id: need.id,
+        title: need.title.clone(),
+        requirement_code: need.requirement_code.clone(),
+        status: need.status.clone(),
+        status_label: need.status_label.clone(),
+        covered_count: need.covered_count,
+        quality_level: quality_level.to_string(),
+        issues,
+        href: format!("/evidence/?need_id={}", need.id),
+    }
+}
+
+fn evidence_item_has_traceable_link(item: &EvidenceItemSummary) -> bool {
+    item.requirement_id.is_some()
+        || item.control_id.is_some()
+        || item.incident_id.is_some()
+        || !item.linked_requirement.trim().is_empty()
+}
+
+fn evidence_quality_level(score: i64) -> &'static str {
+    match score {
+        85..=i64::MAX => "reif",
+        65..=84 => "belastbar",
+        40..=64 => "lueckenhaft",
+        _ => "kritisch",
+    }
 }
 
 async fn sync_evidence_needs_postgres(

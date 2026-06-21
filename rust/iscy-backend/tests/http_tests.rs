@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.16\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.17\""));
 }
 
 #[tokio::test]
@@ -4327,6 +4327,54 @@ async fn evidence_overview_filters_by_session() {
 }
 
 #[tokio::test]
+async fn evidence_quality_reports_maturity_and_issue_queue() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/quality")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["quality"]["summary"]["total_items"], 2);
+    assert_eq!(payload["quality"]["summary"]["approved_items"], 1);
+    assert_eq!(payload["quality"]["summary"]["open_needs"], 1);
+    assert_eq!(payload["quality"]["items"][0]["quality_level"], "reif");
+    assert_eq!(payload["quality"]["items"][1]["title"], "Incident Playbook");
+    assert!(payload["quality"]["items"][1]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue == "Datei oder Artefaktreferenz fehlt."));
+    assert!(payload["quality"]["needs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|need| need["quality_level"] == "offen"));
+}
+
+#[tokio::test]
 async fn evidence_need_sync_creates_and_updates_session_needs() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -4588,6 +4636,7 @@ async fn rust_web_evidence_accepts_file_upload_from_form() {
     assert!(html.contains("CVE-Evidence: CVE-2026-0001"));
     assert!(html.contains("PRODUCT-SECURITY:CVE:CVE-2026-0001"));
     assert!(html.contains("Patch proof"));
+    assert!(html.contains("/evidence/quality/"));
     assert!(
         html.contains(r#"name="return_to" value="/product-security/?tenant_id=42&amp;user_id=7""#)
     );
@@ -4639,6 +4688,39 @@ async fn rust_web_evidence_accepts_file_upload_from_form() {
     .unwrap();
     assert!(media_root.join(file_name).exists());
     let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn rust_web_evidence_quality_renders_maturity_queue() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/evidence/quality/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Evidence Quality"));
+    assert!(html.contains("Incident Playbook"));
+    assert!(html.contains("Datei oder Artefaktreferenz fehlt"));
+    assert!(html.contains("Nachweis f"));
 }
 
 #[tokio::test]
@@ -6096,6 +6178,90 @@ async fn management_review_detail_and_status_update_roundtrip() {
 }
 
 #[tokio::test]
+async fn management_review_exports_markdown_html_pdf_and_json() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_management_review_table(&pool).await;
+    insert_management_review_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let markdown = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews/21/export")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(markdown.status(), StatusCode::OK);
+    let body = to_bytes(markdown.into_body(), usize::MAX).await.unwrap();
+    let markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(markdown.contains("# ISCY Management Review"));
+    assert!(markdown.contains("Q2 Steering Review"));
+    assert!(markdown.contains("/api/v1/risks/1"));
+
+    let html = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews/21/export.html")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(html.status(), StatusCode::OK);
+    let body = to_bytes(html.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("<html lang=\"de\">"));
+    assert!(html.contains("ERP Risiko"));
+
+    let pdf = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews/21/export.pdf")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pdf.status(), StatusCode::OK);
+    let body = to_bytes(pdf.into_body(), usize::MAX).await.unwrap();
+    assert!(body.starts_with(b"%PDF-1.4"));
+
+    let json = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews/21/export.json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json.status(), StatusCode::OK);
+    let body = to_bytes(json.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["package"]["title"], "Q2 Steering Review");
+}
+
+#[tokio::test]
 async fn management_review_generate_creates_demo_audit_snapshot() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -6144,6 +6310,14 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
             .unwrap()
             >= 1
     );
+    assert_eq!(
+        payload["package"]["top_risks_json"][0]["entity_type"],
+        "risk"
+    );
+    assert!(payload["package"]["incident_decisions_json"][0]["href"]
+        .as_str()
+        .unwrap()
+        .starts_with("/incidents/"));
     assert!(
         payload["package"]["product_security_json"]["products"]
             .as_i64()
@@ -6860,6 +7034,9 @@ async fn rust_web_management_reviews_renders_packages_and_updates_status() {
     assert!(html.contains("ERP Risiko"));
     assert!(html.contains("ISCY-27 Control-Gaps"));
     assert!(html.contains("Review-Status speichern"));
+    assert!(html.contains("/management-reviews/21/export.pdf"));
+    assert!(html.contains("/management-reviews/21/export.json"));
+    assert!(html.contains("/api/v1/risks/1"));
 
     let response = app
         .oneshot(
@@ -14019,11 +14196,11 @@ async fn insert_management_review_fixture(pool: &SqlitePool) {
                 '',
                 '',
                 '{"open_risks":2,"open_control_gaps":1,"missing_control_evidence":1,"snapshot_items":{"top_risks":1,"control_gaps":1,"evidence_gaps":1,"incidents":1,"roadmap":1}}',
-                '[{"id":1,"title":"ERP Risiko","status":"OPEN","impact":5,"likelihood":4,"score":20,"treatment_plan":"MFA erzwingen"}]',
-                '[{"id":4,"control_number":4,"code":"ISCY-04","title":"Incident Response","status":"PARTIAL","evidence_status":"MISSING"}]',
-                '[{"id":5,"title":"Incident Runbook Evidence","status":"OPEN","requirement_code":"NIS2-21"}]',
-                '[{"id":6,"title":"Security Incident","severity":"HIGH","nis2_significance_status":"SIGNIFICANT","review_state":"APPROVED"}]',
-                '[{"id":7,"title":"IR-Runbook abschliessen","priority":"HIGH","status":"OPEN","due_date":"2026-07-01"}]',
+                '[{"id":1,"entity_type":"risk","href":"/api/v1/risks/1","title":"ERP Risiko","status":"OPEN","impact":5,"likelihood":4,"score":20,"treatment_plan":"MFA erzwingen"}]',
+                '[{"id":4,"entity_type":"control","href":"/controls/","control_number":4,"code":"ISCY-04","title":"Incident Response","status":"PARTIAL","evidence_status":"MISSING"}]',
+                '[{"id":5,"entity_type":"evidence_need","href":"/evidence/","title":"Incident Runbook Evidence","status":"OPEN","requirement_code":"NIS2-21"}]',
+                '[{"id":6,"entity_type":"incident","href":"/incidents/6","title":"Security Incident","severity":"HIGH","nis2_significance_status":"SIGNIFICANT","review_state":"APPROVED"}]',
+                '[{"id":7,"entity_type":"roadmap_task","href":"/roadmap/","title":"IR-Runbook abschliessen","priority":"HIGH","status":"OPEN","due_date":"2026-07-01"}]',
                 '{"products":2,"open_vulnerabilities":3}',
                 '{"active_agents":5,"stale_agents":1}',
                 '2026-06-30T09:00:00Z',

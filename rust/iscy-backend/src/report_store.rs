@@ -1185,8 +1185,11 @@ fn roadmap_items_sqlite_sql() -> &'static str {
 fn risk_pg_rows_to_json(rows: Vec<PgRow>) -> anyhow::Result<Value> {
     rows.into_iter()
         .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
             Ok(serde_json::json!({
-                "id": row.try_get::<i64, _>("id")?,
+                "id": id,
+                "entity_type": "risk",
+                "href": format!("/api/v1/risks/{id}"),
                 "title": row.try_get::<String, _>("title")?,
                 "status": row.try_get::<String, _>("status")?,
                 "impact": row.try_get::<i64, _>("impact")?,
@@ -1205,8 +1208,11 @@ fn risk_pg_rows_to_json(rows: Vec<PgRow>) -> anyhow::Result<Value> {
 fn risk_sqlite_rows_to_json(rows: Vec<SqliteRow>) -> anyhow::Result<Value> {
     rows.into_iter()
         .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
             Ok(serde_json::json!({
-                "id": row.try_get::<i64, _>("id")?,
+                "id": id,
+                "entity_type": "risk",
+                "href": format!("/api/v1/risks/{id}"),
                 "title": row.try_get::<String, _>("title")?,
                 "status": row.try_get::<String, _>("status")?,
                 "impact": row.try_get::<i64, _>("impact")?,
@@ -1225,8 +1231,11 @@ fn risk_sqlite_rows_to_json(rows: Vec<SqliteRow>) -> anyhow::Result<Value> {
 fn control_pg_rows_to_json(rows: Vec<PgRow>) -> anyhow::Result<Value> {
     rows.into_iter()
         .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
             Ok(serde_json::json!({
-                "id": row.try_get::<i64, _>("id")?,
+                "id": id,
+                "entity_type": "control",
+                "href": "/controls/",
                 "control_number": row.try_get::<i64, _>("control_number")?,
                 "code": row.try_get::<String, _>("code")?,
                 "group_name": row.try_get::<String, _>("group_name")?,
@@ -1244,8 +1253,11 @@ fn control_pg_rows_to_json(rows: Vec<PgRow>) -> anyhow::Result<Value> {
 fn control_sqlite_rows_to_json(rows: Vec<SqliteRow>) -> anyhow::Result<Value> {
     rows.into_iter()
         .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
             Ok(serde_json::json!({
-                "id": row.try_get::<i64, _>("id")?,
+                "id": id,
+                "entity_type": "control",
+                "href": "/controls/",
                 "control_number": row.try_get::<i64, _>("control_number")?,
                 "code": row.try_get::<String, _>("code")?,
                 "group_name": row.try_get::<String, _>("group_name")?,
@@ -1263,8 +1275,11 @@ fn control_sqlite_rows_to_json(rows: Vec<SqliteRow>) -> anyhow::Result<Value> {
 fn evidence_gap_pg_rows_to_json(rows: Vec<PgRow>) -> anyhow::Result<Value> {
     rows.into_iter()
         .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
             Ok(serde_json::json!({
-                "id": row.try_get::<i64, _>("id")?,
+                "id": id,
+                "entity_type": "evidence_need",
+                "href": "/evidence/",
                 "title": row.try_get::<String, _>("title")?,
                 "status": row.try_get::<String, _>("status")?,
                 "framework": row.try_get::<String, _>("framework")?,
@@ -1282,8 +1297,11 @@ fn evidence_gap_pg_rows_to_json(rows: Vec<PgRow>) -> anyhow::Result<Value> {
 fn evidence_gap_sqlite_rows_to_json(rows: Vec<SqliteRow>) -> anyhow::Result<Value> {
     rows.into_iter()
         .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
             Ok(serde_json::json!({
-                "id": row.try_get::<i64, _>("id")?,
+                "id": id,
+                "entity_type": "evidence_need",
+                "href": "/evidence/",
                 "title": row.try_get::<String, _>("title")?,
                 "status": row.try_get::<String, _>("status")?,
                 "framework": row.try_get::<String, _>("framework")?,
@@ -1301,8 +1319,11 @@ fn evidence_gap_sqlite_rows_to_json(rows: Vec<SqliteRow>) -> anyhow::Result<Valu
 fn incident_pg_rows_to_json(rows: Vec<PgRow>) -> anyhow::Result<Value> {
     rows.into_iter()
         .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
             Ok(serde_json::json!({
-                "id": row.try_get::<i64, _>("id")?,
+                "id": id,
+                "entity_type": "incident",
+                "href": format!("/incidents/{id}"),
                 "title": row.try_get::<String, _>("title")?,
                 "severity": row.try_get::<String, _>("severity")?,
                 "status": row.try_get::<String, _>("status")?,
@@ -1322,8 +1343,11 @@ fn incident_pg_rows_to_json(rows: Vec<PgRow>) -> anyhow::Result<Value> {
 fn incident_sqlite_rows_to_json(rows: Vec<SqliteRow>) -> anyhow::Result<Value> {
     rows.into_iter()
         .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
             Ok(serde_json::json!({
-                "id": row.try_get::<i64, _>("id")?,
+                "id": id,
+                "entity_type": "incident",
+                "href": format!("/incidents/{id}"),
                 "title": row.try_get::<String, _>("title")?,
                 "severity": row.try_get::<String, _>("severity")?,
                 "status": row.try_get::<String, _>("status")?,
@@ -1343,8 +1367,11 @@ fn incident_sqlite_rows_to_json(rows: Vec<SqliteRow>) -> anyhow::Result<Value> {
 fn roadmap_pg_rows_to_json(rows: Vec<PgRow>) -> anyhow::Result<Value> {
     rows.into_iter()
         .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
             Ok(serde_json::json!({
-                "id": row.try_get::<i64, _>("id")?,
+                "id": id,
+                "entity_type": "roadmap_task",
+                "href": "/roadmap/",
                 "title": row.try_get::<String, _>("title")?,
                 "priority": row.try_get::<String, _>("priority")?,
                 "status": row.try_get::<String, _>("status")?,
@@ -1362,8 +1389,11 @@ fn roadmap_pg_rows_to_json(rows: Vec<PgRow>) -> anyhow::Result<Value> {
 fn roadmap_sqlite_rows_to_json(rows: Vec<SqliteRow>) -> anyhow::Result<Value> {
     rows.into_iter()
         .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
             Ok(serde_json::json!({
-                "id": row.try_get::<i64, _>("id")?,
+                "id": id,
+                "entity_type": "roadmap_task",
+                "href": "/roadmap/",
                 "title": row.try_get::<String, _>("title")?,
                 "priority": row.try_get::<String, _>("priority")?,
                 "status": row.try_get::<String, _>("status")?,

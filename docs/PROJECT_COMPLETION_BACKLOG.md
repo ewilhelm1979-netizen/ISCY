@@ -6,7 +6,8 @@
 - Das regulatorische Organisationsprofil ist als Tenant-Web-/API-Pfad umgesetzt und fuehrt NIS2, KRITIS, DORA, DSGVO, CRA, AI Act, TISAX und ISO-27001-Zielbild in einer zentralen Matrix zusammen.
 - Product Security verarbeitet CSAF-/CycloneDX-/SPDX-Importe, CVE-Asset-Korrelationen, automatisch erzeugte CVE-Risiken und Product-Security-Roadmap-Tasks.
 - Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence und eine gebuendelte CVE-Risiko-Review-Queue mit Filtern und Bulk-Aktionen.
-- Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck.
+- Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck; Evidence-Quality bewertet Nachweisreife, offene Issues und Evidence-Needs.
+- Management-Review-Pakete koennen als Markdown, HTML, PDF und JSON exportiert werden und enthalten Ruecklinks zu Risiko, Control, Evidence, Incident und Roadmap.
 - Der Rust-only-Betrieb liefert Statusseite, JSON-Drilldown, Prometheus-Metriken, Alertmanager-Webhook mit optionaler Incident-/Evidence-Persistenz, Grafana-Dashboard inklusive Product-Security-Panels, Compose-Beispiel und NixOS-Modul samt Beispielhost.
 
 ## Prioritaet P0 (vor breitem Produktivrollout)
@@ -39,9 +40,7 @@ Die technische Rust-Migration ist abgeschlossen. Die fachliche Weiterentwicklung
 
 Die dort priorisierten naechsten Produktbereiche sind:
 
-1. Management-Review- und Audit-Paket
-2. Evidence-Qualitaet und Nachweisreife
-3. Third-Party- und Supplier-Risk
-4. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-5. AI-Governance-Modul
-6. Agent-Flottenbetrieb und Benachrichtigungen
+1. Third-Party- und Supplier-Risk
+2. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+3. AI-Governance-Modul
+4. Agent-Flottenbetrieb und Benachrichtigungen

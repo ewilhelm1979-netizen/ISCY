@@ -1048,6 +1048,14 @@ pub struct EvidenceOverviewQuery {
     pub session_id: Option<i64>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct EvidenceQualityResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub session_id: Option<i64>,
+    pub quality: evidence_store::EvidenceQualityOverview,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WebContextQuery {
     pub tenant_id: Option<i64>,
@@ -1066,6 +1074,8 @@ pub struct WebContextQuery {
     pub control_id: Option<i64>,
     pub incident_id: Option<i64>,
     pub requirement_id: Option<i64>,
+    pub evidence_id: Option<i64>,
+    pub need_id: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -6075,6 +6085,67 @@ async fn evidence_overview(
     }
 }
 
+async fn evidence_quality(
+    Query(query): Query<EvidenceOverviewQuery>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.evidence_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Evidence-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .evidence_quality(context.tenant_id, query.session_id, 500, 100)
+        .await
+    {
+        Ok(quality) => (
+            StatusCode::OK,
+            Json(EvidenceQualityResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                session_id: query.session_id,
+                quality,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Evidence-Qualitaet konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn evidence_need_sync(
     Path(session_id): Path<i64>,
     State(state): State<AppState>,
@@ -7414,6 +7485,118 @@ async fn management_review_status_update(
                 api_version: "v1",
                 error_code: "management_review_invalid",
                 message: format!("Management-Review konnte nicht aktualisiert werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn management_review_export_markdown(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    management_review_export_format(
+        review_id,
+        state,
+        headers,
+        ManagementReviewExportFormat::Markdown,
+    )
+    .await
+}
+
+async fn management_review_export_html(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    management_review_export_format(
+        review_id,
+        state,
+        headers,
+        ManagementReviewExportFormat::Html,
+    )
+    .await
+}
+
+async fn management_review_export_pdf(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    management_review_export_format(review_id, state, headers, ManagementReviewExportFormat::Pdf)
+        .await
+}
+
+async fn management_review_export_json(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    management_review_export_format(
+        review_id,
+        state,
+        headers,
+        ManagementReviewExportFormat::Json,
+    )
+    .await
+}
+
+async fn management_review_export_format(
+    review_id: i64,
+    state: AppState,
+    headers: HeaderMap,
+    export_format: ManagementReviewExportFormat,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .management_review_detail(context.tenant_id, review_id)
+        .await
+    {
+        Ok(Some(package)) => management_review_export_download_response(&package, export_format),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "management_review_not_found",
+                message: format!("Management-Review {} wurde nicht gefunden.", review_id),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Management-Review-Export konnte nicht erstellt werden: {err}"),
             }),
         )
             .into_response(),
@@ -9772,6 +9955,11 @@ async fn web_evidence(
                   {}
                   {}
                   {}
+                  {}
+                </section>
+                <section class="panel wide">
+                  <h2>Evidence-Qualitaet</h2>
+                  <p><a href="{}">Nachweisreife und Review-Luecken oeffnen</a></p>
                 </section>
                 <section class="grid">
                   <article class="panel wide">
@@ -9805,6 +9993,8 @@ async fn web_evidence(
                 metric_card("Offen", overview.need_summary.open),
                 metric_card("Teilweise", overview.need_summary.partial),
                 metric_card("Abgedeckt", overview.need_summary.covered),
+                metric_card("Qualitaet", overview.evidence_items.len() as i64),
+                web_path_with_context("/evidence/quality/", Some(&context)),
                 if rows.is_empty() {
                     r#"<tr><td colspan="5">Keine Evidenzen vorhanden.</td></tr>"#.to_string()
                 } else {
@@ -9824,6 +10014,120 @@ async fn web_evidence(
             web_page("Evidence", "/evidence/", Some(&context), &body)
         }
         Err(err) => web_error_page("Evidence", "/evidence/", &context, &err.to_string()),
+    }
+}
+
+async fn web_evidence_quality(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Evidence Quality", "/evidence/quality/");
+    };
+    let Some(store) = state.evidence_store else {
+        return web_store_missing(
+            "Evidence Quality",
+            "/evidence/quality/",
+            &context,
+            "Evidence",
+        );
+    };
+    match store
+        .evidence_quality(context.tenant_id, query.session_id, 500, 100)
+        .await
+    {
+        Ok(quality) => {
+            let item_rows = quality
+                .items
+                .iter()
+                .filter(|item| !item.issues.is_empty() || item.quality_score < 85)
+                .map(|item| {
+                    let href = web_path_with_context(&item.href, Some(&context));
+                    format!(
+                        r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}%</td><td>{}</td></tr>"#,
+                        html_escape(&href),
+                        html_escape(&item.title),
+                        html_escape(&item.status_label),
+                        html_escape(&item.quality_level),
+                        item.quality_score,
+                        html_escape(&item.issues.join("; ")),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let need_rows = quality
+                .needs
+                .iter()
+                .filter(|need| !need.issues.is_empty())
+                .map(|need| {
+                    let href = web_path_with_context(&need.href, Some(&context));
+                    format!(
+                        r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&href),
+                        html_escape(&need.title),
+                        html_escape(&need.requirement_code),
+                        html_escape(&need.status_label),
+                        need.covered_count,
+                        html_escape(&need.issues.join("; ")),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Evidence Quality</h1><p>{} · Ø {}%</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="panel wide">
+                  <h2>Nachweisreife</h2>
+                  <table>
+                    <thead><tr><th>Evidence</th><th>Status</th><th>Level</th><th>Score</th><th>Issues</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                <section class="panel wide">
+                  <h2>Evidence Needs</h2>
+                  <table>
+                    <thead><tr><th>Need</th><th>Requirement</th><th>Status</th><th>Coverage</th><th>Issues</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                html_escape(&quality.summary.maturity_label),
+                quality.summary.average_score,
+                metric_card("Nachweise", quality.summary.total_items),
+                metric_card("Freigegeben", quality.summary.approved_items),
+                metric_card("Reviewed", quality.summary.reviewed_items),
+                metric_card("Offene Needs", quality.summary.open_needs),
+                if item_rows.is_empty() {
+                    web_empty_row(5, "Keine Evidence-Qualitaetsluecken sichtbar.")
+                } else {
+                    item_rows
+                },
+                if need_rows.is_empty() {
+                    web_empty_row(5, "Keine offenen Evidence-Needs sichtbar.")
+                } else {
+                    need_rows
+                },
+            );
+            web_page(
+                "Evidence Quality",
+                "/evidence/quality/",
+                Some(&context),
+                &body,
+            )
+        }
+        Err(err) => web_error_page(
+            "Evidence Quality",
+            "/evidence/quality/",
+            &context,
+            &err.to_string(),
+        ),
     }
 }
 
@@ -10265,6 +10569,7 @@ async fn web_management_review_detail(
     {
         Ok(Some(package)) => {
             let status_panel = management_review_status_panel(&package, &context, can_write);
+            let export_panel = management_review_export_panel(&package, &context);
             let body = format!(
                 r#"
                 <section class="hero compact"><h1>{}</h1><p>{}</p></section>
@@ -10273,6 +10578,7 @@ async fn web_management_review_detail(
                   <h2>Executive Summary</h2>
                   <p>{}</p>
                 </section>
+                {}
                 {}
                 <section class="grid">
                   {}
@@ -10290,6 +10596,7 @@ async fn web_management_review_detail(
                 management_review_metric_cards(&package.metrics_json),
                 html_escape(&package.executive_summary),
                 status_panel,
+                export_panel,
                 management_review_object_panel("Kennzahlen", &package.metrics_json),
                 management_review_array_panel(
                     "Top-Risiken",
@@ -10300,6 +10607,7 @@ async fn web_management_review_detail(
                         ("score", "Score"),
                         ("treatment_plan", "Behandlung"),
                     ],
+                    &context,
                 ),
                 management_review_array_panel(
                     "ISCY-27 Control-Gaps",
@@ -10310,6 +10618,7 @@ async fn web_management_review_detail(
                         ("status", "Status"),
                         ("evidence_status", "Evidence"),
                     ],
+                    &context,
                 ),
                 management_review_array_panel(
                     "Evidence-Luecken",
@@ -10320,6 +10629,7 @@ async fn web_management_review_detail(
                         ("status", "Status"),
                         ("covered_count", "Coverage"),
                     ],
+                    &context,
                 ),
                 management_review_array_panel(
                     "Incident-Entscheidungen",
@@ -10330,6 +10640,7 @@ async fn web_management_review_detail(
                         ("nis2_significance_status", "Erheblichkeit"),
                         ("review_state", "Review"),
                     ],
+                    &context,
                 ),
                 management_review_array_panel(
                     "Roadmap-Fokus",
@@ -10340,6 +10651,7 @@ async fn web_management_review_detail(
                         ("status", "Status"),
                         ("due_date", "Faellig"),
                     ],
+                    &context,
                 ),
                 management_review_object_panel("Product Security", &package.product_security_json),
                 management_review_object_panel("Agent Posture", &package.agent_posture_json),
@@ -10432,6 +10744,111 @@ async fn web_management_review_status_submit(
             Some(&context),
         ))
         .into_response(),
+        Ok(None) => web_error_page(
+            "Management Review",
+            "/management-reviews/",
+            &context,
+            "Management-Review wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Management Review",
+            "/management-reviews/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_management_review_export_markdown(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_management_review_export_format(
+        review_id,
+        state,
+        headers,
+        query,
+        ManagementReviewExportFormat::Markdown,
+    )
+    .await
+}
+
+async fn web_management_review_export_html(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_management_review_export_format(
+        review_id,
+        state,
+        headers,
+        query,
+        ManagementReviewExportFormat::Html,
+    )
+    .await
+}
+
+async fn web_management_review_export_pdf(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_management_review_export_format(
+        review_id,
+        state,
+        headers,
+        query,
+        ManagementReviewExportFormat::Pdf,
+    )
+    .await
+}
+
+async fn web_management_review_export_json(
+    Path(review_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    web_management_review_export_format(
+        review_id,
+        state,
+        headers,
+        query,
+        ManagementReviewExportFormat::Json,
+    )
+    .await
+}
+
+async fn web_management_review_export_format(
+    review_id: i64,
+    state: AppState,
+    headers: HeaderMap,
+    query: WebContextQuery,
+    export_format: ManagementReviewExportFormat,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Management Review", "/management-reviews/").into_response();
+    };
+    let Some(store) = state.report_store else {
+        return web_store_missing(
+            "Management Review",
+            "/management-reviews/",
+            &context,
+            "Report",
+        )
+        .into_response();
+    };
+    match store
+        .management_review_detail(context.tenant_id, review_id)
+        .await
+    {
+        Ok(Some(package)) => management_review_export_download_response(&package, export_format),
         Ok(None) => web_error_page(
             "Management Review",
             "/management-reviews/",
@@ -15007,6 +15424,14 @@ enum IncidentExportFormat {
 }
 
 #[derive(Debug, Clone, Copy)]
+enum ManagementReviewExportFormat {
+    Markdown,
+    Html,
+    Pdf,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum IncidentTimelineExportFormat {
     Csv,
     Json,
@@ -15109,6 +15534,414 @@ fn product_security_import_history_download_response(
             product_security_import_history_json(tenant_id, artifacts),
         ),
     }
+}
+
+fn management_review_export_download_response(
+    package: &report_store::ManagementReviewPackageDetail,
+    export_format: ManagementReviewExportFormat,
+) -> Response {
+    match export_format {
+        ManagementReviewExportFormat::Markdown => markdown_download_response(
+            &format!("iscy-management-review-{}.md", package.id),
+            management_review_markdown(package),
+        ),
+        ManagementReviewExportFormat::Html => html_download_response(
+            &format!("iscy-management-review-{}.html", package.id),
+            management_review_html(package),
+        ),
+        ManagementReviewExportFormat::Pdf => binary_download_response(
+            &format!("iscy-management-review-{}.pdf", package.id),
+            "application/pdf",
+            management_review_pdf(package),
+        ),
+        ManagementReviewExportFormat::Json => text_download_response(
+            &format!("iscy-management-review-{}.json", package.id),
+            "application/json; charset=utf-8",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "api_version": "v1",
+                "package": package
+            }))
+            .unwrap_or_else(|_| "{}".to_string()),
+        ),
+    }
+}
+
+fn management_review_markdown(package: &report_store::ManagementReviewPackageDetail) -> String {
+    let mut markdown = format!(
+        "# ISCY Management Review: {}\n\n| Feld | Wert |\n| --- | --- |\n| Review-ID | {} |\n| Tenant-ID | {} |\n| Zeitraum | {} bis {} |\n| Status | {} |\n| Erstellt | {} |\n| Aktualisiert | {} |\n| Freigegeben | {} |\n\n## Executive Summary\n\n{}\n\n## Entscheidung\n\n| Feld | Wert |\n| --- | --- |\n| Entscheidung | {} |\n| Naechste Massnahmen | {} |\n\n## Kennzahlen\n\n{}\n",
+        md_value(&package.title),
+        package.id,
+        package.tenant_id,
+        md_optional(package.period_start.as_deref()),
+        md_optional(package.period_end.as_deref()),
+        md_value(&package.status_label),
+        md_value(&package.created_at),
+        md_value(&package.updated_at),
+        md_optional(package.approved_at.as_deref()),
+        md_value(&package.executive_summary),
+        md_value(&package.decision_notes),
+        md_value(&package.next_actions),
+        management_review_object_markdown(&package.metrics_json),
+    );
+    markdown.push_str(&management_review_array_markdown(
+        "Top-Risiken",
+        &package.top_risks_json,
+        &[
+            ("title", "Titel"),
+            ("status", "Status"),
+            ("score", "Score"),
+            ("treatment_plan", "Behandlung"),
+        ],
+    ));
+    markdown.push_str(&management_review_array_markdown(
+        "ISCY-27 Control-Gaps",
+        &package.control_gaps_json,
+        &[
+            ("code", "Control"),
+            ("title", "Titel"),
+            ("status", "Status"),
+            ("evidence_status", "Evidence"),
+        ],
+    ));
+    markdown.push_str(&management_review_array_markdown(
+        "Evidence-Luecken",
+        &package.evidence_gaps_json,
+        &[
+            ("requirement_code", "Requirement"),
+            ("title", "Evidence"),
+            ("status", "Status"),
+            ("covered_count", "Coverage"),
+        ],
+    ));
+    markdown.push_str(&management_review_array_markdown(
+        "Incident-Entscheidungen",
+        &package.incident_decisions_json,
+        &[
+            ("title", "Incident"),
+            ("severity", "Severity"),
+            ("nis2_significance_status", "Erheblichkeit"),
+            ("review_state", "Review"),
+        ],
+    ));
+    markdown.push_str(&management_review_array_markdown(
+        "Roadmap-Fokus",
+        &package.roadmap_json,
+        &[
+            ("title", "Task"),
+            ("priority", "Prioritaet"),
+            ("status", "Status"),
+            ("due_date", "Faellig"),
+        ],
+    ));
+    markdown.push_str("\n## Product Security\n\n");
+    markdown.push_str(&management_review_object_markdown(
+        &package.product_security_json,
+    ));
+    markdown.push_str("\n## Agent Posture\n\n");
+    markdown.push_str(&management_review_object_markdown(
+        &package.agent_posture_json,
+    ));
+    markdown
+}
+
+fn management_review_html(package: &report_store::ManagementReviewPackageDetail) -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="de">
+<head><meta charset="utf-8"><title>ISCY Management Review {}</title></head>
+<body>
+<h1>{}</h1>
+<p><strong>Status:</strong> {} · <strong>Zeitraum:</strong> {} bis {}</p>
+<h2>Executive Summary</h2>
+<p>{}</p>
+<h2>Entscheidung</h2>
+<table><tbody>
+<tr><th>Entscheidung</th><td>{}</td></tr>
+<tr><th>Naechste Massnahmen</th><td>{}</td></tr>
+<tr><th>Freigabe</th><td>{}</td></tr>
+</tbody></table>
+<h2>Kennzahlen</h2>
+{}
+{}
+{}
+{}
+{}
+{}
+<h2>Product Security</h2>
+{}
+<h2>Agent Posture</h2>
+{}
+</body>
+</html>"#,
+        package.id,
+        html_escape(&package.title),
+        html_escape(&package.status_label),
+        html_escape(package.period_start.as_deref().unwrap_or("-")),
+        html_escape(package.period_end.as_deref().unwrap_or("-")),
+        html_escape(&package.executive_summary),
+        html_escape(&package.decision_notes),
+        html_escape(&package.next_actions),
+        html_escape(package.approved_at.as_deref().unwrap_or("-")),
+        management_review_object_html(&package.metrics_json),
+        management_review_array_html(
+            "Top-Risiken",
+            &package.top_risks_json,
+            &[
+                ("title", "Titel"),
+                ("status", "Status"),
+                ("score", "Score"),
+                ("treatment_plan", "Behandlung"),
+            ],
+        ),
+        management_review_array_html(
+            "ISCY-27 Control-Gaps",
+            &package.control_gaps_json,
+            &[
+                ("code", "Control"),
+                ("title", "Titel"),
+                ("status", "Status"),
+                ("evidence_status", "Evidence"),
+            ],
+        ),
+        management_review_array_html(
+            "Evidence-Luecken",
+            &package.evidence_gaps_json,
+            &[
+                ("requirement_code", "Requirement"),
+                ("title", "Evidence"),
+                ("status", "Status"),
+                ("covered_count", "Coverage"),
+            ],
+        ),
+        management_review_array_html(
+            "Incident-Entscheidungen",
+            &package.incident_decisions_json,
+            &[
+                ("title", "Incident"),
+                ("severity", "Severity"),
+                ("nis2_significance_status", "Erheblichkeit"),
+                ("review_state", "Review"),
+            ],
+        ),
+        management_review_array_html(
+            "Roadmap-Fokus",
+            &package.roadmap_json,
+            &[
+                ("title", "Task"),
+                ("priority", "Prioritaet"),
+                ("status", "Status"),
+                ("due_date", "Faellig"),
+            ],
+        ),
+        management_review_object_html(&package.product_security_json),
+        management_review_object_html(&package.agent_posture_json),
+    )
+}
+
+fn management_review_pdf(package: &report_store::ManagementReviewPackageDetail) -> Vec<u8> {
+    let mut lines = vec![
+        format!("ISCY Management Review: {}", package.title),
+        format!("Review-ID: {}", package.id),
+        format!("Tenant-ID: {}", package.tenant_id),
+        format!(
+            "Zeitraum: {} bis {}",
+            package.period_start.as_deref().unwrap_or("-"),
+            package.period_end.as_deref().unwrap_or("-")
+        ),
+        format!("Status: {}", package.status_label),
+        format!(
+            "Freigabe: {}",
+            package.approved_at.as_deref().unwrap_or("-")
+        ),
+        String::new(),
+        "Executive Summary:".to_string(),
+    ];
+    lines.extend(wrap_pdf_text(&package.executive_summary, 92));
+    lines.push(String::new());
+    lines.push("Entscheidung:".to_string());
+    lines.extend(wrap_pdf_text(&package.decision_notes, 92));
+    lines.push("Naechste Massnahmen:".to_string());
+    lines.extend(wrap_pdf_text(&package.next_actions, 92));
+    lines.push(String::new());
+    lines.push("Kennzahlen:".to_string());
+    lines.extend(wrap_pdf_text(
+        &management_review_object_plain(&package.metrics_json),
+        92,
+    ));
+    lines.push(String::new());
+    lines.push("Top-Risiken:".to_string());
+    lines.extend(management_review_array_pdf_lines(
+        &package.top_risks_json,
+        &["title", "status", "score"],
+    ));
+    lines.push("Control-Gaps:".to_string());
+    lines.extend(management_review_array_pdf_lines(
+        &package.control_gaps_json,
+        &["code", "title", "evidence_status"],
+    ));
+    lines.push("Evidence-Luecken:".to_string());
+    lines.extend(management_review_array_pdf_lines(
+        &package.evidence_gaps_json,
+        &["requirement_code", "title", "status"],
+    ));
+    lines.push("Incidents:".to_string());
+    lines.extend(management_review_array_pdf_lines(
+        &package.incident_decisions_json,
+        &["title", "severity", "nis2_significance_status"],
+    ));
+    simple_pdf_document(&lines)
+}
+
+fn management_review_object_markdown(value: &Value) -> String {
+    let Some(object) = value.as_object() else {
+        return "-\n".to_string();
+    };
+    let mut markdown = String::from("| Kennzahl | Wert |\n| --- | --- |\n");
+    for (key, value) in object {
+        markdown.push_str(&format!(
+            "| {} | {} |\n",
+            md_value(key),
+            md_value(&management_review_json_display(value))
+        ));
+    }
+    markdown
+}
+
+fn management_review_array_markdown(title: &str, value: &Value, fields: &[(&str, &str)]) -> String {
+    let mut markdown = format!("\n## {title}\n\n");
+    let header = fields
+        .iter()
+        .map(|(_, label)| md_value(label))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    markdown.push_str(&format!("| {header} | Link |\n"));
+    markdown.push_str(&format!(
+        "|{}|---|\n",
+        fields.iter().map(|_| " --- ").collect::<Vec<_>>().join("|")
+    ));
+    let Some(items) = value.as_array() else {
+        markdown.push_str("| - | - |\n");
+        return markdown;
+    };
+    if items.is_empty() {
+        markdown.push_str("| - | - |\n");
+        return markdown;
+    }
+    for item in items {
+        let cells = fields
+            .iter()
+            .map(|(key, _)| {
+                md_value(&management_review_json_display(
+                    item.get(*key).unwrap_or(&Value::Null),
+                ))
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+        let href = item.get("href").and_then(Value::as_str).unwrap_or("-");
+        markdown.push_str(&format!("| {cells} | {} |\n", md_value(href)));
+    }
+    markdown
+}
+
+fn management_review_object_html(value: &Value) -> String {
+    let rows = value
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .map(|(key, value)| {
+                    format!(
+                        "<tr><th>{}</th><td>{}</td></tr>",
+                        html_escape(key),
+                        html_escape(&management_review_json_display(value))
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    format!("<table><tbody>{rows}</tbody></table>")
+}
+
+fn management_review_array_html(title: &str, value: &Value, fields: &[(&str, &str)]) -> String {
+    let header = fields
+        .iter()
+        .map(|(_, label)| format!("<th>{}</th>", html_escape(label)))
+        .collect::<Vec<_>>()
+        .join("");
+    let rows = value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| {
+                    let href = item.get("href").and_then(Value::as_str);
+                    let cells = fields
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (key, _))| {
+                            let display = html_escape(&management_review_json_display(
+                                item.get(*key).unwrap_or(&Value::Null),
+                            ));
+                            if index == 0 {
+                                if let Some(href) = href {
+                                    return format!(
+                                        r#"<td><a href="{}">{}</a></td>"#,
+                                        html_escape(href),
+                                        display
+                                    );
+                                }
+                            }
+                            format!("<td>{display}</td>")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    format!("<tr>{cells}</tr>")
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    format!(
+        "<h2>{}</h2><table><thead><tr>{}</tr></thead><tbody>{}</tbody></table>",
+        html_escape(title),
+        header,
+        rows
+    )
+}
+
+fn management_review_object_plain(value: &Value) -> String {
+    value
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .map(|(key, value)| format!("{key}: {}", management_review_json_display(value)))
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn management_review_array_pdf_lines(value: &Value, fields: &[&str]) -> Vec<String> {
+    let Some(items) = value.as_array() else {
+        return vec!["-".to_string()];
+    };
+    if items.is_empty() {
+        return vec!["-".to_string()];
+    }
+    items
+        .iter()
+        .take(8)
+        .flat_map(|item| {
+            let line = fields
+                .iter()
+                .map(|key| management_review_json_display(item.get(*key).unwrap_or(&Value::Null)))
+                .collect::<Vec<_>>()
+                .join(" | ");
+            wrap_pdf_text(&line, 92)
+        })
+        .collect()
 }
 
 fn incident_timeline_csv(events: &[incident_store::IncidentEventSummary]) -> String {
@@ -20055,6 +20888,40 @@ fn management_review_status_options(selected: &str) -> String {
     .join("")
 }
 
+fn management_review_export_panel(
+    package: &report_store::ManagementReviewPackageDetail,
+    context: &WebContext,
+) -> String {
+    let markdown_href = web_path_with_context(
+        &format!("/management-reviews/{}/export", package.id),
+        Some(context),
+    );
+    let html_href = web_path_with_context(
+        &format!("/management-reviews/{}/export.html", package.id),
+        Some(context),
+    );
+    let pdf_href = web_path_with_context(
+        &format!("/management-reviews/{}/export.pdf", package.id),
+        Some(context),
+    );
+    let json_href = web_path_with_context(
+        &format!("/management-reviews/{}/export.json", package.id),
+        Some(context),
+    );
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Export</h2>
+          <p><a href="{}">Markdown</a> · <a href="{}">HTML</a> · <a href="{}">PDF</a> · <a href="{}">JSON</a></p>
+        </section>
+        "#,
+        html_escape(&markdown_href),
+        html_escape(&html_href),
+        html_escape(&pdf_href),
+        html_escape(&json_href),
+    )
+}
+
 fn management_review_metric_cards(metrics: &Value) -> String {
     [
         ("Risiken", "open_risks"),
@@ -20101,7 +20968,12 @@ fn management_review_object_panel(title: &str, value: &Value) -> String {
     )
 }
 
-fn management_review_array_panel(title: &str, value: &Value, fields: &[(&str, &str)]) -> String {
+fn management_review_array_panel(
+    title: &str,
+    value: &Value,
+    fields: &[(&str, &str)],
+    context: &WebContext,
+) -> String {
     let header = fields
         .iter()
         .map(|(_, label)| format!("<th>{}</th>", html_escape(label)))
@@ -20113,15 +20985,27 @@ fn management_review_array_panel(title: &str, value: &Value, fields: &[(&str, &s
             items
                 .iter()
                 .map(|item| {
+                    let href = item
+                        .get("href")
+                        .and_then(Value::as_str)
+                        .map(|href| web_path_with_context(href, Some(context)));
                     let cells = fields
                         .iter()
-                        .map(|(key, _)| {
-                            format!(
-                                "<td>{}</td>",
-                                html_escape(&management_review_json_display(
-                                    item.get(*key).unwrap_or(&Value::Null)
-                                ))
-                            )
+                        .enumerate()
+                        .map(|(index, (key, _))| {
+                            let display = html_escape(&management_review_json_display(
+                                item.get(*key).unwrap_or(&Value::Null),
+                            ));
+                            if index == 0 {
+                                if let Some(href) = href.as_ref() {
+                                    return format!(
+                                        r#"<td><a href="{}">{}</a></td>"#,
+                                        html_escape(href),
+                                        display
+                                    );
+                                }
+                            }
+                            format!("<td>{display}</td>")
                         })
                         .collect::<Vec<_>>()
                         .join("");
@@ -21570,6 +22454,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(incident_timeline_export_json),
         )
         .route("/api/v1/evidence", get(evidence_overview))
+        .route("/api/v1/evidence/quality", get(evidence_quality))
         .route("/api/v1/evidence/uploads", post(evidence_upload))
         .route(
             "/api/v1/evidence/sessions/{session_id}/needs/sync",
@@ -21607,6 +22492,22 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/reports/management-reviews/{review_id}",
             get(management_review_detail).patch(management_review_status_update),
+        )
+        .route(
+            "/api/v1/reports/management-reviews/{review_id}/export",
+            get(management_review_export_markdown),
+        )
+        .route(
+            "/api/v1/reports/management-reviews/{review_id}/export.html",
+            get(management_review_export_html),
+        )
+        .route(
+            "/api/v1/reports/management-reviews/{review_id}/export.pdf",
+            get(management_review_export_pdf),
+        )
+        .route(
+            "/api/v1/reports/management-reviews/{review_id}/export.json",
+            get(management_review_export_json),
         )
         .route("/api/v1/cves", get(cve_feed))
         .route("/api/v1/cves/{cve_id}", get(cve_detail))
@@ -21727,8 +22628,25 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/management-reviews/{review_id}/status",
             post(web_management_review_status_submit),
         )
+        .route(
+            "/management-reviews/{review_id}/export",
+            get(web_management_review_export_markdown),
+        )
+        .route(
+            "/management-reviews/{review_id}/export.html",
+            get(web_management_review_export_html),
+        )
+        .route(
+            "/management-reviews/{review_id}/export.pdf",
+            get(web_management_review_export_pdf),
+        )
+        .route(
+            "/management-reviews/{review_id}/export.json",
+            get(web_management_review_export_json),
+        )
         .route("/roadmap/", get(web_roadmap))
         .route("/evidence/", get(web_evidence).post(web_evidence_upload))
+        .route("/evidence/quality/", get(web_evidence_quality))
         .route("/assets/", get(web_assets))
         .route("/imports/", get(web_imports).post(web_imports_submit))
         .route("/imports/preview/", post(web_imports_preview_submit))
