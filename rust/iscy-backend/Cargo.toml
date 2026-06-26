@@ -2,6 +2,7 @@
 name = "iscy-backend"
 version = "0.3.20"
 edition = "2021"
+license = "AGPL-3.0-only"
 
 [dependencies]
 anyhow = "1"
