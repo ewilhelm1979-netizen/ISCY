@@ -8,6 +8,7 @@
 - Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence und eine gebuendelte CVE-Risiko-Review-Queue mit Filtern und Bulk-Aktionen.
 - Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck; Evidence-Quality bewertet Nachweisreife, offene Issues und Evidence-Needs.
 - Management-Review-Pakete koennen als Markdown, HTML, PDF und JSON exportiert werden und enthalten Ruecklinks zu Risiko, Control, Evidence, Incident und Roadmap.
+- Third-Party-/Supplier-Risk ist als Rust-Web-/API-Modul umgesetzt und bewertet Lieferanten aus Kritikalitaet, Vertrags-/Security-Annex-Bezug, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischem Scope, Review-Faelligkeit, Evidence, Produktkomponenten, offenen Schwachstellen und dokumentierten Risiken.
 - Der Rust-only-Betrieb liefert Statusseite, JSON-Drilldown, Prometheus-Metriken, Alertmanager-Webhook mit optionaler Incident-/Evidence-Persistenz, Grafana-Dashboard inklusive Product-Security-Panels, Compose-Beispiel und NixOS-Modul samt Beispielhost.
 
 ## Prioritaet P0 (vor breitem Produktivrollout)
@@ -40,7 +41,7 @@ Die technische Rust-Migration ist abgeschlossen. Die fachliche Weiterentwicklung
 
 Die dort priorisierten naechsten Produktbereiche sind:
 
-1. Third-Party- und Supplier-Risk
-2. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-3. AI-Governance-Modul
-4. Agent-Flottenbetrieb und Benachrichtigungen
+1. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+2. AI-Governance-Modul
+3. Agent-Flottenbetrieb und Benachrichtigungen
+4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity

@@ -9,7 +9,7 @@ use iscy_backend::{
     import_store::ImportStore, incident_store::IncidentStore, process_store::ProcessStore,
     product_security_store::ProductSecurityStore, report_store::ReportStore,
     requirement_store::RequirementStore, risk_store::RiskStore, roadmap_store::RoadmapStore,
-    tenant_store::TenantStore, wizard_store::WizardStore, AppState,
+    supplier_store::SupplierStore, tenant_store::TenantStore, wizard_store::WizardStore, AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use std::{
@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.17\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.18\""));
 }
 
 #[tokio::test]
@@ -559,8 +559,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0019_rust_management_review_packages"));
-    assert!(html.contains("19/19 angewendet"));
+    assert!(html.contains("0020_rust_supplier_risk_core"));
+    assert!(html.contains("20/20 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -1960,6 +1960,123 @@ async fn asset_inventory_returns_tenant_assets_from_database() {
         payload["assets"][1]["business_unit_name"],
         serde_json::Value::Null
     );
+}
+
+#[tokio::test]
+async fn supplier_risk_overview_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/suppliers")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn supplier_risk_overview_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/suppliers")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn supplier_risk_overview_scores_supplier_exposure() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_supplier_tables(&pool).await;
+    insert_supplier_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_supplier_store(Some(SupplierStore::from_sqlite_pool(pool))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/suppliers")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["summary"]["total_suppliers"], 2);
+    assert_eq!(payload["summary"]["critical_suppliers"], 1);
+    assert_eq!(payload["summary"]["missing_evidence"], 1);
+    assert_eq!(payload["summary"]["open_vulnerabilities"], 1);
+    assert_eq!(payload["suppliers"][0]["name"], "Secure Supplier");
+    assert_eq!(payload["suppliers"][0]["component_count"], 1);
+    assert_eq!(payload["suppliers"][0]["critical_vulnerability_count"], 1);
+    assert_eq!(payload["suppliers"][0]["open_risk_count"], 1);
+    assert!(payload["suppliers"][0]["regulatory_flags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == "CRA"));
+    assert!(payload["suppliers"][0]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item == "Kritische offene Produkt-/Komponenten-Schwachstellen vorhanden."));
+}
+
+#[tokio::test]
+async fn supplier_risk_detail_blocks_foreign_tenant_supplier() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_supplier_tables(&pool).await;
+    insert_supplier_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_supplier_store(Some(SupplierStore::from_sqlite_pool(pool))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/suppliers/99")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -6339,6 +6456,7 @@ async fn rust_web_surface_routes_return_ok() {
         "/roadmap/",
         "/evidence/",
         "/assets/",
+        "/suppliers/",
         "/imports/",
         "/processes/",
         "/requirements/",
@@ -7134,6 +7252,40 @@ async fn rust_web_assets_renders_inventory_from_database() {
     assert!(html.contains("Anwendung"));
     assert!(!html.contains("Foreign BU"));
     assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_suppliers_renders_risk_register_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_supplier_tables(&pool).await;
+    insert_supplier_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_supplier_store(Some(SupplierStore::from_sqlite_pool(pool))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/suppliers/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Supplier-Risk Register"));
+    assert!(html.contains("Secure Supplier"));
+    assert!(html.contains("Kritische offene Produkt-/Komponenten-Schwachstellen vorhanden."));
+    assert!(html.contains("linked_requirement=SUPPLIER%3A50"));
+    assert!(html.contains("/api/v1/suppliers/50"));
+    assert!(!html.contains("Foreign Supplier"));
 }
 
 #[tokio::test]
@@ -8250,7 +8402,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0016_rust_control_evidence_product_imports",
             "0017_rust_incident_nis2_significance",
             "0018_rust_tenant_regulatory_profile",
-            "0019_rust_management_review_packages"
+            "0019_rust_management_review_packages",
+            "0020_rust_supplier_risk_core"
         ]
     );
     assert!(
@@ -10198,6 +10351,201 @@ async fn insert_asset_fixture(pool: &SqlitePool) {
                 '2026-04-03T10:00:00Z',
                 '2026-04-03T11:00:00Z'
             )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn create_supplier_tables(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        CREATE TABLE accounts_user (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NULL,
+            username varchar(150) NOT NULL,
+            first_name varchar(150) NOT NULL,
+            last_name varchar(150) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE organizations_supplier (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL,
+            service_description TEXT NOT NULL DEFAULT '',
+            criticality varchar(32) NOT NULL DEFAULT 'MEDIUM',
+            owner_id INTEGER NULL,
+            contact_email varchar(254) NOT NULL DEFAULT '',
+            contract_reference varchar(255) NOT NULL DEFAULT '',
+            data_categories TEXT NOT NULL DEFAULT '',
+            regions TEXT NOT NULL DEFAULT '',
+            exit_dependency TEXT NOT NULL DEFAULT '',
+            regulatory_scope TEXT NOT NULL DEFAULT '',
+            review_status varchar(24) NOT NULL DEFAULT 'NOT_REVIEWED',
+            last_reviewed_at date NULL,
+            next_review_due_at date NULL,
+            evidence_required bool NOT NULL DEFAULT 1,
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_component (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            supplier_id INTEGER NULL,
+            name varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE product_security_vulnerability (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            component_id INTEGER NULL,
+            title varchar(255) NOT NULL,
+            cve varchar(50) NOT NULL DEFAULT '',
+            severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
+            status varchar(16) NOT NULL DEFAULT 'OPEN'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE risks_risk (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            title varchar(255) NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            treatment_plan TEXT NOT NULL DEFAULT '',
+            status varchar(32) NOT NULL DEFAULT 'IDENTIFIED'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE evidence_evidenceitem (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            linked_requirement varchar(128) NOT NULL DEFAULT '',
+            title varchar(255) NOT NULL DEFAULT '',
+            status varchar(32) NOT NULL DEFAULT 'DRAFT'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn insert_supplier_fixture(pool: &SqlitePool) {
+    sqlx::query(
+        r#"
+        INSERT INTO accounts_user (id, tenant_id, username, first_name, last_name)
+        VALUES (7, 42, 'ada', 'Ada', 'Lovelace')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_supplier (
+            id, tenant_id, name, service_description, criticality, owner_id,
+            contact_email, contract_reference, data_categories, regions, exit_dependency,
+            regulatory_scope, review_status, last_reviewed_at, next_review_due_at,
+            evidence_required, notes, created_at, updated_at
+        )
+        VALUES
+            (
+                50, 42, 'Secure Supplier', 'Firmware and CSAF feed supplier', 'HIGH', 7,
+                '', 'MSA-2026-01', 'Firmware provenance, vulnerability advisories', 'EU',
+                'Single-source firmware component', 'NIS2,DORA,CRA,TISAX',
+                'IN_REVIEW', '2026-01-10', '2026-01-31', 1, '',
+                '2026-01-01T10:00:00Z', '2026-01-02T10:00:00Z'
+            ),
+            (
+                51, 42, 'Audit Cloud', 'External audit evidence portal', 'LOW', 7,
+                'security@audit.example', 'AUDIT-2026', 'Audit records', 'EU',
+                'Portable export available', 'DSGVO,TISAX',
+                'APPROVED', '2026-05-01', '2026-12-31', 1, 'Reviewed',
+                '2026-01-01T10:00:00Z', '2026-05-01T10:00:00Z'
+            ),
+            (
+                99, 99, 'Foreign Supplier', 'Other tenant', 'HIGH', NULL,
+                '', '', '', '', '', '', 'NOT_REVIEWED', NULL, NULL, 1, '',
+                '2026-01-01T10:00:00Z', '2026-01-02T10:00:00Z'
+            )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_component (id, tenant_id, product_id, supplier_id, name)
+        VALUES (250, 42, 100, 50, 'Gateway Firmware')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_vulnerability (
+            id, tenant_id, product_id, component_id, title, cve, severity, status
+        )
+        VALUES (
+            300, 42, 100, 250, 'Supplier firmware RCE', 'CVE-2026-9999', 'CRITICAL', 'OPEN'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO risks_risk (id, tenant_id, title, description, treatment_plan, status)
+        VALUES (
+            400, 42, 'Supplier Delay', 'Secure Supplier patch delay can affect gateways',
+            'Escalate supplier patch SLA', 'IDENTIFIED'
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (id, tenant_id, linked_requirement, title, status)
+        VALUES (
+            500, 42, 'SUPPLIER:51', 'Audit Cloud supplier review', 'APPROVED'
+        )
         "#,
     )
     .execute(pool)

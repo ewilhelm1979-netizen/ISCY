@@ -25,7 +25,22 @@ const PROCESS_COLUMNS: &[&str] = &[
     "communicated",
     "effective",
 ];
-const SUPPLIER_COLUMNS: &[&str] = &["name", "service_description", "criticality"];
+const SUPPLIER_COLUMNS: &[&str] = &[
+    "name",
+    "service_description",
+    "criticality",
+    "contact_email",
+    "contract_reference",
+    "data_categories",
+    "regions",
+    "exit_dependency",
+    "regulatory_scope",
+    "review_status",
+    "last_reviewed_at",
+    "next_review_due_at",
+    "evidence_required",
+    "notes",
+];
 const ASSET_COLUMNS: &[&str] = &[
     "name",
     "asset_type",

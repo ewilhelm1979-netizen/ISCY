@@ -1,6 +1,6 @@
-# ISCY V23.7.21 / Rust 0.3.17
+# ISCY V23.7.22 / Rust 0.3.18
 
-ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
+ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Third-Party-/Supplier-Risk, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
 Der Runtime-Cutover nach Rust ist abgeschlossen: Die produktive Anwendung laeuft ueber den Rust-Axum-Service in `rust/iscy-backend`. Die fruehere Django/Python-Anwendung, ihre Templates, Settings, Requirements und Startpfade wurden aus dem Repository entfernt.
 
@@ -62,7 +62,7 @@ curl -fsS -X POST http://127.0.0.1:9000/api/v1/operations/alertmanager \
 
 Ohne Tenant-/User-Kontext normalisiert der Webhook Alerts nur. Mit schreibendem Tenant-Kontext legt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege an. Wiederholte firing Alerts werden dedupliziert, resolved Alerts schliessen die passende offene Fallakte automatisch. Optional kann `ISCY_ALERTMANAGER_REQUIRE_RESOLUTION_REVIEW=1` gesetzt werden; dann markiert ISCY resolved Alert-Fallakten ohne Root Cause/Lessons Learned als Review-Pflicht. Das Monitoring-Beispiel sendet fuer lokale Demo-Stacks bereits `x-iscy-tenant-id: 1`, `x-iscy-user-id: 2` und `x-iscy-roles: CONTRIBUTOR`; User `2` ist der per Demo-Seed angelegte technische Operations-User `ops-alertmanager`.
 
-Mit Tenant-Kontext liefert ISCY zusaetzlich fachliche Drilldowns fuer ISCY-27-Gaps, CVE-Review-Rueckstand, Evidence-Luecken, Migrationen, Runtime-Flags und Modulstatus:
+Mit Tenant-Kontext liefert ISCY zusaetzlich fachliche Drilldowns fuer ISCY-27-Gaps, Supplier-Risk, CVE-Review-Rueckstand, Evidence-Luecken, Migrationen, Runtime-Flags und Modulstatus:
 
 ```bash
 curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
@@ -151,6 +151,7 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 - `/management-reviews/`
 - `/roadmap/`
 - `/assets/`
+- `/suppliers/`
 - `/imports/`
 - `/processes/`
 - `/product-security/`
@@ -167,20 +168,22 @@ Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel,
 
 Evidence-Qualitaet wird unter `/evidence/quality/` und `GET /api/v1/evidence/quality` als Nachweisreife ausgewertet. ISCY berechnet fuer Evidence Items Score, Reifegrad und Issues aus Status, Review, Datei-/Artefaktreferenz, Traceability, Owner und Review-Notiz. Evidence Needs werden parallel als offen, teilweise oder abgedeckt bewertet, damit Audits nicht nur "Nachweis vorhanden", sondern "Nachweis belastbar" sehen.
 
+Suppliers werden unter `/suppliers/` als Third-Party-Risk-Register gefuehrt. ISCY bewertet Lieferanten, Cloud-, SaaS-, IKT- und Produktzulieferer aus Kritikalitaet, Vertrags-/Security-Annex-Bezug, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischem Scope, Review-Faelligkeit, Evidence, Produktkomponenten, offenen Schwachstellen und dokumentierten Risiken. Maschinenlesbar stehen `GET /api/v1/suppliers` und `GET /api/v1/suppliers/{id}` bereit. Die Webansicht zeigt Score, offene Issues und direkten Evidence-Prefill je Supplier.
+
 Management Reviews werden unter `/management-reviews/` als auditierbare Steuerungspakete gefuehrt. Schreibberechtigte Nutzer koennen aus aktuellen ISCY-Daten ein Paket fuer einen Zeitraum erzeugen: Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage und Agent-Posture werden als Snapshot gespeichert. Snapshot-Zeilen enthalten direkte Ruecklinks zu Risiko, Control, Evidence, Incident und Roadmap. Detailseiten zeigen Kennzahlen und Entscheidungstabellen, der Review-Status kann von Draft ueber In Review bis Approved/Archived gefuehrt werden; Freigaben speichern Entscheidung, naechste Massnahmen, User und Zeitpunkt. Management-Review-Pakete koennen als Markdown, HTML, PDF und JSON exportiert werden.
 
 ## Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 umgesetzt, V23.7.20 ergaenzt das Management-Review- und Audit-Paket, V23.7.21 schliesst Export, Snapshot-Ruecklinks und Evidence-Qualitaet an. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
+Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 umgesetzt, V23.7.20 ergaenzt das Management-Review- und Audit-Paket, V23.7.21 schliesst Export, Snapshot-Ruecklinks und Evidence-Qualitaet an, V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
 
-1. Third-Party- und Supplier-Risk
-2. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-3. AI-Governance-Modul
-4. Agent-Flottenbetrieb und Benachrichtigungen
+1. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+2. AI-Governance-Modul
+3. Agent-Flottenbetrieb und Benachrichtigungen
+4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity
 
 ## Zero-Trust Agent
 
-ISCY `0.3.17` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.18` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 

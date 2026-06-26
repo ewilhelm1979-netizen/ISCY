@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.21 / Rust 0.3.17)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.22 / Rust 0.3.18)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -93,6 +93,7 @@ Die wichtigsten Bereiche sind:
 - Roadmap unter `/roadmap/`
 - Evidence unter `/evidence/`
 - Assets unter `/assets/`
+- Suppliers unter `/suppliers/`
 - Imports unter `/imports/`
 - Processes unter `/processes/`
 - Requirements unter `/requirements/`
@@ -540,7 +541,32 @@ Aktueller Rust-Funktionsumfang:
 - Einzelaktionen fuer Behandeln, Akzeptieren und Mitigiert markieren
 - Evidence-Vorbefuellung und Ruecksprung zur Ausgangsseite nach Upload
 
-### 5.16 Vulnerability Intelligence
+### 5.16 Supplier Risk
+
+Zweck:
+Externe Abhaengigkeiten als eigenen Risikobereich steuern.
+
+Supplier Risk umfasst Lieferanten, Cloud-Provider, SaaS-Dienste, IKT-Drittdienstleister, Produktzulieferer, Komponentenhersteller und Audit-/Nachweisportale. ISCY fuehrt diese Objekte nicht nur als Adressliste, sondern als Third-Party-Risk-Register.
+
+Aktueller Rust-Funktionsumfang:
+
+- Webansicht `/suppliers/` mit Supplier-Risk Register, Score, Kritikalitaet, Review-Status, Evidence-Stand und Exposure
+- API `GET /api/v1/suppliers` fuer die Uebersicht und `GET /api/v1/suppliers/{id}` fuer Detaildaten
+- Datenfelder fuer Vertrags-/Security-Annex-Bezug, Security-Kontakt, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischen Scope, Review-Status, Review-Faelligkeit und Notes
+- automatische Signale aus Produktkomponenten, offenen Product-Security-Schwachstellen, Supplier-bezogenen Risiken und Supplier-Evidence
+- direkte Evidence-Vorbefuellung je Supplier mit stabilem Linked Requirement `SUPPLIER:{id}`
+- Score- und Issue-Logik fuer kritische CVEs, ueberfaellige Reviews, fehlende Evidence, fehlende Exit-Strategie, fehlenden Security-Kontakt und fehlende Risikodokumentation
+
+Fachlicher Nutzen:
+
+- DORA-IKT-Drittparteienrisiko, NIS2-Supply-Chain-Anforderungen, CRA-Komponenten-/Herstellerbezug, DSGVO-Datenverarbeitung und TISAX-Lieferkettennachweise koennen gemeinsam betrachtet werden.
+- Kritische externe Abhaengigkeiten werden sichtbar, bevor sie erst in einem Incident auffallen.
+- Evidence, Risiken, Product Security und Roadmap-Arbeit bekommen einen gemeinsamen Lieferantenbezug.
+
+Fuer Nicht-Sicherheitsleute:
+Dieser Bereich beantwortet: Von welchen externen Parteien haengt unser Betrieb ab, wie kritisch sind sie, welche Nachweise fehlen und wo entsteht daraus Risiko?
+
+### 5.17 Vulnerability Intelligence
 
 Zweck:
 Bekannte Schwachstellen fachlich und technisch bewerten.
@@ -699,7 +725,7 @@ curl -fsS -X POST http://127.0.0.1:9000/api/v1/operations/alertmanager \
 
 Ohne Tenant-/User-Kontext wird der Alert nur normalisiert. Mit schreibendem Tenant-Kontext erzeugt ISCY fuer firing Alerts automatisch eine Incident-Fallakte, verknuepfte Evidence und einen Timeline-Eintrag. Wiederholte firing Alerts werden dedupliziert, resolved Alerts schliessen die passende offene Alert-Fallakte automatisch. Die Alert-Operations-Seite `/operations/incidents/` bietet direkte Filter fuer `open`, `critical` und `resolved`. Wird `ISCY_ALERTMANAGER_REQUIRE_RESOLUTION_REVIEW=1` gesetzt, markiert ISCY automatisch geschlossene Alert-Fallakten ohne Lessons Learned als Review-Pflicht. Das Monitoring-Beispiel nutzt fuer lokale Demo-Stacks Tenant `1`, User `2` und Rolle `CONTRIBUTOR`; User `2` ist der per Demo-Seed angelegte technische Operations-User `ops-alertmanager`.
 
-Mit Tenant-Kontext enthaelt der Betriebsstatus zusaetzlich fachliche Signale zu ISCY-27, Product Security, offenen CVE-Reviews, fehlender Evidence, Migrationen, Runtime-Flags und verbundenen Rust-Modulen:
+Mit Tenant-Kontext enthaelt der Betriebsstatus zusaetzlich fachliche Signale zu ISCY-27, Supplier-Risk, Product Security, offenen CVE-Reviews, fehlender Evidence, Migrationen, Runtime-Flags und verbundenen Rust-Modulen:
 
 ```bash
 curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
@@ -923,16 +949,16 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Third-Party- und Supplier-Risk
-2. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-3. AI-Governance-Modul
-4. Agent-Flottenbetrieb und Benachrichtigungen
+1. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
+2. AI-Governance-Modul
+3. Agent-Flottenbetrieb und Benachrichtigungen
+4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity
 
-Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
+Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 
 ## 11. Git-Bezug dieses Handbuchs
 

@@ -42,6 +42,7 @@ pub mod request_context;
 pub mod requirement_store;
 pub mod risk_store;
 pub mod roadmap_store;
+pub mod supplier_store;
 pub mod tenant_store;
 pub mod wizard_store;
 
@@ -65,6 +66,7 @@ use request_context::{AuthenticatedTenantContext, RequestContext, RequiredTenant
 use requirement_store::RequirementStore;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
+use supplier_store::SupplierStore;
 use tenant_store::TenantStore;
 use wizard_store::WizardStore;
 
@@ -88,6 +90,7 @@ pub struct AppState {
     pub requirement_store: Option<RequirementStore>,
     pub risk_store: Option<RiskStore>,
     pub roadmap_store: Option<RoadmapStore>,
+    pub supplier_store: Option<SupplierStore>,
     pub tenant_store: Option<TenantStore>,
     pub wizard_store: Option<WizardStore>,
     pub evidence_media_root: Option<PathBuf>,
@@ -116,6 +119,7 @@ impl AppState {
             requirement_store: None,
             risk_store: None,
             roadmap_store: None,
+            supplier_store: None,
             tenant_store: None,
             wizard_store: None,
             evidence_media_root: None,
@@ -144,6 +148,7 @@ impl AppState {
             requirement_store: None,
             risk_store: None,
             roadmap_store: None,
+            supplier_store: None,
             tenant_store,
             wizard_store: None,
             evidence_media_root: None,
@@ -252,6 +257,11 @@ impl AppState {
 
     pub fn with_roadmap_store(mut self, roadmap_store: Option<RoadmapStore>) -> Self {
         self.roadmap_store = roadmap_store;
+        self
+    }
+
+    pub fn with_supplier_store(mut self, supplier_store: Option<SupplierStore>) -> Self {
+        self.supplier_store = supplier_store;
         self
     }
 
@@ -740,6 +750,19 @@ pub struct AssetInventoryResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
     pub assets: Vec<asset_store::InformationAssetSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierRiskOverviewResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub overview: supplier_store::SupplierRiskOverview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierRiskDetailResponse {
+    pub api_version: &'static str,
+    pub supplier: supplier_store::SupplierRiskSummaryRow,
 }
 
 #[derive(Debug, Serialize)]
@@ -3912,6 +3935,124 @@ async fn asset_inventory(State(state): State<AppState>, headers: HeaderMap) -> R
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Assetliste konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn supplier_risk_overview(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.supplier_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Supplier-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.overview(context.tenant_id, 200).await {
+        Ok(overview) => (
+            StatusCode::OK,
+            Json(SupplierRiskOverviewResponse {
+                api_version: "v1",
+                overview,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Supplier-Risk-Uebersicht konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn supplier_risk_detail(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.supplier_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Supplier-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.detail(context.tenant_id, supplier_id).await {
+        Ok(Some(supplier)) => (
+            StatusCode::OK,
+            Json(SupplierRiskDetailResponse {
+                api_version: "v1",
+                supplier,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "not_found",
+                message: "Supplier wurde fuer diesen Tenant nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("Supplier-Detail konnte nicht gelesen werden: {err}"),
             }),
         )
             .into_response(),
@@ -11017,6 +11158,101 @@ async fn web_assets(
         Err(err) => web_error_page("Assets", "/assets/", &context, &err.to_string()),
     }
 }
+
+async fn web_suppliers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Suppliers", "/suppliers/");
+    };
+    let Some(store) = state.supplier_store else {
+        return web_store_missing("Suppliers", "/suppliers/", &context, "Supplier");
+    };
+    match store.overview(context.tenant_id, 200).await {
+        Ok(overview) => {
+            let rows = overview
+                .suppliers
+                .iter()
+                .map(|supplier| {
+                    let evidence_href = evidence_prefill_href(
+                        &context,
+                        &format!("Supplier Evidence: {}", supplier.name),
+                        "Supplier Review, Vertrag, Security Annex, Zertifikat, SLA, SBOM/CSAF oder Exit-Nachweis.",
+                        &format!("SUPPLIER:{}", supplier.id),
+                        Some("SUBMITTED"),
+                        Some("/suppliers/"),
+                    );
+                    let api_href = web_path_with_context(
+                        &format!("/api/v1/suppliers/{}", supplier.id),
+                        Some(&context),
+                    );
+                    let evidence_count =
+                        format!("{} / {}", supplier.approved_evidence_count, supplier.evidence_count);
+                    let exposure = format!(
+                        "{} CVE · {} Risiken",
+                        supplier.open_vulnerability_count, supplier.open_risk_count
+                    );
+                    format!(
+                        r#"<tr><td><a href="{}">{}</a><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Evidence</a></td></tr>"#,
+                        html_escape(&api_href),
+                        html_escape(&supplier.name),
+                        html_escape(&supplier.service_description),
+                        web_badge(
+                            &supplier.criticality_label,
+                            supplier_criticality_badge_class(&supplier.criticality),
+                        ),
+                        web_badge(&supplier.score_label, score_badge_class(supplier.score)),
+                        supplier.score,
+                        html_escape(supplier.owner_display.as_deref().unwrap_or("-")),
+                        framework_badges(&supplier.regulatory_flags),
+                        supplier.review_status_label,
+                        evidence_count,
+                        exposure,
+                        supplier_issue_summary(&supplier.issues),
+                        html_escape(&evidence_href),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Suppliers</h1><p>Third-Party Risk, DORA/NIS2/CRA/TISAX-Nachweise und Exit-Abhaengigkeiten</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="panel wide">
+                  <h2>Supplier-Risk Register</h2>
+                  <table>
+                    <thead><tr><th>Supplier</th><th>Kritikalitaet</th><th>Reife</th><th>Score</th><th>Owner</th><th>Scope</th><th>Review</th><th>Evidence</th><th>Exposure</th><th>Issues</th><th>Nachweis</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                metric_card("Supplier", overview.summary.total_suppliers),
+                metric_card("Kritisch", overview.summary.critical_suppliers),
+                metric_card("High Risk", overview.summary.high_risk_suppliers),
+                metric_card("Review ueberfaellig", overview.summary.overdue_reviews),
+                metric_card("Evidence fehlt", overview.summary.missing_evidence),
+                metric_card("Ø Score", overview.summary.average_score),
+                if rows.is_empty() {
+                    web_empty_row(11, "Keine Supplier vorhanden.")
+                } else {
+                    rows
+                },
+            );
+            web_page("Suppliers", "/suppliers/", Some(&context), &body)
+        }
+        Err(err) => web_error_page("Suppliers", "/suppliers/", &context, &err.to_string()),
+    }
+}
+
 async fn web_imports(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -18580,7 +18816,7 @@ fn web_imports_page(
               <tbody>
                 <tr><td>business_units</td><td>name</td><td>CSV, XLSX, XLSM</td></tr>
                 <tr><td>processes</td><td>name, business_unit, status, scope, description</td><td>CSV, XLSX, XLSM</td></tr>
-                <tr><td>suppliers</td><td>name, service_description, criticality</td><td>CSV, XLSX, XLSM</td></tr>
+                <tr><td>suppliers</td><td>name, service_description, criticality, contact_email, contract_reference, data_categories, regions, exit_dependency, regulatory_scope, review_status, next_review_due_at, evidence_required</td><td>CSV, XLSX, XLSM</td></tr>
                 <tr><td>assets</td><td>name, business_unit, asset_type, criticality, description</td><td>CSV, XLSX, XLSM</td></tr>
               </tbody>
             </table>
@@ -18800,6 +19036,7 @@ fn web_page(
         ("/reports/", "Reports"),
         ("/management-reviews/", "Reviews"),
         ("/assets/", "Assets"),
+        ("/suppliers/", "Suppliers"),
         ("/imports/", "Imports"),
         ("/processes/", "Processes"),
         ("/product-security/", "Product Security"),
@@ -19146,6 +19383,11 @@ fn status_store_statuses(state: &AppState) -> Vec<StatusStoreStatus> {
             name: "Assets",
             configured: state.asset_store.is_some(),
             scope: "Asset- und CPE/PURL-Bezug",
+        },
+        StatusStoreStatus {
+            name: "Suppliers",
+            configured: state.supplier_store.is_some(),
+            scope: "Third-Party Risk und Lieferkettennachweise",
         },
         StatusStoreStatus {
             name: "Roadmap",
@@ -21119,6 +21361,28 @@ fn evidence_status_badge_class(status: &str) -> &'static str {
     }
 }
 
+fn supplier_criticality_badge_class(criticality: &str) -> &'static str {
+    match criticality.trim().to_ascii_uppercase().as_str() {
+        "CRITICAL" | "VERY_HIGH" => "danger",
+        "HIGH" => "high",
+        "MEDIUM" => "warn",
+        "LOW" => "info",
+        _ => "muted-badge",
+    }
+}
+
+fn supplier_issue_summary(issues: &[String]) -> String {
+    if issues.is_empty() {
+        return web_badge("Keine offenen Issues", "ok");
+    }
+    issues
+        .iter()
+        .take(3)
+        .map(|issue| format!("<p>{}</p>", html_escape(issue)))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn score_band_label(score: i64) -> &'static str {
     if score >= 80 {
         "Stabil"
@@ -22329,6 +22593,8 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(agent_device_findings).post(agent_findings),
         )
         .route("/api/v1/assets/information-assets", get(asset_inventory))
+        .route("/api/v1/suppliers", get(supplier_risk_overview))
+        .route("/api/v1/suppliers/{supplier_id}", get(supplier_risk_detail))
         .route("/api/v1/processes", get(process_register))
         .route("/api/v1/processes/{process_id}", get(process_detail))
         .route(
@@ -22648,6 +22914,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/evidence/", get(web_evidence).post(web_evidence_upload))
         .route("/evidence/quality/", get(web_evidence_quality))
         .route("/assets/", get(web_assets))
+        .route("/suppliers/", get(web_suppliers))
         .route("/imports/", get(web_imports).post(web_imports_submit))
         .route("/imports/preview/", post(web_imports_preview_submit))
         .route("/processes/", get(web_processes))

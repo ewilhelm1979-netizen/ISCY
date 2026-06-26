@@ -137,6 +137,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_MANAGEMENT_REVIEW_PACKAGE_SCHEMA,
         postgres_sql: POSTGRES_MANAGEMENT_REVIEW_PACKAGE_SCHEMA,
     },
+    Migration {
+        version: "0020_rust_supplier_risk_core",
+        sqlite_sql: SQLITE_SUPPLIER_RISK_CORE_SCHEMA,
+        postgres_sql: POSTGRES_SUPPLIER_RISK_CORE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -835,6 +840,76 @@ CREATE TABLE IF NOT EXISTS reports_managementreviewpackage (
 );
 CREATE INDEX IF NOT EXISTS idx_management_review_tenant_status
     ON reports_managementreviewpackage(tenant_id, status, created_at);
+"#;
+
+const SQLITE_SUPPLIER_RISK_CORE_SCHEMA: &str = r#"
+ALTER TABLE organizations_supplier ADD COLUMN contact_email varchar(254) NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN contract_reference varchar(255) NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN data_categories TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN regions TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN exit_dependency TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN regulatory_scope TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN review_status varchar(24) NOT NULL DEFAULT 'NOT_REVIEWED';
+ALTER TABLE organizations_supplier ADD COLUMN last_reviewed_at date NULL;
+ALTER TABLE organizations_supplier ADD COLUMN next_review_due_at date NULL;
+ALTER TABLE organizations_supplier ADD COLUMN evidence_required bool NOT NULL DEFAULT 1;
+ALTER TABLE organizations_supplier ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_supplier_tenant_criticality
+    ON organizations_supplier(tenant_id, criticality, review_status);
+CREATE INDEX IF NOT EXISTS idx_supplier_review_due
+    ON organizations_supplier(tenant_id, next_review_due_at);
+UPDATE organizations_supplier
+SET regulatory_scope = CASE
+        WHEN regulatory_scope = '' AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH') THEN 'NIS2,DORA,CRA,TISAX'
+        ELSE regulatory_scope
+    END,
+    next_review_due_at = CASE
+        WHEN next_review_due_at IS NULL AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH') THEN '2026-12-31'
+        ELSE next_review_due_at
+    END,
+    contract_reference = CASE
+        WHEN contract_reference = '' AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH') THEN 'Rahmenvertrag / Security Annex pruefen'
+        ELSE contract_reference
+    END,
+    exit_dependency = CASE
+        WHEN exit_dependency = '' AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH') THEN 'Exit-Strategie und Ersatzlieferant bewerten'
+        ELSE exit_dependency
+    END;
+"#;
+
+const POSTGRES_SUPPLIER_RISK_CORE_SCHEMA: &str = r#"
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS contact_email varchar(254) NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS contract_reference varchar(255) NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS data_categories TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS regions TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS exit_dependency TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS regulatory_scope TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS review_status varchar(24) NOT NULL DEFAULT 'NOT_REVIEWED';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS last_reviewed_at date NULL;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS next_review_due_at date NULL;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS evidence_required BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_supplier_tenant_criticality
+    ON organizations_supplier(tenant_id, criticality, review_status);
+CREATE INDEX IF NOT EXISTS idx_supplier_review_due
+    ON organizations_supplier(tenant_id, next_review_due_at);
+UPDATE organizations_supplier
+SET regulatory_scope = CASE
+        WHEN regulatory_scope = '' AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH') THEN 'NIS2,DORA,CRA,TISAX'
+        ELSE regulatory_scope
+    END,
+    next_review_due_at = CASE
+        WHEN next_review_due_at IS NULL AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH') THEN '2026-12-31'
+        ELSE next_review_due_at
+    END,
+    contract_reference = CASE
+        WHEN contract_reference = '' AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH') THEN 'Rahmenvertrag / Security Annex pruefen'
+        ELSE contract_reference
+    END,
+    exit_dependency = CASE
+        WHEN exit_dependency = '' AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH') THEN 'Exit-Strategie und Ersatzlieferant bewerten'
+        ELSE exit_dependency
+    END;
 "#;
 
 const SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"

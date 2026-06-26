@@ -6,7 +6,7 @@ Diese Roadmap beschreibt die fachlich sinnvollen naechsten Ausbaustufen nach dem
 
 ## Leitgedanke
 
-ISCY soll keine Regulierungssilos bauen. Die Plattform soll Organisationen, Assets, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, Agent-Posture und Roadmap-Arbeit so verbinden, dass neue regulatorische Anforderungen als Mapping und Entscheidungspfad aufgenommen werden koennen.
+ISCY soll keine Regulierungssilos bauen. Die Plattform soll Organisationen, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, Agent-Posture und Roadmap-Arbeit so verbinden, dass neue regulatorische Anforderungen als Mapping und Entscheidungspfad aufgenommen werden koennen.
 
 Die fachliche Ausrichtung orientiert sich an:
 
@@ -94,12 +94,23 @@ Erfolgskriterium:
 
 Ziel: Lieferanten, Cloud-, SaaS-, IKT- und Produktzulieferer sollen als eigener Risikobereich sichtbar werden.
 
-Umsetzungsidee:
+Status: In V23.7.22 als Supplier-Risk-API und Webansicht umgesetzt.
 
-- Supplier-Register mit Kritikalitaet, Services, Vertragsbezug, Ansprechpartnern, Datenarten, Regionen, Exit-Abhaengigkeit und regulatorischem Bezug.
-- Zuordnung zu Controls, Assets, Produkten, Prozessen, Risiken und Evidence.
-- DORA-IKT-Drittparteienbezug, NIS2-Supply-Chain-Bezug, CRA-Komponenten-/Herstellerbezug und TISAX-Lieferkettennachweise abbilden.
-- Supplier-Reviews, SLA-/Security-Anforderungen, Zertifikate, Attestierungen, SBOMs, CSAF-Feeds und Exit-Strategien hinterlegen.
+Umgesetzt:
+
+- Weboberflaeche unter `/suppliers/`.
+- API-Pfade `GET /api/v1/suppliers` und `GET /api/v1/suppliers/{id}`.
+- Supplier-Register mit Kritikalitaet, Services, Vertragsbezug, Security-Kontakt, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischem Scope, Review-Status, Review-Faelligkeit und Notes.
+- Automatische Signale aus Produktkomponenten, offenen Product-Security-Schwachstellen, Supplier-bezogenen Risiken und Supplier-Evidence.
+- DORA-IKT-Drittparteienbezug, NIS2-Supply-Chain-Bezug, CRA-Komponenten-/Herstellerbezug, DSGVO-Datenbezug und TISAX-Lieferkettennachweise werden als gemeinsame Flags sichtbar.
+- Score- und Issue-Logik fuer kritische CVEs, ueberfaellige Reviews, fehlende Evidence, fehlenden Security-Kontakt, fehlende Exit-Strategie und fehlende Risikodokumentation.
+- Evidence-Vorbefuellung mit stabilem Linked Requirement `SUPPLIER:{id}`.
+
+Naechste Vertiefung:
+
+- Supplier-Controls direkt mit ISCY-27 Control 15/16 und Evidence Needs verbinden.
+- Supplier-Reviews als eigener Review-Workflow mit Freigabehistorie ausbauen.
+- Vertragslaufzeiten, Unterauftragnehmer, Datenuebermittlungen und Exit-Tests granular versionieren.
 
 Erfolgskriterium:
 
@@ -154,12 +165,11 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Management-Review-/Audit-Paket als sichtbarer Governance-Nutzen.
-2. Evidence-Qualitaet, damit Reports und Audits belastbarer werden.
-3. Third-Party-/Supplier-Risk, weil externe Abhaengigkeiten fuer NIS2, DORA, ISO 27001, CRA und TISAX zentral sind.
-4. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness.
-5. AI-Governance-Modul als aktueller, aber klar abgegrenzter Erweiterungsbereich.
-6. Agent-Flottenbetrieb und Benachrichtigungen fuer Skalierung und Alltagstauglichkeit.
+1. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness.
+2. AI-Governance-Modul als aktueller, aber klar abgegrenzter Erweiterungsbereich.
+3. Agent-Flottenbetrieb und Benachrichtigungen fuer Skalierung und Alltagstauglichkeit.
+4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity.
+5. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
 
 ## Abgrenzung
 

@@ -427,6 +427,18 @@ async fn import_suppliers_postgres(
         }
         let service_description = row_text(row, &["service_description", "description"]);
         let criticality = supplier_criticality(&row_text(row, &["criticality"]));
+        let contact_email = row_text(row, &["contact_email", "security_contact", "email"]);
+        let contract_reference =
+            row_text(row, &["contract_reference", "contract", "security_annex"]);
+        let data_categories = row_text(row, &["data_categories", "data", "data_types"]);
+        let regions = row_text(row, &["regions", "region", "countries"]);
+        let exit_dependency = row_text(row, &["exit_dependency", "exit_strategy"]);
+        let regulatory_scope = row_text(row, &["regulatory_scope", "scope", "frameworks"]);
+        let review_status = supplier_review_status(&row_text(row, &["review_status"]));
+        let last_reviewed_at = nullable_row_text(row, &["last_reviewed_at", "last_review"]);
+        let next_review_due_at = nullable_row_text(row, &["next_review_due_at", "next_review"]);
+        let evidence_required = supplier_evidence_required(row);
+        let notes = row_text(row, &["notes", "note"]);
         if let Some(id) =
             find_named_postgres(pool, "organizations_supplier", tenant_id, &name).await?
         {
@@ -435,6 +447,17 @@ async fn import_suppliers_postgres(
                 UPDATE organizations_supplier
                 SET service_description = $2,
                     criticality = $3,
+                    contact_email = $4,
+                    contract_reference = $5,
+                    data_categories = $6,
+                    regions = $7,
+                    exit_dependency = $8,
+                    regulatory_scope = $9,
+                    review_status = $10,
+                    last_reviewed_at = $11,
+                    next_review_due_at = $12,
+                    evidence_required = $13,
+                    notes = $14,
                     updated_at = NOW()
                 WHERE id = $1
                 "#,
@@ -442,6 +465,17 @@ async fn import_suppliers_postgres(
             .bind(id)
             .bind(&service_description)
             .bind(criticality)
+            .bind(&contact_email)
+            .bind(&contract_reference)
+            .bind(&data_categories)
+            .bind(&regions)
+            .bind(&exit_dependency)
+            .bind(&regulatory_scope)
+            .bind(review_status)
+            .bind(&last_reviewed_at)
+            .bind(&next_review_due_at)
+            .bind(evidence_required)
+            .bind(&notes)
             .execute(pool)
             .await?;
             counter.updated += 1;
@@ -453,17 +487,39 @@ async fn import_suppliers_postgres(
                     name,
                     service_description,
                     criticality,
+                    contact_email,
+                    contract_reference,
+                    data_categories,
+                    regions,
+                    exit_dependency,
+                    regulatory_scope,
+                    review_status,
+                    last_reviewed_at,
+                    next_review_due_at,
+                    evidence_required,
+                    notes,
                     owner_id,
                     created_at,
                     updated_at
                 )
-                VALUES ($1, $2, $3, $4, NULL, NOW(), NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, NOW(), NOW())
                 "#,
             )
             .bind(tenant_id)
             .bind(&name)
             .bind(&service_description)
             .bind(criticality)
+            .bind(&contact_email)
+            .bind(&contract_reference)
+            .bind(&data_categories)
+            .bind(&regions)
+            .bind(&exit_dependency)
+            .bind(&regulatory_scope)
+            .bind(review_status)
+            .bind(&last_reviewed_at)
+            .bind(&next_review_due_at)
+            .bind(evidence_required)
+            .bind(&notes)
             .execute(pool)
             .await?;
             counter.created += 1;
@@ -486,6 +542,18 @@ async fn import_suppliers_sqlite(
         }
         let service_description = row_text(row, &["service_description", "description"]);
         let criticality = supplier_criticality(&row_text(row, &["criticality"]));
+        let contact_email = row_text(row, &["contact_email", "security_contact", "email"]);
+        let contract_reference =
+            row_text(row, &["contract_reference", "contract", "security_annex"]);
+        let data_categories = row_text(row, &["data_categories", "data", "data_types"]);
+        let regions = row_text(row, &["regions", "region", "countries"]);
+        let exit_dependency = row_text(row, &["exit_dependency", "exit_strategy"]);
+        let regulatory_scope = row_text(row, &["regulatory_scope", "scope", "frameworks"]);
+        let review_status = supplier_review_status(&row_text(row, &["review_status"]));
+        let last_reviewed_at = nullable_row_text(row, &["last_reviewed_at", "last_review"]);
+        let next_review_due_at = nullable_row_text(row, &["next_review_due_at", "next_review"]);
+        let evidence_required = supplier_evidence_required(row);
+        let notes = row_text(row, &["notes", "note"]);
         if let Some(id) =
             find_named_sqlite(pool, "organizations_supplier", tenant_id, &name).await?
         {
@@ -494,6 +562,17 @@ async fn import_suppliers_sqlite(
                 UPDATE organizations_supplier
                 SET service_description = ?2,
                     criticality = ?3,
+                    contact_email = ?4,
+                    contract_reference = ?5,
+                    data_categories = ?6,
+                    regions = ?7,
+                    exit_dependency = ?8,
+                    regulatory_scope = ?9,
+                    review_status = ?10,
+                    last_reviewed_at = ?11,
+                    next_review_due_at = ?12,
+                    evidence_required = ?13,
+                    notes = ?14,
                     updated_at = datetime('now')
                 WHERE id = ?1
                 "#,
@@ -501,6 +580,17 @@ async fn import_suppliers_sqlite(
             .bind(id)
             .bind(&service_description)
             .bind(criticality)
+            .bind(&contact_email)
+            .bind(&contract_reference)
+            .bind(&data_categories)
+            .bind(&regions)
+            .bind(&exit_dependency)
+            .bind(&regulatory_scope)
+            .bind(review_status)
+            .bind(&last_reviewed_at)
+            .bind(&next_review_due_at)
+            .bind(evidence_required)
+            .bind(&notes)
             .execute(pool)
             .await?;
             counter.updated += 1;
@@ -512,17 +602,39 @@ async fn import_suppliers_sqlite(
                     name,
                     service_description,
                     criticality,
+                    contact_email,
+                    contract_reference,
+                    data_categories,
+                    regions,
+                    exit_dependency,
+                    regulatory_scope,
+                    review_status,
+                    last_reviewed_at,
+                    next_review_due_at,
+                    evidence_required,
+                    notes,
                     owner_id,
                     created_at,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, NULL, datetime('now'), datetime('now'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, datetime('now'), datetime('now'))
                 "#,
             )
             .bind(tenant_id)
             .bind(&name)
             .bind(&service_description)
             .bind(criticality)
+            .bind(&contact_email)
+            .bind(&contract_reference)
+            .bind(&data_categories)
+            .bind(&regions)
+            .bind(&exit_dependency)
+            .bind(&regulatory_scope)
+            .bind(review_status)
+            .bind(&last_reviewed_at)
+            .bind(&next_review_due_at)
+            .bind(evidence_required)
+            .bind(&notes)
             .execute(pool)
             .await?;
             counter.created += 1;
@@ -867,6 +979,15 @@ fn row_text(row: &HashMap<String, Value>, keys: &[&str]) -> String {
         .unwrap_or_default()
 }
 
+fn nullable_row_text(row: &HashMap<String, Value>, keys: &[&str]) -> Option<String> {
+    let value = row_text(row, keys);
+    if value.trim().is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
 fn value_to_text(value: &Value) -> String {
     match value {
         Value::Null => String::new(),
@@ -902,6 +1023,25 @@ fn supplier_criticality(value: &str) -> String {
         "MEDIUM".to_string()
     } else {
         normalized
+    }
+}
+
+fn supplier_review_status(value: &str) -> &'static str {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "APPROVED" => "APPROVED",
+        "REVIEWED" => "REVIEWED",
+        "IN_REVIEW" => "IN_REVIEW",
+        "REJECTED" => "REJECTED",
+        _ => "NOT_REVIEWED",
+    }
+}
+
+fn supplier_evidence_required(row: &HashMap<String, Value>) -> bool {
+    let raw = row_text(row, &["evidence_required", "requires_evidence"]);
+    if raw.trim().is_empty() {
+        true
+    } else {
+        row_bool(row, &["evidence_required", "requires_evidence"])
     }
 }
 

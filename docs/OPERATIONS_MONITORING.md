@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.21 / Rust 0.3.17
+Stand: ISCY V23.7.22 / Rust 0.3.18
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 
@@ -31,7 +31,7 @@ Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/opera
 - `POST /api/v1/operations/alertmanager`: Alertmanager-Webhook, der Alerts validiert, normalisiert und bei schreibendem Tenant-Kontext als Incident/Evidence persistieren kann.
 - `GET /api/v1/product-security/trends`: Product-Security-Trends zu CVE-Reviews, Evidence-Luecken, Importvalidierung, Coverage und Snapshots.
 
-Mit Tenant-Kontext liefern die Operations-Endpunkte zusaetzlich fachliche Signale zu ISCY-27, Product Security, CVE-Reviews, Evidence-Luecken und Roadmap-Gaps:
+Mit Tenant-Kontext liefern die Operations-Endpunkte zusaetzlich fachliche Signale zu ISCY-27, Supplier-Risk, Product Security, CVE-Reviews, Evidence-Luecken und Roadmap-Gaps:
 
 ```bash
 curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
