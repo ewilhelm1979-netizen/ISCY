@@ -1,4 +1,4 @@
-# ISCY V23.7.22 / Rust 0.3.18
+# ISCY V23.7.23 / Rust 0.3.19
 
 ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Third-Party-/Supplier-Risk, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
@@ -162,7 +162,7 @@ Organizations werden unter `/organizations/` als regulatorisches Tenant-Profil g
 
 Incidents werden als Rust-Fallakten unter `/incidents/` gefuehrt. Detailseiten unter `/incidents/{id}` erlauben die Bearbeitung von Typ, Runbook, Status, Severity, Erheblichkeitsentscheidung, Meldezeitpunkten und Behoerdenreferenz; Statuswechsel, NIS2-Erheblichkeitsbewertungen, Review-Anforderungen, Anlage, manuelle Timeline-Notizen und incidentbezogene Evidence-Uploads werden als Timeline-/Audit-Events in der Fallakte dokumentiert. Die Detailseite fuehrt den Entscheidungsfluss sichtbar von Vorfall ueber Erheblichkeit und Bearbeitung bis zum Meldepaket. ISCY trennt bewusst den Security Incident vom erheblichen Sicherheitsvorfall: Die Status `Nicht bewertet`, `Nicht erheblich`, `Wahrscheinlich erheblich` und `Erheblich / NIS2 meldepflichtig` koennen mit Kriterien, Begruendung, Referenz und Bewertungszeitpunkt dokumentiert werden. Wird ein Fall als `Nicht erheblich` entschieden, setzt ISCY die Fallakte automatisch in den Review-Status, bis die Nicht-Meldeentscheidung fachlich freigegeben ist. Die 24h-/72h-/30-Tage-Fristen werden erst aktiv, wenn die Bewertung auf `Erheblich / NIS2 meldepflichtig` steht. Das Dashboard zeigt Incidents ohne abgeschlossene Erheblichkeitsbewertung als klickbare Kachel und oeffnet direkt die gefilterte Incident-Liste. Tenantbezogene Runbook-Vorlagen stehen ueber `/api/v1/incidents/runbook-templates` und im Incident-Formular bereit. Verknuepfte Evidence wird direkt in der Fallakte angezeigt und kann dort hochgeladen werden. Alertmanager-firing Alerts werden per Fingerprint oder Alertname dedupliziert, resolved Alerts schliessen offene Alert-Fallakten automatisch, und `/operations/incidents/` zeigt offene, kritische, Triage- und resolved Alert-Faelle mit direkten Filtern (`alert_filter=open|critical|resolved`) sowie optionaler Review-Pflicht fuer fehlende Root-Cause-/Lessons-Learned-Dokumentation. Das NIS2-Meldepaket inklusive Erheblichkeitsentscheidung, regulatorischer NIS2/DORA/DSGVO-Entscheidungsmatrix und Audit-Timeline kann als Markdown, HTML oder PDF ueber `/incidents/{id}/nis2-export`, `/incidents/{id}/nis2-export.html`, `/incidents/{id}/nis2-export.pdf` sowie die entsprechenden `/api/v1/incidents/{id}/...` Endpunkte exportiert werden. Zusaetzlich stehen DORA-Pruefpakete ueber `/incidents/{id}/dora-export(.html|.pdf)` und DSGVO-Pruefpakete ueber `/incidents/{id}/dsgvo-export(.html|.pdf)` bereit.
 
-Product Security wird unter `/product-security/` als Rust-Arbeitsbereich gefuehrt. CSAF-, CycloneDX- und SPDX-Importe werden historisiert, validiert und ueber Detailseiten mit Validierungsfehlern sowie Komponenten-Matches angezeigt. CVE-Asset-Korrelationen koennen vorgeschlagen, akzeptiert oder abgelehnt werden; akzeptierte Korrelationen erzeugen bei Bedarf Risiko- und Roadmap-Arbeit mit stabilem Evidence-Key. Das Dashboard zeigt offene CVE-Reviews und fehlende Evidence, buendelt automatisch erzeugte CVE-Risiken in einer Review-Queue, filtert nach offenen Reviews, fehlender Evidence oder fehlendem Risiko, bietet Bulk-Aktionen fuer ausgewaehlte CVE-Reviews und verlinkt Evidence-Uploads nach dem Speichern zur Ausgangsseite zurueck. Die Product-Security-Trends sind zusaetzlich ueber Prometheus-Metriken fuer Coverage, Importvalidierung, Trend-Signale und Snapshot-Verlauf verfuegbar.
+Product Security wird unter `/product-security/` als Rust-Arbeitsbereich gefuehrt. CSAF-, CycloneDX- und SPDX-Importe werden historisiert, validiert und ueber Detailseiten mit Validierungsfehlern sowie Komponenten-Matches angezeigt. CVE-Asset-Korrelationen koennen vorgeschlagen, akzeptiert oder abgelehnt werden; akzeptierte Korrelationen erzeugen bei Bedarf Risiko- und Roadmap-Arbeit mit stabilem Evidence-Key. Schwachstellen tragen zusaetzlich einen VEX-Status (`AFFECTED`, `NOT_AFFECTED`, `FIXED`, `UNDER_INVESTIGATION`) inklusive Begruendung, Fix-Version und VEX-Zeitpunkt. Das Dashboard zeigt offene CVE-Reviews und fehlende Evidence, buendelt automatisch erzeugte CVE-Risiken in einer Review-Queue, filtert nach offenen Reviews, fehlender Evidence oder fehlendem Risiko, bietet Bulk-Aktionen fuer ausgewaehlte CVE-Reviews, verlinkt Evidence-Uploads nach dem Speichern zur Ausgangsseite zurueck und berechnet CRA-Readiness je Produkt aus SBOM, VEX/CVE-Triage, PSIRT/Advisories, Threat/TARA und Lifecycle. SBOM-Importe koennen per `/product-security/sbom-diff` sowie `GET /api/v1/product-security/sbom-diff` verglichen werden. Die Product-Security-Trends sind zusaetzlich ueber Prometheus-Metriken fuer Coverage, Importvalidierung, Trend-Signale und Snapshot-Verlauf verfuegbar.
 
 Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel, Beschreibung, Linked Requirement, Status und Ruecksprungziel vor. Dadurch kann ein Nachweis direkt aus dem fachlichen Kontext erstellt werden und landet nach dem Upload wieder dort, wo die Arbeit begonnen hat.
 
@@ -174,16 +174,16 @@ Management Reviews werden unter `/management-reviews/` als auditierbare Steuerun
 
 ## Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 umgesetzt, V23.7.20 ergaenzt das Management-Review- und Audit-Paket, V23.7.21 schliesst Export, Snapshot-Ruecklinks und Evidence-Qualitaet an, V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
+Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 umgesetzt, V23.7.20 ergaenzt das Management-Review- und Audit-Paket, V23.7.21 schliesst Export, Snapshot-Ruecklinks und Evidence-Qualitaet an, V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um, V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
 
-1. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-2. AI-Governance-Modul
-3. Agent-Flottenbetrieb und Benachrichtigungen
+1. AI-Governance-Modul
+2. Agent-Flottenbetrieb und Benachrichtigungen
+3. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
 4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity
 
 ## Zero-Trust Agent
 
-ISCY `0.3.18` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.19` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 

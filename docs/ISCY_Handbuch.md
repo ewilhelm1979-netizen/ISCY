@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.22 / Rust 0.3.18)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.23 / Rust 0.3.19)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -512,10 +512,13 @@ Typische Objekte:
 - Threat Scenario
 - TARA
 - Vulnerability
+- VEX-Entscheidung
 - PSIRT Case
 - CSAF-/SBOM-Importhistorie
+- SBOM-Diff
 - CVE-Asset-Korrelation
 - CVE-Risiko-Review-Queue
+- CRA-Readiness
 
 Fachlicher Nutzen:
 
@@ -523,6 +526,9 @@ Fachlicher Nutzen:
 - Vorbereitung fuer CRA, IEC 62443, ISO/SAE 21434 oder AI-bezogene Governance
 - Sicht auf Releases, Komponenten und Verwundbarkeit
 - strukturierte Verarbeitung von CSAF-Advisories, CycloneDX/SPDX-SBOMs und CVE-Korrelationen
+- auditierbare VEX-Entscheidung je Schwachstelle mit Status, Begruendung, Fix-Version und Zeitpunkt
+- SBOM-Vergleich zwischen Importstaenden, damit neue, entfernte und geaenderte Komponenten sichtbar werden
+- CRA-Readiness je Produkt aus SBOM, VEX/CVE-Triage, PSIRT/Advisories, Threat/TARA und Lifecycle
 - automatische Ableitung von Risiko- und Roadmap-Arbeit aus akzeptierten CVE-Korrelationen
 - Nachweissteuerung ueber Evidence-Keys fuer CVE, Import, Risiko und Roadmap
 
@@ -533,6 +539,9 @@ Aktueller Rust-Funktionsumfang:
 
 - Import-Historie fuer CSAF, CycloneDX und SPDX mit CSV-/JSON-Export
 - Import-Detailseite mit Validierungsfehlern und Komponenten-Matches
+- SBOM-Diff als Webansicht und API fuer zwei SBOM-Importartefakte
+- VEX-Status fuer Schwachstellen: betroffen, nicht betroffen, behoben oder in Untersuchung
+- CRA-Readiness-Dashboard je Produkt mit transparenten Dimensionen und Gap-Hinweisen
 - CVE-Asset-Korrelation ueber CPE oder PURL mit Akzeptieren/Ablehnen-Workflow
 - automatische Erzeugung von CVE-Risiken und Product-Security-Roadmap-Tasks aus akzeptierten Korrelationen
 - Dashboard-Kennzahlen fuer offene CVE-Reviews und fehlende Evidence
@@ -625,13 +634,15 @@ Hier wird aus einer technischen Schwachstellenmeldung eine geschaeftlich nutzbar
 
 1. Produkte, Releases und Komponenten pflegen
 2. CSAF-Advisories oder SBOMs importieren und Validierungsfehler pruefen
-3. Komponenten-Matches ueber CPE oder PURL kontrollieren
-4. CVE-Asset-Korrelationen vorschlagen lassen
-5. Korrelationen fachlich akzeptieren oder ablehnen
-6. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen
-7. CVE-Risiko-Review-Queue abarbeiten
-8. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen
-9. Massnahmen ueber Roadmap oder Risiko-Behandlung steuern
+3. SBOM-Importstaende vergleichen und neue, entfernte oder geaenderte Komponenten bewerten
+4. VEX-Status fuer Schwachstellen dokumentieren: betroffen, nicht betroffen, behoben oder in Untersuchung
+5. Komponenten-Matches ueber CPE oder PURL kontrollieren
+6. CVE-Asset-Korrelationen vorschlagen lassen
+7. Korrelationen fachlich akzeptieren oder ablehnen
+8. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen
+9. CVE-Risiko-Review-Queue abarbeiten
+10. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen
+11. CRA-Readiness je Produkt pruefen und Massnahmen ueber Roadmap oder Risiko-Behandlung steuern
 
 ### 6.5 Incident- und NIS2-Meldeworkflow
 
@@ -748,7 +759,7 @@ Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:
 
 Die Statusseite `/status/` zeigt neben Health, Migrationen, Modulen, offenen Signalen und Prometheus-Scrape-Konfiguration auch einen kompakten Grafana-Query-Spickzettel sowie direkte Links zu Incident-Fallakten und `/operations/incidents/`. Das Grafana-Dashboard enthaelt zusaetzlich Panels fuer Alert-Incidents mit konfigurierbarer `iscy_base_url`, konkretem Incident-Drilldown ueber `iscy_operations_alertmanager_incident_info`, Product-Security-Coverage, CVE-Review-Trend und Importvalidierung.
 
-Der Product-Security-Bereich zeigt zusaetzlich Trenddaten fuer SBOM-/CSAF-/Threat-Coverage, offene CVE-Reviews, fehlende Evidence, Importvalidierung und Snapshot-Verlauf. Maschinenlesbar sind diese Daten ueber `GET /api/v1/product-security/trends` und ueber Prometheus-Metriken wie `iscy_product_security_trend_signal`, `iscy_product_security_coverage_percent` und `iscy_product_security_import_validation_total`.
+Der Product-Security-Bereich zeigt zusaetzlich Trenddaten fuer SBOM-/CSAF-/Threat-Coverage, offene CVE-Reviews, fehlende Evidence, Importvalidierung, Snapshot-Verlauf, CRA-Readiness und SBOM-Diffs. Maschinenlesbar sind diese Daten ueber `GET /api/v1/product-security/trends`, `GET /api/v1/product-security/products/{product_id}/cra-readiness`, `GET /api/v1/product-security/sbom-diff` und ueber Prometheus-Metriken wie `iscy_product_security_trend_signal`, `iscy_product_security_coverage_percent` und `iscy_product_security_import_validation_total`.
 
 Runbook fuer automatisch erzeugte Alert-Incidents:
 
@@ -859,6 +870,7 @@ Nutze diese Liste als schnelle Team-Abnahme in ISCY:
    - `make docker-smoke` ist ohne Fehler durchgelaufen.
 2. CRA-Readiness sichtbar  
    - Product-Security-Scope ist gepflegt.
+   - SBOM-Diff und VEX-Entscheidungen sind fuer relevante Releases dokumentiert.
    - Schwachstellen-/Patch-Prozess ist dokumentiert.
    - Incident-/Meldeweg ist dokumentiert.
 3. Cloud-Security umgesetzt  
@@ -949,13 +961,13 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-2. AI-Governance-Modul
-3. Agent-Flottenbetrieb und Benachrichtigungen
+1. AI-Governance-Modul
+2. Agent-Flottenbetrieb und Benachrichtigungen
+3. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
 4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.

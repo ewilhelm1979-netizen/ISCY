@@ -116,16 +116,19 @@ Erfolgskriterium:
 
 - ISCY kann zeigen, welche externen Abhaengigkeiten kritisch sind, welche Nachweise fehlen und welche Risiken daraus entstehen.
 
-## Prioritaet 5: Product-Security-Reife
+## Prioritaet 5: Product-Security-Reife (umgesetzt in V23.7.23)
 
 Ziel: Der bestehende Product-Security-Bereich soll von Import/Korrelation zu einem echten PSIRT-/CRA-Arbeitsplatz wachsen.
 
-Umsetzungsidee:
+Umgesetzt:
 
-- VEX-Status je Komponente und CVE aufnehmen: affected, not affected, fixed, under investigation.
-- SBOM-Diff zwischen Produktversionen anzeigen.
+- VEX-Status je Schwachstelle aufnehmen: affected, not affected, fixed, under investigation.
+- SBOM-Diff zwischen Importstaenden anzeigen.
+- CRA-Readiness je Produkt aus SBOM, VEX/CVE-Triage, PSIRT/Advisories, Threat/TARA und Lifecycle ableiten.
+
+Noch ausbaufähig:
+
 - Security-Update- und Support-Ende je Produkt/Version pflegen.
-- CRA-Readiness je Produkt aus CSAF, SBOM, CVE-Reviews, Evidence, Vulnerability Handling und Update-Prozess ableiten.
 - Supplier-Advisory- und Herstellerfeeds je Produkt verknuepfen.
 
 Erfolgskriterium:
@@ -165,9 +168,9 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness.
-2. AI-Governance-Modul als aktueller, aber klar abgegrenzter Erweiterungsbereich.
-3. Agent-Flottenbetrieb und Benachrichtigungen fuer Skalierung und Alltagstauglichkeit.
+1. AI-Governance-Modul als aktueller, aber klar abgegrenzter Erweiterungsbereich.
+2. Agent-Flottenbetrieb und Benachrichtigungen fuer Skalierung und Alltagstauglichkeit.
+3. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben.
 4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity.
 5. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
 

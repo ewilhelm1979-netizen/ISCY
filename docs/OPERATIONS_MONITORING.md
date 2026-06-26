@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.22 / Rust 0.3.18
+Stand: ISCY V23.7.23 / Rust 0.3.19
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 

@@ -22,7 +22,7 @@ BT
 T*
 () Tj
 T*
-(Version: Arbeitsstand Juni 2026 \(ISCY V23.7.22 / Rust 0.3.18\)) Tj
+(Version: Arbeitsstand Juni 2026 \(ISCY V23.7.23 / Rust 0.3.19\)) Tj
 T*
 () Tj
 T*
@@ -1111,7 +1111,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 19 0 R >>
 endobj
 19 0 obj
-<< /Length 2461 >>
+<< /Length 2386 >>
 stream
 BT
 /F1 9 Tf
@@ -1209,13 +1209,19 @@ T*
 T*
 (- Vulnerability) Tj
 T*
+(- VEX-Entscheidung) Tj
+T*
 (- PSIRT Case) Tj
 T*
 (- CSAF-/SBOM-Importhistorie) Tj
 T*
+(- SBOM-Diff) Tj
+T*
 (- CVE-Asset-Korrelation) Tj
 T*
 (- CVE-Risiko-Review-Queue) Tj
+T*
+(- CRA-Readiness) Tj
 T*
 () Tj
 T*
@@ -1231,6 +1237,18 @@ T*
 T*
 (- strukturierte Verarbeitung von CSAF-Advisories, CycloneDX/SPDX-SBOMs und CVE-Korrelationen) Tj
 T*
+(- auditierbare VEX-Entscheidung je Schwachstelle mit Status, Begruendung, Fix-Version und) Tj
+T*
+(Zeitpunkt) Tj
+T*
+(- SBOM-Vergleich zwischen Importstaenden, damit neue, entfernte und geaenderte Komponenten) Tj
+T*
+(sichtbar werden) Tj
+T*
+(- CRA-Readiness je Produkt aus SBOM, VEX/CVE-Triage, PSIRT/Advisories, Threat/TARA und) Tj
+T*
+(Lifecycle) Tj
+T*
 (- automatische Ableitung von Risiko- und Roadmap-Arbeit aus akzeptierten CVE-Korrelationen) Tj
 T*
 (- Nachweissteuerung ueber Evidence-Keys fuer CVE, Import, Risiko und Roadmap) Tj
@@ -1243,6 +1261,19 @@ T*
 T*
 (Systeme bereitstellen.) Tj
 T*
+ET
+endstream
+endobj
+20 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
+endobj
+21 0 obj
+<< /Length 3960 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Aktueller Rust-Funktionsumfang:) Tj
@@ -1253,6 +1284,12 @@ T*
 T*
 (- Import-Detailseite mit Validierungsfehlern und Komponenten-Matches) Tj
 T*
+(- SBOM-Diff als Webansicht und API fuer zwei SBOM-Importartefakte) Tj
+T*
+(- VEX-Status fuer Schwachstellen: betroffen, nicht betroffen, behoben oder in Untersuchung) Tj
+T*
+(- CRA-Readiness-Dashboard je Produkt mit transparenten Dimensionen und Gap-Hinweisen) Tj
+T*
 (- CVE-Asset-Korrelation ueber CPE oder PURL mit Akzeptieren/Ablehnen-Workflow) Tj
 T*
 (- automatische Erzeugung von CVE-Risiken und Product-Security-Roadmap-Tasks aus akzeptierten) Tj
@@ -1261,19 +1298,6 @@ T*
 T*
 (- Dashboard-Kennzahlen fuer offene CVE-Reviews und fehlende Evidence) Tj
 T*
-ET
-endstream
-endobj
-20 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
-endobj
-21 0 obj
-<< /Length 3709 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- gebuendelte CVE-Risiko-Review-Queue mit Filtern fuer offene Reviews, fehlende Evidence und) Tj
 T*
 (fehlende Risiken) Tj
@@ -1394,6 +1418,19 @@ T*
 T*
 (Fuer lokale Tests und air-gapped Prueflaeufe kann der NVD-Import statt eines HTTP-Endpunkts) Tj
 T*
+ET
+endstream
+endobj
+22 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
+endobj
+23 0 obj
+<< /Length 3441 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (auch eine lokale NVD-JSON-Datei lesen, wenn NVDAPIBASEURL als) Tj
 T*
 (file:///pfad/zur/nvd-response.json gesetzt wird.) Tj
@@ -1418,19 +1455,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-22 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
-endobj
-23 0 obj
-<< /Length 3542 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (6. Typische Arbeitsablaeufe:) Tj
 T*
 () Tj
@@ -1497,19 +1521,27 @@ T*
 T*
 (2. CSAF-Advisories oder SBOMs importieren und Validierungsfehler pruefen) Tj
 T*
-(3. Komponenten-Matches ueber CPE oder PURL kontrollieren) Tj
+(3. SBOM-Importstaende vergleichen und neue, entfernte oder geaenderte Komponenten bewerten) Tj
 T*
-(4. CVE-Asset-Korrelationen vorschlagen lassen) Tj
+(4. VEX-Status fuer Schwachstellen dokumentieren: betroffen, nicht betroffen, behoben oder in) Tj
 T*
-(5. Korrelationen fachlich akzeptieren oder ablehnen) Tj
+(Untersuchung) Tj
 T*
-(6. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen) Tj
+(5. Komponenten-Matches ueber CPE oder PURL kontrollieren) Tj
 T*
-(7. CVE-Risiko-Review-Queue abarbeiten) Tj
+(6. CVE-Asset-Korrelationen vorschlagen lassen) Tj
 T*
-(8. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen) Tj
+(7. Korrelationen fachlich akzeptieren oder ablehnen) Tj
 T*
-(9. Massnahmen ueber Roadmap oder Risiko-Behandlung steuern) Tj
+(8. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen) Tj
+T*
+(9. CVE-Risiko-Review-Queue abarbeiten) Tj
+T*
+(10. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen) Tj
+T*
+(11. CRA-Readiness je Produkt pruefen und Massnahmen ueber Roadmap oder Risiko-Behandlung) Tj
+T*
+(steuern) Tj
 T*
 () Tj
 T*
@@ -1543,6 +1575,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+24 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
+endobj
+25 0 obj
+<< /Length 5118 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (1. Nicht bewertet) Tj
 T*
 (2. Nicht erheblich) Tj
@@ -1575,19 +1620,6 @@ T*
 T*
 (1. 24h-Fruehwarnung) Tj
 T*
-ET
-endstream
-endobj
-24 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
-endobj
-25 0 obj
-<< /Length 5045 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (2. 72h-Meldung) Tj
 T*
 (3. Abschlussbericht nach 30 Tagen) Tj
@@ -1700,6 +1732,19 @@ T*
 T*
 (6. Priorisieren) Tj
 T*
+ET
+endstream
+endobj
+26 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
+endobj
+27 0 obj
+<< /Length 3770 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Kritikalitaet und Dringlichkeit anhand Impact, Privilege-Level, Ausbreitungs- und) Tj
 T*
 (Datenabflussrisiko einstufen.) Tj
@@ -1732,19 +1777,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-26 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
-endobj
-27 0 obj
-<< /Length 4058 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Einfachster lokaler Start:) Tj
 T*
 () Tj
@@ -1857,6 +1889,19 @@ T*
 T*
 (- deploy/monitoring/docker-compose.yml) Tj
 T*
+ET
+endstream
+endobj
+28 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
+endobj
+29 0 obj
+<< /Length 3402 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- deploy/monitoring/nixos/iscy-monitoring.nix) Tj
 T*
 (- deploy/monitoring/nixos/example-host.nix) Tj
@@ -1879,9 +1924,13 @@ T*
 T*
 (Der Product-Security-Bereich zeigt zusaetzlich Trenddaten fuer SBOM-/CSAF-/Threat-Coverage,) Tj
 T*
-(offene CVE-Reviews, fehlende Evidence, Importvalidierung und Snapshot-Verlauf. Maschinenlesbar) Tj
+(offene CVE-Reviews, fehlende Evidence, Importvalidierung, Snapshot-Verlauf, CRA-Readiness und) Tj
 T*
-(sind diese Daten ueber GET /api/v1/product-security/trends und ueber Prometheus-Metriken wie) Tj
+(SBOM-Diffs. Maschinenlesbar sind diese Daten ueber GET /api/v1/product-security/trends, GET) Tj
+T*
+(/api/v1/product-security/products/{productid}/cra-readiness, GET) Tj
+T*
+(/api/v1/product-security/sbom-diff und ueber Prometheus-Metriken wie) Tj
 T*
 (iscyproductsecuritytrendsignal, iscyproductsecuritycoveragepercent und) Tj
 T*
@@ -1889,19 +1938,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-28 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
-endobj
-29 0 obj
-<< /Length 2917 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Runbook fuer automatisch erzeugte Alert-Incidents:) Tj
 T*
 () Tj
@@ -2010,6 +2046,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+30 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
+endobj
+31 0 obj
+<< /Length 3403 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Merksatz: Erst validieren, dann kurz testen, dann dauerhaft starten.) Tj
 T*
 () Tj
@@ -2046,19 +2095,6 @@ T*
 T*
 (4. Nachweise \(Evidenz\) revisionsfest ablegen.) Tj
 T*
-ET
-endstream
-endobj
-30 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
-endobj
-31 0 obj
-<< /Length 3484 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (#### IoT- und Cloud-Security in kurz) Tj
@@ -2125,6 +2161,8 @@ T*
 T*
 (- Product-Security-Scope ist gepflegt.) Tj
 T*
+(- SBOM-Diff und VEX-Entscheidungen sind fuer relevante Releases dokumentiert.) Tj
+T*
 (- Schwachstellen-/Patch-Prozess ist dokumentiert.) Tj
 T*
 (- Incident-/Meldeweg ist dokumentiert.) Tj
@@ -2165,6 +2203,19 @@ T*
 T*
 (fuer ISCY ist Zero Trust als laufende technische Posture-Sicht.) Tj
 T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 3754 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Was aktuell belastbar vorhanden ist:) Tj
@@ -2203,19 +2254,6 @@ T*
 T*
 (Evidenzanforderungen ableitbar sein.) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 3950 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (3. MDM-/EDR-Integrationen vorbereiten) Tj
 T*
 (Intune, Jamf, Microsoft Defender, Wazuh, CrowdStrike oder SentinelOne sollten zunaechst als) Tj
@@ -2322,6 +2360,19 @@ T*
 T*
 (- mit einem Tenant und einem realen Scope starten) Tj
 T*
+ET
+endstream
+endobj
+34 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
+endobj
+35 0 obj
+<< /Length 2096 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- lieber wenige, aber belastbare Daten pflegen) Tj
 T*
 (- Begriffe intern vereinheitlichen) Tj
@@ -2346,9 +2397,11 @@ T*
 T*
 (und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes) Tj
 T*
-(Rust-Web-/API-Modul um. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf) Tj
+(Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness) Tj
 T*
-(Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.) Tj
+(aus. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter) Tj
+T*
+(Python-/Django-Pfade, sondern auf fachliche Produktreife.) Tj
 T*
 () Tj
 T*
@@ -2356,24 +2409,11 @@ T*
 T*
 () Tj
 T*
-(1. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness) Tj
+(1. AI-Governance-Modul) Tj
 T*
-(2. AI-Governance-Modul) Tj
+(2. Agent-Flottenbetrieb und Benachrichtigungen) Tj
 T*
-ET
-endstream
-endobj
-34 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
-endobj
-35 0 obj
-<< /Length 890 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
-(3. Agent-Flottenbetrieb und Benachrichtigungen) Tj
+(3. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben) Tj
 T*
 (4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity) Tj
 T*
@@ -2434,24 +2474,24 @@ xref
 0000017504 00000 n
 0000020406 00000 n
 0000020534 00000 n
-0000023047 00000 n
-0000023175 00000 n
-0000026936 00000 n
-0000027064 00000 n
-0000030658 00000 n
-0000030786 00000 n
-0000035883 00000 n
-0000036011 00000 n
-0000040121 00000 n
-0000040249 00000 n
-0000043218 00000 n
-0000043346 00000 n
-0000046882 00000 n
-0000047010 00000 n
-0000051012 00000 n
-0000051140 00000 n
+0000022972 00000 n
+0000023100 00000 n
+0000027112 00000 n
+0000027240 00000 n
+0000030733 00000 n
+0000030861 00000 n
+0000036031 00000 n
+0000036159 00000 n
+0000039981 00000 n
+0000040109 00000 n
+0000043563 00000 n
+0000043691 00000 n
+0000047146 00000 n
+0000047274 00000 n
+0000051080 00000 n
+0000051208 00000 n
 trailer
 << /Size 36 /Root 1 0 R >>
 startxref
-52081
+53356
 %%EOF

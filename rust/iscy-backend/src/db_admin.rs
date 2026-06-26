@@ -142,6 +142,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_SUPPLIER_RISK_CORE_SCHEMA,
         postgres_sql: POSTGRES_SUPPLIER_RISK_CORE_SCHEMA,
     },
+    Migration {
+        version: "0021_rust_product_security_vex_cra",
+        sqlite_sql: SQLITE_PRODUCT_SECURITY_VEX_CRA_SCHEMA,
+        postgres_sql: POSTGRES_PRODUCT_SECURITY_VEX_CRA_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -909,6 +914,64 @@ SET regulatory_scope = CASE
     exit_dependency = CASE
         WHEN exit_dependency = '' AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH') THEN 'Exit-Strategie und Ersatzlieferant bewerten'
         ELSE exit_dependency
+    END;
+"#;
+
+const SQLITE_PRODUCT_SECURITY_VEX_CRA_SCHEMA: &str = r#"
+ALTER TABLE product_security_vulnerability ADD COLUMN vex_status varchar(32) NOT NULL DEFAULT 'UNDER_INVESTIGATION';
+ALTER TABLE product_security_vulnerability ADD COLUMN vex_justification TEXT NOT NULL DEFAULT '';
+ALTER TABLE product_security_vulnerability ADD COLUMN fixed_version varchar(128) NOT NULL DEFAULT '';
+ALTER TABLE product_security_vulnerability ADD COLUMN vex_updated_at TEXT NULL;
+CREATE INDEX IF NOT EXISTS idx_product_security_vulnerability_vex
+    ON product_security_vulnerability(tenant_id, vex_status);
+UPDATE product_security_vulnerability
+SET
+    vex_status = CASE
+        WHEN cve = 'CVE-2026-0001' THEN 'AFFECTED'
+        WHEN status = 'FIXED' THEN 'FIXED'
+        ELSE vex_status
+    END,
+    vex_justification = CASE
+        WHEN cve = 'CVE-2026-0001' THEN 'Produktversion 1.0.3 ist laut Advisory betroffen; Fix in 1.0.4 nachweisen.'
+        WHEN status = 'FIXED' THEN 'Schwachstelle wurde bereits behoben.'
+        ELSE vex_justification
+    END,
+    fixed_version = CASE
+        WHEN cve = 'CVE-2026-0001' THEN '1.0.4'
+        ELSE fixed_version
+    END,
+    vex_updated_at = CASE
+        WHEN cve = 'CVE-2026-0001' OR status = 'FIXED' THEN CURRENT_TIMESTAMP
+        ELSE vex_updated_at
+    END;
+"#;
+
+const POSTGRES_PRODUCT_SECURITY_VEX_CRA_SCHEMA: &str = r#"
+ALTER TABLE product_security_vulnerability ADD COLUMN IF NOT EXISTS vex_status varchar(32) NOT NULL DEFAULT 'UNDER_INVESTIGATION';
+ALTER TABLE product_security_vulnerability ADD COLUMN IF NOT EXISTS vex_justification TEXT NOT NULL DEFAULT '';
+ALTER TABLE product_security_vulnerability ADD COLUMN IF NOT EXISTS fixed_version varchar(128) NOT NULL DEFAULT '';
+ALTER TABLE product_security_vulnerability ADD COLUMN IF NOT EXISTS vex_updated_at TEXT NULL;
+CREATE INDEX IF NOT EXISTS idx_product_security_vulnerability_vex
+    ON product_security_vulnerability(tenant_id, vex_status);
+UPDATE product_security_vulnerability
+SET
+    vex_status = CASE
+        WHEN cve = 'CVE-2026-0001' THEN 'AFFECTED'
+        WHEN status = 'FIXED' THEN 'FIXED'
+        ELSE vex_status
+    END,
+    vex_justification = CASE
+        WHEN cve = 'CVE-2026-0001' THEN 'Produktversion 1.0.3 ist laut Advisory betroffen; Fix in 1.0.4 nachweisen.'
+        WHEN status = 'FIXED' THEN 'Schwachstelle wurde bereits behoben.'
+        ELSE vex_justification
+    END,
+    fixed_version = CASE
+        WHEN cve = 'CVE-2026-0001' THEN '1.0.4'
+        ELSE fixed_version
+    END,
+    vex_updated_at = CASE
+        WHEN cve = 'CVE-2026-0001' OR status = 'FIXED' THEN (CURRENT_TIMESTAMP)::text
+        ELSE vex_updated_at
     END;
 "#;
 

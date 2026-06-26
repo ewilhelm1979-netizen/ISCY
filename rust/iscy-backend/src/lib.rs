@@ -807,6 +807,13 @@ pub struct ProductSecurityDetailResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ProductSecurityCraReadinessResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub readiness: product_security_store::ProductSecurityCraReadiness,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ProductSecurityRoadmapDetailResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
@@ -847,6 +854,19 @@ pub struct ProductSecurityImportDetailResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub detail: product_security_store::ProductSecurityImportArtifactDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductSecuritySbomDiffResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub diff: product_security_store::ProductSecuritySbomDiff,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProductSecuritySbomDiffQuery {
+    pub base_artifact_id: i64,
+    pub target_artifact_id: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1099,6 +1119,15 @@ pub struct WebContextQuery {
     pub requirement_id: Option<i64>,
     pub evidence_id: Option<i64>,
     pub need_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WebProductSecuritySbomDiffQuery {
+    tenant_id: Option<i64>,
+    user_id: Option<i64>,
+    user_email: Option<String>,
+    base_artifact_id: i64,
+    target_artifact_id: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -4482,6 +4511,71 @@ async fn product_security_product_roadmap(
     }
 }
 
+async fn product_security_product_cra_readiness(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.cra_readiness(context.tenant_id, product_id).await {
+        Ok(Some(readiness)) => (
+            StatusCode::OK,
+            Json(ProductSecurityCraReadinessResponse {
+                api_version: "v1",
+                readiness,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "product_not_found",
+                message: "Product-Security-Produkt wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("CRA-Readiness konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn product_security_roadmap_task_update(
     Path(task_id): Path<i64>,
     State(state): State<AppState>,
@@ -4883,6 +4977,77 @@ async fn product_security_import_detail(
                 message: format!(
                     "Product-Security-Importdetail konnte nicht gelesen werden: {err}"
                 ),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn product_security_sbom_diff(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProductSecuritySbomDiffQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.product_security_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .sbom_diff(
+            context.tenant_id,
+            query.base_artifact_id,
+            query.target_artifact_id,
+        )
+        .await
+    {
+        Ok(Some(diff)) => (
+            StatusCode::OK,
+            Json(ProductSecuritySbomDiffResponse {
+                api_version: "v1",
+                diff,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "product_security_import_not_found",
+                message: "Mindestens ein SBOM-Import wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_product_security_sbom_diff",
+                message: format!("SBOM-Diff konnte nicht erstellt werden: {err}"),
             }),
         )
             .into_response(),
@@ -13484,6 +13649,39 @@ async fn web_product_security(
             })
             .collect::<Vec<_>>()
             .join("");
+            let mut cra_readiness_items = Vec::new();
+            for product in &overview.products {
+                if let Ok(Some(readiness)) =
+                    store.cra_readiness(context.tenant_id, product.id).await
+                {
+                    cra_readiness_items.push(readiness);
+                }
+            }
+            let cra_readiness_rows = cra_readiness_items
+                .iter()
+                .map(|readiness| {
+                    let weakest = readiness
+                        .dimensions
+                        .iter()
+                        .min_by_key(|dimension| dimension.score_percent)
+                        .map(|dimension| {
+                            format!("{} {}%", dimension.label, dimension.score_percent)
+                        })
+                        .unwrap_or_else(|| "-".to_string());
+                    format!(
+                        r#"<tr><td>{}</td><td>{}%</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&readiness.product_name),
+                        readiness.readiness_percent,
+                        web_badge(
+                            &readiness.status_label,
+                            product_security_cra_status_class(&readiness.status)
+                        ),
+                        html_escape(&weakest),
+                        html_escape(&readiness.summary),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
             let product_rows = overview
                 .products
                 .iter()
@@ -13814,6 +14012,27 @@ async fn web_product_security(
                 web_path_with_context("/product-security/imports.csv", Some(&context)),
                 web_path_with_context("/product-security/imports.json", Some(&context)),
             );
+            let sbom_artifacts = overview
+                .import_artifacts
+                .iter()
+                .filter(|artifact| artifact.artifact_type == "SBOM")
+                .collect::<Vec<_>>();
+            let sbom_diff_action = if sbom_artifacts.len() >= 2 {
+                let target = sbom_artifacts[0];
+                let base = sbom_artifacts[1];
+                format!(
+                    r#"<div class="inline-actions"><a href="{}">Letzte zwei SBOMs vergleichen</a></div>"#,
+                    web_path_with_context(
+                        &format!(
+                            "/product-security/sbom-diff?base_artifact_id={}&target_artifact_id={}",
+                            base.id, target.id
+                        ),
+                        Some(&context),
+                    )
+                )
+            } else {
+                String::new()
+            };
             let import_panel = if can_write {
                 format!(
                     r#"<article class="panel wide">
@@ -14040,6 +14259,13 @@ async fn web_product_security(
                     </table>
                   </article>
                   <article class="panel wide">
+                    <h2>CRA-Readiness</h2>
+                    <table>
+                      <thead><tr><th>Produkt</th><th>Readiness</th><th>Status</th><th>Schwaechstes Signal</th><th>Summary</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  <article class="panel wide">
                     <h2>Produkte</h2>
                     <table>
                       <thead><tr><th>Produkt</th><th>Familie</th><th>Code</th><th>Beschreibung</th><th>Scope</th><th>Releases</th><th>SBOM</th><th>CSAF</th><th>CVEs</th><th>Schwachstellen</th><th>PSIRT</th></tr></thead>
@@ -14056,6 +14282,7 @@ async fn web_product_security(
                   {}
                   <article class="panel wide">
                     <h2>Import-Historie</h2>
+                    {}
                     {}
                     <table>
                       <thead><tr><th>Typ</th><th>Datei</th><th>Produkt</th><th>Format</th><th>Status</th><th>Validierung</th><th>SBOM</th><th>CVEs</th><th>Zeit</th></tr></thead>
@@ -14103,6 +14330,11 @@ async fn web_product_security(
                 } else {
                     matrix_rows
                 },
+                if cra_readiness_rows.is_empty() {
+                    web_empty_row(5, "Noch keine CRA-Readiness-Daten vorhanden.")
+                } else {
+                    cra_readiness_rows
+                },
                 if product_rows.is_empty() {
                     web_empty_row(11, "Keine Produkte vorhanden.")
                 } else {
@@ -14115,6 +14347,7 @@ async fn web_product_security(
                 },
                 import_panel,
                 import_export_actions,
+                sbom_diff_action,
                 if import_rows.is_empty() {
                     web_empty_row(9, "Noch keine CSAF-/SBOM-Importe vorhanden.")
                 } else {
@@ -14348,6 +14581,109 @@ async fn web_product_security_import_detail(
             "/product-security/",
             &context,
             "Product-Security-Import wurde fuer diesen Tenant nicht gefunden.",
+        ),
+        Err(err) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        ),
+    }
+}
+
+async fn web_product_security_sbom_diff(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebProductSecuritySbomDiffQuery>,
+) -> Html<String> {
+    let context_query = WebContextQuery {
+        tenant_id: query.tenant_id,
+        user_id: query.user_id,
+        user_email: query.user_email.clone(),
+        ..WebContextQuery::default()
+    };
+    let Some(context) = web_context_from_request(&context_query, &headers, &state).await else {
+        return web_missing_context("Product Security", "/product-security/");
+    };
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Product Security",
+        );
+    };
+    match store
+        .sbom_diff(
+            context.tenant_id,
+            query.base_artifact_id,
+            query.target_artifact_id,
+        )
+        .await
+    {
+        Ok(Some(diff)) => {
+            let component_rows = diff
+                .components
+                .iter()
+                .map(|component| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&component.name),
+                        web_badge(&component.status_label, product_security_sbom_diff_status_class(&component.status)),
+                        html_escape(&component.identity_key),
+                        html_escape(component.base_version.as_deref().unwrap_or("-")),
+                        html_escape(component.target_version.as_deref().unwrap_or("-")),
+                        html_escape(component.target_match_status.as_deref().unwrap_or("-")),
+                        html_escape(&component.detail),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>SBOM-Diff</h1><p>{} -> {}</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <h2>Vergleich</h2>
+                    <p>Basis: #{} {} · Ziel: #{} {}</p>
+                    <table>
+                      <thead><tr><th>Komponente</th><th>Status</th><th>Identitaet</th><th>Basis-Version</th><th>Ziel-Version</th><th>Match</th><th>Detail</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                </section>
+                "#,
+                html_escape(&diff.base_artifact.file_name),
+                html_escape(&diff.target_artifact.file_name),
+                metric_card("Neu", diff.summary.added),
+                metric_card("Entfernt", diff.summary.removed),
+                metric_card("Geaendert", diff.summary.changed),
+                metric_card("Unveraendert", diff.summary.unchanged),
+                metric_card("Verglichen", diff.summary.total_compared),
+                diff.base_artifact.id,
+                html_escape(&diff.base_artifact.file_name),
+                diff.target_artifact.id,
+                html_escape(&diff.target_artifact.file_name),
+                if component_rows.is_empty() {
+                    web_empty_row(7, "Keine Komponenten im SBOM-Diff vorhanden.")
+                } else {
+                    component_rows
+                },
+            );
+            web_page("SBOM-Diff", "/product-security/", Some(&context), &body)
+        }
+        Ok(None) => web_error_page(
+            "Product Security",
+            "/product-security/",
+            &context,
+            "Mindestens ein SBOM-Import wurde fuer diesen Tenant nicht gefunden.",
         ),
         Err(err) => web_error_page(
             "Product Security",
@@ -14906,6 +15242,25 @@ fn product_security_trend_status_class(status: &str) -> &'static str {
         "ok" => "ok",
         "critical" => "danger",
         "warn" | "warning" => "warn",
+        _ => "info",
+    }
+}
+
+fn product_security_cra_status_class(status: &str) -> &'static str {
+    match status {
+        "READY" => "ok",
+        "PARTIAL" => "warn",
+        "GAP" => "danger",
+        _ => "info",
+    }
+}
+
+fn product_security_sbom_diff_status_class(status: &str) -> &'static str {
+    match status {
+        "ADDED" => "ok",
+        "REMOVED" => "danger",
+        "CHANGED" => "warn",
+        "UNCHANGED" => "muted-badge",
         _ => "info",
     }
 }
@@ -22610,6 +22965,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(product_security_product_detail),
         )
         .route(
+            "/api/v1/product-security/products/{product_id}/cra-readiness",
+            get(product_security_product_cra_readiness),
+        )
+        .route(
             "/api/v1/product-security/products/{product_id}/roadmap",
             get(product_security_product_roadmap),
         )
@@ -22640,6 +22999,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/product-security/imports/{artifact_id}",
             get(product_security_import_detail),
+        )
+        .route(
+            "/api/v1/product-security/sbom-diff",
+            get(product_security_sbom_diff),
         )
         .route(
             "/api/v1/product-security/cve-correlations",
@@ -22955,6 +23318,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/product-security/imports/{artifact_id}",
             get(web_product_security_import_detail),
+        )
+        .route(
+            "/product-security/sbom-diff",
+            get(web_product_security_sbom_diff),
         )
         .route(
             "/product-security/cve-correlations",

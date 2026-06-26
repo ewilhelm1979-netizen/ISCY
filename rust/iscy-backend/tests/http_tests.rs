@@ -146,7 +146,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.18\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.19\""));
 }
 
 #[tokio::test]
@@ -559,8 +559,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0020_rust_supplier_risk_core"));
-    assert!(html.contains("20/20 angewendet"));
+    assert!(html.contains("0021_rust_product_security_vex_cra"));
+    assert!(html.contains("21/21 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -2375,6 +2375,7 @@ async fn product_security_detail_returns_product_tree_from_database() {
         )));
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/product-security/products/100")
@@ -2426,6 +2427,12 @@ async fn product_security_detail_returns_product_tree_from_database() {
         "cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*"
     );
     assert_eq!(payload["vulnerabilities"][0]["advisory_ids"][0], "ADV-1");
+    assert_eq!(payload["vulnerabilities"][0]["vex_status"], "AFFECTED");
+    assert_eq!(
+        payload["vulnerabilities"][0]["vex_justification"],
+        "Affected in 1.0.3; fixed in 1.0.4."
+    );
+    assert_eq!(payload["vulnerabilities"][0]["fixed_version"], "1.0.4");
     assert_eq!(payload["ai_systems"][0]["name"], "Gateway Assistant");
     assert_eq!(payload["psirt_cases"][0]["case_id"], "PSIRT-1");
     assert_eq!(payload["advisories"][0]["advisory_id"], "ADV-1");
@@ -2445,6 +2452,30 @@ async fn product_security_detail_returns_product_tree_from_database() {
         payload["roadmap_tasks"][1]["related_vulnerability_title"],
         "Critical firmware exposure"
     );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/products/100/cra-readiness")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["product_id"], 100);
+    assert_eq!(payload["product_name"], "Sensor Gateway");
+    assert!(payload["readiness_percent"].as_i64().unwrap() >= 70);
+    assert!(payload["dimensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|dimension| dimension["key"] == "vex"));
 }
 
 #[tokio::test]
@@ -2658,7 +2689,10 @@ async fn product_security_vulnerability_update_updates_tenant_vulnerability() {
                         "severity": "MEDIUM",
                         "status": "MITIGATED",
                         "remediation_due": "2026-06-15",
-                        "summary": "Mitigated via firmware patch"
+                        "summary": "Mitigated via firmware patch",
+                        "vex_status": "FIXED",
+                        "vex_justification": "Firmware patch 1.0.4 removes the affected updater path.",
+                        "fixed_version": "1.0.4"
                     }"#,
                 ))
                 .unwrap(),
@@ -2681,10 +2715,18 @@ async fn product_security_vulnerability_update_updates_tenant_vulnerability() {
         payload["vulnerability"]["summary"],
         "Mitigated via firmware patch"
     );
+    assert_eq!(payload["vulnerability"]["vex_status"], "FIXED");
+    assert_eq!(payload["vulnerability"]["vex_status_label"], "Behoben");
+    assert_eq!(
+        payload["vulnerability"]["vex_justification"],
+        "Firmware patch 1.0.4 removes the affected updater path."
+    );
+    assert_eq!(payload["vulnerability"]["fixed_version"], "1.0.4");
+    assert!(payload["vulnerability"]["vex_updated_at"].is_string());
 
     let row = sqlx::query(
         r#"
-        SELECT severity, status, remediation_due, summary
+        SELECT severity, status, remediation_due, summary, vex_status, vex_justification, fixed_version, vex_updated_at
         FROM product_security_vulnerability
         WHERE id = 500
         "#,
@@ -2702,6 +2744,13 @@ async fn product_security_vulnerability_update_updates_tenant_vulnerability() {
         row.get::<String, _>("summary"),
         "Mitigated via firmware patch"
     );
+    assert_eq!(row.get::<String, _>("vex_status"), "FIXED");
+    assert_eq!(
+        row.get::<String, _>("vex_justification"),
+        "Firmware patch 1.0.4 removes the affected updater path."
+    );
+    assert_eq!(row.get::<String, _>("fixed_version"), "1.0.4");
+    assert!(row.get::<Option<String>, _>("vex_updated_at").is_some());
 }
 
 #[tokio::test]
@@ -2907,6 +2956,99 @@ async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations(
     assert!(html.contains("Komponenten-Matches"));
     assert!(html.contains("Gateway Firmware"));
     assert!(html.contains("Evidence verknuepfen"));
+
+    let sbom_payload_next = serde_json::json!({
+        "product_id": 100,
+        "file_name": "sensor-gateway-1.0.4.cdx.json",
+        "document": {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "serialNumber": "urn:uuid:223e4567-e89b-12d3-a456-426614174000",
+            "components": [
+                {
+                    "type": "firmware",
+                    "name": "Gateway Firmware",
+                    "version": "1.0.4",
+                    "purl": "pkg:generic/iscy/sensor-gateway-firmware@1.0.4",
+                    "cpe": "cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.4:*:*:*:*:*:*:*",
+                    "supplier": {"name": "Secure Supplier"}
+                },
+                {
+                    "type": "application",
+                    "name": "Gateway Web UI",
+                    "version": "2.0.0",
+                    "purl": "pkg:npm/iscy/gateway-web-ui@2.0.0",
+                    "supplier": {"name": "Secure Supplier"}
+                }
+            ]
+        }
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/import/sbom")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(sbom_payload_next.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let next_sbom_artifact_id = payload["artifact_id"].as_i64().unwrap();
+    assert_eq!(payload["component_count"], 2);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/product-security/sbom-diff?base_artifact_id={sbom_artifact_id}&target_artifact_id={next_sbom_artifact_id}"
+                ))
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["summary"]["changed"], 1);
+    assert_eq!(payload["summary"]["added"], 1);
+    assert!(payload["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(
+            |component| component["status"] == "CHANGED" && component["name"] == "Gateway Firmware"
+        ));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/product-security/sbom-diff?base_artifact_id={sbom_artifact_id}&target_artifact_id={next_sbom_artifact_id}&tenant_id=42&user_id=1"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("SBOM-Diff"));
+    assert!(html.contains("Gateway Firmware"));
+    assert!(html.contains("Geaendert"));
 
     let response = app
         .clone()
@@ -8403,7 +8545,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0017_rust_incident_nis2_significance",
             "0018_rust_tenant_regulatory_profile",
             "0019_rust_management_review_packages",
-            "0020_rust_supplier_risk_core"
+            "0020_rust_supplier_risk_core",
+            "0021_rust_product_security_vex_cra"
         ]
     );
     assert!(
@@ -10425,7 +10568,11 @@ async fn create_supplier_tables(pool: &SqlitePool) {
             title varchar(255) NOT NULL,
             cve varchar(50) NOT NULL DEFAULT '',
             severity varchar(16) NOT NULL DEFAULT 'MEDIUM',
-            status varchar(16) NOT NULL DEFAULT 'OPEN'
+            status varchar(16) NOT NULL DEFAULT 'OPEN',
+            vex_status varchar(32) NOT NULL DEFAULT 'UNDER_INVESTIGATION',
+            vex_justification TEXT NOT NULL DEFAULT '',
+            fixed_version varchar(128) NOT NULL DEFAULT '',
+            vex_updated_at TEXT NULL
         )
         "#,
     )
@@ -10799,6 +10946,10 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             summary TEXT NOT NULL,
             cpe23_uri varchar(255) NOT NULL DEFAULT '',
             advisory_ids_json TEXT NOT NULL DEFAULT '[]',
+            vex_status varchar(32) NOT NULL DEFAULT 'UNDER_INVESTIGATION',
+            vex_justification TEXT NOT NULL DEFAULT '',
+            fixed_version varchar(128) NOT NULL DEFAULT '',
+            vex_updated_at TEXT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -11357,6 +11508,10 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
             summary,
             cpe23_uri,
             advisory_ids_json,
+            vex_status,
+            vex_justification,
+            fixed_version,
+            vex_updated_at,
             created_at,
             updated_at
         )
@@ -11375,6 +11530,10 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
                 'Critical issue in firmware updater',
                 'cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*',
                 '["ADV-1"]',
+                'AFFECTED',
+                'Affected in 1.0.3; fixed in 1.0.4.',
+                '1.0.4',
+                '2026-04-19T09:00:00Z',
                 '2026-04-18T10:00:00Z',
                 '2026-04-18T11:00:00Z'
             ),
@@ -11392,6 +11551,10 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
                 'Dependency needs update',
                 '',
                 '[]',
+                'UNDER_INVESTIGATION',
+                '',
+                '',
+                NULL,
                 '2026-04-18T10:00:00Z',
                 '2026-04-18T11:00:00Z'
             ),
@@ -11409,6 +11572,10 @@ async fn insert_product_security_fixture(pool: &SqlitePool) {
                 'Already fixed',
                 '',
                 '[]',
+                'FIXED',
+                'Already fixed before current product release.',
+                '1.0.1',
+                '2026-04-18T12:00:00Z',
                 '2026-04-18T10:00:00Z',
                 '2026-04-18T11:00:00Z'
             )

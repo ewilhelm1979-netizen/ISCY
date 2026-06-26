@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{
@@ -205,6 +206,11 @@ pub struct VulnerabilitySummary {
     pub summary: String,
     pub cpe23_uri: String,
     pub advisory_ids: Vec<String>,
+    pub vex_status: String,
+    pub vex_status_label: String,
+    pub vex_justification: String,
+    pub fixed_version: String,
+    pub vex_updated_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -354,6 +360,9 @@ pub struct ProductSecurityVulnerabilityUpdateRequest {
     pub status: Option<String>,
     pub remediation_due: Option<String>,
     pub summary: Option<String>,
+    pub vex_status: Option<String>,
+    pub vex_justification: Option<String>,
+    pub fixed_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -425,6 +434,66 @@ pub struct ProductSecurityImportComponentSummary {
 pub struct ProductSecurityImportArtifactDetail {
     pub artifact: ProductSecurityImportArtifactSummary,
     pub components: Vec<ProductSecurityImportComponentSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecuritySbomDiff {
+    pub tenant_id: i64,
+    pub base_artifact: ProductSecurityImportArtifactSummary,
+    pub target_artifact: ProductSecurityImportArtifactSummary,
+    pub summary: ProductSecuritySbomDiffSummary,
+    pub components: Vec<ProductSecuritySbomDiffComponent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecuritySbomDiffSummary {
+    pub added: i64,
+    pub removed: i64,
+    pub changed: i64,
+    pub unchanged: i64,
+    pub total_compared: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecuritySbomDiffComponent {
+    pub status: String,
+    pub status_label: String,
+    pub identity_key: String,
+    pub name: String,
+    pub base_version: Option<String>,
+    pub target_version: Option<String>,
+    pub base_package_url: Option<String>,
+    pub target_package_url: Option<String>,
+    pub base_cpe23_uri: Option<String>,
+    pub target_cpe23_uri: Option<String>,
+    pub base_match_status: Option<String>,
+    pub target_match_status: Option<String>,
+    pub base_component_id: Option<i64>,
+    pub target_component_id: Option<i64>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityCraReadiness {
+    pub tenant_id: i64,
+    pub product_id: i64,
+    pub product_name: String,
+    pub readiness_percent: i64,
+    pub status: String,
+    pub status_label: String,
+    pub summary: String,
+    pub gaps: Vec<String>,
+    pub dimensions: Vec<ProductSecurityCraReadinessDimension>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProductSecurityCraReadinessDimension {
+    pub key: String,
+    pub label: String,
+    pub score_percent: i64,
+    pub status: String,
+    pub status_label: String,
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -587,6 +656,10 @@ struct ProductSecurityVulnerabilityCurrent {
     status: String,
     remediation_due: Option<String>,
     summary: String,
+    vex_status: String,
+    vex_justification: String,
+    fixed_version: String,
+    vex_updated_at: Option<String>,
 }
 
 struct ProductSecurityRiskLink {
@@ -653,6 +726,17 @@ impl ProductSecurityStore {
             Self::Postgres(pool) => detail_postgres(pool, tenant_id, product_id).await,
             Self::Sqlite(pool) => detail_sqlite(pool, tenant_id, product_id).await,
         }
+    }
+
+    pub async fn cra_readiness(
+        &self,
+        tenant_id: i64,
+        product_id: i64,
+    ) -> anyhow::Result<Option<ProductSecurityCraReadiness>> {
+        let Some(detail) = self.detail(tenant_id, product_id).await? else {
+            return Ok(None);
+        };
+        Ok(Some(build_cra_readiness(&detail)))
     }
 
     pub async fn roadmap_detail(
@@ -751,6 +835,22 @@ impl ProductSecurityStore {
         match self {
             Self::Postgres(pool) => load_import_detail_postgres(pool, tenant_id, artifact_id).await,
             Self::Sqlite(pool) => load_import_detail_sqlite(pool, tenant_id, artifact_id).await,
+        }
+    }
+
+    pub async fn sbom_diff(
+        &self,
+        tenant_id: i64,
+        base_artifact_id: i64,
+        target_artifact_id: i64,
+    ) -> anyhow::Result<Option<ProductSecuritySbomDiff>> {
+        match self {
+            Self::Postgres(pool) => {
+                sbom_diff_postgres(pool, tenant_id, base_artifact_id, target_artifact_id).await
+            }
+            Self::Sqlite(pool) => {
+                sbom_diff_sqlite(pool, tenant_id, base_artifact_id, target_artifact_id).await
+            }
         }
     }
 
@@ -1592,6 +1692,29 @@ async fn update_vulnerability_postgres(
         None => current.remediation_due.clone(),
     };
     let summary = payload.summary.unwrap_or_else(|| current.summary.clone());
+    let vex_status = payload
+        .vex_status
+        .as_deref()
+        .map(normalize_vex_status)
+        .unwrap_or_else(|| current.vex_status.clone());
+    let vex_justification = payload
+        .vex_justification
+        .unwrap_or_else(|| current.vex_justification.clone())
+        .trim()
+        .to_string();
+    let fixed_version = payload
+        .fixed_version
+        .unwrap_or_else(|| current.fixed_version.clone())
+        .trim()
+        .to_string();
+    let vex_updated_at = if vex_status != current.vex_status
+        || vex_justification != current.vex_justification
+        || fixed_version != current.fixed_version
+    {
+        Some(Utc::now().to_rfc3339())
+    } else {
+        current.vex_updated_at.clone()
+    };
 
     sqlx::query(
         r#"
@@ -1600,6 +1723,10 @@ async fn update_vulnerability_postgres(
             status = $3,
             remediation_due = $4::date,
             summary = $5,
+            vex_status = $6,
+            vex_justification = $7,
+            fixed_version = $8,
+            vex_updated_at = $9,
             updated_at = NOW()
         WHERE id = $1
         "#,
@@ -1609,6 +1736,10 @@ async fn update_vulnerability_postgres(
     .bind(status)
     .bind(remediation_due)
     .bind(summary)
+    .bind(vex_status)
+    .bind(vex_justification)
+    .bind(fixed_version)
+    .bind(vex_updated_at)
     .execute(pool)
     .await
     .context("PostgreSQL-Product-Security-Vulnerability konnte nicht aktualisiert werden")?;
@@ -1648,6 +1779,29 @@ async fn update_vulnerability_sqlite(
         None => current.remediation_due.clone(),
     };
     let summary = payload.summary.unwrap_or_else(|| current.summary.clone());
+    let vex_status = payload
+        .vex_status
+        .as_deref()
+        .map(normalize_vex_status)
+        .unwrap_or_else(|| current.vex_status.clone());
+    let vex_justification = payload
+        .vex_justification
+        .unwrap_or_else(|| current.vex_justification.clone())
+        .trim()
+        .to_string();
+    let fixed_version = payload
+        .fixed_version
+        .unwrap_or_else(|| current.fixed_version.clone())
+        .trim()
+        .to_string();
+    let vex_updated_at = if vex_status != current.vex_status
+        || vex_justification != current.vex_justification
+        || fixed_version != current.fixed_version
+    {
+        Some(Utc::now().to_rfc3339())
+    } else {
+        current.vex_updated_at.clone()
+    };
 
     sqlx::query(
         r#"
@@ -1656,6 +1810,10 @@ async fn update_vulnerability_sqlite(
             status = ?3,
             remediation_due = ?4,
             summary = ?5,
+            vex_status = ?6,
+            vex_justification = ?7,
+            fixed_version = ?8,
+            vex_updated_at = ?9,
             updated_at = datetime('now')
         WHERE id = ?1
         "#,
@@ -1665,6 +1823,10 @@ async fn update_vulnerability_sqlite(
     .bind(status)
     .bind(remediation_due)
     .bind(summary)
+    .bind(vex_status)
+    .bind(vex_justification)
+    .bind(fixed_version)
+    .bind(vex_updated_at)
     .execute(pool)
     .await
     .context("SQLite-Product-Security-Vulnerability konnte nicht aktualisiert werden")?;
@@ -1690,7 +1852,11 @@ async fn vulnerability_current_postgres(
             severity,
             status,
             remediation_due::text AS remediation_due,
-            summary
+            summary,
+            vex_status,
+            vex_justification,
+            fixed_version,
+            vex_updated_at::text AS vex_updated_at
         FROM product_security_vulnerability
         WHERE tenant_id = $1 AND id = $2
         "#,
@@ -1717,7 +1883,11 @@ async fn vulnerability_current_sqlite(
             severity,
             status,
             CAST(remediation_due AS TEXT) AS remediation_due,
-            summary
+            summary,
+            vex_status,
+            vex_justification,
+            fixed_version,
+            CAST(vex_updated_at AS TEXT) AS vex_updated_at
         FROM product_security_vulnerability
         WHERE tenant_id = ? AND id = ?
         "#,
@@ -2116,6 +2286,10 @@ fn vulnerabilities_postgres_sql() -> &'static str {
         vuln.summary,
         vuln.cpe23_uri,
         vuln.advisory_ids_json,
+        vuln.vex_status,
+        vuln.vex_justification,
+        vuln.fixed_version,
+        vuln.vex_updated_at::text AS vex_updated_at,
         vuln.created_at::text AS created_at,
         vuln.updated_at::text AS updated_at
     FROM product_security_vulnerability vuln
@@ -2146,6 +2320,10 @@ fn vulnerabilities_sqlite_sql() -> &'static str {
         vuln.summary,
         vuln.cpe23_uri,
         vuln.advisory_ids_json,
+        vuln.vex_status,
+        vuln.vex_justification,
+        vuln.fixed_version,
+        CAST(vuln.vex_updated_at AS TEXT) AS vex_updated_at,
         CAST(vuln.created_at AS TEXT) AS created_at,
         CAST(vuln.updated_at AS TEXT) AS updated_at
     FROM product_security_vulnerability vuln
@@ -2176,6 +2354,10 @@ fn vulnerability_by_id_postgres_sql() -> &'static str {
         vuln.summary,
         vuln.cpe23_uri,
         vuln.advisory_ids_json,
+        vuln.vex_status,
+        vuln.vex_justification,
+        vuln.fixed_version,
+        vuln.vex_updated_at::text AS vex_updated_at,
         vuln.created_at::text AS created_at,
         vuln.updated_at::text AS updated_at
     FROM product_security_vulnerability vuln
@@ -2205,6 +2387,10 @@ fn vulnerability_by_id_sqlite_sql() -> &'static str {
         vuln.summary,
         vuln.cpe23_uri,
         vuln.advisory_ids_json,
+        vuln.vex_status,
+        vuln.vex_justification,
+        vuln.fixed_version,
+        CAST(vuln.vex_updated_at AS TEXT) AS vex_updated_at,
         CAST(vuln.created_at AS TEXT) AS created_at,
         CAST(vuln.updated_at AS TEXT) AS updated_at
     FROM product_security_vulnerability vuln
@@ -4926,6 +5112,239 @@ async fn load_import_components_sqlite(
         .map_err(Into::into)
 }
 
+async fn sbom_diff_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    base_artifact_id: i64,
+    target_artifact_id: i64,
+) -> anyhow::Result<Option<ProductSecuritySbomDiff>> {
+    let Some(base) = load_import_detail_postgres(pool, tenant_id, base_artifact_id).await? else {
+        return Ok(None);
+    };
+    let Some(target) = load_import_detail_postgres(pool, tenant_id, target_artifact_id).await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(build_sbom_diff(tenant_id, base, target)?))
+}
+
+async fn sbom_diff_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    base_artifact_id: i64,
+    target_artifact_id: i64,
+) -> anyhow::Result<Option<ProductSecuritySbomDiff>> {
+    let Some(base) = load_import_detail_sqlite(pool, tenant_id, base_artifact_id).await? else {
+        return Ok(None);
+    };
+    let Some(target) = load_import_detail_sqlite(pool, tenant_id, target_artifact_id).await? else {
+        return Ok(None);
+    };
+    Ok(Some(build_sbom_diff(tenant_id, base, target)?))
+}
+
+fn build_sbom_diff(
+    tenant_id: i64,
+    base: ProductSecurityImportArtifactDetail,
+    target: ProductSecurityImportArtifactDetail,
+) -> anyhow::Result<ProductSecuritySbomDiff> {
+    ensure_sbom_artifact(&base.artifact)?;
+    ensure_sbom_artifact(&target.artifact)?;
+
+    let base_by_key = sbom_component_map(&base.components);
+    let target_by_key = sbom_component_map(&target.components);
+    let mut keys = base_by_key.keys().cloned().collect::<BTreeSet<_>>();
+    keys.extend(target_by_key.keys().cloned());
+
+    let mut summary = ProductSecuritySbomDiffSummary {
+        added: 0,
+        removed: 0,
+        changed: 0,
+        unchanged: 0,
+        total_compared: 0,
+    };
+    let mut components = Vec::new();
+    for key in keys {
+        let base_component = base_by_key.get(&key);
+        let target_component = target_by_key.get(&key);
+        let (status, detail) = match (base_component, target_component) {
+            (None, Some(target_component)) => {
+                summary.added += 1;
+                (
+                    "ADDED",
+                    format!(
+                        "Neu im Ziel-SBOM: {} {}.",
+                        target_component.name, target_component.version
+                    ),
+                )
+            }
+            (Some(base_component), None) => {
+                summary.removed += 1;
+                (
+                    "REMOVED",
+                    format!(
+                        "Nicht mehr im Ziel-SBOM: {} {}.",
+                        base_component.name, base_component.version
+                    ),
+                )
+            }
+            (Some(base_component), Some(target_component)) => {
+                if sbom_component_changed(base_component, target_component) {
+                    summary.changed += 1;
+                    (
+                        "CHANGED",
+                        format!(
+                            "Komponente geaendert: Version {} -> {}, Match {} -> {}.",
+                            empty_dash(&base_component.version),
+                            empty_dash(&target_component.version),
+                            empty_dash(&base_component.match_status),
+                            empty_dash(&target_component.match_status),
+                        ),
+                    )
+                } else {
+                    summary.unchanged += 1;
+                    ("UNCHANGED", "Komponente unveraendert.".to_string())
+                }
+            }
+            (None, None) => continue,
+        };
+        summary.total_compared += 1;
+        let name = target_component
+            .or(base_component)
+            .map(|component| component.name.clone())
+            .unwrap_or_else(|| key.clone());
+        components.push(ProductSecuritySbomDiffComponent {
+            status: status.to_string(),
+            status_label: sbom_diff_status_label(status),
+            identity_key: key,
+            name,
+            base_version: non_empty_opt(base_component.map(|component| component.version.clone())),
+            target_version: non_empty_opt(
+                target_component.map(|component| component.version.clone()),
+            ),
+            base_package_url: non_empty_opt(
+                base_component.map(|component| component.package_url.clone()),
+            ),
+            target_package_url: non_empty_opt(
+                target_component.map(|component| component.package_url.clone()),
+            ),
+            base_cpe23_uri: non_empty_opt(
+                base_component.map(|component| component.cpe23_uri.clone()),
+            ),
+            target_cpe23_uri: non_empty_opt(
+                target_component.map(|component| component.cpe23_uri.clone()),
+            ),
+            base_match_status: non_empty_opt(
+                base_component.map(|component| component.match_status.clone()),
+            ),
+            target_match_status: non_empty_opt(
+                target_component.map(|component| component.match_status.clone()),
+            ),
+            base_component_id: base_component.and_then(|component| component.component_id),
+            target_component_id: target_component.and_then(|component| component.component_id),
+            detail,
+        });
+    }
+
+    Ok(ProductSecuritySbomDiff {
+        tenant_id,
+        base_artifact: base.artifact,
+        target_artifact: target.artifact,
+        summary,
+        components,
+    })
+}
+
+fn ensure_sbom_artifact(artifact: &ProductSecurityImportArtifactSummary) -> anyhow::Result<()> {
+    if artifact.artifact_type == "SBOM" {
+        return Ok(());
+    }
+    bail!(
+        "Import-Artefakt {} ist kein SBOM-Artefakt, sondern {}.",
+        artifact.id,
+        artifact.artifact_type
+    );
+}
+
+fn sbom_component_map(
+    components: &[ProductSecurityImportComponentSummary],
+) -> BTreeMap<String, ProductSecurityImportComponentSummary> {
+    let mut mapped = BTreeMap::new();
+    for component in components {
+        mapped
+            .entry(sbom_component_identity_key(component))
+            .or_insert_with(|| component.clone());
+    }
+    mapped
+}
+
+fn sbom_component_identity_key(component: &ProductSecurityImportComponentSummary) -> String {
+    let package_url = component.package_url.trim();
+    if !package_url.is_empty() {
+        let without_version = package_url
+            .rfind('@')
+            .map(|idx| &package_url[..idx])
+            .unwrap_or(package_url);
+        return format!("purl:{}", without_version.to_ascii_lowercase());
+    }
+    let cpe23_uri = component.cpe23_uri.trim();
+    if !cpe23_uri.is_empty() {
+        let parts = cpe23_uri.split(':').collect::<Vec<_>>();
+        if parts.len() >= 5 && parts[0] == "cpe" && parts[1] == "2.3" {
+            return format!(
+                "cpe:{}:{}:{}:{}",
+                parts[1].to_ascii_lowercase(),
+                parts[2].to_ascii_lowercase(),
+                parts[3].to_ascii_lowercase(),
+                parts[4].to_ascii_lowercase()
+            );
+        }
+        return format!("cpe:{}", cpe23_uri.to_ascii_lowercase());
+    }
+    format!("name:{}", component.name.trim().to_ascii_lowercase())
+}
+
+fn sbom_component_changed(
+    base: &ProductSecurityImportComponentSummary,
+    target: &ProductSecurityImportComponentSummary,
+) -> bool {
+    base.version != target.version
+        || base.package_url != target.package_url
+        || base.cpe23_uri != target.cpe23_uri
+        || base.match_status != target.match_status
+        || base.component_id != target.component_id
+}
+
+fn sbom_diff_status_label(status: &str) -> String {
+    match status {
+        "ADDED" => "Neu",
+        "REMOVED" => "Entfernt",
+        "CHANGED" => "Geaendert",
+        "UNCHANGED" => "Unveraendert",
+        _ => status,
+    }
+    .to_string()
+}
+
+fn non_empty_opt(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn empty_dash(value: &str) -> &str {
+    if value.trim().is_empty() {
+        "-"
+    } else {
+        value
+    }
+}
+
 async fn load_cve_correlations_sqlite(
     pool: &SqlitePool,
     tenant_id: i64,
@@ -6865,6 +7284,249 @@ fn product_security_ratio_percent(numerator: i64, denominator: i64) -> i64 {
     }
 }
 
+fn build_cra_readiness(detail: &ProductSecurityDetail) -> ProductSecurityCraReadiness {
+    let component_count = detail.components.len() as i64;
+    let sbom_components = detail
+        .components
+        .iter()
+        .filter(|component| {
+            component.has_sbom
+                || !component.sbom_document_url.trim().is_empty()
+                || !component.sbom_digest.trim().is_empty()
+        })
+        .count() as i64;
+    let vulnerability_count = detail.vulnerabilities.len() as i64;
+    let vex_documented = detail
+        .vulnerabilities
+        .iter()
+        .filter(|vulnerability| {
+            vulnerability.vex_status != "UNDER_INVESTIGATION"
+                && (!vulnerability.vex_justification.trim().is_empty()
+                    || !vulnerability.fixed_version.trim().is_empty()
+                    || vulnerability.vex_status == "AFFECTED")
+        })
+        .count() as i64;
+    let actionable_vulnerabilities = detail
+        .vulnerabilities
+        .iter()
+        .filter(|vulnerability| {
+            matches!(
+                vulnerability.status.as_str(),
+                "TRIAGED" | "MITIGATED" | "FIXED" | "ACCEPTED"
+            ) || vulnerability.vex_status != "UNDER_INVESTIGATION"
+        })
+        .count() as i64;
+    let open_critical = detail
+        .vulnerabilities
+        .iter()
+        .filter(|vulnerability| {
+            vulnerability.severity == "CRITICAL"
+                && !matches!(
+                    vulnerability.status.as_str(),
+                    "MITIGATED" | "FIXED" | "ACCEPTED"
+                )
+        })
+        .count() as i64;
+    let active_releases = detail
+        .releases
+        .iter()
+        .filter(|release| release.status == "ACTIVE")
+        .count() as i64;
+    let supported_active_releases = detail
+        .releases
+        .iter()
+        .filter(|release| release.status == "ACTIVE" && release.support_end_date.is_some())
+        .count() as i64;
+
+    let mut dimensions = vec![
+        cra_dimension(
+            "sbom",
+            "SBOM & Komponenten",
+            if component_count == 0 {
+                0
+            } else {
+                product_security_ratio_percent(sbom_components, component_count)
+            },
+            &format!("{sbom_components}/{component_count} Komponenten mit SBOM-Spur."),
+        ),
+        cra_dimension(
+            "vex",
+            "CVE/VEX-Entscheidungen",
+            if vulnerability_count == 0 {
+                100
+            } else {
+                product_security_ratio_percent(vex_documented, vulnerability_count)
+            },
+            &format!("{vex_documented}/{vulnerability_count} Schwachstellen mit dokumentierter VEX-Entscheidung."),
+        ),
+        cra_dimension(
+            "vulnerability_handling",
+            "Schwachstellenbearbeitung",
+            if vulnerability_count == 0 {
+                100
+            } else {
+                let score =
+                    product_security_ratio_percent(actionable_vulnerabilities, vulnerability_count);
+                if open_critical > 0 {
+                    score.min(60)
+                } else {
+                    score
+                }
+            },
+            &format!("{actionable_vulnerabilities}/{vulnerability_count} Schwachstellen triagiert oder behandelt; {open_critical} kritisch offen."),
+        ),
+        cra_dimension(
+            "psirt_advisory",
+            "PSIRT & Advisory-Spur",
+            cra_psirt_advisory_score(detail),
+            &format!(
+                "{} PSIRT-Case(s), {} Advisory/Advisories, {} CSAF-Dokument(e).",
+                detail.psirt_cases.len(),
+                detail.advisories.len(),
+                detail
+                    .advisories
+                    .iter()
+                    .filter(|advisory| !advisory.csaf_document_id.trim().is_empty())
+                    .count()
+            ),
+        ),
+        cra_dimension(
+            "threat_tara",
+            "Threat Modeling & TARA",
+            cra_threat_tara_score(detail),
+            &format!(
+                "{} Threat Model(s), {} Szenario(s), {} TARA(s).",
+                detail.threat_models.len(),
+                detail.threat_scenarios,
+                detail.taras.len()
+            ),
+        ),
+        cra_dimension(
+            "lifecycle",
+            "Lifecycle & Support",
+            if active_releases == 0 {
+                20
+            } else {
+                product_security_ratio_percent(supported_active_releases, active_releases).max(
+                    if detail.product.support_window_months >= 24 {
+                        80
+                    } else {
+                        60
+                    },
+                )
+            },
+            &format!(
+                "{supported_active_releases}/{active_releases} aktive Releases mit Support-Ende; Supportfenster {} Monate.",
+                detail.product.support_window_months
+            ),
+        ),
+    ];
+    dimensions.sort_by(|left, right| left.key.cmp(&right.key));
+    let readiness_percent = if dimensions.is_empty() {
+        0
+    } else {
+        dimensions
+            .iter()
+            .map(|dimension| dimension.score_percent)
+            .sum::<i64>()
+            / dimensions.len() as i64
+    };
+    let (status, status_label) = cra_status(readiness_percent);
+    let gaps = dimensions
+        .iter()
+        .filter(|dimension| dimension.score_percent < 80)
+        .map(|dimension| format!("{}: {}", dimension.label, dimension.detail))
+        .collect::<Vec<_>>();
+    let summary = if gaps.is_empty() {
+        format!(
+            "{} erreicht {}% CRA-Readiness; keine wesentlichen Luecken in den Kernsignalen.",
+            detail.product.name, readiness_percent
+        )
+    } else {
+        format!(
+            "{} erreicht {}% CRA-Readiness; {} Kernluecke(n) brauchen Nacharbeit.",
+            detail.product.name,
+            readiness_percent,
+            gaps.len()
+        )
+    };
+
+    ProductSecurityCraReadiness {
+        tenant_id: detail.product.tenant_id,
+        product_id: detail.product.id,
+        product_name: detail.product.name.clone(),
+        readiness_percent,
+        status,
+        status_label,
+        summary,
+        gaps,
+        dimensions,
+    }
+}
+
+fn cra_psirt_advisory_score(detail: &ProductSecurityDetail) -> i64 {
+    if let Some(snapshot) = detail.snapshot.as_ref() {
+        return snapshot.psirt_readiness_percent.clamp(0, 100);
+    }
+    let csaf_count = detail
+        .advisories
+        .iter()
+        .filter(|advisory| !advisory.csaf_document_id.trim().is_empty())
+        .count();
+    match (
+        detail.psirt_cases.is_empty(),
+        detail.advisories.is_empty(),
+        csaf_count > 0,
+    ) {
+        (false, false, true) => 95,
+        (false, false, false) => 80,
+        (false, true, _) => 60,
+        (true, false, true) => 70,
+        (true, false, false) => 55,
+        (true, true, _) => 30,
+    }
+}
+
+fn cra_threat_tara_score(detail: &ProductSecurityDetail) -> i64 {
+    if let Some(snapshot) = detail.snapshot.as_ref() {
+        return snapshot.threat_model_coverage_percent.clamp(0, 100);
+    }
+    match (detail.threat_models.is_empty(), detail.taras.is_empty()) {
+        (false, false) => 90,
+        (false, true) | (true, false) => 55,
+        (true, true) => 20,
+    }
+}
+
+fn cra_dimension(
+    key: &str,
+    label: &str,
+    score_percent: i64,
+    detail: &str,
+) -> ProductSecurityCraReadinessDimension {
+    let score_percent = score_percent.clamp(0, 100);
+    let (status, status_label) = cra_status(score_percent);
+    ProductSecurityCraReadinessDimension {
+        key: key.to_string(),
+        label: label.to_string(),
+        score_percent,
+        status,
+        status_label,
+        detail: detail.to_string(),
+    }
+}
+
+fn cra_status(score_percent: i64) -> (String, String) {
+    let (status, label) = if score_percent >= 80 {
+        ("READY", "Bereit")
+    } else if score_percent >= 50 {
+        ("PARTIAL", "Teilweise")
+    } else {
+        ("GAP", "Luecke")
+    };
+    (status.to_string(), label.to_string())
+}
+
 fn product_security_trend_signal(
     key: &str,
     label: &str,
@@ -7284,6 +7946,7 @@ fn tara_from_sqlite_row(row: SqliteRow) -> Result<TaraSummary, sqlx::Error> {
 fn vulnerability_from_pg_row(row: PgRow) -> Result<VulnerabilitySummary, sqlx::Error> {
     let severity: String = row.try_get("severity")?;
     let status: String = row.try_get("status")?;
+    let vex_status: String = row.try_get("vex_status")?;
     Ok(VulnerabilitySummary {
         id: row.try_get("id")?,
         tenant_id: row.try_get("tenant_id")?,
@@ -7302,6 +7965,11 @@ fn vulnerability_from_pg_row(row: PgRow) -> Result<VulnerabilitySummary, sqlx::E
         summary: row.try_get("summary")?,
         cpe23_uri: row.try_get("cpe23_uri")?,
         advisory_ids: parse_json_string_array(row.try_get("advisory_ids_json")?),
+        vex_status_label: vex_status_label(&vex_status),
+        vex_status,
+        vex_justification: row.try_get("vex_justification")?,
+        fixed_version: row.try_get("fixed_version")?,
+        vex_updated_at: row.try_get("vex_updated_at")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -7310,6 +7978,7 @@ fn vulnerability_from_pg_row(row: PgRow) -> Result<VulnerabilitySummary, sqlx::E
 fn vulnerability_from_sqlite_row(row: SqliteRow) -> Result<VulnerabilitySummary, sqlx::Error> {
     let severity: String = row.try_get("severity")?;
     let status: String = row.try_get("status")?;
+    let vex_status: String = row.try_get("vex_status")?;
     Ok(VulnerabilitySummary {
         id: row.try_get("id")?,
         tenant_id: row.try_get("tenant_id")?,
@@ -7328,6 +7997,11 @@ fn vulnerability_from_sqlite_row(row: SqliteRow) -> Result<VulnerabilitySummary,
         summary: row.try_get("summary")?,
         cpe23_uri: row.try_get("cpe23_uri")?,
         advisory_ids: parse_json_string_array(row.try_get("advisory_ids_json")?),
+        vex_status_label: vex_status_label(&vex_status),
+        vex_status,
+        vex_justification: row.try_get("vex_justification")?,
+        fixed_version: row.try_get("fixed_version")?,
+        vex_updated_at: row.try_get("vex_updated_at")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -7590,6 +8264,10 @@ fn vulnerability_current_from_pg_row(
         status: row.try_get("status")?,
         remediation_due: row.try_get("remediation_due")?,
         summary: row.try_get("summary")?,
+        vex_status: row.try_get("vex_status")?,
+        vex_justification: row.try_get("vex_justification")?,
+        fixed_version: row.try_get("fixed_version")?,
+        vex_updated_at: row.try_get("vex_updated_at")?,
     })
 }
 
@@ -7602,6 +8280,10 @@ fn vulnerability_current_from_sqlite_row(
         status: row.try_get("status")?,
         remediation_due: row.try_get("remediation_due")?,
         summary: row.try_get("summary")?,
+        vex_status: row.try_get("vex_status")?,
+        vex_justification: row.try_get("vex_justification")?,
+        fixed_version: row.try_get("fixed_version")?,
+        vex_updated_at: row.try_get("vex_updated_at")?,
     })
 }
 
@@ -7777,6 +8459,17 @@ fn vulnerability_status_label(value: &str) -> String {
     .to_string()
 }
 
+fn vex_status_label(value: &str) -> String {
+    match value {
+        "AFFECTED" => "Betroffen",
+        "NOT_AFFECTED" => "Nicht betroffen",
+        "FIXED" => "Behoben",
+        "UNDER_INVESTIGATION" => "In Untersuchung",
+        _ => value,
+    }
+    .to_string()
+}
+
 fn ai_risk_label(value: &str) -> String {
     match value {
         "NONE" => "Keine besondere AI-Risiko-Klasse",
@@ -7878,6 +8571,19 @@ fn normalize_vulnerability_status(value: &str) -> String {
         "FIXED" => "FIXED",
         "ACCEPTED" => "ACCEPTED",
         _ => "OPEN",
+    }
+    .to_string()
+}
+
+fn normalize_vex_status(value: &str) -> String {
+    match value.trim().to_ascii_uppercase().as_str() {
+        "AFFECTED" => "AFFECTED",
+        "NOT_AFFECTED" | "NOT-AFFECTED" | "NOT AFFECTED" => "NOT_AFFECTED",
+        "FIXED" => "FIXED",
+        "UNDER_INVESTIGATION" | "UNDER-INVESTIGATION" | "UNDER INVESTIGATION" | "INVESTIGATING" => {
+            "UNDER_INVESTIGATION"
+        }
+        _ => "UNDER_INVESTIGATION",
     }
     .to_string()
 }

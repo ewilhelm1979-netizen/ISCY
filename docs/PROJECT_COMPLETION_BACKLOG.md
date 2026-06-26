@@ -4,8 +4,8 @@
 
 - Rust-only Runtime ist abgeschlossen.
 - Das regulatorische Organisationsprofil ist als Tenant-Web-/API-Pfad umgesetzt und fuehrt NIS2, KRITIS, DORA, DSGVO, CRA, AI Act, TISAX und ISO-27001-Zielbild in einer zentralen Matrix zusammen.
-- Product Security verarbeitet CSAF-/CycloneDX-/SPDX-Importe, CVE-Asset-Korrelationen, automatisch erzeugte CVE-Risiken und Product-Security-Roadmap-Tasks.
-- Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence und eine gebuendelte CVE-Risiko-Review-Queue mit Filtern und Bulk-Aktionen.
+- Product Security verarbeitet CSAF-/CycloneDX-/SPDX-Importe, CVE-Asset-Korrelationen, automatisch erzeugte CVE-Risiken, Product-Security-Roadmap-Tasks, VEX-Entscheidungen, SBOM-Diffs und CRA-Readiness je Produkt.
+- Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence, CRA-Readiness, SBOM-Diff-Einstiege und eine gebuendelte CVE-Risiko-Review-Queue mit Filtern und Bulk-Aktionen.
 - Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck; Evidence-Quality bewertet Nachweisreife, offene Issues und Evidence-Needs.
 - Management-Review-Pakete koennen als Markdown, HTML, PDF und JSON exportiert werden und enthalten Ruecklinks zu Risiko, Control, Evidence, Incident und Roadmap.
 - Third-Party-/Supplier-Risk ist als Rust-Web-/API-Modul umgesetzt und bewertet Lieferanten aus Kritikalitaet, Vertrags-/Security-Annex-Bezug, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischem Scope, Review-Faelligkeit, Evidence, Produktkomponenten, offenen Schwachstellen und dokumentierten Risiken.
@@ -41,7 +41,7 @@ Die technische Rust-Migration ist abgeschlossen. Die fachliche Weiterentwicklung
 
 Die dort priorisierten naechsten Produktbereiche sind:
 
-1. Product-Security-Reife mit VEX, SBOM-Diff und CRA-Readiness
-2. AI-Governance-Modul
-3. Agent-Flottenbetrieb und Benachrichtigungen
+1. AI-Governance-Modul
+2. Agent-Flottenbetrieb und Benachrichtigungen
+3. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
 4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity

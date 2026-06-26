@@ -36,7 +36,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Assets
 - Imports inklusive CSV/XLSX/XLSM-Preview
 - Processes
-- Product Security inklusive CSAF-/CycloneDX-/SPDX-Importhistorie, Import-Detailseiten, CVE-Asset-Korrelation, automatischer Risiko-/Roadmap-Ableitung, CVE-Risiko-Review-Queue, Review-Filtern, Bulk-Aktionen, Evidence-Lueckenmetriken, Trend-Dashboard, Prometheus-Trendmetriken und Grafana-Panels fuer Alert-Incidents mit konkretem Incident-Drilldown, Coverage, Review-Trend und Importvalidierung
+- Product Security inklusive CSAF-/CycloneDX-/SPDX-Importhistorie, Import-Detailseiten, VEX-Status je Schwachstelle, SBOM-Diff, CRA-Readiness, CVE-Asset-Korrelation, automatischer Risiko-/Roadmap-Ableitung, CVE-Risiko-Review-Queue, Review-Filtern, Bulk-Aktionen, Evidence-Lueckenmetriken, Trend-Dashboard, Prometheus-Trendmetriken und Grafana-Panels fuer Alert-Incidents mit konkretem Incident-Drilldown, Coverage, Review-Trend und Importvalidierung
 - CVE Feed, CVE Assessments und NVD-Import
 - User-Administration, Rollen, Gruppen und direkte Permissions
 
