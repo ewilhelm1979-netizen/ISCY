@@ -14,6 +14,9 @@ use iscy_backend::{
     dashboard_store::DashboardStore,
     db_admin::{run_db_admin_action, DbAdminAction},
     evidence_store::EvidenceStore,
+    hardening::{
+        assert_db_admin_action_allowed, run_production_preflight, CommunitySecurityConfig,
+    },
     import_store::ImportStore,
     incident_store::IncidentStore,
     process_store::ProcessStore,
@@ -31,6 +34,7 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let security_config = CommunitySecurityConfig::from_env()?;
     if let Some(command) = std::env::args().nth(1) {
         match command.as_str() {
             "migrate" => {
@@ -38,10 +42,12 @@ async fn main() -> anyhow::Result<()> {
                 return Ok(());
             }
             "seed-demo" => {
+                assert_db_admin_action_allowed(&security_config, DbAdminAction::SeedDemo)?;
                 run_database_admin(DbAdminAction::SeedDemo).await?;
                 return Ok(());
             }
             "init-demo" => {
+                assert_db_admin_action_allowed(&security_config, DbAdminAction::InitDemo)?;
                 run_database_admin(DbAdminAction::InitDemo).await?;
                 return Ok(());
             }
@@ -61,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
     let database_url = std::env::var("DATABASE_URL")
         .ok()
         .filter(|value| !value.trim().is_empty());
+    run_production_preflight(&security_config, &addr, database_url.as_deref()).await?;
     let (
         cve_store,
         account_store,
@@ -160,7 +167,8 @@ async fn main() -> anyhow::Result<()> {
         .with_wizard_store(wizard_store)
         .with_product_security_store(product_security_store)
         .with_ai_governance_store(ai_governance_store)
-        .with_database_url(database_url);
+        .with_database_url(database_url)
+        .with_security_config(security_config);
 
     let listener = TcpListener::bind(addr).await?;
     println!("ISCY Rust backend listening on http://{}", addr);

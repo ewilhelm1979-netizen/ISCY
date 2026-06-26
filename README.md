@@ -73,6 +73,14 @@ curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
 
 Prometheus-/Grafana-Betrieb: [docs/OPERATIONS_MONITORING.md](docs/OPERATIONS_MONITORING.md)
 
+Production-Hardening und Community-Readiness:
+
+- Phase-0/1-Bericht: [docs/COMMUNITY_READINESS_PHASE0_PHASE1.md](docs/COMMUNITY_READINESS_PHASE0_PHASE1.md)
+- Konfigurationsmatrix: [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
+- TLS-/Reverse-Proxy-Grenzen: [docs/TLS_AND_REVERSE_PROXY.md](docs/TLS_AND_REVERSE_PROXY.md)
+- Autorisierungsmodell: [docs/AUTHORIZATION_MODEL.md](docs/AUTHORIZATION_MODEL.md)
+- Production-Hardening: [docs/PRODUCTION_HARDENING.md](docs/PRODUCTION_HARDENING.md)
+
 Monitoring-Artefakte fuer den direkten Betrieb:
 
 - Prometheus Scrape Config: [deploy/monitoring/prometheus/iscy-scrape.yml](deploy/monitoring/prometheus/iscy-scrape.yml)

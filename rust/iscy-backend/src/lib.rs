@@ -6,6 +6,7 @@ use axum::{
         header::{AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE},
         HeaderMap, HeaderValue, StatusCode,
     },
+    middleware,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, patch, post},
     Router,
@@ -33,6 +34,7 @@ pub mod cve_store;
 pub mod dashboard_store;
 pub mod db_admin;
 pub mod evidence_store;
+pub mod hardening;
 pub mod import_preview;
 pub mod import_store;
 pub mod incident_store;
@@ -58,6 +60,7 @@ use control_store::ControlStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
 use evidence_store::EvidenceStore;
+use hardening::CommunitySecurityConfig;
 use import_preview::{ImportPreview, ImportUploadFile};
 use import_store::ImportStore;
 use incident_store::{IncidentAlertmanagerMetrics, IncidentStore};
@@ -99,6 +102,7 @@ pub struct AppState {
     pub evidence_media_root: Option<PathBuf>,
     pub nvd_api_base_url: Option<String>,
     pub database_url: Option<String>,
+    pub security_config: CommunitySecurityConfig,
 }
 
 impl AppState {
@@ -129,6 +133,7 @@ impl AppState {
             evidence_media_root: None,
             nvd_api_base_url: None,
             database_url: None,
+            security_config: CommunitySecurityConfig::default(),
         }
     }
 
@@ -159,6 +164,7 @@ impl AppState {
             evidence_media_root: None,
             nvd_api_base_url: None,
             database_url: None,
+            security_config: CommunitySecurityConfig::default(),
         }
     }
 
@@ -212,6 +218,11 @@ impl AppState {
 
     pub fn with_database_url(mut self, database_url: Option<String>) -> Self {
         self.database_url = database_url;
+        self
+    }
+
+    pub fn with_security_config(mut self, security_config: CommunitySecurityConfig) -> Self {
+        self.security_config = security_config;
         self
     }
 
@@ -1274,6 +1285,7 @@ struct StatusOperationsJsonResponse {
     severity: StatusOperationsSeverity,
     exit_code: i64,
     runtime: StatusRuntimeJson,
+    security: StatusSecurityJson,
     migration: StatusMigrationJson,
     build: StatusBuildJson,
     modules: Vec<StatusStoreStatus>,
@@ -1303,6 +1315,16 @@ struct StatusRuntimeJson {
     strict_mode: bool,
     evidence_media_root: Option<String>,
     nvd_api_base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StatusSecurityJson {
+    app_mode: String,
+    trust_identity_headers: bool,
+    trusted_proxy_configured: bool,
+    secure_cookies: bool,
+    https_confirmed: bool,
+    hsts_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2007,7 +2029,7 @@ async fn operations_alertmanager_webhook(
 }
 
 fn alertmanager_token_matches(headers: &HeaderMap) -> bool {
-    let Ok(expected) = std::env::var("ISCY_ALERTMANAGER_TOKEN") else {
+    let Ok(Some(expected)) = hardening::secret_value("ISCY_ALERTMANAGER_TOKEN") else {
         return true;
     };
     let expected = expected.trim();
@@ -2685,12 +2707,18 @@ fn session_cookie_from_headers(headers: &HeaderMap) -> Option<String> {
         })
 }
 
-fn session_cookie_value(token: &str) -> String {
-    format!("{ISCY_SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800")
+fn session_cookie_value(token: &str, security_config: &CommunitySecurityConfig) -> String {
+    format!(
+        "{ISCY_SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800{}",
+        security_config.cookie_secure_suffix()
+    )
 }
 
-fn expired_session_cookie_value() -> &'static str {
-    "iscy_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0"
+fn expired_session_cookie_value(security_config: &CommunitySecurityConfig) -> String {
+    format!(
+        "iscy_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0{}",
+        security_config.cookie_secure_suffix()
+    )
 }
 
 fn web_context_from_headers(headers: &HeaderMap) -> Option<WebContext> {
@@ -2875,7 +2903,7 @@ async fn auth_session_create(
     };
     match session_result {
         Ok(Some(session)) => {
-            let cookie = session_cookie_value(&session.token);
+            let cookie = session_cookie_value(&session.token, &state.security_config);
             response_with_cookie(
                 (
                     StatusCode::CREATED,
@@ -3004,7 +3032,7 @@ async fn auth_logout(State(state): State<AppState>, headers: HeaderMap) -> Respo
             })),
         )
             .into_response(),
-        expired_session_cookie_value(),
+        &expired_session_cookie_value(&state.security_config),
     )
 }
 
@@ -8563,7 +8591,10 @@ async fn web_login_submit(
         .create_session_for_login(form.tenant_id, &form.username, &form.password)
         .await
     {
-        Ok(Some(session)) => redirect_with_cookie("/dashboard/", &session_cookie_value(&session.token)),
+        Ok(Some(session)) => redirect_with_cookie(
+            "/dashboard/",
+            &session_cookie_value(&session.token, &state.security_config),
+        ),
         Ok(None) => web_page(
             "Login",
             "/login/",
@@ -11982,6 +12013,50 @@ async fn web_status(
             signal_badge(state.evidence_media_root.is_some()),
             media_root,
         ),
+        (
+            "App Mode",
+            web_badge(state.security_config.mode_label(), "info"),
+            state.security_config.mode_label().to_string(),
+        ),
+        (
+            "Identity Header",
+            if state.security_config.trust_identity_headers {
+                web_badge("trusted", "warn")
+            } else {
+                web_badge("deny by default", "ok")
+            },
+            if state.security_config.trust_identity_headers {
+                "x-iscy-* Identity-Header werden akzeptiert.".to_string()
+            } else {
+                "x-iscy-* Identity-Header werden ohne Trusted-Proxy-Kontext blockiert.".to_string()
+            },
+        ),
+        (
+            "Session Cookies",
+            if state.security_config.secure_cookies {
+                web_badge("Secure", "ok")
+            } else {
+                web_badge("lokal", "warn")
+            },
+            if state.security_config.secure_cookies {
+                "HttpOnly; Secure; SameSite=Lax".to_string()
+            } else {
+                "HttpOnly; SameSite=Lax fuer lokale HTTP-Entwicklung.".to_string()
+            },
+        ),
+        (
+            "HSTS",
+            if state.security_config.hsts_enabled {
+                web_badge("aktiv", "ok")
+            } else {
+                web_badge("aus", "muted-badge")
+            },
+            if state.security_config.hsts_enabled {
+                "Strict-Transport-Security wird gesetzt.".to_string()
+            } else {
+                "HSTS wird erst nach bestaetigtem HTTPS aktiviert.".to_string()
+            },
+        ),
         ("NVD API", web_badge("konfiguriert", "info"), nvd_base),
     ]
     .iter()
@@ -12335,6 +12410,14 @@ async fn status_operations_payload(
                 .unwrap_or("NVD-Default")
                 .to_string(),
         },
+        security: StatusSecurityJson {
+            app_mode: state.security_config.mode_label().to_string(),
+            trust_identity_headers: state.security_config.trust_identity_headers,
+            trusted_proxy_configured: state.security_config.trusted_proxy_configured,
+            secure_cookies: state.security_config.secure_cookies,
+            https_confirmed: state.security_config.https_confirmed,
+            hsts_enabled: state.security_config.hsts_enabled,
+        },
         migration: status_migration_json(&migration_status),
         build: StatusBuildJson {
             version: env!("CARGO_PKG_VERSION"),
@@ -12414,6 +12497,35 @@ fn status_operations_metrics_body(payload: &StatusOperationsJsonResponse) -> Str
     body.push_str(&format!(
         "iscy_operations_runtime_flag{{name=\"strict_mode\"}} {}\n",
         bool_metric(payload.runtime.strict_mode)
+    ));
+    body.push_str(
+        "# HELP iscy_operations_security_flag Security hardening flag state, 1 enabled and 0 disabled.\n\
+         # TYPE iscy_operations_security_flag gauge\n",
+    );
+    body.push_str(&format!(
+        "iscy_operations_security_flag{{name=\"trust_identity_headers\",app_mode=\"{}\"}} {}\n",
+        prometheus_label_value(&payload.security.app_mode),
+        bool_metric(payload.security.trust_identity_headers)
+    ));
+    body.push_str(&format!(
+        "iscy_operations_security_flag{{name=\"trusted_proxy_configured\",app_mode=\"{}\"}} {}\n",
+        prometheus_label_value(&payload.security.app_mode),
+        bool_metric(payload.security.trusted_proxy_configured)
+    ));
+    body.push_str(&format!(
+        "iscy_operations_security_flag{{name=\"secure_cookies\",app_mode=\"{}\"}} {}\n",
+        prometheus_label_value(&payload.security.app_mode),
+        bool_metric(payload.security.secure_cookies)
+    ));
+    body.push_str(&format!(
+        "iscy_operations_security_flag{{name=\"https_confirmed\",app_mode=\"{}\"}} {}\n",
+        prometheus_label_value(&payload.security.app_mode),
+        bool_metric(payload.security.https_confirmed)
+    ));
+    body.push_str(&format!(
+        "iscy_operations_security_flag{{name=\"hsts_enabled\",app_mode=\"{}\"}} {}\n",
+        prometheus_label_value(&payload.security.app_mode),
+        bool_metric(payload.security.hsts_enabled)
     ));
     body.push_str(
         "# HELP iscy_operations_migration_applied Applied Rust database migrations.\n\
@@ -20663,6 +20775,50 @@ async fn status_operations_overview(
             None,
         ),
         StatusSignal::new(
+            "Security",
+            "App Mode",
+            if state.security_config.app_mode.is_production() {
+                StatusSignalLevel::Ok
+            } else {
+                StatusSignalLevel::Warn
+            },
+            format!(
+                "ISCY_APP_MODE={} (development/demo sind nicht fuer oeffentlichen Produktivbetrieb gedacht).",
+                state.security_config.mode_label()
+            ),
+            None,
+        ),
+        StatusSignal::new(
+            "Security",
+            "Identity-Header-Grenze",
+            if state.security_config.trust_identity_headers {
+                StatusSignalLevel::Warn
+            } else {
+                StatusSignalLevel::Ok
+            },
+            if state.security_config.trust_identity_headers {
+                "x-iscy-* Identity-Header werden akzeptiert; nur hinter einem Header-saeubernden Reverse Proxy produktiv nutzen.".to_string()
+            } else {
+                "x-iscy-* Identity-Header sind deny-by-default blockiert.".to_string()
+            },
+            None,
+        ),
+        StatusSignal::new(
+            "Security",
+            "Session-Cookies",
+            if state.security_config.secure_cookies {
+                StatusSignalLevel::Ok
+            } else {
+                StatusSignalLevel::Warn
+            },
+            if state.security_config.secure_cookies {
+                "Session-Cookies werden mit Secure, HttpOnly und SameSite=Lax gesetzt.".to_string()
+            } else {
+                "Session-Cookies sind fuer lokale HTTP-Entwicklung ohne Secure markiert.".to_string()
+            },
+            None,
+        ),
+        StatusSignal::new(
             "Migrationen",
             "Datenbank-Schema",
             migration_signal_level(migration_status),
@@ -23830,6 +23986,7 @@ pub fn app_router() -> Router {
 }
 
 pub fn app_router_with_state(state: AppState) -> Router {
+    let security_config = state.security_config.clone();
     Router::new()
         .route("/health", get(health_live))
         .route("/health/ready", get(health_live))
@@ -24320,6 +24477,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/guidance/evaluate", post(guidance_evaluate))
         .route("/api/v1/reports/cve-summary", post(report_cve_summary))
         .layer(DefaultBodyLimit::max(MULTIPART_FORM_BODY_LIMIT_BYTES))
+        .layer(middleware::from_fn_with_state(
+            security_config,
+            hardening::community_security_headers,
+        ))
         .with_state(state)
 }
 

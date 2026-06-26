@@ -1896,7 +1896,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
 endobj
 29 0 obj
-<< /Length 4185 >>
+<< /Length 4182 >>
 stream
 BT
 /F1 9 Tf
@@ -1992,6 +1992,48 @@ T*
 T*
 () Tj
 T*
+(Fuer Community-Readiness und Production-Hardening sind zusaetzlich diese Dokumente) Tj
+T*
+(verbindlich:) Tj
+T*
+() Tj
+T*
+(- docs/COMMUNITYREADINESSPHASE0PHASE1.md beschreibt die aktuelle Gap-Liste und den Status) Tj
+T*
+(READY WITH DOCUMENTED LIMITATIONS.) Tj
+T*
+(- docs/CONFIGURATION.md dokumentiert Betriebsmodi, Secrets, Proxy-Grenzen und sichere) Tj
+T*
+(Defaults.) Tj
+T*
+(- docs/TLSANDREVERSEPROXY.md beschreibt HTTPS-Terminierung, HSTS und die Behandlung von) Tj
+T*
+(x-iscy- Identity-Headern.) Tj
+T*
+(- docs/AUTHORIZATIONMODEL.md beschreibt Session-, Header- und Rollenmodell inklusive) Tj
+T*
+(Negativtests.) Tj
+T*
+(- docs/PRODUCTIONHARDENING.md beschreibt den Production-Preflight, Security-Header und offene) Tj
+T*
+(Phase-1-Risiken.) Tj
+T*
+() Tj
+T*
+(Im Production-Modus \(ISCYAPPMODE=production\) bricht ISCY den Start ab, wenn kritische Annahmen) Tj
+T*
+(fehlen: keine Datenbank, Beispiel-Secrets, aktive Demo-Zugangsdaten, Demo-Seeding, unsichere) Tj
+T*
+(Cookies, oeffentliche Bind-Adresse ohne bestaetigten Reverse Proxy, HSTS ohne bestaetigtes) Tj
+T*
+(HTTPS oder fehlendes Alertmanager-Secret. Normale Clients duerfen x-iscy-tenant-id,) Tj
+T*
+(x-iscy-user-id oder x-iscy-roles produktiv nicht zur Identitaetssteuerung verwenden; diese) Tj
+T*
+(Header werden nur akzeptiert, wenn ein vertrauenswuerdiger Proxy das explizit absichert.) Tj
+T*
+() Tj
+T*
 (Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:) Tj
 T*
 () Tj
@@ -2004,6 +2046,19 @@ T*
 T*
 (- deploy/monitoring/grafana/iscy-operations-dashboard.json) Tj
 T*
+ET
+endstream
+endobj
+30 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
+endobj
+31 0 obj
+<< /Length 3440 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- deploy/monitoring/docker-compose.yml) Tj
 T*
 (- deploy/monitoring/nixos/iscy-monitoring.nix) Tj
@@ -2046,19 +2101,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-30 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
-endobj
-31 0 obj
-<< /Length 2903 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (1. Neue Fallakte in /operations/incidents/ sichten, bei Bedarf nach open, critical oder) Tj
 T*
 (resolved filtern und in /incidents/ oeffnen.) Tj
@@ -2161,6 +2203,19 @@ T*
 T*
 (- produktiv: make prod-up oder make prod-up-llm) Tj
 T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 3340 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Merksatz: Erst validieren, dann kurz testen, dann dauerhaft starten.) Tj
@@ -2203,19 +2258,6 @@ T*
 T*
 (#### IoT- und Cloud-Security in kurz) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 3562 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (- IoT: Asset-Inventar, sichere Defaults, Updatefaehigkeit, Segmentierung.) Tj
@@ -2318,6 +2360,19 @@ T*
 T*
 (Grundschutz wird in diesem Arbeitsstand bewusst zurueckgestellt. Der sinnvolle naechste Fokus) Tj
 T*
+ET
+endstream
+endobj
+34 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
+endobj
+35 0 obj
+<< /Length 3768 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (fuer ISCY ist Zero Trust als laufende technische Posture-Sicht.) Tj
 T*
 () Tj
@@ -2360,19 +2415,6 @@ T*
 T*
 (3. MDM-/EDR-Integrationen vorbereiten) Tj
 T*
-ET
-endstream
-endobj
-34 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
-endobj
-35 0 obj
-<< /Length 4013 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Intune, Jamf, Microsoft Defender, Wazuh, CrowdStrike oder SentinelOne sollten zunaechst als) Tj
 T*
 (Import-/Connector-Schicht angebunden werden, nicht als Fernsteuerung.) Tj
@@ -2475,6 +2517,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+36 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
+endobj
+37 0 obj
+<< /Length 2341 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- mit einem Tenant und einem realen Scope starten) Tj
 T*
 (- lieber wenige, aber belastbare Daten pflegen) Tj
@@ -2517,19 +2572,6 @@ T*
 T*
 (1. Agent-Flottenbetrieb und Benachrichtigungen) Tj
 T*
-ET
-endstream
-endobj
-36 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
-endobj
-37 0 obj
-<< /Length 1051 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben) Tj
 T*
 (3. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity) Tj
@@ -2607,16 +2649,16 @@ xref
 0000034467 00000 n
 0000039502 00000 n
 0000039630 00000 n
-0000043867 00000 n
-0000043995 00000 n
-0000046950 00000 n
-0000047078 00000 n
-0000050692 00000 n
-0000050820 00000 n
-0000054885 00000 n
-0000055013 00000 n
+0000043864 00000 n
+0000043992 00000 n
+0000047484 00000 n
+0000047612 00000 n
+0000051004 00000 n
+0000051132 00000 n
+0000054952 00000 n
+0000055080 00000 n
 trailer
 << /Size 38 /Root 1 0 R >>
 startxref
-56116
+57473
 %%EOF

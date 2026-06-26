@@ -787,6 +787,16 @@ curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
 
 Die Prometheus-/Grafana-Betriebsdoku liegt in `docs/OPERATIONS_MONITORING.md`.
 
+Fuer Community-Readiness und Production-Hardening sind zusaetzlich diese Dokumente verbindlich:
+
+- `docs/COMMUNITY_READINESS_PHASE0_PHASE1.md` beschreibt die aktuelle Gap-Liste und den Status `READY WITH DOCUMENTED LIMITATIONS`.
+- `docs/CONFIGURATION.md` dokumentiert Betriebsmodi, Secrets, Proxy-Grenzen und sichere Defaults.
+- `docs/TLS_AND_REVERSE_PROXY.md` beschreibt HTTPS-Terminierung, HSTS und die Behandlung von `x-iscy-*` Identity-Headern.
+- `docs/AUTHORIZATION_MODEL.md` beschreibt Session-, Header- und Rollenmodell inklusive Negativtests.
+- `docs/PRODUCTION_HARDENING.md` beschreibt den Production-Preflight, Security-Header und offene Phase-1-Risiken.
+
+Im Production-Modus (`ISCY_APP_MODE=production`) bricht ISCY den Start ab, wenn kritische Annahmen fehlen: keine Datenbank, Beispiel-Secrets, aktive Demo-Zugangsdaten, Demo-Seeding, unsichere Cookies, oeffentliche Bind-Adresse ohne bestaetigten Reverse Proxy, HSTS ohne bestaetigtes HTTPS oder fehlendes Alertmanager-Secret. Normale Clients duerfen `x-iscy-tenant-id`, `x-iscy-user-id` oder `x-iscy-roles` produktiv nicht zur Identitaetssteuerung verwenden; diese Header werden nur akzeptiert, wenn ein vertrauenswuerdiger Proxy das explizit absichert.
+
 Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:
 
 - `deploy/monitoring/prometheus/iscy-scrape.yml`

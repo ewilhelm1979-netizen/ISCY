@@ -2,14 +2,32 @@ use axum::body::{to_bytes, Body};
 use axum::http::{header::SET_COOKIE, Request, StatusCode};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use iscy_backend::{
-    account_store::AccountStore, agent_store::AgentStore, ai_governance_store::AiGovernanceStore,
-    app_router, app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
-    auth_store::AuthStore, catalog_store::CatalogStore, control_store::ControlStore,
-    cve_store::CveStore, dashboard_store::DashboardStore, db_admin, evidence_store::EvidenceStore,
-    import_store::ImportStore, incident_store::IncidentStore, process_store::ProcessStore,
-    product_security_store::ProductSecurityStore, report_store::ReportStore,
-    requirement_store::RequirementStore, risk_store::RiskStore, roadmap_store::RoadmapStore,
-    supplier_store::SupplierStore, tenant_store::TenantStore, wizard_store::WizardStore, AppState,
+    account_store::AccountStore,
+    agent_store::AgentStore,
+    ai_governance_store::AiGovernanceStore,
+    app_router, app_router_with_state,
+    assessment_store::AssessmentStore,
+    asset_store::AssetStore,
+    auth_store::AuthStore,
+    catalog_store::CatalogStore,
+    control_store::ControlStore,
+    cve_store::CveStore,
+    dashboard_store::DashboardStore,
+    db_admin,
+    evidence_store::EvidenceStore,
+    hardening::{AppMode, CommunitySecurityConfig},
+    import_store::ImportStore,
+    incident_store::IncidentStore,
+    process_store::ProcessStore,
+    product_security_store::ProductSecurityStore,
+    report_store::ReportStore,
+    requirement_store::RequirementStore,
+    risk_store::RiskStore,
+    roadmap_store::RoadmapStore,
+    supplier_store::SupplierStore,
+    tenant_store::TenantStore,
+    wizard_store::WizardStore,
+    AppState,
 };
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use std::{
@@ -49,6 +67,66 @@ async fn health_alias_endpoint_returns_ok() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn security_headers_are_added_to_http_responses() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/health/live")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("x-content-type-options").unwrap(),
+        "nosniff"
+    );
+    assert_eq!(
+        response.headers().get("referrer-policy").unwrap(),
+        "no-referrer"
+    );
+    assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
+    assert!(response.headers().get("content-security-policy").is_some());
+    assert!(response
+        .headers()
+        .get("strict-transport-security")
+        .is_none());
+}
+
+#[tokio::test]
+async fn production_mode_blocks_untrusted_identity_headers() {
+    let app = app_router_with_state(AppState::default().with_security_config(
+        CommunitySecurityConfig {
+            app_mode: AppMode::Production,
+            trust_identity_headers: false,
+            trusted_proxy_configured: false,
+            secure_cookies: true,
+            https_confirmed: false,
+            hsts_enabled: false,
+        },
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/context/whoami")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "untrusted_identity_headers");
 }
 
 #[tokio::test]
