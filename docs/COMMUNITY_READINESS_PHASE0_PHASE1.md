@@ -34,9 +34,10 @@ Dieser Bericht dokumentiert den ersten Community-Readiness-Lauf fuer Phase 0 und
 - Production erkennt bekannte Demo-Passwort-Hashes fuer `admin` und `ops-alertmanager`.
 - `_FILE`-Secret-Muster fuer `ISCY_ALERTMANAGER_TOKEN_FILE`.
 - `init-admin` erzeugt den ersten produktiven Tenant/Admin ohne Demo-Seed und ohne Beispielpasswort.
-- Lokales Login-Rate-Limiting blockiert wiederholte Fehlversuche pro Tenant/Username.
-- Alertmanager-Webhook unterstuetzt HMAC-SHA256 ueber `timestamp.body` inklusive Zeitfenster und Previous-Secret fuer Rotation.
+- DB-gestuetztes Login-Rate-Limiting blockiert wiederholte Fehlversuche pro Tenant/Username und funktioniert bei gemeinsamem Security-Store instanzuebergreifend.
+- Alertmanager-Webhook unterstuetzt HMAC-SHA256 ueber `timestamp.body` inklusive Zeitfenster, Nonce-Persistenz und Previous-Secret fuer Rotation.
 - `make rust-restore-smoke` prueft einen einfachen SQLite-/Media-Restore lokal automatisiert.
+- `make rust-postgres-restore-drill` prueft optional Dump/Restore gegen zwei wegwerfbare PostgreSQL-Testdatenbanken.
 - Zentrale Middleware fuer Security Header.
 - Zentrale Deny-by-default-Grenze fuer `x-iscy-*` Identity Header im Production-Profil.
 - Security-Signale in `/status/`, `/status/operations.json` und `/metrics`.
@@ -44,10 +45,10 @@ Dieser Bericht dokumentiert den ersten Community-Readiness-Lauf fuer Phase 0 und
 ## Offene Risiken
 
 - Vollstaendige Tenant-Isolation muss weiterhin routenweise durch Negativtests verdichtet werden.
-- Login-Rate-Limiting ist pro Backend-Prozess umgesetzt; fuer mehrere Instanzen sollte ein gemeinsamer Store ergaenzt werden.
-- Alertmanager-HMAC nutzt ein Timestamp-Fenster; persistente Nonce-Erkennung fuer strikten Replay-Schutz ist noch offen.
-- Der Restore-Smoke deckt lokal SQLite und Media-Dateien ab; PostgreSQL-/Container-Restore-Drills sollten als naechste Betriebsreife-Stufe folgen.
+- Ohne Security-Store bleiben Login-Rate-Limiting und HMAC-Nonce-Erkennung auf Einzelprozess/Timestamp-Fenster begrenzt.
+- PostgreSQL-Restore wird als optionaler Drill unterstuetzt; produktive Backup-Speicher, RPO/RTO und Restore-Freigaben bleiben Betreiberaufgabe.
+- Objektspeicher-/S3-artige Evidence-Backends sind noch nicht Teil des automatischen Restore-Drills.
 
 ## Empfehlung
 
-Phase 1 ist fuer Community-/Einzelinstanzbetrieb deutlich belastbarer. Naechster fachlicher Schritt vor Phase 2: Tenant-Isolation-Negativtests verdichten, Login-Rate-Limit fuer Clusterbetrieb zentralisieren, HMAC-Nonce-Persistenz ergaenzen und Restore-Drills fuer PostgreSQL/Container automatisieren.
+Phase 1 ist fuer Community-/Einzelinstanzbetrieb und kleine Mehrinstanz-Setups deutlich belastbarer. Naechster fachlicher Schritt vor Phase 2: Tenant-Isolation-Negativtests verdichten, produktive Backup-/Restore-Runbooks je Zielumgebung nachweisen und Evidence-Storage-Backends in Restore-Drills einbeziehen.

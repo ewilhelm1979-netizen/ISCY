@@ -31,7 +31,7 @@ Der Command fuehrt Migrationen aus, legt falls noetig einen Tenant an, erzeugt d
 
 ## Login-Schutz
 
-Lokale Username-/Passwort-Logins werden pro Prozess und pro Tenant/Username begrenzt. Nach fuenf fehlgeschlagenen Versuchen in 15 Minuten blockiert ISCY weitere Versuche fuer 15 Minuten. Die Fehlermeldung bleibt generisch und liefert keine Benutzerexistenz zurueck. Betreiber sollten weiterhin Reverse-Proxy-, WAF- oder SIEM-Regeln fuer IP- und Geo-Anomalien nutzen.
+Lokale Username-/Passwort-Logins werden pro Tenant/Username begrenzt. Nach fuenf fehlgeschlagenen Versuchen in 15 Minuten blockiert ISCY weitere Versuche fuer 15 Minuten. Wenn `DATABASE_URL` gesetzt und Migration `0023_rust_security_runtime_state` angewendet ist, liegt dieser Zustand in der Datenbank und ist damit fuer mehrere Backend-Instanzen gemeinsam nutzbar. Ohne Security-Store faellt ISCY fuer lokale Entwicklung auf einen Prozessspeicher zurueck. Die Fehlermeldung bleibt generisch und liefert keine Benutzerexistenz zurueck. Betreiber sollten weiterhin Reverse-Proxy-, WAF- oder SIEM-Regeln fuer IP- und Geo-Anomalien nutzen.
 
 ## Alertmanager HMAC
 
@@ -47,9 +47,22 @@ Der Client signiert `timestamp.body` mit HMAC-SHA256 und sendet:
 ```text
 x-iscy-alert-timestamp: <unix-epoch-seconds>
 x-iscy-alert-signature: sha256=<hex-hmac>
+x-iscy-alert-nonce: <optionaler-eindeutiger-request-wert>
 ```
 
-Fuer Rotation kann temporaer `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE` gesetzt werden.
+Fuer Rotation kann temporaer `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE` gesetzt werden. Wenn der Security-Store aktiv ist, speichert ISCY verwendete Nonces im Replay-Fenster. Fehlt `x-iscy-alert-nonce`, wird die Kombination aus Timestamp und Signatur als Nonce-Schluessel genutzt.
+
+## Restore-Drills
+
+`make rust-restore-smoke` prueft lokal SQLite plus Media-Dateien. Fuer PostgreSQL gibt es einen optionalen Drill gegen zwei wegwerfbare Testdatenbanken:
+
+```bash
+ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_source \
+ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_restore \
+nix develop --command make rust-postgres-restore-drill
+```
+
+Der Drill initialisiert die Source-Datenbank mit Demo-Daten, erzeugt einen `pg_dump`, leert das Restore-Ziel, spielt den Dump ein und validiert anschliessend die Migrationstabelle.
 
 ## Security Header
 
@@ -81,6 +94,6 @@ iscy_operations_security_flag
 
 ## Bekannte Grenzen
 
-- Das Login-Rate-Limit ist pro Prozess und nicht clusterweit synchronisiert.
-- Der HMAC-Replay-Schutz nutzt ein Timestamp-Fenster; Nonce-Persistenz ist noch nicht umgesetzt.
-- Der Restore-Smoke deckt SQLite/Media lokal ab; produktive PostgreSQL-/Objektspeicher-Drills muessen pro Umgebung geplant werden.
+- Ohne konfigurierten Security-Store fallen Login-Rate-Limits und HMAC-Nonce-Erkennung auf Einzelprozess-/Timestamp-Schutz zurueck.
+- Der PostgreSQL-Restore-Drill nutzt wegwerfbare Testdatenbanken; produktive Restore-Prozesse muessen je Umgebung mit echten Backup-Speichern, RPO/RTO und Freigaben erprobt werden.
+- Objektspeicher-/S3-artige Evidence-Backends sind noch nicht Teil des automatischen Restore-Drills.

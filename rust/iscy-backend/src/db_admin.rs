@@ -172,6 +172,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AI_GOVERNANCE_CORE_SCHEMA,
         postgres_sql: POSTGRES_AI_GOVERNANCE_CORE_SCHEMA,
     },
+    Migration {
+        version: "0023_rust_security_runtime_state",
+        sqlite_sql: SQLITE_SECURITY_RUNTIME_STATE_SCHEMA,
+        postgres_sql: POSTGRES_SECURITY_RUNTIME_STATE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1156,6 +1161,58 @@ WHERE NOT EXISTS (
     WHERE existing.tenant_id = ai.tenant_id
       AND existing.name = ai.name
 );
+"#;
+
+const SQLITE_SECURITY_RUNTIME_STATE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS iscy_security_login_rate_limit (
+    key varchar(255) PRIMARY KEY,
+    tenant_id INTEGER NULL,
+    username varchar(150) NOT NULL DEFAULT '',
+    failures INTEGER NOT NULL DEFAULT 0,
+    first_failure_at TEXT NOT NULL,
+    blocked_until TEXT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_iscy_security_login_rate_limit_tenant
+    ON iscy_security_login_rate_limit(tenant_id, username);
+CREATE INDEX IF NOT EXISTS idx_iscy_security_login_rate_limit_blocked
+    ON iscy_security_login_rate_limit(blocked_until);
+
+CREATE TABLE IF NOT EXISTS iscy_security_hmac_nonce (
+    scope varchar(64) NOT NULL,
+    nonce_hash varchar(64) NOT NULL,
+    observed_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    PRIMARY KEY(scope, nonce_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_iscy_security_hmac_nonce_expiry
+    ON iscy_security_hmac_nonce(expires_at);
+"#;
+
+const POSTGRES_SECURITY_RUNTIME_STATE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS iscy_security_login_rate_limit (
+    key varchar(255) PRIMARY KEY,
+    tenant_id BIGINT NULL,
+    username varchar(150) NOT NULL DEFAULT '',
+    failures BIGINT NOT NULL DEFAULT 0,
+    first_failure_at TEXT NOT NULL,
+    blocked_until TEXT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_iscy_security_login_rate_limit_tenant
+    ON iscy_security_login_rate_limit(tenant_id, username);
+CREATE INDEX IF NOT EXISTS idx_iscy_security_login_rate_limit_blocked
+    ON iscy_security_login_rate_limit(blocked_until);
+
+CREATE TABLE IF NOT EXISTS iscy_security_hmac_nonce (
+    scope varchar(64) NOT NULL,
+    nonce_hash varchar(64) NOT NULL,
+    observed_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    PRIMARY KEY(scope, nonce_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_iscy_security_hmac_nonce_expiry
+    ON iscy_security_hmac_nonce(expires_at);
 "#;
 
 const SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"

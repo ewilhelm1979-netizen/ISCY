@@ -4,7 +4,7 @@ COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
 COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 RUST_BACKEND_MANIFEST=rust/iscy-backend/Cargo.toml
 
-.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke docs-pdf canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
+.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke rust-postgres-restore-drill docs-pdf canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
 
 local-bootstrap: rust-init
 
@@ -128,6 +128,27 @@ rust-restore-smoke:
 	test -s "$$restore_path"; \
 	test -f "$$restore_media/evidence/probe.txt"; \
 	echo "Rust restore smoke OK: $$restore_url"
+
+rust-postgres-restore-drill:
+	@if [ -z "$$ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL" ] || [ -z "$$ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL" ]; then \
+		echo "Rust PostgreSQL restore drill SKIP: set ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL and ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL for disposable test databases."; \
+		exit 0; \
+	fi; \
+	command -v pg_dump >/dev/null; \
+	command -v pg_restore >/dev/null; \
+	command -v psql >/dev/null; \
+	tmpdir=$$(mktemp -d); \
+	dump_file="$$tmpdir/iscy-postgres.dump"; \
+	source_url="$$ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL"; \
+	restore_url="$$ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL"; \
+	echo "Rust PostgreSQL restore drill source: $$source_url"; \
+	DATABASE_URL="$$source_url" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- init-demo; \
+	pg_dump --format=custom --no-owner --no-privileges --dbname="$$source_url" --file="$$dump_file"; \
+	psql "$$restore_url" -v ON_ERROR_STOP=1 -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;' >/dev/null; \
+	pg_restore --dbname="$$restore_url" --no-owner --no-privileges "$$dump_file"; \
+	DATABASE_URL="$$restore_url" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- migrate; \
+	psql "$$restore_url" -v ON_ERROR_STOP=1 -c 'SELECT COUNT(*) FROM iscy_schema_migrations;' >/dev/null; \
+	echo "Rust PostgreSQL restore drill OK"
 
 canary-daily:
 	./scripts/run_daily_canary.sh

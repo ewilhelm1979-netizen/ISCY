@@ -48,6 +48,7 @@ pub mod request_context;
 pub mod requirement_store;
 pub mod risk_store;
 pub mod roadmap_store;
+pub mod security_store;
 pub mod supplier_store;
 pub mod tenant_store;
 pub mod wizard_store;
@@ -74,6 +75,7 @@ use request_context::{AuthenticatedTenantContext, RequestContext, RequiredTenant
 use requirement_store::RequirementStore;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
+use security_store::SecurityStore;
 use supplier_store::SupplierStore;
 use tenant_store::TenantStore;
 use wizard_store::WizardStore;
@@ -99,6 +101,7 @@ pub struct AppState {
     pub requirement_store: Option<RequirementStore>,
     pub risk_store: Option<RiskStore>,
     pub roadmap_store: Option<RoadmapStore>,
+    pub security_store: Option<SecurityStore>,
     pub supplier_store: Option<SupplierStore>,
     pub tenant_store: Option<TenantStore>,
     pub wizard_store: Option<WizardStore>,
@@ -138,6 +141,7 @@ impl AppState {
             requirement_store: None,
             risk_store: None,
             roadmap_store: None,
+            security_store: None,
             supplier_store: None,
             tenant_store: None,
             wizard_store: None,
@@ -170,6 +174,7 @@ impl AppState {
             requirement_store: None,
             risk_store: None,
             roadmap_store: None,
+            security_store: None,
             supplier_store: None,
             tenant_store,
             wizard_store: None,
@@ -236,6 +241,11 @@ impl AppState {
 
     pub fn with_security_config(mut self, security_config: CommunitySecurityConfig) -> Self {
         self.security_config = security_config;
+        self
+    }
+
+    pub fn with_security_store(mut self, security_store: Option<SecurityStore>) -> Self {
+        self.security_store = security_store;
         self
     }
 
@@ -1962,7 +1972,7 @@ async fn operations_alertmanager_webhook(
         )
             .into_response();
     }
-    if let Err(response) = alertmanager_hmac_valid(&headers, &body) {
+    if let Err(response) = alertmanager_hmac_valid(&state, &headers, &body).await {
         return response;
     }
     let payload = match serde_json::from_slice::<AlertmanagerWebhookPayload>(&body) {
@@ -2083,7 +2093,11 @@ fn alertmanager_token_matches(headers: &HeaderMap) -> bool {
 
 type AlertmanagerHmacSha256 = Hmac<Sha256>;
 
-fn alertmanager_hmac_valid(headers: &HeaderMap, body: &[u8]) -> Result<(), Response> {
+async fn alertmanager_hmac_valid(
+    state: &AppState,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(), Response> {
     let Ok(current_secret) = hardening::secret_value("ISCY_ALERTMANAGER_HMAC_SECRET") else {
         return Err(alertmanager_auth_response(
             "invalid_alertmanager_hmac_config",
@@ -2101,7 +2115,8 @@ fn alertmanager_hmac_valid(headers: &HeaderMap, body: &[u8]) -> Result<(), Respo
             "Alertmanager-HMAC benoetigt x-iscy-alert-timestamp.",
         )
     })?;
-    validate_alertmanager_timestamp(&timestamp)?;
+    let max_age = alertmanager_hmac_max_age();
+    validate_alertmanager_timestamp(&timestamp, max_age)?;
     let signature = header_string(headers, "x-iscy-alert-signature").ok_or_else(|| {
         alertmanager_auth_response(
             "missing_alertmanager_hmac_signature",
@@ -2118,6 +2133,9 @@ fn alertmanager_hmac_valid(headers: &HeaderMap, body: &[u8]) -> Result<(), Respo
             .as_deref()
             .is_some_and(|secret| alertmanager_hmac_secret_matches(secret, &signed_body, signature))
     {
+        let nonce = header_string(headers, "x-iscy-alert-nonce")
+            .unwrap_or_else(|| format!("{}:{}", timestamp.trim(), signature.trim()));
+        consume_alertmanager_hmac_nonce(state, &nonce, max_age).await?;
         return Ok(());
     }
     Err(alertmanager_auth_response(
@@ -2126,26 +2144,54 @@ fn alertmanager_hmac_valid(headers: &HeaderMap, body: &[u8]) -> Result<(), Respo
     ))
 }
 
-fn validate_alertmanager_timestamp(timestamp: &str) -> Result<(), Response> {
+fn alertmanager_hmac_max_age() -> Duration {
+    std::env::var("ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(300))
+}
+
+fn validate_alertmanager_timestamp(timestamp: &str, max_age: Duration) -> Result<(), Response> {
     let parsed = timestamp.trim().parse::<i64>().map_err(|_| {
         alertmanager_auth_response(
             "invalid_alertmanager_hmac_timestamp",
             "x-iscy-alert-timestamp muss Unix-Epoch-Sekunden enthalten.",
         )
     })?;
-    let max_age = std::env::var("ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS")
-        .ok()
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(300);
     let now = Utc::now().timestamp();
-    if (now - parsed).abs() > max_age {
+    if (now - parsed).unsigned_abs() > max_age.as_secs() {
         return Err(alertmanager_auth_response(
             "stale_alertmanager_hmac_timestamp",
             "Alertmanager-HMAC-Timestamp liegt ausserhalb des erlaubten Replay-Fensters.",
         ));
     }
     Ok(())
+}
+
+async fn consume_alertmanager_hmac_nonce(
+    state: &AppState,
+    nonce: &str,
+    max_age: Duration,
+) -> Result<(), Response> {
+    let Some(store) = state.security_store.as_ref() else {
+        return Ok(());
+    };
+    match store
+        .consume_hmac_nonce("alertmanager", nonce, max_age)
+        .await
+    {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(alertmanager_auth_response(
+            "replayed_alertmanager_hmac_nonce",
+            "Alertmanager-HMAC-Nonce wurde im Replay-Fenster bereits verwendet.",
+        )),
+        Err(_) => Err(alertmanager_auth_response(
+            "invalid_alertmanager_hmac_nonce_store",
+            "Alertmanager-HMAC-Nonce konnte nicht persistiert werden.",
+        )),
+    }
 }
 
 fn alertmanager_hmac_message(timestamp: &str, body: &[u8]) -> Vec<u8> {
@@ -2915,7 +2961,19 @@ fn login_rate_limit_key(tenant_id: Option<i64>, username: &str) -> String {
     )
 }
 
-fn login_rate_limit_remaining_block(state: &AppState, key: &str) -> Option<Duration> {
+async fn login_rate_limit_remaining_block(state: &AppState, key: &str) -> Option<Duration> {
+    if let Some(store) = state.security_store.as_ref() {
+        if let Ok(remaining) = store
+            .login_rate_limit_remaining_block(key, LOGIN_RATE_LIMIT_WINDOW)
+            .await
+        {
+            return remaining;
+        }
+    }
+    login_rate_limit_remaining_block_memory(state, key)
+}
+
+fn login_rate_limit_remaining_block_memory(state: &AppState, key: &str) -> Option<Duration> {
     let now = Instant::now();
     let mut guard = state.login_rate_limits.lock().ok()?;
     let entry = guard.get(key)?;
@@ -2930,7 +2988,32 @@ fn login_rate_limit_remaining_block(state: &AppState, key: &str) -> Option<Durat
     None
 }
 
-fn login_rate_limit_record_failure(state: &AppState, key: &str) {
+async fn login_rate_limit_record_failure(
+    state: &AppState,
+    key: &str,
+    tenant_id: Option<i64>,
+    username: &str,
+) {
+    if let Some(store) = state.security_store.as_ref() {
+        if store
+            .record_login_failure(
+                key,
+                tenant_id,
+                username,
+                LOGIN_RATE_LIMIT_MAX_FAILURES,
+                LOGIN_RATE_LIMIT_WINDOW,
+                LOGIN_RATE_LIMIT_BLOCK,
+            )
+            .await
+            .is_ok()
+        {
+            return;
+        }
+    }
+    login_rate_limit_record_failure_memory(state, key);
+}
+
+fn login_rate_limit_record_failure_memory(state: &AppState, key: &str) {
     let now = Instant::now();
     let Ok(mut guard) = state.login_rate_limits.lock() else {
         return;
@@ -2953,7 +3036,16 @@ fn login_rate_limit_record_failure(state: &AppState, key: &str) {
     }
 }
 
-fn login_rate_limit_record_success(state: &AppState, key: &str) {
+async fn login_rate_limit_record_success(state: &AppState, key: &str) {
+    if let Some(store) = state.security_store.as_ref() {
+        if store.clear_login_limit(key).await.is_ok() {
+            return;
+        }
+    }
+    login_rate_limit_record_success_memory(state, key);
+}
+
+fn login_rate_limit_record_success_memory(state: &AppState, key: &str) {
     if let Ok(mut guard) = state.login_rate_limits.lock() {
         guard.remove(key);
     }
@@ -3096,7 +3188,7 @@ async fn auth_session_create(
         )
             .into_response();
     };
-    let mut login_key = None;
+    let mut login_context = None;
     let session_result = match (
         payload.username.as_deref(),
         payload.password.as_deref(),
@@ -3105,10 +3197,10 @@ async fn auth_session_create(
     ) {
         (Some(username), Some(password), tenant_id, _) => {
             let key = login_rate_limit_key(tenant_id, username);
-            if let Some(remaining) = login_rate_limit_remaining_block(&state, &key) {
+            if let Some(remaining) = login_rate_limit_remaining_block(&state, &key).await {
                 return login_rate_limited_response(remaining);
             }
-            login_key = Some(key);
+            login_context = Some((key, tenant_id, username.to_string()));
             store
                 .create_session_for_login(tenant_id, username, password)
                 .await
@@ -3132,8 +3224,8 @@ async fn auth_session_create(
     };
     match session_result {
         Ok(Some(session)) => {
-            if let Some(key) = login_key.as_deref() {
-                login_rate_limit_record_success(&state, key);
+            if let Some((key, _, _)) = login_context.as_ref() {
+                login_rate_limit_record_success(&state, key).await;
             }
             let cookie = session_cookie_value(&session.token, &state.security_config);
             response_with_cookie(
@@ -3157,8 +3249,8 @@ async fn auth_session_create(
             )
         }
         Ok(None) => {
-            if let Some(key) = login_key.as_deref() {
-                login_rate_limit_record_failure(&state, key);
+            if let Some((key, tenant_id, username)) = login_context.as_ref() {
+                login_rate_limit_record_failure(&state, key, *tenant_id, username).await;
             }
             (
                 StatusCode::UNAUTHORIZED,
@@ -8825,7 +8917,7 @@ async fn web_login_submit(
         .into_response();
     };
     let login_key = login_rate_limit_key(form.tenant_id, &form.username);
-    if let Some(remaining) = login_rate_limit_remaining_block(&state, &login_key) {
+    if let Some(remaining) = login_rate_limit_remaining_block(&state, &login_key).await {
         return web_page(
             "Login",
             "/login/",
@@ -8842,14 +8934,15 @@ async fn web_login_submit(
         .await
     {
         Ok(Some(session)) => {
-            login_rate_limit_record_success(&state, &login_key);
+            login_rate_limit_record_success(&state, &login_key).await;
             redirect_with_cookie(
                 "/dashboard/",
                 &session_cookie_value(&session.token, &state.security_config),
             )
         }
         Ok(None) => {
-            login_rate_limit_record_failure(&state, &login_key);
+            login_rate_limit_record_failure(&state, &login_key, form.tenant_id, &form.username)
+                .await;
             web_page(
                 "Login",
                 "/login/",

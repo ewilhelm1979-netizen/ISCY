@@ -804,7 +804,7 @@ Fuer Community-Readiness und Production-Hardening sind zusaetzlich diese Dokumen
 
 Im Production-Modus (`ISCY_APP_MODE=production`) bricht ISCY den Start ab, wenn kritische Annahmen fehlen: keine Datenbank, Beispiel-Secrets, aktive Demo-Zugangsdaten, Demo-Seeding, unsichere Cookies, oeffentliche Bind-Adresse ohne bestaetigten Reverse Proxy, HSTS ohne bestaetigtes HTTPS oder fehlendes Alertmanager-Secret. Normale Clients duerfen `x-iscy-tenant-id`, `x-iscy-user-id` oder `x-iscy-roles` produktiv nicht zur Identitaetssteuerung verwenden; diese Header werden nur akzeptiert, wenn ein vertrauenswuerdiger Proxy das explizit absichert.
 
-Lokale Logins sind gegen einfache Brute-Force-Schleifen begrenzt: Nach fuenf fehlgeschlagenen Versuchen pro Tenant/Username blockiert ISCY weitere Versuche fuer 15 Minuten. Der Alertmanager-Webhook kann zusaetzlich zum Bearer-Token mit `ISCY_ALERTMANAGER_HMAC_SECRET_FILE` signierte `timestamp.body`-Requests verlangen; das Replay-Fenster wird ueber `ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS` gesteuert.
+Lokale Logins sind gegen einfache Brute-Force-Schleifen begrenzt: Nach fuenf fehlgeschlagenen Versuchen pro Tenant/Username blockiert ISCY weitere Versuche fuer 15 Minuten. Mit angewendeter Migration `0023_rust_security_runtime_state` wird dieser Zustand im Security-Store persistiert und kann von mehreren Backend-Instanzen gemeinsam genutzt werden. Der Alertmanager-Webhook kann zusaetzlich zum Bearer-Token mit `ISCY_ALERTMANAGER_HMAC_SECRET_FILE` signierte `timestamp.body`-Requests verlangen; das Replay-Fenster wird ueber `ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS` gesteuert. Optional kann `x-iscy-alert-nonce` gesendet werden; bei aktivem Security-Store speichert ISCY verwendete Nonces im Replay-Fenster und lehnt Wiederholungen ab.
 
 Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:
 
@@ -833,6 +833,9 @@ Wichtige lokale Pruefbefehle:
 ```bash
 nix develop --command make rust-smoke
 nix develop --command make rust-restore-smoke
+ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_source \
+ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_restore \
+nix develop --command make rust-postgres-restore-drill
 nix develop --command make team-test
 make rust-test
 make rust-smoke

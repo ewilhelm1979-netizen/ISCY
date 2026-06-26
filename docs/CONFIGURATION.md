@@ -26,6 +26,8 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 | `ISCY_INITIAL_ADMIN_FIRST_NAME` | Initialer Admin-Vorname | nein | `ISCY` | Text | Anzeigeprofil des Erstadmins | nein |
 | `ISCY_INITIAL_ADMIN_LAST_NAME` | Initialer Admin-Nachname | nein | `Admin` | Text | Anzeigeprofil des Erstadmins | nein |
 | `ISCY_INITIAL_ADMIN_PASSWORD` | Initiales Admin-Passwort | fuer `init-admin` ja | keine | mind. 14 Zeichen, kein Beispielwert | Erzeugt ersten Admin ohne Demo-Zugangsdaten | ja, `ISCY_INITIAL_ADMIN_PASSWORD_FILE` |
+| `ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL` | Disposable PostgreSQL-Quelle fuer Restore-Drill | nur fuer Drill | leer | PostgreSQL-URL | Wird durch `make rust-postgres-restore-drill` mit Demo-Daten initialisiert | nein |
+| `ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL` | Disposable PostgreSQL-Ziel fuer Restore-Drill | nur fuer Drill | leer | PostgreSQL-URL | Ziel-Schema wird beim Drill geloescht und aus Dump wiederhergestellt | nein |
 | `NVD_API_BASE_URL` | Optionale NVD-Quelle | nein | NVD Default | URL | Externe Verbindung nur bei aktivem CVE-Abgleich | nein |
 | `NVD_API_KEY` | Optionaler NVD API Key | nein | leer | Secret | Darf nicht in Logs oder Supportpaketen landen | ja, noch nicht fuer alle Callpaths |
 
@@ -62,3 +64,19 @@ nix run .#iscy-backend -- init-admin
 ```
 
 `init-admin` fuehrt Migrationen aus, legt bei Bedarf einen Tenant und einen aktiven Admin an und seedet keine Demo-Daten.
+
+## Restore-Drills
+
+Der lokale Standard-Smoke prueft SQLite und Media-Dateien:
+
+```bash
+nix develop --command make rust-restore-smoke
+```
+
+Fuer PostgreSQL kann ein Drill gegen zwei wegwerfbare Testdatenbanken aktiviert werden. Das Ziel-Schema wird geloescht.
+
+```bash
+ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_source \
+ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_restore \
+nix develop --command make rust-postgres-restore-drill
+```

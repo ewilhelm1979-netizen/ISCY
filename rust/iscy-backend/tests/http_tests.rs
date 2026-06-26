@@ -24,6 +24,7 @@ use iscy_backend::{
     requirement_store::RequirementStore,
     risk_store::RiskStore,
     roadmap_store::RoadmapStore,
+    security_store::SecurityStore,
     supplier_store::SupplierStore,
     tenant_store::TenantStore,
     wizard_store::WizardStore,
@@ -33,7 +34,7 @@ use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use std::{
     fs,
     path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tower::util::ServiceExt;
 
@@ -638,8 +639,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0022_rust_ai_governance_core"));
-    assert!(html.contains("22/22 angewendet"));
+    assert!(html.contains("0023_rust_security_runtime_state"));
+    assert!(html.contains("23/23 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -926,7 +927,9 @@ async fn rust_auth_session_rate_limits_repeated_failed_passwords() {
     db_admin::run_sqlite_migrations(&pool).await.unwrap();
     db_admin::seed_sqlite_demo(&pool).await.unwrap();
     let app = app_router_with_state(
-        AppState::default().with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone()))),
+        AppState::default()
+            .with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone())))
+            .with_security_store(Some(SecurityStore::from_sqlite_pool(pool.clone()))),
     );
 
     for _ in 0..5 {
@@ -947,7 +950,12 @@ async fn rust_auth_session_rate_limits_repeated_failed_passwords() {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
-    let response = app
+    let second_app = app_router_with_state(
+        AppState::default()
+            .with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone())))
+            .with_security_store(Some(SecurityStore::from_sqlite_pool(pool.clone()))),
+    );
+    let response = second_app
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -964,6 +972,26 @@ async fn rust_auth_session_rate_limits_repeated_failed_passwords() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "login_rate_limited");
+}
+
+#[tokio::test]
+async fn rust_security_store_rejects_replayed_hmac_nonce() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let store = SecurityStore::from_sqlite_pool(pool);
+
+    assert!(store
+        .consume_hmac_nonce("alertmanager", "nonce-1", Duration::from_secs(300))
+        .await
+        .unwrap());
+    assert!(!store
+        .consume_hmac_nonce("alertmanager", "nonce-1", Duration::from_secs(300))
+        .await
+        .unwrap());
 }
 
 #[tokio::test]
@@ -8906,7 +8934,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0019_rust_management_review_packages",
             "0020_rust_supplier_risk_core",
             "0021_rust_product_security_vex_cra",
-            "0022_rust_ai_governance_core"
+            "0022_rust_ai_governance_core",
+            "0023_rust_security_runtime_state"
         ]
     );
     assert!(
@@ -8930,6 +8959,16 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     assert!(db_admin::sqlite_table_exists(&pool, "django_content_type")
         .await
         .unwrap());
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "iscy_security_login_rate_limit")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "iscy_security_hmac_nonce")
+            .await
+            .unwrap()
+    );
     assert!(db_admin::sqlite_table_exists(&pool, "incidents_incident")
         .await
         .unwrap());

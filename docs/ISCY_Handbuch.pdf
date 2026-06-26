@@ -2053,7 +2053,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
 endobj
 31 0 obj
-<< /Length 3700 >>
+<< /Length 4040 >>
 stream
 BT
 /F1 9 Tf
@@ -2061,13 +2061,21 @@ BT
 10 TL
 (Lokale Logins sind gegen einfache Brute-Force-Schleifen begrenzt: Nach fuenf fehlgeschlagenen) Tj
 T*
-(Versuchen pro Tenant/Username blockiert ISCY weitere Versuche fuer 15 Minuten. Der) Tj
+(Versuchen pro Tenant/Username blockiert ISCY weitere Versuche fuer 15 Minuten. Mit) Tj
+T*
+(angewendeter Migration 0023rustsecurityruntimestate wird dieser Zustand im Security-Store) Tj
+T*
+(persistiert und kann von mehreren Backend-Instanzen gemeinsam genutzt werden. Der) Tj
 T*
 (Alertmanager-Webhook kann zusaetzlich zum Bearer-Token mit ISCYALERTMANAGERHMACSECRETFILE) Tj
 T*
 (signierte timestamp.body-Requests verlangen; das Replay-Fenster wird ueber) Tj
 T*
-(ISCYALERTMANAGERHMACMAXAGESECONDS gesteuert.) Tj
+(ISCYALERTMANAGERHMACMAXAGESECONDS gesteuert. Optional kann x-iscy-alert-nonce gesendet werden;) Tj
+T*
+(bei aktivem Security-Store speichert ISCY verwendete Nonces im Replay-Fenster und lehnt) Tj
+T*
+(Wiederholungen ab.) Tj
 T*
 () Tj
 T*
@@ -2149,6 +2157,16 @@ T*
 T*
 (nix develop --command make rust-restore-smoke) Tj
 T*
+(ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_source) Tj
+T*
+(\\) Tj
+T*
+(ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_restore) Tj
+T*
+(\\) Tj
+T*
+(nix develop --command make rust-postgres-restore-drill) Tj
+T*
 (nix develop --command make team-test) Tj
 T*
 (make rust-test) Tj
@@ -2185,6 +2203,19 @@ T*
 T*
 (Produktive Agenten sollten mit Enrollment-Token aufgenommen werden:) Tj
 T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 3153 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (ISCY_BACKEND_URL=http://127.0.0.1:9000 \\) Tj
@@ -2203,19 +2234,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 3284 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (6.7 Docker-Betrieb in einfacher Sprache:) Tj
 T*
 () Tj
@@ -2342,6 +2360,19 @@ T*
 T*
 (- make docker-smoke ist ohne Fehler durchgelaufen.) Tj
 T*
+ET
+endstream
+endobj
+34 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
+endobj
+35 0 obj
+<< /Length 3897 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (2. CRA-Readiness sichtbar) Tj
 T*
 (- Product-Security-Scope ist gepflegt.) Tj
@@ -2360,19 +2391,6 @@ T*
 T*
 (4. Windows-Hardening umgesetzt) Tj
 T*
-ET
-endstream
-endobj
-34 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
-endobj
-35 0 obj
-<< /Length 3886 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Baselines sind definiert.) Tj
 T*
 (- lokale Adminrechte, Makros, SMB und Firewall sind geregelt.) Tj
@@ -2499,6 +2517,19 @@ T*
 T*
 (- Evidence: Nachweis) Tj
 T*
+ET
+endstream
+endobj
+36 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
+endobj
+37 0 obj
+<< /Length 3298 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- CVE: standardisierte Kennung fuer eine bekannte Schwachstelle) Tj
 T*
 (- CVSS: Basisscore fuer technische Schwere) Tj
@@ -2517,19 +2548,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-36 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
-endobj
-37 0 obj
-<< /Length 2852 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (ISCY ersetzt nicht:) Tj
 T*
 () Tj
@@ -2677,14 +2695,14 @@ xref
 0000039630 00000 n
 0000043838 00000 n
 0000043966 00000 n
-0000047718 00000 n
-0000047846 00000 n
-0000051182 00000 n
-0000051310 00000 n
-0000055248 00000 n
-0000055376 00000 n
+0000048058 00000 n
+0000048186 00000 n
+0000051391 00000 n
+0000051519 00000 n
+0000055468 00000 n
+0000055596 00000 n
 trailer
 << /Size 38 /Root 1 0 R >>
 startxref
-58280
+58946
 %%EOF

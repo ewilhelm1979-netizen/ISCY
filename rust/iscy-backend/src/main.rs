@@ -25,6 +25,7 @@ use iscy_backend::{
     requirement_store::RequirementStore,
     risk_store::RiskStore,
     roadmap_store::RoadmapStore,
+    security_store::SecurityStore,
     supplier_store::SupplierStore,
     tenant_store::TenantStore,
     wizard_store::WizardStore,
@@ -92,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
         import_store,
         assessment_store,
         roadmap_store,
+        security_store,
         supplier_store,
         wizard_store,
         product_security_store,
@@ -116,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
             let import_store = ImportStore::connect(database_url).await?;
             let assessment_store = AssessmentStore::connect(database_url).await?;
             let roadmap_store = RoadmapStore::connect(database_url).await?;
+            let security_store = SecurityStore::connect(database_url).await?;
             let supplier_store = SupplierStore::connect(database_url).await?;
             let wizard_store = WizardStore::connect(database_url).await?;
             let product_security_store = ProductSecurityStore::connect(database_url).await?;
@@ -139,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(import_store),
                 Some(assessment_store),
                 Some(roadmap_store),
+                Some(security_store),
                 Some(supplier_store),
                 Some(wizard_store),
                 Some(product_security_store),
@@ -147,7 +151,7 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => (
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None,
         ),
     };
     let state = AppState::with_stores(cve_store, tenant_store)
@@ -168,6 +172,7 @@ async fn main() -> anyhow::Result<()> {
         .with_import_store(import_store)
         .with_assessment_store(assessment_store)
         .with_roadmap_store(roadmap_store)
+        .with_security_store(security_store)
         .with_supplier_store(supplier_store)
         .with_wizard_store(wizard_store)
         .with_product_security_store(product_security_store)

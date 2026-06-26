@@ -116,6 +116,14 @@ nix develop --command make rust-restore-smoke
 nix develop --command make team-test
 ```
 
+Optionaler PostgreSQL-Restore-Drill mit zwei wegwerfbaren Testdatenbanken:
+
+```bash
+ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_source \
+ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_restore \
+nix develop --command make rust-postgres-restore-drill
+```
+
 ## Docker Compose
 
 Development:
