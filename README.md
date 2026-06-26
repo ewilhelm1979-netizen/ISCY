@@ -1,6 +1,6 @@
-# ISCY V23.7.23 / Rust 0.3.19
+# ISCY V23.7.24 / Rust 0.3.20
 
-ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Third-Party-/Supplier-Risk, Product Security, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
+ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Third-Party-/Supplier-Risk, Product Security, AI Governance, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
 
 Der Runtime-Cutover nach Rust ist abgeschlossen: Die produktive Anwendung laeuft ueber den Rust-Axum-Service in `rust/iscy-backend`. Die fruehere Django/Python-Anwendung, ihre Templates, Settings, Requirements und Startpfade wurden aus dem Repository entfernt.
 
@@ -8,7 +8,7 @@ Der Runtime-Cutover nach Rust ist abgeschlossen: Die produktive Anwendung laeuft
 
 Dieses Projekt wurde mit Unterstuetzung von OpenAI Codex entwickelt, iterativ migriert und technisch/fachlich plausibilisiert. Die fachliche Pruefung orientiert sich an offiziellen Quellen und aktuellen Sicherheitspraktiken zu NIS2, DORA, Cyber Resilience Act, EU AI Act, DSGVO, ISO-27001-ISMS-Arbeit, CVE-/SBOM-/CSAF-Verarbeitung, Evidence-Steuerung, Incident Response und risikobasierter Roadmap-Planung.
 
-Der Stand ist damit fachlich konsistent und nach aktuellem Architekturverstaendnis sinnvoll aufgebaut: ISCY trennt keine Regulierungen in Silos, sondern verbindet Controls, Risiken, Assets, Product Security, Incidents, Evidence und Roadmap-Arbeit in einem nachvollziehbaren Governance-Modell. Das ersetzt keine externe Zertifizierung, Rechtsberatung oder formale Auditfreigabe, schafft aber eine belastbare fachliche Arbeitsbasis.
+Der Stand ist damit fachlich konsistent und nach aktuellem Architekturverstaendnis sinnvoll aufgebaut: ISCY trennt keine Regulierungen in Silos, sondern verbindet Controls, Risiken, Assets, Product Security, AI Governance, Incidents, Evidence und Roadmap-Arbeit in einem nachvollziehbaren Governance-Modell. Das ersetzt keine externe Zertifizierung, Rechtsberatung oder formale Auditfreigabe, schafft aber eine belastbare fachliche Arbeitsbasis.
 
 Fachliche Referenzen:
 
@@ -62,7 +62,7 @@ curl -fsS -X POST http://127.0.0.1:9000/api/v1/operations/alertmanager \
 
 Ohne Tenant-/User-Kontext normalisiert der Webhook Alerts nur. Mit schreibendem Tenant-Kontext legt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege an. Wiederholte firing Alerts werden dedupliziert, resolved Alerts schliessen die passende offene Fallakte automatisch. Optional kann `ISCY_ALERTMANAGER_REQUIRE_RESOLUTION_REVIEW=1` gesetzt werden; dann markiert ISCY resolved Alert-Fallakten ohne Root Cause/Lessons Learned als Review-Pflicht. Das Monitoring-Beispiel sendet fuer lokale Demo-Stacks bereits `x-iscy-tenant-id: 1`, `x-iscy-user-id: 2` und `x-iscy-roles: CONTRIBUTOR`; User `2` ist der per Demo-Seed angelegte technische Operations-User `ops-alertmanager`.
 
-Mit Tenant-Kontext liefert ISCY zusaetzlich fachliche Drilldowns fuer ISCY-27-Gaps, Supplier-Risk, CVE-Review-Rueckstand, Evidence-Luecken, Migrationen, Runtime-Flags und Modulstatus:
+Mit Tenant-Kontext liefert ISCY zusaetzlich fachliche Drilldowns fuer ISCY-27-Gaps, Supplier-Risk, Product Security, AI Governance, CVE-Review-Rueckstand, Evidence-Luecken, Migrationen, Runtime-Flags und Modulstatus:
 
 ```bash
 curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
@@ -154,6 +154,7 @@ Das Backend stellt serverseitige Weboberflaechen und APIs fuer die migrierten Pr
 - `/suppliers/`
 - `/imports/`
 - `/processes/`
+- `/ai-governance/`
 - `/product-security/`
 - `/cves/`
 - `/admin/users/`
@@ -164,7 +165,9 @@ Incidents werden als Rust-Fallakten unter `/incidents/` gefuehrt. Detailseiten u
 
 Product Security wird unter `/product-security/` als Rust-Arbeitsbereich gefuehrt. CSAF-, CycloneDX- und SPDX-Importe werden historisiert, validiert und ueber Detailseiten mit Validierungsfehlern sowie Komponenten-Matches angezeigt. CVE-Asset-Korrelationen koennen vorgeschlagen, akzeptiert oder abgelehnt werden; akzeptierte Korrelationen erzeugen bei Bedarf Risiko- und Roadmap-Arbeit mit stabilem Evidence-Key. Schwachstellen tragen zusaetzlich einen VEX-Status (`AFFECTED`, `NOT_AFFECTED`, `FIXED`, `UNDER_INVESTIGATION`) inklusive Begruendung, Fix-Version und VEX-Zeitpunkt. Das Dashboard zeigt offene CVE-Reviews und fehlende Evidence, buendelt automatisch erzeugte CVE-Risiken in einer Review-Queue, filtert nach offenen Reviews, fehlender Evidence oder fehlendem Risiko, bietet Bulk-Aktionen fuer ausgewaehlte CVE-Reviews, verlinkt Evidence-Uploads nach dem Speichern zur Ausgangsseite zurueck und berechnet CRA-Readiness je Produkt aus SBOM, VEX/CVE-Triage, PSIRT/Advisories, Threat/TARA und Lifecycle. SBOM-Importe koennen per `/product-security/sbom-diff` sowie `GET /api/v1/product-security/sbom-diff` verglichen werden. Die Product-Security-Trends sind zusaetzlich ueber Prometheus-Metriken fuer Coverage, Importvalidierung, Trend-Signale und Snapshot-Verlauf verfuegbar.
 
-Evidence-Links aus Risks, Roadmap, Incidents und Product Security fuellen Titel, Beschreibung, Linked Requirement, Status und Ruecksprungziel vor. Dadurch kann ein Nachweis direkt aus dem fachlichen Kontext erstellt werden und landet nach dem Upload wieder dort, wo die Arbeit begonnen hat.
+AI Governance wird unter `/ai-governance/` als eigenes Rust-Web-/API-Modul gefuehrt. ISCY verwaltet dort AI-Systeme mit Zweck, Produktbezug, Provider, Modell, Datenkategorien, Entscheidungswirkung, Human Oversight, AI-Act-Klasse, Kritikalitaet, Status, Review-Faelligkeit, Monitoringplan, Risikosummary und Evidence-Key. Aus diesen Feldern berechnet ISCY Governance-Anforderungen fuer Klassifizierung, Risikomanagement, Human Oversight, Logging, Transparenz, Cybersecurity/Robustheit sowie Monitoring/Evidence. Maschinenlesbar stehen `GET` und `POST /api/v1/ai-governance/systems` sowie `GET` und `PATCH /api/v1/ai-governance/systems/{id}` bereit. Die Rust-only-Betriebszentrale zeigt AI-Governance-Signale zu nicht bewerteten AI-Systemen, faelligen Reviews, fehlender Evidence und offenen Governance-Gaps.
+
+Evidence-Links aus Risks, Roadmap, Incidents, Product Security und AI Governance fuellen Titel, Beschreibung, Linked Requirement, Status und Ruecksprungziel vor. Dadurch kann ein Nachweis direkt aus dem fachlichen Kontext erstellt werden und landet nach dem Upload wieder dort, wo die Arbeit begonnen hat.
 
 Evidence-Qualitaet wird unter `/evidence/quality/` und `GET /api/v1/evidence/quality` als Nachweisreife ausgewertet. ISCY berechnet fuer Evidence Items Score, Reifegrad und Issues aus Status, Review, Datei-/Artefaktreferenz, Traceability, Owner und Review-Notiz. Evidence Needs werden parallel als offen, teilweise oder abgedeckt bewertet, damit Audits nicht nur "Nachweis vorhanden", sondern "Nachweis belastbar" sehen.
 
@@ -174,16 +177,16 @@ Management Reviews werden unter `/management-reviews/` als auditierbare Steuerun
 
 ## Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 umgesetzt, V23.7.20 ergaenzt das Management-Review- und Audit-Paket, V23.7.21 schliesst Export, Snapshot-Ruecklinks und Evidence-Qualitaet an, V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um, V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
+Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 umgesetzt, V23.7.20 ergaenzt das Management-Review- und Audit-Paket, V23.7.21 schliesst Export, Snapshot-Ruecklinks und Evidence-Qualitaet an, V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um, V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus, V23.7.24 ergaenzt AI Governance als eigenes Rust-Web-/API-Modul. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
 
-1. AI-Governance-Modul
-2. Agent-Flottenbetrieb und Benachrichtigungen
-3. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
-4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity
+1. Agent-Flottenbetrieb und Benachrichtigungen
+2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
+3. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity
+4. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten
 
 ## Zero-Trust Agent
 
-ISCY `0.3.19` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.20` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 

@@ -8,7 +8,7 @@ Die Roadmap ist abgeschlossen. ISCY wurde fuer die produktive Runtime auf Rust u
 
 - Rust-Axum-Service als Runtime.
 - Rust-Weboberflaechen fuer zentrale Produktbereiche.
-- Rust-APIs fuer Dashboard, Catalog, Requirements, Assets, Processes, Risks, Evidence, Assessments, Roadmap, Wizard, Imports, Product Security und CVEs.
+- Rust-APIs fuer Dashboard, Catalog, Requirements, Assets, Processes, Risks, Evidence, Assessments, Roadmap, Wizard, Imports, Product Security, AI Governance und CVEs.
 - Rust-Session-, Auth- und Account-Administration.
 - Rust-NVD-/CVE-Import und Canary-CLI.
 - Rust-Product-Security-Flows fuer CSAF-/CycloneDX-/SPDX-Importe, CVE-Asset-Korrelationen, gefilterte Review-Queue, Bulk-Aktionen, Risiko-/Roadmap-Ableitung und Evidence-Ruecksprung.

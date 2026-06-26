@@ -5,11 +5,12 @@
 - Rust-only Runtime ist abgeschlossen.
 - Das regulatorische Organisationsprofil ist als Tenant-Web-/API-Pfad umgesetzt und fuehrt NIS2, KRITIS, DORA, DSGVO, CRA, AI Act, TISAX und ISO-27001-Zielbild in einer zentralen Matrix zusammen.
 - Product Security verarbeitet CSAF-/CycloneDX-/SPDX-Importe, CVE-Asset-Korrelationen, automatisch erzeugte CVE-Risiken, Product-Security-Roadmap-Tasks, VEX-Entscheidungen, SBOM-Diffs und CRA-Readiness je Produkt.
+- AI Governance ist als eigenes Rust-Web-/API-Modul umgesetzt und fuehrt AI-Systeme mit AI-Act-Klasse, Kritikalitaet, Review-Faelligkeit, Monitoringplan, Risikosummary, Evidence-Key und berechneten Governance-Gaps.
 - Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence, CRA-Readiness, SBOM-Diff-Einstiege und eine gebuendelte CVE-Risiko-Review-Queue mit Filtern und Bulk-Aktionen.
 - Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck; Evidence-Quality bewertet Nachweisreife, offene Issues und Evidence-Needs.
 - Management-Review-Pakete koennen als Markdown, HTML, PDF und JSON exportiert werden und enthalten Ruecklinks zu Risiko, Control, Evidence, Incident und Roadmap.
 - Third-Party-/Supplier-Risk ist als Rust-Web-/API-Modul umgesetzt und bewertet Lieferanten aus Kritikalitaet, Vertrags-/Security-Annex-Bezug, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischem Scope, Review-Faelligkeit, Evidence, Produktkomponenten, offenen Schwachstellen und dokumentierten Risiken.
-- Der Rust-only-Betrieb liefert Statusseite, JSON-Drilldown, Prometheus-Metriken, Alertmanager-Webhook mit optionaler Incident-/Evidence-Persistenz, Grafana-Dashboard inklusive Product-Security-Panels, Compose-Beispiel und NixOS-Modul samt Beispielhost.
+- Der Rust-only-Betrieb liefert Statusseite, JSON-Drilldown, Prometheus-Metriken, Alertmanager-Webhook mit optionaler Incident-/Evidence-Persistenz, AI-Governance-Signale, Grafana-Dashboard inklusive Product-Security-Panels, Compose-Beispiel und NixOS-Modul samt Beispielhost.
 
 ## Prioritaet P0 (vor breitem Produktivrollout)
 
@@ -41,7 +42,7 @@ Die technische Rust-Migration ist abgeschlossen. Die fachliche Weiterentwicklung
 
 Die dort priorisierten naechsten Produktbereiche sind:
 
-1. AI-Governance-Modul
-2. Agent-Flottenbetrieb und Benachrichtigungen
-3. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
-4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity
+1. Agent-Flottenbetrieb und Benachrichtigungen
+2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
+3. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity
+4. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln

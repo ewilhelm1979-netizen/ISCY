@@ -1,12 +1,12 @@
 # ISCY Strategic Roadmap
 
-Stand: 2026-06-20
+Stand: 2026-06-26
 
 Diese Roadmap beschreibt die fachlich sinnvollen naechsten Ausbaustufen nach dem Rust-only-Cutover. Sie ersetzt die alte Rust-Migrationsroadmap nicht, sondern beginnt danach: ISCY ist technisch auf Rust umgestellt und soll nun fachlich reifer, pruefbarer und im Betrieb wirksamer werden.
 
 ## Leitgedanke
 
-ISCY soll keine Regulierungssilos bauen. Die Plattform soll Organisationen, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, Agent-Posture und Roadmap-Arbeit so verbinden, dass neue regulatorische Anforderungen als Mapping und Entscheidungspfad aufgenommen werden koennen.
+ISCY soll keine Regulierungssilos bauen. Die Plattform soll Organisationen, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Agent-Posture und Roadmap-Arbeit so verbinden, dass neue regulatorische Anforderungen als Mapping und Entscheidungspfad aufgenommen werden koennen.
 
 Die fachliche Ausrichtung orientiert sich an:
 
@@ -135,16 +135,26 @@ Erfolgskriterium:
 
 - ISCY kann fuer ein Produkt nachvollziehbar zeigen, welche Schwachstellen relevant sind, welche nicht, welche Releases betroffen sind und welche CRA-/PSIRT-Arbeit offen ist.
 
-## Prioritaet 6: AI-Governance-Modul
+## Prioritaet 6: AI-Governance-Modul (umgesetzt in V23.7.24)
 
 Ziel: KI-Systeme sollen als eigene Governance-Objekte in ISCY sichtbar werden.
 
-Umsetzungsidee:
+Umgesetzt:
 
-- KI-System-Inventar mit Zweck, Owner, Datenarten, Modellquelle, Anbieter, Einsatzbereich und Kritikalitaet.
-- AI-Act-Klassifizierung: verboten, hochriskant, begrenztes Risiko, minimales Risiko oder nicht relevant.
-- Anforderungen fuer Logging, Transparenz, Human Oversight, Robustheit, Security, Datenqualitaet und Monitoring verknuepfen.
-- Risiken, Evidence, Incidents und Roadmap-Tasks direkt an KI-Systeme koppeln.
+- Weboberflaeche unter `/ai-governance/`.
+- API-Pfade `GET` und `POST /api/v1/ai-governance/systems`.
+- API-Pfade `GET` und `PATCH /api/v1/ai-governance/systems/{id}`.
+- KI-System-Inventar mit Zweck, Produktbezug, Owner, Datenarten, Modellquelle, Anbieter, Einsatzbereich, Kritikalitaet, Status und Review-Faelligkeit.
+- AI-Act-Klassifizierung: nicht bewertet, verboten/nicht freigegeben, High Risk, Limited Risk, Minimal Risk oder nicht im Scope.
+- Berechnete Governance-Anforderungen fuer Klassifizierung, Risikomanagement, Human Oversight, Logging, Transparenz, Cybersecurity/Robustheit sowie Monitoring/Evidence.
+- Evidence-Vorbefuellung ueber stabile AI-Governance-Evidence-Keys.
+- Rust-only-Betriebssignale fuer nicht bewertete AI-Systeme, faellige Reviews, fehlende Evidence und offene Governance-Gaps.
+
+Naechste Vertiefung:
+
+- Roadmap-Tasks automatisch aus AI-Governance-Gaps erzeugen.
+- Risiko-Register direkt an AI-Systeme koppeln.
+- AI-Incident-/Change-Verknuepfung fuer produktive AI-Systeme ausbauen.
 
 Erfolgskriterium:
 
@@ -168,10 +178,10 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. AI-Governance-Modul als aktueller, aber klar abgegrenzter Erweiterungsbereich.
-2. Agent-Flottenbetrieb und Benachrichtigungen fuer Skalierung und Alltagstauglichkeit.
-3. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben.
-4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity.
+1. Agent-Flottenbetrieb und Benachrichtigungen fuer Skalierung und Alltagstauglichkeit.
+2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben.
+3. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity.
+4. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln.
 5. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
 
 ## Abgrenzung

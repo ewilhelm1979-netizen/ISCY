@@ -3,7 +3,7 @@
 << /Type /Catalog /Pages 2 0 R >>
 endobj
 2 0 obj
-<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R] /Count 16 >>
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R] /Count 17 >>
 endobj
 3 0 obj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
@@ -22,7 +22,7 @@ BT
 T*
 () Tj
 T*
-(Version: Arbeitsstand Juni 2026 \(ISCY V23.7.23 / Rust 0.3.19\)) Tj
+(Version: Arbeitsstand Juni 2026 \(ISCY V23.7.24 / Rust 0.3.20\)) Tj
 T*
 () Tj
 T*
@@ -169,7 +169,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 7 0 R >>
 endobj
 7 0 obj
-<< /Length 2838 >>
+<< /Length 2837 >>
 stream
 BT
 /F1 9 Tf
@@ -267,6 +267,8 @@ T*
 T*
 (- Processes unter /processes/) Tj
 T*
+(- AI Governance unter /ai-governance/) Tj
+T*
 (- Requirements unter /requirements/) Tj
 T*
 (- Risks unter /risks/) Tj
@@ -317,8 +319,6 @@ T*
 T*
 (- CRA-Relevanz fuer digitale Produkte) Tj
 T*
-(- AI-Act-Profil und Hochrisiko-Hinweis) Tj
-T*
 ET
 endstream
 endobj
@@ -326,12 +326,14 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 9 0 R >>
 endobj
 9 0 obj
-<< /Length 2382 >>
+<< /Length 2420 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+(- AI-Act-Profil und Hochrisiko-Hinweis) Tj
+T*
 (- TISAX-Scope und ISO-27001-Zielbild) Tj
 T*
 (- regulatorische Notizen fuer Scope- und Managemententscheidungen) Tj
@@ -474,8 +476,6 @@ T*
 T*
 (Typische Inhalte:) Tj
 T*
-() Tj
-T*
 ET
 endstream
 endobj
@@ -489,6 +489,8 @@ BT
 /F1 9 Tf
 42 800 Td
 10 TL
+() Tj
+T*
 (- aggregierte Kennzahlen) Tj
 T*
 (- sektor- oder tenantbezogene Sicht) Tj
@@ -631,8 +633,6 @@ T*
 T*
 (Ein Prozess ist ein geordneter Arbeitsablauf des Unternehmens.) Tj
 T*
-() Tj
-T*
 ET
 endstream
 endobj
@@ -640,12 +640,14 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 13 0 R >>
 endobj
 13 0 obj
-<< /Length 3166 >>
+<< /Length 3096 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+() Tj
+T*
 (5.8 Assets:) Tj
 T*
 () Tj
@@ -788,8 +790,6 @@ T*
 T*
 (- Fokuskarte fuer den naechsten sinnvollen Schritt) Tj
 T*
-(- Severity-Badges fuer kritische, hohe, mittlere und niedrige Findings) Tj
-T*
 ET
 endstream
 endobj
@@ -797,12 +797,14 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 15 0 R >>
 endobj
 15 0 obj
-<< /Length 2481 >>
+<< /Length 2527 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+(- Severity-Badges fuer kritische, hohe, mittlere und niedrige Findings) Tj
+T*
 (- mobile Navigation und horizontal scrollbare Tabellen fuer kleine Displays) Tj
 T*
 (- konservative Darstellung ohne automatische Remediation) Tj
@@ -945,8 +947,6 @@ T*
 T*
 (- Evidence hochladen) Tj
 T*
-(- Evidence aktualisieren) Tj
-T*
 ET
 endstream
 endobj
@@ -954,12 +954,14 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 17 0 R >>
 endobj
 17 0 obj
-<< /Length 2850 >>
+<< /Length 2835 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+(- Evidence aktualisieren) Tj
+T*
 (- Evidence Needs synchronisieren) Tj
 T*
 (- Evidence direkt aus Risks, Roadmap-Tasks, Incidents und Product-Security-Kontexten) Tj
@@ -1102,8 +1104,6 @@ T*
 T*
 (Fuer Nicht-Sicherheitsleute:) Tj
 T*
-(Die Roadmap ist der Umsetzungsfahrplan.) Tj
-T*
 ET
 endstream
 endobj
@@ -1111,12 +1111,14 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 19 0 R >>
 endobj
 19 0 obj
-<< /Length 2386 >>
+<< /Length 2403 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+(Die Roadmap ist der Umsetzungsfahrplan.) Tj
+T*
 () Tj
 T*
 (5.14 Import Center:) Tj
@@ -1259,8 +1261,6 @@ T*
 T*
 (Dieser Bereich ist fuer Unternehmen wichtig, die Software, digitale Produkte oder vernetzte) Tj
 T*
-(Systeme bereitstellen.) Tj
-T*
 ET
 endstream
 endobj
@@ -1268,12 +1268,14 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
 endobj
 21 0 obj
-<< /Length 3960 >>
+<< /Length 3601 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+(Systeme bereitstellen.) Tj
+T*
 () Tj
 T*
 (Aktueller Rust-Funktionsumfang:) Tj
@@ -1312,8 +1314,123 @@ T*
 T*
 () Tj
 T*
-(5.16 Supplier Risk:) Tj
+(5.16 AI Governance:) Tj
 T*
+() Tj
+T*
+(Zweck:) Tj
+T*
+(KI-Systeme als eigene Governance-Objekte steuern.) Tj
+T*
+() Tj
+T*
+(AI Governance umfasst AI-Systeme, die in Produkten, internen Prozessen oder) Tj
+T*
+(Support-/Triage-Flows genutzt werden. ISCY trennt dabei nicht nur nach Regulierung, sondern) Tj
+T*
+(fragt funktional: Welchen Zweck hat das System, welche Daten nutzt es, welche Wirkung haben) Tj
+T*
+(seine Empfehlungen oder Entscheidungen, wer prueft die Ergebnisse und welche Evidence belegt) Tj
+T*
+(Betrieb, Review und Kontrolle?) Tj
+T*
+() Tj
+T*
+(Typische Objekte:) Tj
+T*
+() Tj
+T*
+(- AI System) Tj
+T*
+(- Produktbezug) Tj
+T*
+(- Modellquelle und Provider) Tj
+T*
+(- Datenkategorien) Tj
+T*
+(- Entscheidungswirkung) Tj
+T*
+(- Human Oversight) Tj
+T*
+(- AI-Act-Klassifizierung) Tj
+T*
+(- Monitoringplan) Tj
+T*
+(- Risikosummary) Tj
+T*
+(- Evidence-Key) Tj
+T*
+() Tj
+T*
+(Aktueller Rust-Funktionsumfang:) Tj
+T*
+() Tj
+T*
+(- Webansicht /ai-governance/ mit AI-Systemregister, Kennzahlen, Review-Faelligkeit,) Tj
+T*
+(Evidence-Stand und Governance-Gaps) Tj
+T*
+(- API GET und POST /api/v1/ai-governance/systems) Tj
+T*
+(- API GET und PATCH /api/v1/ai-governance/systems/{id}) Tj
+T*
+(- AI-Act-Klassen: nicht bewertet, High Risk, Limited Risk, Minimal Risk, nicht im Scope und) Tj
+T*
+(verboten/nicht freigegeben) Tj
+T*
+(- Anforderungen fuer Klassifizierung, Risikomanagement, Human Oversight, Logging, Transparenz,) Tj
+T*
+(Cybersecurity/Robustheit sowie Monitoring/Evidence) Tj
+T*
+(- Evidence-Vorbefuellung ueber stabile AI-Governance-Evidence-Keys) Tj
+T*
+(- Rust-only-Betriebssignale fuer nicht bewertete AI-Systeme, faellige Reviews, fehlende) Tj
+T*
+(Evidence und offene Governance-Gaps) Tj
+T*
+() Tj
+T*
+(Fachlicher Nutzen:) Tj
+T*
+() Tj
+T*
+(- AI-Systeme werden nicht nur als Produktmerkmal, sondern als steuerbares Risiko- und) Tj
+T*
+(Governance-Objekt sichtbar.) Tj
+T*
+(- AI-Act-, ISMS-, Product-Security- und Evidence-Arbeit laufen ueber dasselbe Nachweis- und) Tj
+T*
+(Review-Modell.) Tj
+T*
+(- Fachliche Reviews koennen frueh erkennen, ob Einstufung, Oversight, Monitoring oder Evidence) Tj
+T*
+(fehlen.) Tj
+T*
+() Tj
+T*
+(Fuer Nicht-Sicherheitsleute:) Tj
+T*
+(Dieser Bereich beantwortet: Welche KI wird genutzt, wofuer, mit welchen Risiken, wer) Tj
+T*
+(kontrolliert sie und wo ist der Nachweis?) Tj
+T*
+() Tj
+T*
+(5.17 Supplier Risk:) Tj
+T*
+ET
+endstream
+endobj
+22 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
+endobj
+23 0 obj
+<< /Length 3480 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Zweck:) Tj
@@ -1386,7 +1503,7 @@ T*
 T*
 () Tj
 T*
-(5.17 Vulnerability Intelligence:) Tj
+(5.18 Vulnerability Intelligence:) Tj
 T*
 () Tj
 T*
@@ -1418,19 +1535,6 @@ T*
 T*
 (Fuer lokale Tests und air-gapped Prueflaeufe kann der NVD-Import statt eines HTTP-Endpunkts) Tj
 T*
-ET
-endstream
-endobj
-22 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
-endobj
-23 0 obj
-<< /Length 3441 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (auch eine lokale NVD-JSON-Datei lesen, wenn NVDAPIBASEURL als) Tj
 T*
 (file:///pfad/zur/nvd-response.json gesetzt wird.) Tj
@@ -1471,6 +1575,19 @@ T*
 T*
 (4. Requirements und Applicability sichten) Tj
 T*
+ET
+endstream
+endobj
+24 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
+endobj
+25 0 obj
+<< /Length 3724 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (5. erste Risiken erfassen) Tj
 T*
 (6. Evidence aufbauen) Tj
@@ -1575,19 +1692,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-24 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
-endobj
-25 0 obj
-<< /Length 5118 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (1. Nicht bewertet) Tj
 T*
 (2. Nicht erheblich) Tj
@@ -1628,6 +1732,19 @@ T*
 T*
 (Die Uebersicht zeigt offene Faelle, Erheblichkeitsstatus, NIS2-relevante Faelle und) Tj
 T*
+ET
+endstream
+endobj
+26 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
+endobj
+27 0 obj
+<< /Length 4983 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (ueberfaellige Meldeschritte. Gesendete Meldungen koennen ueber die API als Zeitstempel) Tj
 T*
 (gepflegt werden. Damit vermeidet ISCY eine Angstlogik nach dem Motto "24 Stunden fuer alles") Tj
@@ -1732,19 +1849,6 @@ T*
 T*
 (6. Priorisieren) Tj
 T*
-ET
-endstream
-endobj
-26 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
-endobj
-27 0 obj
-<< /Length 3770 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Kritikalitaet und Dringlichkeit anhand Impact, Privilege-Level, Ausbreitungs- und) Tj
 T*
 (Datenabflussrisiko einstufen.) Tj
@@ -1785,6 +1889,19 @@ T*
 T*
 (./start.sh) Tj
 T*
+ET
+endstream
+endobj
+28 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
+endobj
+29 0 obj
+<< /Length 4185 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Danach ist ISCY unter http://127.0.0.1:9000/login/ erreichbar.) Tj
@@ -1855,9 +1972,9 @@ T*
 T*
 (Mit Tenant-Kontext enthaelt der Betriebsstatus zusaetzlich fachliche Signale zu ISCY-27,) Tj
 T*
-(Supplier-Risk, Product Security, offenen CVE-Reviews, fehlender Evidence, Migrationen,) Tj
+(Supplier-Risk, Product Security, AI Governance, offenen CVE-Reviews, fehlender Evidence,) Tj
 T*
-(Runtime-Flags und verbundenen Rust-Modulen:) Tj
+(Migrationen, Runtime-Flags und verbundenen Rust-Modulen:) Tj
 T*
 () Tj
 T*
@@ -1889,19 +2006,6 @@ T*
 T*
 (- deploy/monitoring/docker-compose.yml) Tj
 T*
-ET
-endstream
-endobj
-28 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
-endobj
-29 0 obj
-<< /Length 3402 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- deploy/monitoring/nixos/iscy-monitoring.nix) Tj
 T*
 (- deploy/monitoring/nixos/example-host.nix) Tj
@@ -1942,6 +2046,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+30 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
+endobj
+31 0 obj
+<< /Length 2903 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (1. Neue Fallakte in /operations/incidents/ sichten, bei Bedarf nach open, critical oder) Tj
 T*
 (resolved filtern und in /incidents/ oeffnen.) Tj
@@ -2046,19 +2163,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-30 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
-endobj
-31 0 obj
-<< /Length 3403 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Merksatz: Erst validieren, dann kurz testen, dann dauerhaft starten.) Tj
 T*
 () Tj
@@ -2099,6 +2203,19 @@ T*
 T*
 (#### IoT- und Cloud-Security in kurz) Tj
 T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 3562 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (- IoT: Asset-Inventar, sichere Defaults, Updatefaehigkeit, Segmentierung.) Tj
@@ -2203,19 +2320,6 @@ T*
 T*
 (fuer ISCY ist Zero Trust als laufende technische Posture-Sicht.) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 3754 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Was aktuell belastbar vorhanden ist:) Tj
@@ -2256,6 +2360,19 @@ T*
 T*
 (3. MDM-/EDR-Integrationen vorbereiten) Tj
 T*
+ET
+endstream
+endobj
+34 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
+endobj
+35 0 obj
+<< /Length 4013 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Intune, Jamf, Microsoft Defender, Wazuh, CrowdStrike oder SentinelOne sollten zunaechst als) Tj
 T*
 (Import-/Connector-Schicht angebunden werden, nicht als Fernsteuerung.) Tj
@@ -2360,19 +2477,6 @@ T*
 T*
 (- mit einem Tenant und einem realen Scope starten) Tj
 T*
-ET
-endstream
-endobj
-34 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
-endobj
-35 0 obj
-<< /Length 2096 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- lieber wenige, aber belastbare Daten pflegen) Tj
 T*
 (- Begriffe intern vereinheitlichen) Tj
@@ -2399,9 +2503,11 @@ T*
 T*
 (Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness) Tj
 T*
-(aus. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter) Tj
+(aus; V23.7.24 fuegt AI Governance als eigenes Rust-Web-/API-Modul hinzu. Die weitere) Tj
 T*
-(Python-/Django-Pfade, sondern auf fachliche Produktreife.) Tj
+(ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade,) Tj
+T*
+(sondern auf fachliche Produktreife.) Tj
 T*
 () Tj
 T*
@@ -2409,13 +2515,28 @@ T*
 T*
 () Tj
 T*
-(1. AI-Governance-Modul) Tj
+(1. Agent-Flottenbetrieb und Benachrichtigungen) Tj
 T*
-(2. Agent-Flottenbetrieb und Benachrichtigungen) Tj
+ET
+endstream
+endobj
+36 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
+endobj
+37 0 obj
+<< /Length 1051 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
+(2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben) Tj
 T*
-(3. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben) Tj
+(3. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity) Tj
 T*
-(4. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity) Tj
+(4. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme) Tj
+T*
+(koppeln) Tj
 T*
 () Tj
 T*
@@ -2423,7 +2544,9 @@ T*
 T*
 (Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product) Tj
 T*
-(Security, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.) Tj
+(Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen) Tj
+T*
+(Steuerungsmodell verbinden.) Tj
 T*
 () Tj
 T*
@@ -2453,45 +2576,47 @@ ET
 endstream
 endobj
 xref
-0 36
+0 38
 0000000000 65535 f
 0000000009 00000 n
 0000000058 00000 n
-0000000219 00000 n
-0000000289 00000 n
-0000000415 00000 n
-0000003671 00000 n
-0000003797 00000 n
-0000006686 00000 n
-0000006812 00000 n
-0000009245 00000 n
-0000009373 00000 n
-0000011369 00000 n
-0000011497 00000 n
-0000014715 00000 n
-0000014843 00000 n
-0000017376 00000 n
-0000017504 00000 n
-0000020406 00000 n
-0000020534 00000 n
-0000022972 00000 n
-0000023100 00000 n
-0000027112 00000 n
-0000027240 00000 n
-0000030733 00000 n
-0000030861 00000 n
-0000036031 00000 n
-0000036159 00000 n
-0000039981 00000 n
-0000040109 00000 n
-0000043563 00000 n
-0000043691 00000 n
-0000047146 00000 n
-0000047274 00000 n
-0000051080 00000 n
-0000051208 00000 n
+0000000226 00000 n
+0000000296 00000 n
+0000000422 00000 n
+0000003678 00000 n
+0000003804 00000 n
+0000006692 00000 n
+0000006818 00000 n
+0000009289 00000 n
+0000009417 00000 n
+0000011413 00000 n
+0000011541 00000 n
+0000014689 00000 n
+0000014817 00000 n
+0000017396 00000 n
+0000017524 00000 n
+0000020411 00000 n
+0000020539 00000 n
+0000022994 00000 n
+0000023122 00000 n
+0000026775 00000 n
+0000026903 00000 n
+0000030435 00000 n
+0000030563 00000 n
+0000034339 00000 n
+0000034467 00000 n
+0000039502 00000 n
+0000039630 00000 n
+0000043867 00000 n
+0000043995 00000 n
+0000046950 00000 n
+0000047078 00000 n
+0000050692 00000 n
+0000050820 00000 n
+0000054885 00000 n
+0000055013 00000 n
 trailer
-<< /Size 36 /Root 1 0 R >>
+<< /Size 38 /Root 1 0 R >>
 startxref
-53356
+56116
 %%EOF

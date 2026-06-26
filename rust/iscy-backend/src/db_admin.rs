@@ -147,6 +147,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_PRODUCT_SECURITY_VEX_CRA_SCHEMA,
         postgres_sql: POSTGRES_PRODUCT_SECURITY_VEX_CRA_SCHEMA,
     },
+    Migration {
+        version: "0022_rust_ai_governance_core",
+        sqlite_sql: SQLITE_AI_GOVERNANCE_CORE_SCHEMA,
+        postgres_sql: POSTGRES_AI_GOVERNANCE_CORE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -973,6 +978,164 @@ SET
         WHEN cve = 'CVE-2026-0001' OR status = 'FIXED' THEN (CURRENT_TIMESTAMP)::text
         ELSE vex_updated_at
     END;
+"#;
+
+const SQLITE_AI_GOVERNANCE_CORE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS ai_governance_system (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NULL,
+    owner_id INTEGER NULL,
+    name varchar(255) NOT NULL,
+    purpose TEXT NOT NULL DEFAULT '',
+    model_provider varchar(255) NOT NULL DEFAULT '',
+    model_name varchar(255) NOT NULL DEFAULT '',
+    model_version varchar(128) NOT NULL DEFAULT '',
+    deployment_context TEXT NOT NULL DEFAULT '',
+    data_categories TEXT NOT NULL DEFAULT '',
+    decision_impact TEXT NOT NULL DEFAULT '',
+    human_oversight TEXT NOT NULL DEFAULT '',
+    ai_act_classification varchar(32) NOT NULL DEFAULT 'NOT_ASSESSED',
+    criticality varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    status varchar(24) NOT NULL DEFAULT 'IN_REVIEW',
+    logging_required bool NOT NULL DEFAULT 0,
+    transparency_required bool NOT NULL DEFAULT 0,
+    cybersecurity_required bool NOT NULL DEFAULT 1,
+    monitoring_plan TEXT NOT NULL DEFAULT '',
+    evidence_key varchar(128) NOT NULL DEFAULT '',
+    risk_summary TEXT NOT NULL DEFAULT '',
+    next_review_due_at TEXT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_tenant
+    ON ai_governance_system(tenant_id, status, ai_act_classification);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_review_due
+    ON ai_governance_system(tenant_id, next_review_due_at);
+INSERT INTO ai_governance_system (
+    tenant_id, product_id, name, purpose, model_provider, deployment_context,
+    data_categories, decision_impact, human_oversight, ai_act_classification,
+    criticality, status, logging_required, transparency_required, cybersecurity_required,
+    monitoring_plan, evidence_key, risk_summary, next_review_due_at, notes,
+    created_at, updated_at
+)
+SELECT
+    ai.tenant_id,
+    ai.product_id,
+    ai.name,
+    ai.use_case,
+    ai.provider,
+    'Aus Product Security uebernommenes AI-System',
+    'Noch zu klassifizieren',
+    'Support- und Triage-Unterstuetzung',
+    'Fachliche Pruefung durch Product Security / ISMS',
+    CASE
+        WHEN UPPER(ai.risk_classification) = 'HIGH' THEN 'HIGH_RISK'
+        WHEN UPPER(ai.risk_classification) = 'LIMITED' THEN 'LIMITED_RISK'
+        ELSE 'NOT_ASSESSED'
+    END,
+    CASE
+        WHEN UPPER(ai.risk_classification) = 'HIGH' THEN 'HIGH'
+        ELSE 'MEDIUM'
+    END,
+    'IN_REVIEW',
+    1,
+    1,
+    1,
+    'Monitoring, Logs und fachliche Review-Evidence anlegen.',
+    'AI-GOV:PRODUCT-SECURITY:' || ai.id,
+    'AI-System aus Product Security fachlich im AI-Governance-Modul bewerten.',
+    DATE('now', '+180 days'),
+    'Migration aus product_security_aisystem.',
+    ai.created_at,
+    ai.updated_at
+FROM product_security_aisystem ai
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM ai_governance_system existing
+    WHERE existing.tenant_id = ai.tenant_id
+      AND existing.name = ai.name
+);
+"#;
+
+const POSTGRES_AI_GOVERNANCE_CORE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS ai_governance_system (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NULL,
+    owner_id BIGINT NULL,
+    name varchar(255) NOT NULL,
+    purpose TEXT NOT NULL DEFAULT '',
+    model_provider varchar(255) NOT NULL DEFAULT '',
+    model_name varchar(255) NOT NULL DEFAULT '',
+    model_version varchar(128) NOT NULL DEFAULT '',
+    deployment_context TEXT NOT NULL DEFAULT '',
+    data_categories TEXT NOT NULL DEFAULT '',
+    decision_impact TEXT NOT NULL DEFAULT '',
+    human_oversight TEXT NOT NULL DEFAULT '',
+    ai_act_classification varchar(32) NOT NULL DEFAULT 'NOT_ASSESSED',
+    criticality varchar(16) NOT NULL DEFAULT 'MEDIUM',
+    status varchar(24) NOT NULL DEFAULT 'IN_REVIEW',
+    logging_required BOOLEAN NOT NULL DEFAULT FALSE,
+    transparency_required BOOLEAN NOT NULL DEFAULT FALSE,
+    cybersecurity_required BOOLEAN NOT NULL DEFAULT TRUE,
+    monitoring_plan TEXT NOT NULL DEFAULT '',
+    evidence_key varchar(128) NOT NULL DEFAULT '',
+    risk_summary TEXT NOT NULL DEFAULT '',
+    next_review_due_at TEXT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_tenant
+    ON ai_governance_system(tenant_id, status, ai_act_classification);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_review_due
+    ON ai_governance_system(tenant_id, next_review_due_at);
+INSERT INTO ai_governance_system (
+    tenant_id, product_id, name, purpose, model_provider, deployment_context,
+    data_categories, decision_impact, human_oversight, ai_act_classification,
+    criticality, status, logging_required, transparency_required, cybersecurity_required,
+    monitoring_plan, evidence_key, risk_summary, next_review_due_at, notes,
+    created_at, updated_at
+)
+SELECT
+    ai.tenant_id,
+    ai.product_id,
+    ai.name,
+    ai.use_case,
+    ai.provider,
+    'Aus Product Security uebernommenes AI-System',
+    'Noch zu klassifizieren',
+    'Support- und Triage-Unterstuetzung',
+    'Fachliche Pruefung durch Product Security / ISMS',
+    CASE
+        WHEN UPPER(ai.risk_classification) = 'HIGH' THEN 'HIGH_RISK'
+        WHEN UPPER(ai.risk_classification) = 'LIMITED' THEN 'LIMITED_RISK'
+        ELSE 'NOT_ASSESSED'
+    END,
+    CASE
+        WHEN UPPER(ai.risk_classification) = 'HIGH' THEN 'HIGH'
+        ELSE 'MEDIUM'
+    END,
+    'IN_REVIEW',
+    TRUE,
+    TRUE,
+    TRUE,
+    'Monitoring, Logs und fachliche Review-Evidence anlegen.',
+    'AI-GOV:PRODUCT-SECURITY:' || ai.id::text,
+    'AI-System aus Product Security fachlich im AI-Governance-Modul bewerten.',
+    (CURRENT_DATE + INTERVAL '180 days')::date::text,
+    'Migration aus product_security_aisystem.',
+    ai.created_at,
+    ai.updated_at
+FROM product_security_aisystem ai
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM ai_governance_system existing
+    WHERE existing.tenant_id = ai.tenant_id
+      AND existing.name = ai.name
+);
 "#;
 
 const SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"
@@ -3543,6 +3706,32 @@ INSERT OR IGNORE INTO product_security_aisystem (
     1260, 1, 1100, 'Rust Gateway Assistant', 'Firmware triage and support guidance',
     'Internal', 'LIMITED', 1, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
 );
+INSERT OR IGNORE INTO ai_governance_system (
+    id, tenant_id, product_id, owner_id, name, purpose, model_provider, model_name, model_version,
+    deployment_context, data_categories, decision_impact, human_oversight, ai_act_classification,
+    criticality, status, logging_required, transparency_required, cybersecurity_required,
+    monitoring_plan, evidence_key, risk_summary, next_review_due_at, notes, created_at, updated_at
+)
+SELECT
+    3000, 1, 1100, 1, 'Rust Gateway Assistant',
+    'Firmware triage and support guidance fuer Product Security und Support.',
+    'Internal', 'Local Gateway Assistant', '1.0',
+    'Lokale Rust-only Verarbeitung im ISCY-Demo-Kontext.',
+    'Technische Produkt-, Schwachstellen- und Supportdaten.',
+    'Unterstuetzt Triage; keine vollautomatische Rechts- oder Sicherheitsentscheidung.',
+    'Product Security Lead prueft Empfehlungen vor Umsetzung.',
+    'LIMITED_RISK', 'MEDIUM', 'IN_REVIEW', 1, 1, 1,
+    'Logs, Review-Entscheidungen und Evidence pro Release verknuepfen.',
+    'AI-GOV:PRODUCT-SECURITY:1260',
+    'Risiko liegt in Fehlklassifikation, unvollstaendigen Kontextdaten und Uebervertrauen in Empfehlungen.',
+    '2026-12-31',
+    'Demo-Seed fuer das AI-Governance-Modul.',
+    '2026-04-22T10:00:00Z',
+    '2026-04-22T10:00:00Z'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ai_governance_system
+    WHERE tenant_id = 1 AND name = 'Rust Gateway Assistant'
+);
 INSERT OR IGNORE INTO product_security_threatmodel (
     id, tenant_id, product_id, release_id, name, methodology, summary, status, created_at, updated_at
 ) VALUES (
@@ -3962,6 +4151,32 @@ INSERT INTO product_security_aisystem (
     1260, 1, 1100, 'Rust Gateway Assistant', 'Firmware triage and support guidance',
     'Internal', 'LIMITED', TRUE, '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
 ) ON CONFLICT (id) DO NOTHING;
+INSERT INTO ai_governance_system (
+    id, tenant_id, product_id, owner_id, name, purpose, model_provider, model_name, model_version,
+    deployment_context, data_categories, decision_impact, human_oversight, ai_act_classification,
+    criticality, status, logging_required, transparency_required, cybersecurity_required,
+    monitoring_plan, evidence_key, risk_summary, next_review_due_at, notes, created_at, updated_at
+)
+SELECT
+    3000, 1, 1100, 1, 'Rust Gateway Assistant',
+    'Firmware triage and support guidance fuer Product Security und Support.',
+    'Internal', 'Local Gateway Assistant', '1.0',
+    'Lokale Rust-only Verarbeitung im ISCY-Demo-Kontext.',
+    'Technische Produkt-, Schwachstellen- und Supportdaten.',
+    'Unterstuetzt Triage; keine vollautomatische Rechts- oder Sicherheitsentscheidung.',
+    'Product Security Lead prueft Empfehlungen vor Umsetzung.',
+    'LIMITED_RISK', 'MEDIUM', 'IN_REVIEW', TRUE, TRUE, TRUE,
+    'Logs, Review-Entscheidungen und Evidence pro Release verknuepfen.',
+    'AI-GOV:PRODUCT-SECURITY:1260',
+    'Risiko liegt in Fehlklassifikation, unvollstaendigen Kontextdaten und Uebervertrauen in Empfehlungen.',
+    '2026-12-31',
+    'Demo-Seed fuer das AI-Governance-Modul.',
+    '2026-04-22T10:00:00Z',
+    '2026-04-22T10:00:00Z'
+WHERE NOT EXISTS (
+    SELECT 1 FROM ai_governance_system
+    WHERE tenant_id = 1 AND name = 'Rust Gateway Assistant'
+);
 INSERT INTO product_security_threatmodel (
     id, tenant_id, product_id, release_id, name, methodology, summary, status, created_at, updated_at
 ) VALUES (

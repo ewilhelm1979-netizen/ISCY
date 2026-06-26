@@ -2,10 +2,10 @@ use axum::body::{to_bytes, Body};
 use axum::http::{header::SET_COOKIE, Request, StatusCode};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use iscy_backend::{
-    account_store::AccountStore, agent_store::AgentStore, app_router, app_router_with_state,
-    assessment_store::AssessmentStore, asset_store::AssetStore, auth_store::AuthStore,
-    catalog_store::CatalogStore, control_store::ControlStore, cve_store::CveStore,
-    dashboard_store::DashboardStore, db_admin, evidence_store::EvidenceStore,
+    account_store::AccountStore, agent_store::AgentStore, ai_governance_store::AiGovernanceStore,
+    app_router, app_router_with_state, assessment_store::AssessmentStore, asset_store::AssetStore,
+    auth_store::AuthStore, catalog_store::CatalogStore, control_store::ControlStore,
+    cve_store::CveStore, dashboard_store::DashboardStore, db_admin, evidence_store::EvidenceStore,
     import_store::ImportStore, incident_store::IncidentStore, process_store::ProcessStore,
     product_security_store::ProductSecurityStore, report_store::ReportStore,
     requirement_store::RequirementStore, risk_store::RiskStore, roadmap_store::RoadmapStore,
@@ -146,7 +146,8 @@ async fn rust_status_metrics_exports_prometheus_text() {
     assert!(metrics
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.19\""));
+    assert!(metrics.contains("iscy_operations_module_configured{name=\"AI Governance\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.20\""));
 }
 
 #[tokio::test]
@@ -559,8 +560,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0021_rust_product_security_vex_cra"));
-    assert!(html.contains("21/21 angewendet"));
+    assert!(html.contains("0022_rust_ai_governance_core"));
+    assert!(html.contains("22/22 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -2229,6 +2230,235 @@ async fn process_detail_blocks_foreign_tenant_process() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "process_not_found");
+}
+
+#[tokio::test]
+async fn ai_governance_overview_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/ai-governance/systems")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn ai_governance_overview_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/ai-governance/systems")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn ai_governance_overview_returns_seeded_systems_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_ai_governance_store(Some(AiGovernanceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/ai-governance/systems")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 1);
+    assert!(payload["summary"]["total_systems"].as_i64().unwrap() >= 1);
+    assert_eq!(payload["systems"][0]["name"], "Rust Gateway Assistant");
+    assert_eq!(
+        payload["systems"][0]["ai_act_classification"],
+        "LIMITED_RISK"
+    );
+}
+
+#[tokio::test]
+async fn ai_governance_create_and_update_systems() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_ai_governance_store(Some(AiGovernanceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ai-governance/systems")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "name":"Control Mapping Assistant",
+                        "purpose":"Maps AI controls to ISCY-27 governance gaps.",
+                        "model_provider":"Internal",
+                        "model_name":"local-control-model",
+                        "ai_act_classification":"HIGH_RISK",
+                        "criticality":"HIGH",
+                        "human_oversight":"ISMS Manager approves all proposed mappings.",
+                        "monitoring_plan":"Monthly quality review and evidence sampling.",
+                        "risk_summary":"Wrong mappings can create false compliance confidence.",
+                        "next_review_due_at":"2026-12-31"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let body = to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    let system_id = payload["system"]["id"].as_i64().unwrap();
+    assert_eq!(payload["system"]["ai_act_classification"], "HIGH_RISK");
+    assert_eq!(payload["requirements"][0]["key"], "classification");
+
+    let update = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/ai-governance/systems/{system_id}"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "status":"APPROVED",
+                        "ai_act_classification":"LIMITED_RISK",
+                        "evidence_key":"AI-GOV:SYSTEM:CONTROL-MAPPING-ASSISTANT"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(update.status(), StatusCode::OK);
+    let body = to_bytes(update.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["system"]["status"], "APPROVED");
+    assert_eq!(payload["system"]["ai_act_classification"], "LIMITED_RISK");
+    assert_eq!(
+        payload["system"]["evidence_key"],
+        "AI-GOV:SYSTEM:CONTROL-MAPPING-ASSISTANT"
+    );
+}
+
+#[tokio::test]
+async fn rust_web_ai_governance_renders_and_updates_system_review() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_ai_governance_store(Some(AiGovernanceStore::from_sqlite_pool(pool.clone())))
+            .with_product_security_store(Some(ProductSecurityStore::from_sqlite_pool(
+                pool.clone(),
+            ))),
+    );
+
+    let page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/ai-governance/?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = to_bytes(page.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("AI Governance"));
+    assert!(html.contains("Rust Gateway Assistant"));
+    assert!(html.contains("Governance-Anforderungen"));
+
+    let update = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/ai-governance/systems/3000")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "ai_act_classification=LIMITED_RISK&criticality=MEDIUM&status=APPROVED&human_oversight=Review+Board&monitoring_plan=Monthly+review&evidence_key=AI-GOV%3APRODUCT-SECURITY%3A1260&risk_summary=Reviewed&next_review_due_at=2026-12-31&notes=Approved",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(update.status(), StatusCode::SEE_OTHER);
+    let row = sqlx::query(
+        "SELECT status, human_oversight, risk_summary FROM ai_governance_system WHERE id = 3000",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let status: String = row.try_get("status").unwrap();
+    let oversight: String = row.try_get("human_oversight").unwrap();
+    let risk_summary: String = row.try_get("risk_summary").unwrap();
+    assert_eq!(status, "APPROVED");
+    assert_eq!(oversight, "Review Board");
+    assert_eq!(risk_summary, "Reviewed");
 }
 
 #[tokio::test]
@@ -6601,6 +6831,7 @@ async fn rust_web_surface_routes_return_ok() {
         "/suppliers/",
         "/imports/",
         "/processes/",
+        "/ai-governance/",
         "/requirements/",
         "/risks/",
         "/incidents/",
@@ -8546,7 +8777,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0018_rust_tenant_regulatory_profile",
             "0019_rust_management_review_packages",
             "0020_rust_supplier_risk_core",
-            "0021_rust_product_security_vex_cra"
+            "0021_rust_product_security_vex_cra",
+            "0022_rust_ai_governance_core"
         ]
     );
     assert!(
@@ -8643,6 +8875,9 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             .await
             .unwrap()
     );
+    assert!(db_admin::sqlite_table_exists(&pool, "ai_governance_system")
+        .await
+        .unwrap());
 
     let applied_again = db_admin::run_sqlite_migrations(&pool).await.unwrap();
     assert!(applied_again.is_empty());

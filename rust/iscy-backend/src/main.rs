@@ -3,6 +3,7 @@ use std::{net::SocketAddr, path::PathBuf};
 use iscy_backend::{
     account_store::AccountStore,
     agent_store::AgentStore,
+    ai_governance_store::AiGovernanceStore,
     app_router_with_state,
     assessment_store::AssessmentStore,
     asset_store::AssetStore,
@@ -82,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
         supplier_store,
         wizard_store,
         product_security_store,
+        ai_governance_store,
     ) = match database_url.as_deref() {
         Some(database_url) => {
             let cve_store = CveStore::connect(database_url).await?;
@@ -105,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
             let supplier_store = SupplierStore::connect(database_url).await?;
             let wizard_store = WizardStore::connect(database_url).await?;
             let product_security_store = ProductSecurityStore::connect(database_url).await?;
+            let ai_governance_store = AiGovernanceStore::connect(database_url).await?;
             (
                 Some(cve_store),
                 Some(account_store),
@@ -127,11 +130,12 @@ async fn main() -> anyhow::Result<()> {
                 Some(supplier_store),
                 Some(wizard_store),
                 Some(product_security_store),
+                Some(ai_governance_store),
             )
         }
         _ => (
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None,
         ),
     };
     let state = AppState::with_stores(cve_store, tenant_store)
@@ -155,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
         .with_supplier_store(supplier_store)
         .with_wizard_store(wizard_store)
         .with_product_security_store(product_security_store)
+        .with_ai_governance_store(ai_governance_store)
         .with_database_url(database_url);
 
     let listener = TcpListener::bind(addr).await?;

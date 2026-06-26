@@ -23,6 +23,7 @@ use std::{
 
 pub mod account_store;
 pub mod agent_store;
+pub mod ai_governance_store;
 pub mod assessment_store;
 pub mod asset_store;
 pub mod auth_store;
@@ -48,6 +49,7 @@ pub mod wizard_store;
 
 use account_store::AccountStore;
 use agent_store::AgentStore;
+use ai_governance_store::AiGovernanceStore;
 use assessment_store::AssessmentStore;
 use asset_store::AssetStore;
 use auth_store::AuthStore;
@@ -73,6 +75,7 @@ use wizard_store::WizardStore;
 #[derive(Clone, Default)]
 pub struct AppState {
     pub account_store: Option<AccountStore>,
+    pub ai_governance_store: Option<AiGovernanceStore>,
     pub agent_store: Option<AgentStore>,
     pub asset_store: Option<AssetStore>,
     pub assessment_store: Option<AssessmentStore>,
@@ -102,6 +105,7 @@ impl AppState {
     pub fn new(cve_store: Option<CveStore>) -> Self {
         Self {
             account_store: None,
+            ai_governance_store: None,
             agent_store: None,
             asset_store: None,
             assessment_store: None,
@@ -131,6 +135,7 @@ impl AppState {
     pub fn with_stores(cve_store: Option<CveStore>, tenant_store: Option<TenantStore>) -> Self {
         Self {
             account_store: None,
+            ai_governance_store: None,
             agent_store: None,
             asset_store: None,
             assessment_store: None,
@@ -164,6 +169,14 @@ impl AppState {
 
     pub fn with_account_store(mut self, account_store: Option<AccountStore>) -> Self {
         self.account_store = account_store;
+        self
+    }
+
+    pub fn with_ai_governance_store(
+        mut self,
+        ai_governance_store: Option<AiGovernanceStore>,
+    ) -> Self {
+        self.ai_governance_store = ai_governance_store;
         self
     }
 
@@ -786,6 +799,28 @@ pub struct ProcessDetailResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct AiGovernanceOverviewResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub overview: ai_governance_store::AiGovernanceOverview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiGovernanceDetailResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub detail: ai_governance_store::AiGovernanceSystemDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiGovernanceSystemWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub result: ai_governance_store::AiGovernanceSystemWriteResult,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ProductSecurityOverviewResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
@@ -1119,6 +1154,40 @@ pub struct WebContextQuery {
     pub requirement_id: Option<i64>,
     pub evidence_id: Option<i64>,
     pub need_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebAiGovernanceCreateForm {
+    pub product_id: Option<i64>,
+    pub name: String,
+    pub purpose: String,
+    pub model_provider: String,
+    pub model_name: String,
+    pub model_version: String,
+    pub deployment_context: String,
+    pub data_categories: String,
+    pub decision_impact: String,
+    pub human_oversight: String,
+    pub ai_act_classification: String,
+    pub criticality: String,
+    pub monitoring_plan: String,
+    pub evidence_key: String,
+    pub risk_summary: String,
+    pub next_review_due_at: String,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebAiGovernanceUpdateForm {
+    pub ai_act_classification: String,
+    pub criticality: String,
+    pub status: String,
+    pub human_oversight: String,
+    pub monitoring_plan: String,
+    pub evidence_key: String,
+    pub risk_summary: String,
+    pub next_review_due_at: String,
+    pub notes: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -4250,6 +4319,257 @@ async fn process_detail(
                 api_version: "v1",
                 error_code: "database_error",
                 message: format!("Prozessdetail konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn ai_governance_overview(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let Some(store) = state.ai_governance_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-AI-Governance-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.overview(context.tenant_id, 200).await {
+        Ok(overview) => (
+            StatusCode::OK,
+            Json(AiGovernanceOverviewResponse {
+                api_version: "v1",
+                overview,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("AI-Governance-Uebersicht konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn ai_governance_create_system(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ai_governance_store::AiGovernanceSystemCreateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.ai_governance_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-AI-Governance-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.create_system(context.tenant_id, payload).await {
+        Ok(result) => (
+            StatusCode::CREATED,
+            Json(AiGovernanceSystemWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_ai_governance_payload",
+                message: err.to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn ai_governance_detail(
+    Path(system_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.ai_governance_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-AI-Governance-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store.detail(context.tenant_id, system_id).await {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(AiGovernanceDetailResponse {
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "not_found",
+                message: "AI-Governance-System wurde fuer diesen Tenant nicht gefunden."
+                    .to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: format!("AI-Governance-Detail konnte nicht gelesen werden: {err}"),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn ai_governance_update_system(
+    Path(system_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ai_governance_store::AiGovernanceSystemUpdateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.ai_governance_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-AI-Governance-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    match store
+        .update_system(context.tenant_id, system_id, payload)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(AiGovernanceSystemWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "not_found",
+                message: "AI-Governance-System wurde fuer diesen Tenant nicht gefunden."
+                    .to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_ai_governance_payload",
+                message: err.to_string(),
             }),
         )
             .into_response(),
@@ -13595,6 +13915,260 @@ async fn web_admin_user_update(
         }
     }
 }
+
+async fn web_ai_governance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("AI Governance", "/ai-governance/");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    let Some(store) = state.ai_governance_store.as_ref() else {
+        return web_store_missing(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "AI Governance",
+        );
+    };
+
+    match store.overview(context.tenant_id, 200).await {
+        Ok(overview) => {
+            let product_options = ai_governance_product_options(&state, context.tenant_id).await;
+            let system_rows = overview
+                .systems
+                .iter()
+                .map(|system| {
+                    let evidence_href = evidence_prefill_href(
+                        &context,
+                        &format!("AI-Governance Evidence: {}", system.name),
+                        &format!(
+                            "Nachweis fuer AI-Governance-System {}. Einstufung: {}. Status: {}.",
+                            system.name,
+                            system.ai_act_classification_label,
+                            system.status_label,
+                        ),
+                        &system.evidence_key,
+                        Some("SUBMITTED"),
+                        Some(&web_path_with_context("/ai-governance/", Some(&context))),
+                    );
+                    format!(
+                        r##"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Evidence</a></td><td><a href="#ai-system-{}">Review</a></td></tr>"##,
+                        html_escape(&system.name),
+                        html_escape(system.product_name.as_deref().unwrap_or("-")),
+                        html_escape(&system.model_provider),
+                        web_badge(
+                            &system.ai_act_classification_label,
+                            ai_governance_classification_class(&system.ai_act_classification),
+                        ),
+                        web_badge(&system.status_label, ai_governance_status_class(&system.status)),
+                        html_escape(system.next_review_due_at.as_deref().unwrap_or("-")),
+                        system.open_requirement_count,
+                        evidence_href,
+                        system.id,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let detail_panels = overview
+                .systems
+                .iter()
+                .map(|system| ai_governance_system_panel(&context, system, can_write))
+                .collect::<Vec<_>>()
+                .join("");
+            let create_panel = if can_write {
+                format!(
+                    r#"<article class="panel wide">
+                    <h2>AI-System anlegen</h2>
+                    <form method="post" action="{}">
+                      <div class="form-grid">
+                        <label>Name<input name="name" required></label>
+                        <label>Produkt<select name="product_id"><option value="">Tenantweit</option>{}</select></label>
+                        <label>Provider<input name="model_provider"></label>
+                        <label>Modell<input name="model_name"></label>
+                        <label>Version<input name="model_version"></label>
+                        <label>AI-Act-Klasse<select name="ai_act_classification">{}</select></label>
+                        <label>Kritikalitaet<select name="criticality">{}</select></label>
+                        <label>Naechster Review<input name="next_review_due_at" type="date"></label>
+                      </div>
+                      <label>Zweck<textarea name="purpose" rows="2"></textarea></label>
+                      <label>Deployment-Kontext<textarea name="deployment_context" rows="2"></textarea></label>
+                      <label>Datenkategorien<textarea name="data_categories" rows="2"></textarea></label>
+                      <label>Entscheidungswirkung<textarea name="decision_impact" rows="2"></textarea></label>
+                      <label>Human Oversight<textarea name="human_oversight" rows="2"></textarea></label>
+                      <label>Monitoringplan<textarea name="monitoring_plan" rows="2"></textarea></label>
+                      <label>Evidence-Key<input name="evidence_key" placeholder="AI-GOV:SYSTEM:..."></label>
+                      <label>Risikosummary<textarea name="risk_summary" rows="2"></textarea></label>
+                      <label>Notizen<textarea name="notes" rows="2"></textarea></label>
+                      <button type="submit">Anlegen</button>
+                    </form>
+                  </article>"#,
+                    web_path_with_context("/ai-governance/systems", Some(&context)),
+                    product_options,
+                    ai_governance_classification_options("NOT_ASSESSED"),
+                    ai_governance_criticality_options("MEDIUM"),
+                )
+            } else {
+                String::new()
+            };
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>AI Governance</h1><p>Tenant {} · AI-Systemregister, Einstufung, Review und Evidence</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  <article class="panel wide">
+                    <h2>AI-Systemregister</h2>
+                    <table>
+                      <thead><tr><th>System</th><th>Produkt</th><th>Provider</th><th>Klasse</th><th>Status</th><th>Review</th><th>Gaps</th><th>Evidence</th><th>Details</th></tr></thead>
+                      <tbody>{}</tbody>
+                    </table>
+                  </article>
+                  {}
+                  {}
+                </section>
+                "#,
+                context.tenant_id,
+                metric_card("AI-Systeme", overview.summary.total_systems),
+                metric_card("High Risk", overview.summary.high_risk_systems),
+                metric_card("Nicht bewertet", overview.summary.not_assessed_systems),
+                metric_card("Review faellig", overview.summary.review_due_systems),
+                metric_card("Evidence fehlt", overview.summary.evidence_missing),
+                metric_card("Governance-Gaps", overview.summary.open_governance_gaps),
+                if system_rows.is_empty() {
+                    web_empty_row(9, "Noch keine AI-Systeme vorhanden.")
+                } else {
+                    system_rows
+                },
+                create_panel,
+                detail_panels,
+            );
+            web_page("AI Governance", "/ai-governance/", Some(&context), &body)
+        }
+        Err(err) => web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            &err.to_string(),
+        ),
+    }
+}
+
+async fn web_ai_governance_create_system(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAiGovernanceCreateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("AI Governance", "/ai-governance/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.ai_governance_store else {
+        return web_store_missing(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "AI Governance",
+        )
+        .into_response();
+    };
+    let payload = ai_governance_create_payload_from_form(form);
+    match store.create_system(auth_context.tenant_id, payload).await {
+        Ok(_) => {
+            Redirect::to(&web_path_with_context("/ai-governance/", Some(&context))).into_response()
+        }
+        Err(err) => web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_ai_governance_update_system(
+    Path(system_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAiGovernanceUpdateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("AI Governance", "/ai-governance/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.ai_governance_store else {
+        return web_store_missing(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "AI Governance",
+        )
+        .into_response();
+    };
+    let payload = ai_governance_update_payload_from_form(form);
+    match store
+        .update_system(auth_context.tenant_id, system_id, payload)
+        .await
+    {
+        Ok(Some(_)) => {
+            Redirect::to(&web_path_with_context("/ai-governance/", Some(&context))).into_response()
+        }
+        Ok(None) => web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "AI-Governance-System wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
 async fn web_product_security(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -19356,6 +19930,279 @@ fn web_imports_preview_page(
     web_page("Imports", "/imports/", Some(context), &body)
 }
 
+async fn ai_governance_product_options(state: &AppState, tenant_id: i64) -> String {
+    let Some(store) = state.product_security_store.as_ref() else {
+        return String::new();
+    };
+    match store.overview(tenant_id, 200, 5).await {
+        Ok(Some(overview)) => overview
+            .products
+            .iter()
+            .map(|product| {
+                format!(
+                    r#"<option value="{}">{} · {}</option>"#,
+                    product.id,
+                    html_escape(&product.code),
+                    html_escape(&product.name),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        Ok(None) | Err(_) => String::new(),
+    }
+}
+
+fn ai_governance_system_panel(
+    context: &WebContext,
+    system: &ai_governance_store::AiGovernanceSystemSummary,
+    can_write: bool,
+) -> String {
+    let requirement_rows = ai_governance_store::ai_governance_requirements(system)
+        .iter()
+        .map(|requirement| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&requirement.label),
+                web_badge(
+                    &requirement.status_label,
+                    ai_governance_requirement_class(&requirement.status),
+                ),
+                html_escape(&requirement.detail),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let evidence_href = evidence_prefill_href(
+        context,
+        &format!("AI-Governance Evidence: {}", system.name),
+        &format!(
+            "Nachweis fuer AI-Governance-System {}. Evidence-Key: {}.",
+            system.name, system.evidence_key
+        ),
+        &system.evidence_key,
+        Some("SUBMITTED"),
+        Some(&web_path_with_context("/ai-governance/", Some(context))),
+    );
+    let form = if can_write {
+        format!(
+            r#"<form method="post" action="{}">
+              <div class="form-grid">
+                <label>AI-Act-Klasse<select name="ai_act_classification">{}</select></label>
+                <label>Kritikalitaet<select name="criticality">{}</select></label>
+                <label>Status<select name="status">{}</select></label>
+                <label>Naechster Review<input name="next_review_due_at" type="date" value="{}"></label>
+              </div>
+              <label>Human Oversight<textarea name="human_oversight" rows="2">{}</textarea></label>
+              <label>Monitoringplan<textarea name="monitoring_plan" rows="2">{}</textarea></label>
+              <label>Evidence-Key<input name="evidence_key" value="{}"></label>
+              <label>Risikosummary<textarea name="risk_summary" rows="2">{}</textarea></label>
+              <label>Notizen<textarea name="notes" rows="2">{}</textarea></label>
+              <button type="submit">Review speichern</button>
+            </form>"#,
+            web_path_with_context(
+                &format!("/ai-governance/systems/{}", system.id),
+                Some(context),
+            ),
+            ai_governance_classification_options(&system.ai_act_classification),
+            ai_governance_criticality_options(&system.criticality),
+            ai_governance_status_options(&system.status),
+            html_escape(ai_governance_date_value(
+                system.next_review_due_at.as_deref()
+            )),
+            html_escape(&system.human_oversight),
+            html_escape(&system.monitoring_plan),
+            html_escape(&system.evidence_key),
+            html_escape(&system.risk_summary),
+            html_escape(&system.notes),
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        r#"<article id="ai-system-{}" class="panel wide">
+          <h2>{}</h2>
+          <table>
+            <tbody>
+              <tr><th>Produkt</th><td>{}</td><th>Owner</th><td>{}</td></tr>
+              <tr><th>Modell</th><td>{} {}</td><th>Provider</th><td>{}</td></tr>
+              <tr><th>Zweck</th><td colspan="3">{}</td></tr>
+              <tr><th>Daten</th><td>{}</td><th>Impact</th><td>{}</td></tr>
+              <tr><th>Evidence</th><td><a href="{}">{} Nachweis(e)</a></td><th>Freigegeben</th><td>{}</td></tr>
+            </tbody>
+          </table>
+          <h3>Governance-Anforderungen</h3>
+          <table>
+            <thead><tr><th>Anforderung</th><th>Status</th><th>Detail</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+          {}
+        </article>"#,
+        system.id,
+        html_escape(&system.name),
+        html_escape(system.product_name.as_deref().unwrap_or("-")),
+        html_escape(system.owner_display.as_deref().unwrap_or("-")),
+        html_escape(&system.model_name),
+        html_escape(&system.model_version),
+        html_escape(&system.model_provider),
+        html_escape(&system.purpose),
+        html_escape(&system.data_categories),
+        html_escape(&system.decision_impact),
+        evidence_href,
+        system.evidence_count,
+        system.approved_evidence_count,
+        if requirement_rows.is_empty() {
+            web_empty_row(3, "Keine Governance-Anforderungen berechnet.")
+        } else {
+            requirement_rows
+        },
+        form,
+    )
+}
+
+fn ai_governance_create_payload_from_form(
+    form: WebAiGovernanceCreateForm,
+) -> ai_governance_store::AiGovernanceSystemCreateRequest {
+    ai_governance_store::AiGovernanceSystemCreateRequest {
+        product_id: form.product_id.filter(|id| *id > 0),
+        owner_id: None,
+        name: form.name,
+        purpose: form.purpose,
+        model_provider: form.model_provider,
+        model_name: form.model_name,
+        model_version: form.model_version,
+        deployment_context: form.deployment_context,
+        data_categories: form.data_categories,
+        decision_impact: form.decision_impact,
+        human_oversight: form.human_oversight,
+        ai_act_classification: Some(form.ai_act_classification),
+        criticality: Some(form.criticality),
+        status: Some("IN_REVIEW".to_string()),
+        logging_required: Some(true),
+        transparency_required: Some(true),
+        cybersecurity_required: Some(true),
+        monitoring_plan: form.monitoring_plan,
+        evidence_key: Some(form.evidence_key),
+        risk_summary: form.risk_summary,
+        next_review_due_at: Some(form.next_review_due_at),
+        notes: form.notes,
+    }
+}
+
+fn ai_governance_update_payload_from_form(
+    form: WebAiGovernanceUpdateForm,
+) -> ai_governance_store::AiGovernanceSystemUpdateRequest {
+    ai_governance_store::AiGovernanceSystemUpdateRequest {
+        product_id: None,
+        owner_id: None,
+        name: None,
+        purpose: None,
+        model_provider: None,
+        model_name: None,
+        model_version: None,
+        deployment_context: None,
+        data_categories: None,
+        decision_impact: None,
+        human_oversight: Some(form.human_oversight),
+        ai_act_classification: Some(form.ai_act_classification),
+        criticality: Some(form.criticality),
+        status: Some(form.status),
+        logging_required: None,
+        transparency_required: None,
+        cybersecurity_required: None,
+        monitoring_plan: Some(form.monitoring_plan),
+        evidence_key: Some(form.evidence_key),
+        risk_summary: Some(form.risk_summary),
+        next_review_due_at: Some(form.next_review_due_at),
+        notes: Some(form.notes),
+    }
+}
+
+fn ai_governance_classification_options(selected: &str) -> String {
+    [
+        ("NOT_ASSESSED", "Nicht bewertet"),
+        ("HIGH_RISK", "High Risk"),
+        ("LIMITED_RISK", "Limited Risk"),
+        ("MINIMAL_RISK", "Minimal Risk"),
+        ("NOT_IN_SCOPE", "Nicht im Scope"),
+        ("PROHIBITED", "Verboten / nicht freigegeben"),
+    ]
+    .iter()
+    .map(|(value, label)| option_tag(value, label, selected))
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn ai_governance_criticality_options(selected: &str) -> String {
+    [
+        ("CRITICAL", "Kritisch"),
+        ("HIGH", "Hoch"),
+        ("MEDIUM", "Mittel"),
+        ("LOW", "Niedrig"),
+    ]
+    .iter()
+    .map(|(value, label)| option_tag(value, label, selected))
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn ai_governance_status_options(selected: &str) -> String {
+    [
+        ("DRAFT", "Entwurf"),
+        ("IN_REVIEW", "In Review"),
+        ("APPROVED", "Freigegeben"),
+        ("RETIRED", "Stillgelegt"),
+    ]
+    .iter()
+    .map(|(value, label)| option_tag(value, label, selected))
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn option_tag(value: &str, label: &str, selected: &str) -> String {
+    let selected_attr = if value.eq_ignore_ascii_case(selected) {
+        " selected"
+    } else {
+        ""
+    };
+    format!(
+        r#"<option value="{}"{}>{}</option>"#,
+        html_escape(value),
+        selected_attr,
+        html_escape(label),
+    )
+}
+
+fn ai_governance_classification_class(value: &str) -> &'static str {
+    match value {
+        "PROHIBITED" | "HIGH_RISK" => "danger-badge",
+        "NOT_ASSESSED" => "warning-badge",
+        "LIMITED_RISK" => "info-badge",
+        "NOT_IN_SCOPE" => "muted-badge",
+        _ => "ok-badge",
+    }
+}
+
+fn ai_governance_status_class(value: &str) -> &'static str {
+    match value {
+        "APPROVED" => "ok-badge",
+        "RETIRED" => "muted-badge",
+        "DRAFT" => "warning-badge",
+        _ => "info-badge",
+    }
+}
+
+fn ai_governance_requirement_class(value: &str) -> &'static str {
+    match value {
+        "OK" => "ok-badge",
+        "WATCH" => "warning-badge",
+        _ => "danger-badge",
+    }
+}
+
+fn ai_governance_date_value(value: Option<&str>) -> &str {
+    value.and_then(|value| value.get(..10)).unwrap_or("")
+}
+
 fn web_error_page(
     title: &'static str,
     active_path: &'static str,
@@ -19394,6 +20241,7 @@ fn web_page(
         ("/suppliers/", "Suppliers"),
         ("/imports/", "Imports"),
         ("/processes/", "Processes"),
+        ("/ai-governance/", "AI Governance"),
         ("/product-security/", "Product Security"),
         ("/admin/users/", "Users"),
     ]
@@ -19715,6 +20563,11 @@ fn status_store_statuses(state: &AppState) -> Vec<StatusStoreStatus> {
             scope: "CRA, SBOM, CSAF, CVE-Reviews",
         },
         StatusStoreStatus {
+            name: "AI Governance",
+            configured: state.ai_governance_store.is_some(),
+            scope: "AI-Systemregister, AI-Act-Einstufung, Evidence",
+        },
+        StatusStoreStatus {
             name: "Risks",
             configured: state.risk_store.is_some(),
             scope: "Risiko-Register und Reviews",
@@ -19833,6 +20686,7 @@ async fn status_operations_overview(
         Some(context) => {
             signals.extend(control_operation_signals(state, context).await);
             signals.extend(product_security_operation_signals(state, context).await);
+            signals.extend(ai_governance_operation_signals(state, context).await);
         }
         None => {
             signals.push(StatusSignal::new(
@@ -19855,6 +20709,13 @@ async fn status_operations_overview(
                 StatusSignalLevel::Warn,
                 "Tenant-Kontext fehlt; Evidence-Lage braucht tenant_id und user_id.",
                 Some("/product-security/".to_string()),
+            ));
+            signals.push(StatusSignal::new(
+                "AI Governance",
+                "AI-Systeme nicht bewertet",
+                StatusSignalLevel::Warn,
+                "Tenant-Kontext fehlt; AI-Governance-Signale brauchen tenant_id und user_id.",
+                Some("/ai-governance/".to_string()),
             ));
         }
     }
@@ -20084,6 +20945,88 @@ async fn product_security_operation_signals(
             StatusSignalLevel::Danger,
             format!("Product-Security-Overview konnte nicht gelesen werden: {err}"),
             Some(web_path_with_context("/product-security/", Some(context))),
+        )],
+    }
+}
+
+async fn ai_governance_operation_signals(
+    state: &AppState,
+    context: &WebContext,
+) -> Vec<StatusSignal> {
+    let Some(store) = state.ai_governance_store.as_ref() else {
+        return vec![StatusSignal::new(
+            "AI Governance",
+            "AI-Systeme nicht bewertet",
+            StatusSignalLevel::Warn,
+            "AI-Governance-Store ist nicht konfiguriert.",
+            Some(web_path_with_context("/ai-governance/", Some(context))),
+        )];
+    };
+    match store.overview(context.tenant_id, 200).await {
+        Ok(overview) => vec![
+            StatusSignal::new(
+                "AI Governance",
+                "AI-Systeme nicht bewertet",
+                if overview.summary.not_assessed_systems == 0 {
+                    StatusSignalLevel::Ok
+                } else {
+                    StatusSignalLevel::Warn
+                },
+                format!(
+                    "{} von {} AI-Systemen sind noch nicht eingestuft.",
+                    overview.summary.not_assessed_systems, overview.summary.total_systems
+                ),
+                Some(web_path_with_context("/ai-governance/", Some(context))),
+            ),
+            StatusSignal::new(
+                "AI Governance",
+                "AI-Reviews faellig",
+                if overview.summary.review_due_systems == 0 {
+                    StatusSignalLevel::Ok
+                } else {
+                    StatusSignalLevel::Warn
+                },
+                format!(
+                    "{} AI-Governance-Reviews sind faellig.",
+                    overview.summary.review_due_systems
+                ),
+                Some(web_path_with_context("/ai-governance/", Some(context))),
+            ),
+            StatusSignal::new(
+                "AI Governance",
+                "AI-Evidence fehlt",
+                if overview.summary.evidence_missing == 0 {
+                    StatusSignalLevel::Ok
+                } else {
+                    StatusSignalLevel::Warn
+                },
+                format!(
+                    "{} AI-Systeme haben noch keine Evidence-Spur.",
+                    overview.summary.evidence_missing
+                ),
+                Some(web_path_with_context("/ai-governance/", Some(context))),
+            ),
+            StatusSignal::new(
+                "AI Governance",
+                "AI-Governance-Gaps",
+                if overview.summary.open_governance_gaps == 0 {
+                    StatusSignalLevel::Ok
+                } else {
+                    StatusSignalLevel::Warn
+                },
+                format!(
+                    "{} offene AI-Governance-Anforderungen.",
+                    overview.summary.open_governance_gaps
+                ),
+                Some(web_path_with_context("/ai-governance/", Some(context))),
+            ),
+        ],
+        Err(err) => vec![StatusSignal::new(
+            "AI Governance",
+            "AI-Systeme nicht bewertet",
+            StatusSignalLevel::Danger,
+            format!("AI-Governance-Uebersicht konnte nicht gelesen werden: {err}"),
+            Some(web_path_with_context("/ai-governance/", Some(context))),
         )],
     }
 }
@@ -22953,6 +23896,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/processes", get(process_register))
         .route("/api/v1/processes/{process_id}", get(process_detail))
         .route(
+            "/api/v1/ai-governance/systems",
+            get(ai_governance_overview).post(ai_governance_create_system),
+        )
+        .route(
+            "/api/v1/ai-governance/systems/{system_id}",
+            get(ai_governance_detail).patch(ai_governance_update_system),
+        )
+        .route(
             "/api/v1/product-security/overview",
             get(product_security_overview),
         )
@@ -23294,6 +24245,18 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(web_admin_users).post(web_admin_users_submit),
         )
         .route("/admin/users/{user_id}", post(web_admin_user_update))
+        .route(
+            "/ai-governance/",
+            get(web_ai_governance).post(web_ai_governance_create_system),
+        )
+        .route(
+            "/ai-governance/systems",
+            post(web_ai_governance_create_system),
+        )
+        .route(
+            "/ai-governance/systems/{system_id}",
+            post(web_ai_governance_update_system),
+        )
         .route("/product-security/", get(web_product_security))
         .route(
             "/product-security/thresholds",
