@@ -33,18 +33,21 @@ Dieser Bericht dokumentiert den ersten Community-Readiness-Lauf fuer Phase 0 und
 - Production verlangt unter anderem `DATABASE_URL`, nicht-beispielhafte Secrets, sichere Cookies und Alertmanager-Token.
 - Production erkennt bekannte Demo-Passwort-Hashes fuer `admin` und `ops-alertmanager`.
 - `_FILE`-Secret-Muster fuer `ISCY_ALERTMANAGER_TOKEN_FILE`.
+- `init-admin` erzeugt den ersten produktiven Tenant/Admin ohne Demo-Seed und ohne Beispielpasswort.
+- Lokales Login-Rate-Limiting blockiert wiederholte Fehlversuche pro Tenant/Username.
+- Alertmanager-Webhook unterstuetzt HMAC-SHA256 ueber `timestamp.body` inklusive Zeitfenster und Previous-Secret fuer Rotation.
+- `make rust-restore-smoke` prueft einen einfachen SQLite-/Media-Restore lokal automatisiert.
 - Zentrale Middleware fuer Security Header.
 - Zentrale Deny-by-default-Grenze fuer `x-iscy-*` Identity Header im Production-Profil.
 - Security-Signale in `/status/`, `/status/operations.json` und `/metrics`.
 
 ## Offene Risiken
 
-- Admin-Erstinitialisierung ist noch nicht als separater Production-Flow umgesetzt.
-- Login-Rate-Limiting und Brute-Force-Schutz sind noch nicht final zentralisiert.
 - Vollstaendige Tenant-Isolation muss weiterhin routenweise durch Negativtests verdichtet werden.
-- Backup-/Restore-Drill ist dokumentarisch vorhanden, aber noch nicht als automatischer Restore-Smoke im CI verankert.
-- Webhook-HMAC/Replay-Schutz ist noch nicht implementiert; aktuell ist Bearer/Token-Pflicht fuer Production umgesetzt.
+- Login-Rate-Limiting ist pro Backend-Prozess umgesetzt; fuer mehrere Instanzen sollte ein gemeinsamer Store ergaenzt werden.
+- Alertmanager-HMAC nutzt ein Timestamp-Fenster; persistente Nonce-Erkennung fuer strikten Replay-Schutz ist noch offen.
+- Der Restore-Smoke deckt lokal SQLite und Media-Dateien ab; PostgreSQL-/Container-Restore-Drills sollten als naechste Betriebsreife-Stufe folgen.
 
 ## Empfehlung
 
-Phase 2 sollte noch nicht begonnen werden. Naechster fachlicher Schritt in Phase 1: Admin-Erstinitialisierung, Login-Rate-Limiting, Webhook-Rotation/HMAC und Restore-Smoke-Test.
+Phase 1 ist fuer Community-/Einzelinstanzbetrieb deutlich belastbarer. Naechster fachlicher Schritt vor Phase 2: Tenant-Isolation-Negativtests verdichten, Login-Rate-Limit fuer Clusterbetrieb zentralisieren, HMAC-Nonce-Persistenz ergaenzen und Restore-Drills fuer PostgreSQL/Container automatisieren.

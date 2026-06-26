@@ -16,12 +16,22 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 | `ISCY_HTTPS_CONFIRMED` | HTTPS ist fuer Nutzerzugriff bestaetigt | fuer HSTS: ja | `0` | `0/1`, `true/false` | Voraussetzung fuer HSTS | nein |
 | `ISCY_HSTS_ENABLED` | Aktiviert `Strict-Transport-Security` | nein | `0` | `0/1`, `true/false` | Darf nur nach bestaetigtem HTTPS aktiv sein | nein |
 | `ISCY_ALERTMANAGER_TOKEN` | Webhook-Secret | Production: ja | keine | starkes Secret, mind. 24 Zeichen | Schuetzt Alertmanager-Webhook | ja, `ISCY_ALERTMANAGER_TOKEN_FILE` |
+| `ISCY_ALERTMANAGER_HMAC_SECRET` | Optionales HMAC-Secret fuer Alertmanager | nein | leer | starkes Secret | Signiert `timestamp.body` und reduziert Spoofing-/Replay-Risiko | ja, `ISCY_ALERTMANAGER_HMAC_SECRET_FILE` |
+| `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET` | Altes HMAC-Secret fuer Rotation | nein | leer | starkes Secret | Erlaubt kurze Secret-Rotation ohne Monitoring-Ausfall | ja, `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE` |
+| `ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS` | Replay-Fenster fuer HMAC-Timestamps | nein | `300` | positive Sekunden | Alte oder weit zukuenftige Signaturen werden abgewiesen | nein |
+| `ISCY_INITIAL_ADMIN_TENANT_NAME` | Tenant-Name fuer `init-admin` | fuer `init-admin` empfohlen | `ISCY Production Tenant` | Text | Erstzugang ohne Demo-Seed | nein |
+| `ISCY_INITIAL_ADMIN_TENANT_SLUG` | Tenant-Slug fuer `init-admin` | fuer `init-admin` empfohlen | `iscy-production` | Kleinbuchstaben, Zahlen, Bindestrich | Eindeutige Mandantenkennung | nein |
+| `ISCY_INITIAL_ADMIN_USERNAME` | Initialer Admin-Username | fuer `init-admin` empfohlen | `iscy-admin` | Text | Wird nicht ueberschrieben, wenn aktiver Admin existiert | nein |
+| `ISCY_INITIAL_ADMIN_EMAIL` | Initiale Admin-E-Mail | fuer `init-admin` empfohlen | `iscy-admin@example.local` | E-Mail/Text | Kontaktadresse des Erstadmins | nein |
+| `ISCY_INITIAL_ADMIN_FIRST_NAME` | Initialer Admin-Vorname | nein | `ISCY` | Text | Anzeigeprofil des Erstadmins | nein |
+| `ISCY_INITIAL_ADMIN_LAST_NAME` | Initialer Admin-Nachname | nein | `Admin` | Text | Anzeigeprofil des Erstadmins | nein |
+| `ISCY_INITIAL_ADMIN_PASSWORD` | Initiales Admin-Passwort | fuer `init-admin` ja | keine | mind. 14 Zeichen, kein Beispielwert | Erzeugt ersten Admin ohne Demo-Zugangsdaten | ja, `ISCY_INITIAL_ADMIN_PASSWORD_FILE` |
 | `NVD_API_BASE_URL` | Optionale NVD-Quelle | nein | NVD Default | URL | Externe Verbindung nur bei aktivem CVE-Abgleich | nein |
 | `NVD_API_KEY` | Optionaler NVD API Key | nein | leer | Secret | Darf nicht in Logs oder Supportpaketen landen | ja, noch nicht fuer alle Callpaths |
 
 ## Secret-Dateien
 
-Fuer Container, NixOS und systemd kann `ISCY_ALERTMANAGER_TOKEN_FILE` auf eine gemountete Secret-Datei zeigen. Der direkte Env-Wert hat Vorrang, danach wird die Datei gelesen. Secrets duerfen nicht ins Repository, in Logs, Metriken oder Supportpakete geschrieben werden.
+Fuer Container, NixOS und systemd koennen `*_FILE`-Varianten auf gemountete Secret-Dateien zeigen. Der direkte Env-Wert hat Vorrang, danach wird die Datei gelesen. Secrets duerfen nicht ins Repository, in Logs, Metriken oder Supportpakete geschrieben werden.
 
 ## Production-Minimum
 
@@ -35,6 +45,20 @@ ISCY_SECURE_COOKIES=1
 ISCY_HTTPS_CONFIRMED=1
 ISCY_HSTS_ENABLED=1
 ISCY_ALERTMANAGER_TOKEN_FILE=/run/secrets/iscy-alertmanager-token
+ISCY_ALERTMANAGER_HMAC_SECRET_FILE=/run/secrets/iscy-alertmanager-hmac
+ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy-initial-admin-password
 ```
 
 Identity-Header duerfen produktiv nur aktiviert werden, wenn der Reverse Proxy eingehende `x-iscy-tenant-id`, `x-iscy-user-id`, `x-iscy-user-email`, `x-iscy-roles`, `x-iscy-is-staff` und `x-iscy-is-superuser` immer entfernt und nur selbst neu setzt.
+
+## Initial-Admin ohne Demo-Seed
+
+Produktive Systeme sollten mit Migrationen und einem eigenen Initial-Admin starten:
+
+```bash
+DATABASE_URL=postgresql://isms:<strong-password>@db:5432/isms \
+ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy-initial-admin-password \
+nix run .#iscy-backend -- init-admin
+```
+
+`init-admin` fuehrt Migrationen aus, legt bei Bedarf einen Tenant und einen aktiven Admin an und seedet keine Demo-Daten.

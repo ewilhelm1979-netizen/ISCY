@@ -39,6 +39,13 @@ nix run .#iscy-backend -- init-demo
 DATABASE_URL=sqlite:///db.sqlite3 RUST_BACKEND_BIND=127.0.0.1:9000 nix run .#iscy-backend
 ```
 
+Produktiver Erstadmin ohne Demo-Seed:
+
+```bash
+ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy-initial-admin-password \
+nix run .#iscy-backend -- init-admin
+```
+
 Healthcheck:
 
 ```bash
@@ -95,6 +102,7 @@ Kurzpruefung fuer Betrieb und Regression:
 
 ```bash
 nix develop --command make rust-smoke
+nix develop --command make rust-restore-smoke
 nix develop --command make team-test
 ```
 

@@ -13,13 +13,16 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{Datelike, Utc};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::Sha256;
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
     path::{Path as FsPath, PathBuf},
-    time::Duration,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 pub mod account_store;
@@ -103,6 +106,14 @@ pub struct AppState {
     pub nvd_api_base_url: Option<String>,
     pub database_url: Option<String>,
     pub security_config: CommunitySecurityConfig,
+    login_rate_limits: Arc<Mutex<HashMap<String, LoginRateLimitEntry>>>,
+}
+
+#[derive(Debug, Clone)]
+struct LoginRateLimitEntry {
+    failures: u32,
+    first_failure_at: Instant,
+    blocked_until: Option<Instant>,
 }
 
 impl AppState {
@@ -134,6 +145,7 @@ impl AppState {
             nvd_api_base_url: None,
             database_url: None,
             security_config: CommunitySecurityConfig::default(),
+            login_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -165,6 +177,7 @@ impl AppState {
             nvd_api_base_url: None,
             database_url: None,
             security_config: CommunitySecurityConfig::default(),
+            login_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -1935,7 +1948,7 @@ async fn health_live() -> Json<serde_json::Value> {
 async fn operations_alertmanager_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<AlertmanagerWebhookPayload>,
+    body: Bytes,
 ) -> Response {
     if !alertmanager_token_matches(&headers) {
         return (
@@ -1949,6 +1962,24 @@ async fn operations_alertmanager_webhook(
         )
             .into_response();
     }
+    if let Err(response) = alertmanager_hmac_valid(&headers, &body) {
+        return response;
+    }
+    let payload = match serde_json::from_slice::<AlertmanagerWebhookPayload>(&body) {
+        Ok(payload) => payload,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_alertmanager_payload",
+                    message: "Alertmanager-Webhook-Payload ist kein gueltiges JSON.".to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
     let alert_count = payload.alerts.len() as i64;
     let firing_count = payload
         .alerts
@@ -2048,6 +2079,124 @@ fn alertmanager_token_matches(headers: &HeaderMap) -> bool {
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().strip_prefix("Bearer "))
         .is_some_and(|value| value.trim() == expected)
+}
+
+type AlertmanagerHmacSha256 = Hmac<Sha256>;
+
+fn alertmanager_hmac_valid(headers: &HeaderMap, body: &[u8]) -> Result<(), Response> {
+    let Ok(current_secret) = hardening::secret_value("ISCY_ALERTMANAGER_HMAC_SECRET") else {
+        return Err(alertmanager_auth_response(
+            "invalid_alertmanager_hmac_config",
+            "Alertmanager-HMAC-Secret konnte nicht gelesen werden.",
+        ));
+    };
+    let Some(current_secret) = current_secret else {
+        return Ok(());
+    };
+    let previous_secret =
+        hardening::secret_value("ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET").unwrap_or(None);
+    let timestamp = header_string(headers, "x-iscy-alert-timestamp").ok_or_else(|| {
+        alertmanager_auth_response(
+            "missing_alertmanager_hmac_timestamp",
+            "Alertmanager-HMAC benoetigt x-iscy-alert-timestamp.",
+        )
+    })?;
+    validate_alertmanager_timestamp(&timestamp)?;
+    let signature = header_string(headers, "x-iscy-alert-signature").ok_or_else(|| {
+        alertmanager_auth_response(
+            "missing_alertmanager_hmac_signature",
+            "Alertmanager-HMAC benoetigt x-iscy-alert-signature.",
+        )
+    })?;
+    let signature = signature
+        .strip_prefix("sha256=")
+        .unwrap_or(signature.as_str())
+        .trim();
+    let signed_body = alertmanager_hmac_message(&timestamp, body);
+    if alertmanager_hmac_secret_matches(&current_secret, &signed_body, signature)
+        || previous_secret
+            .as_deref()
+            .is_some_and(|secret| alertmanager_hmac_secret_matches(secret, &signed_body, signature))
+    {
+        return Ok(());
+    }
+    Err(alertmanager_auth_response(
+        "invalid_alertmanager_hmac_signature",
+        "Alertmanager-HMAC-Signatur ist ungueltig.",
+    ))
+}
+
+fn validate_alertmanager_timestamp(timestamp: &str) -> Result<(), Response> {
+    let parsed = timestamp.trim().parse::<i64>().map_err(|_| {
+        alertmanager_auth_response(
+            "invalid_alertmanager_hmac_timestamp",
+            "x-iscy-alert-timestamp muss Unix-Epoch-Sekunden enthalten.",
+        )
+    })?;
+    let max_age = std::env::var("ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(300);
+    let now = Utc::now().timestamp();
+    if (now - parsed).abs() > max_age {
+        return Err(alertmanager_auth_response(
+            "stale_alertmanager_hmac_timestamp",
+            "Alertmanager-HMAC-Timestamp liegt ausserhalb des erlaubten Replay-Fensters.",
+        ));
+    }
+    Ok(())
+}
+
+fn alertmanager_hmac_message(timestamp: &str, body: &[u8]) -> Vec<u8> {
+    let mut message = Vec::with_capacity(timestamp.len() + 1 + body.len());
+    message.extend_from_slice(timestamp.trim().as_bytes());
+    message.push(b'.');
+    message.extend_from_slice(body);
+    message
+}
+
+fn alertmanager_hmac_secret_matches(secret: &str, message: &[u8], signature: &str) -> bool {
+    let Ok(mut mac) = AlertmanagerHmacSha256::new_from_slice(secret.trim().as_bytes()) else {
+        return false;
+    };
+    mac.update(message);
+    let expected = hex_encode_bytes(&mac.finalize().into_bytes());
+    constant_time_eq(expected.as_bytes(), signature.as_bytes())
+}
+
+fn alertmanager_auth_response(error_code: &'static str, message: &'static str) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: message.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn hex_encode_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut diff = 0_u8;
+    for (left_byte, right_byte) in left.iter().zip(right.iter()) {
+        diff |= left_byte ^ right_byte;
+    }
+    diff == 0
 }
 
 fn alert_label(
@@ -2752,6 +2901,80 @@ fn redirect_with_cookie(location: &str, cookie: &str) -> Response {
     response_with_cookie(response, cookie)
 }
 
+const LOGIN_RATE_LIMIT_MAX_FAILURES: u32 = 5;
+const LOGIN_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(15 * 60);
+const LOGIN_RATE_LIMIT_BLOCK: Duration = Duration::from_secs(15 * 60);
+
+fn login_rate_limit_key(tenant_id: Option<i64>, username: &str) -> String {
+    format!(
+        "{}:{}",
+        tenant_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "global".to_string()),
+        username.trim().to_ascii_lowercase()
+    )
+}
+
+fn login_rate_limit_remaining_block(state: &AppState, key: &str) -> Option<Duration> {
+    let now = Instant::now();
+    let mut guard = state.login_rate_limits.lock().ok()?;
+    let entry = guard.get(key)?;
+    if let Some(blocked_until) = entry.blocked_until {
+        if blocked_until > now {
+            return Some(blocked_until.duration_since(now));
+        }
+    }
+    if now.duration_since(entry.first_failure_at) > LOGIN_RATE_LIMIT_WINDOW {
+        guard.remove(key);
+    }
+    None
+}
+
+fn login_rate_limit_record_failure(state: &AppState, key: &str) {
+    let now = Instant::now();
+    let Ok(mut guard) = state.login_rate_limits.lock() else {
+        return;
+    };
+    let entry = guard
+        .entry(key.to_string())
+        .or_insert_with(|| LoginRateLimitEntry {
+            failures: 0,
+            first_failure_at: now,
+            blocked_until: None,
+        });
+    if now.duration_since(entry.first_failure_at) > LOGIN_RATE_LIMIT_WINDOW {
+        entry.failures = 0;
+        entry.first_failure_at = now;
+        entry.blocked_until = None;
+    }
+    entry.failures = entry.failures.saturating_add(1);
+    if entry.failures >= LOGIN_RATE_LIMIT_MAX_FAILURES {
+        entry.blocked_until = Some(now + LOGIN_RATE_LIMIT_BLOCK);
+    }
+}
+
+fn login_rate_limit_record_success(state: &AppState, key: &str) {
+    if let Ok(mut guard) = state.login_rate_limits.lock() {
+        guard.remove(key);
+    }
+}
+
+fn login_rate_limited_response(remaining: Duration) -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "login_rate_limited",
+            message: format!(
+                "Zu viele fehlgeschlagene Login-Versuche. Bitte in {} Sekunden erneut versuchen.",
+                remaining.as_secs().max(1)
+            ),
+        }),
+    )
+        .into_response()
+}
+
 async fn context_whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(token) = session_token_from_headers(&headers) {
         if let Some(store) = state.auth_store.as_ref() {
@@ -2861,7 +3084,7 @@ async fn auth_session_create(
     State(state): State<AppState>,
     Json(payload): Json<AuthSessionCreateRequest>,
 ) -> Response {
-    let Some(store) = state.auth_store else {
+    let Some(store) = state.auth_store.clone() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiErrorResponse {
@@ -2873,6 +3096,7 @@ async fn auth_session_create(
         )
             .into_response();
     };
+    let mut login_key = None;
     let session_result = match (
         payload.username.as_deref(),
         payload.password.as_deref(),
@@ -2880,6 +3104,11 @@ async fn auth_session_create(
         payload.user_id,
     ) {
         (Some(username), Some(password), tenant_id, _) => {
+            let key = login_rate_limit_key(tenant_id, username);
+            if let Some(remaining) = login_rate_limit_remaining_block(&state, &key) {
+                return login_rate_limited_response(remaining);
+            }
+            login_key = Some(key);
             store
                 .create_session_for_login(tenant_id, username, password)
                 .await
@@ -2903,6 +3132,9 @@ async fn auth_session_create(
     };
     match session_result {
         Ok(Some(session)) => {
+            if let Some(key) = login_key.as_deref() {
+                login_rate_limit_record_success(&state, key);
+            }
             let cookie = session_cookie_value(&session.token, &state.security_config);
             response_with_cookie(
                 (
@@ -2924,16 +3156,21 @@ async fn auth_session_create(
                 &cookie,
             )
         }
-        Ok(None) => (
-            StatusCode::UNAUTHORIZED,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "invalid_login_context",
-                message: "Login-Daten sind fuer Rust-Session nicht gueltig.".to_string(),
-            }),
-        )
-            .into_response(),
+        Ok(None) => {
+            if let Some(key) = login_key.as_deref() {
+                login_rate_limit_record_failure(&state, key);
+            }
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_login_context",
+                    message: "Login-Daten sind fuer Rust-Session nicht gueltig.".to_string(),
+                }),
+            )
+                .into_response()
+        }
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiErrorResponse {
@@ -8578,7 +8815,7 @@ async fn web_login_submit(
     State(state): State<AppState>,
     Form(form): Form<WebLoginForm>,
 ) -> Response {
-    let Some(store) = state.auth_store else {
+    let Some(store) = state.auth_store.clone() else {
         return web_page(
             "Login",
             "/login/",
@@ -8587,21 +8824,40 @@ async fn web_login_submit(
         )
         .into_response();
     };
+    let login_key = login_rate_limit_key(form.tenant_id, &form.username);
+    if let Some(remaining) = login_rate_limit_remaining_block(&state, &login_key) {
+        return web_page(
+            "Login",
+            "/login/",
+            None,
+            &format!(
+                r#"<section class="panel form-panel error"><h1>Login</h1><p>Zu viele fehlgeschlagene Login-Versuche. Bitte in {} Sekunden erneut versuchen.</p></section>"#,
+                remaining.as_secs().max(1)
+            ),
+        )
+        .into_response();
+    }
     match store
         .create_session_for_login(form.tenant_id, &form.username, &form.password)
         .await
     {
-        Ok(Some(session)) => redirect_with_cookie(
-            "/dashboard/",
-            &session_cookie_value(&session.token, &state.security_config),
-        ),
-        Ok(None) => web_page(
-            "Login",
-            "/login/",
-            None,
-            r#"<section class="panel form-panel error"><h1>Login</h1><p>Benutzername oder Passwort ist nicht gueltig.</p></section>"#,
-        )
-        .into_response(),
+        Ok(Some(session)) => {
+            login_rate_limit_record_success(&state, &login_key);
+            redirect_with_cookie(
+                "/dashboard/",
+                &session_cookie_value(&session.token, &state.security_config),
+            )
+        }
+        Ok(None) => {
+            login_rate_limit_record_failure(&state, &login_key);
+            web_page(
+                "Login",
+                "/login/",
+                None,
+                r#"<section class="panel form-panel error"><h1>Login</h1><p>Benutzername oder Passwort ist nicht gueltig.</p></section>"#,
+            )
+            .into_response()
+        }
         Err(err) => web_page(
             "Login",
             "/login/",
@@ -24486,10 +24742,34 @@ pub fn app_router_with_state(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_cve_id;
+    use hmac::Mac;
+
+    use super::{
+        alertmanager_hmac_message, alertmanager_hmac_secret_matches, hex_encode_bytes,
+        normalize_cve_id, AlertmanagerHmacSha256,
+    };
 
     #[test]
     fn normalize_cve_id_uppercases_and_trims() {
         assert_eq!(normalize_cve_id(" cve-2026-1234 "), "CVE-2026-1234");
+    }
+
+    #[test]
+    fn alertmanager_hmac_matches_timestamp_and_body() {
+        let message = alertmanager_hmac_message("1800000000", br#"{"status":"firing"}"#);
+        let mut mac = AlertmanagerHmacSha256::new_from_slice(b"strong-alert-secret").unwrap();
+        mac.update(&message);
+        let signature = hex_encode_bytes(&mac.finalize().into_bytes());
+
+        assert!(alertmanager_hmac_secret_matches(
+            "strong-alert-secret",
+            &message,
+            &signature
+        ));
+        assert!(!alertmanager_hmac_secret_matches(
+            "wrong-secret",
+            &message,
+            &signature
+        ));
     }
 }

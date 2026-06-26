@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fs::File, io::Read, str::FromStr};
 
 use anyhow::{bail, Context};
 use chrono::Utc;
@@ -8,7 +8,7 @@ use sqlx::{
     Row,
 };
 
-use crate::cve_store::normalize_database_url;
+use crate::{auth_store::make_django_pbkdf2_sha256_password, cve_store::normalize_database_url};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbAdminAction {
@@ -32,6 +32,26 @@ pub struct DbMigrationStatus {
     pub latest_applied_version: Option<String>,
     pub latest_applied_at: Option<String>,
     pub expected_latest_version: Option<&'static str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InitialAdminConfig {
+    pub tenant_name: String,
+    pub tenant_slug: String,
+    pub username: String,
+    pub password: String,
+    pub email: String,
+    pub first_name: String,
+    pub last_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InitialAdminOutcome {
+    pub database_kind: &'static str,
+    pub tenant_id: i64,
+    pub user_id: i64,
+    pub username: String,
+    pub created: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -1811,6 +1831,361 @@ pub async fn migration_status(database_url: &str) -> anyhow::Result<DbMigrationS
         )?);
     }
     bail!("Nicht unterstuetztes DATABASE_URL-Schema fuer Rust-Migrationsstatus");
+}
+
+pub async fn bootstrap_initial_admin(
+    database_url: &str,
+    config: InitialAdminConfig,
+) -> anyhow::Result<InitialAdminOutcome> {
+    validate_initial_admin_config(&config)?;
+    let normalized_url = normalize_database_url(database_url);
+    if normalized_url.starts_with("postgres://") || normalized_url.starts_with("postgresql://") {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&normalized_url)
+            .await
+            .context("PostgreSQL-Verbindung fuer Initial-Admin fehlgeschlagen")?;
+        let tenant_id = ensure_postgres_bootstrap_tenant(&pool, &config).await?;
+        ensure_postgres_bootstrap_roles(&pool).await?;
+        let (user_id, created) =
+            ensure_postgres_initial_admin_user(&pool, tenant_id, &config).await?;
+        return Ok(InitialAdminOutcome {
+            database_kind: "postgres",
+            tenant_id,
+            user_id,
+            username: config.username,
+            created,
+        });
+    }
+    if normalized_url.starts_with("sqlite:") {
+        let options = SqliteConnectOptions::from_str(&normalized_url)
+            .context("SQLite-DATABASE_URL fuer Initial-Admin konnte nicht gelesen werden")?
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect_with(options)
+            .await
+            .context("SQLite-Verbindung fuer Initial-Admin fehlgeschlagen")?;
+        let tenant_id = ensure_sqlite_bootstrap_tenant(&pool, &config).await?;
+        ensure_sqlite_bootstrap_roles(&pool).await?;
+        let (user_id, created) =
+            ensure_sqlite_initial_admin_user(&pool, tenant_id, &config).await?;
+        return Ok(InitialAdminOutcome {
+            database_kind: "sqlite",
+            tenant_id,
+            user_id,
+            username: config.username,
+            created,
+        });
+    }
+    bail!("Nicht unterstuetztes DATABASE_URL-Schema fuer Initial-Admin");
+}
+
+fn validate_initial_admin_config(config: &InitialAdminConfig) -> anyhow::Result<()> {
+    if config.tenant_name.trim().is_empty() {
+        bail!("ISCY_INITIAL_ADMIN_TENANT_NAME darf nicht leer sein.");
+    }
+    if !is_valid_slug(&config.tenant_slug) {
+        bail!("ISCY_INITIAL_ADMIN_TENANT_SLUG muss aus Kleinbuchstaben, Zahlen und Bindestrichen bestehen.");
+    }
+    if config.username.trim().is_empty() {
+        bail!("ISCY_INITIAL_ADMIN_USERNAME darf nicht leer sein.");
+    }
+    let password = config.password.trim();
+    if password.len() < 14 {
+        bail!("ISCY_INITIAL_ADMIN_PASSWORD muss mindestens 14 Zeichen lang sein.");
+    }
+    let lower = password.to_ascii_lowercase();
+    if ["admin123", "password", "changeme", "change-me", "demo"]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        bail!("ISCY_INITIAL_ADMIN_PASSWORD enthaelt einen bekannten Beispielwert.");
+    }
+    Ok(())
+}
+
+fn is_valid_slug(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+}
+
+async fn ensure_sqlite_bootstrap_tenant(
+    pool: &SqlitePool,
+    config: &InitialAdminConfig,
+) -> anyhow::Result<i64> {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_tenant (
+            name, slug, country, operation_countries, description, sector,
+            employee_count, annual_revenue_million, balance_sheet_million,
+            critical_services, supply_chain_role,
+            nis2_relevant, kritis_relevant, develops_digital_products, uses_ai_systems,
+            ot_iacs_scope, automotive_scope, psirt_defined, sbom_required, product_security_scope
+        ) VALUES (
+            ?1, ?2, 'DE', '["DE"]', 'Production bootstrap tenant', 'OTHER',
+            0, '0', '0', '', '',
+            0, 0, 0, 0,
+            0, 0, 0, 0, ''
+        )
+        ON CONFLICT(slug) DO UPDATE SET
+            name = excluded.name,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(config.tenant_name.trim())
+    .bind(config.tenant_slug.trim())
+    .execute(pool)
+    .await
+    .context("SQLite-Initial-Tenant konnte nicht angelegt werden")?;
+    let tenant_id: i64 = sqlx::query_scalar("SELECT id FROM organizations_tenant WHERE slug = ?1")
+        .bind(config.tenant_slug.trim())
+        .fetch_one(pool)
+        .await
+        .context("SQLite-Initial-Tenant konnte nicht gelesen werden")?;
+    Ok(tenant_id)
+}
+
+async fn ensure_postgres_bootstrap_tenant(
+    pool: &PgPool,
+    config: &InitialAdminConfig,
+) -> anyhow::Result<i64> {
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_tenant (
+            name, slug, country, operation_countries, description, sector,
+            employee_count, annual_revenue_million, balance_sheet_million,
+            critical_services, supply_chain_role,
+            nis2_relevant, kritis_relevant, develops_digital_products, uses_ai_systems,
+            ot_iacs_scope, automotive_scope, psirt_defined, sbom_required, product_security_scope
+        ) VALUES (
+            $1, $2, 'DE', '["DE"]', 'Production bootstrap tenant', 'OTHER',
+            0, '0', '0', '', '',
+            FALSE, FALSE, FALSE, FALSE,
+            FALSE, FALSE, FALSE, FALSE, ''
+        )
+        ON CONFLICT(slug) DO UPDATE SET
+            name = EXCLUDED.name,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(config.tenant_name.trim())
+    .bind(config.tenant_slug.trim())
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Initial-Tenant konnte nicht angelegt werden")?;
+    let tenant_id: i64 = sqlx::query_scalar("SELECT id FROM organizations_tenant WHERE slug = $1")
+        .bind(config.tenant_slug.trim())
+        .fetch_one(pool)
+        .await
+        .context("PostgreSQL-Initial-Tenant konnte nicht gelesen werden")?;
+    Ok(tenant_id)
+}
+
+async fn ensure_sqlite_bootstrap_roles(pool: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO accounts_role (code, label, description) VALUES
+            ('ADMIN', 'Administrator', 'Full tenant administration and write access'),
+            ('CONTRIBUTOR', 'Contributor', 'Can create and maintain tenant records'),
+            ('AUDITOR', 'Auditor', 'Read-only audit and evidence review')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .context("SQLite-Bootstrap-Rollen konnten nicht angelegt werden")?;
+    Ok(())
+}
+
+async fn ensure_postgres_bootstrap_roles(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO accounts_role (code, label, description) VALUES
+            ('ADMIN', 'Administrator', 'Full tenant administration and write access'),
+            ('CONTRIBUTOR', 'Contributor', 'Can create and maintain tenant records'),
+            ('AUDITOR', 'Auditor', 'Read-only audit and evidence review')
+        ON CONFLICT(code) DO NOTHING
+        "#,
+    )
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Bootstrap-Rollen konnten nicht angelegt werden")?;
+    Ok(())
+}
+
+async fn ensure_sqlite_initial_admin_user(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    config: &InitialAdminConfig,
+) -> anyhow::Result<(i64, bool)> {
+    if let Some((user_id, is_admin)) =
+        sqlite_existing_user_admin_state(pool, config.username.trim()).await?
+    {
+        if is_admin {
+            return Ok((user_id, false));
+        }
+        bail!("SQLite-Initial-Admin: Username existiert bereits, ist aber kein aktiver Admin.");
+    }
+    let password_hash = make_django_pbkdf2_sha256_password(&config.password, &generate_salt()?);
+    let row = sqlx::query(
+        r#"
+        INSERT INTO accounts_user (
+            password, is_superuser, username, first_name, last_name, email,
+            is_staff, is_active, date_joined, role, job_title, tenant_id
+        ) VALUES (
+            ?1, 1, ?2, ?3, ?4, ?5,
+            1, 1, datetime('now'), 'ADMIN', 'Initial Administrator', ?6
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(&password_hash)
+    .bind(config.username.trim())
+    .bind(config.first_name.trim())
+    .bind(config.last_name.trim())
+    .bind(config.email.trim())
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await
+    .context("SQLite-Initial-Admin konnte nicht angelegt werden")?;
+    let user_id: i64 = row.try_get("id")?;
+    sqlx::query(
+        r#"
+        INSERT OR IGNORE INTO accounts_userrole (user_id, role_id, scope_tenant_id, granted_at, granted_by_id)
+        SELECT ?1, id, ?2, datetime('now'), NULL FROM accounts_role WHERE code = 'ADMIN'
+        "#,
+    )
+    .bind(user_id)
+    .bind(tenant_id)
+    .execute(pool)
+    .await
+    .context("SQLite-Initial-Admin-Rolle konnte nicht gesetzt werden")?;
+    Ok((user_id, true))
+}
+
+async fn ensure_postgres_initial_admin_user(
+    pool: &PgPool,
+    tenant_id: i64,
+    config: &InitialAdminConfig,
+) -> anyhow::Result<(i64, bool)> {
+    if let Some((user_id, is_admin)) =
+        postgres_existing_user_admin_state(pool, config.username.trim()).await?
+    {
+        if is_admin {
+            return Ok((user_id, false));
+        }
+        bail!("PostgreSQL-Initial-Admin: Username existiert bereits, ist aber kein aktiver Admin.");
+    }
+    let password_hash = make_django_pbkdf2_sha256_password(&config.password, &generate_salt()?);
+    let row = sqlx::query(
+        r#"
+        INSERT INTO accounts_user (
+            password, is_superuser, username, first_name, last_name, email,
+            is_staff, is_active, date_joined, role, job_title, tenant_id
+        ) VALUES (
+            $1, TRUE, $2, $3, $4, $5,
+            TRUE, TRUE, NOW(), 'ADMIN', 'Initial Administrator', $6
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(&password_hash)
+    .bind(config.username.trim())
+    .bind(config.first_name.trim())
+    .bind(config.last_name.trim())
+    .bind(config.email.trim())
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Initial-Admin konnte nicht angelegt werden")?;
+    let user_id: i64 = row.try_get("id")?;
+    sqlx::query(
+        r#"
+        INSERT INTO accounts_userrole (user_id, role_id, scope_tenant_id, granted_at, granted_by_id)
+        SELECT $1, id, $2, NOW(), NULL FROM accounts_role WHERE code = 'ADMIN'
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(user_id)
+    .bind(tenant_id)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Initial-Admin-Rolle konnte nicht gesetzt werden")?;
+    Ok((user_id, true))
+}
+
+async fn sqlite_existing_user_admin_state(
+    pool: &SqlitePool,
+    username: &str,
+) -> anyhow::Result<Option<(i64, bool)>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, is_superuser, is_staff, is_active
+        FROM accounts_user
+        WHERE username = ?1
+        "#,
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Initial-Admin-Username konnte nicht geprueft werden")?;
+    row.map(|row| {
+        let user_id: i64 = row.try_get("id")?;
+        let is_superuser: bool = row.try_get("is_superuser")?;
+        let is_staff: bool = row.try_get("is_staff")?;
+        let is_active: bool = row.try_get("is_active")?;
+        Ok((user_id, is_active && is_staff && is_superuser))
+    })
+    .transpose()
+}
+
+async fn postgres_existing_user_admin_state(
+    pool: &PgPool,
+    username: &str,
+) -> anyhow::Result<Option<(i64, bool)>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, is_superuser, is_staff, is_active
+        FROM accounts_user
+        WHERE username = $1
+        "#,
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Initial-Admin-Username konnte nicht geprueft werden")?;
+    row.map(|row| {
+        let user_id: i64 = row.try_get("id")?;
+        let is_superuser: bool = row.try_get("is_superuser")?;
+        let is_staff: bool = row.try_get("is_staff")?;
+        let is_active: bool = row.try_get("is_active")?;
+        Ok((user_id, is_active && is_staff && is_superuser))
+    })
+    .transpose()
+}
+
+fn generate_salt() -> anyhow::Result<String> {
+    let mut bytes = [0_u8; 16];
+    File::open("/dev/urandom")
+        .context("Initial-Admin-Saltquelle /dev/urandom konnte nicht geoeffnet werden")?
+        .read_exact(&mut bytes)
+        .context("Initial-Admin-Salt konnte nicht erzeugt werden")?;
+    Ok(hex_encode(&bytes))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn empty_migration_status(database_kind: &'static str) -> DbMigrationStatus {

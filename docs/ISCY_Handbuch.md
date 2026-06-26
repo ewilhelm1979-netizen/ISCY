@@ -758,6 +758,13 @@ nix run .#iscy-backend -- init-demo
 DATABASE_URL=sqlite:///db.sqlite3 RUST_BACKEND_BIND=127.0.0.1:9000 nix run .#iscy-backend
 ```
 
+Produktive Erstinitialisierung erfolgt ohne Demo-Seed. Dafuer wird ein eigenes Passwort aus einer Secret-Datei gelesen und ein initialer Admin angelegt:
+
+```bash
+ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy-initial-admin-password \
+nix run .#iscy-backend -- init-admin
+```
+
 Maschinenlesbarer Betriebsstatus fuer lokale Pruefung, Monitoring und Agenten:
 
 ```bash
@@ -797,6 +804,8 @@ Fuer Community-Readiness und Production-Hardening sind zusaetzlich diese Dokumen
 
 Im Production-Modus (`ISCY_APP_MODE=production`) bricht ISCY den Start ab, wenn kritische Annahmen fehlen: keine Datenbank, Beispiel-Secrets, aktive Demo-Zugangsdaten, Demo-Seeding, unsichere Cookies, oeffentliche Bind-Adresse ohne bestaetigten Reverse Proxy, HSTS ohne bestaetigtes HTTPS oder fehlendes Alertmanager-Secret. Normale Clients duerfen `x-iscy-tenant-id`, `x-iscy-user-id` oder `x-iscy-roles` produktiv nicht zur Identitaetssteuerung verwenden; diese Header werden nur akzeptiert, wenn ein vertrauenswuerdiger Proxy das explizit absichert.
 
+Lokale Logins sind gegen einfache Brute-Force-Schleifen begrenzt: Nach fuenf fehlgeschlagenen Versuchen pro Tenant/Username blockiert ISCY weitere Versuche fuer 15 Minuten. Der Alertmanager-Webhook kann zusaetzlich zum Bearer-Token mit `ISCY_ALERTMANAGER_HMAC_SECRET_FILE` signierte `timestamp.body`-Requests verlangen; das Replay-Fenster wird ueber `ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS` gesteuert.
+
 Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:
 
 - `deploy/monitoring/prometheus/iscy-scrape.yml`
@@ -823,6 +832,7 @@ Wichtige lokale Pruefbefehle:
 
 ```bash
 nix develop --command make rust-smoke
+nix develop --command make rust-restore-smoke
 nix develop --command make team-test
 make rust-test
 make rust-smoke

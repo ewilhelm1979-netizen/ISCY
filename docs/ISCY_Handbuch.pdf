@@ -1896,7 +1896,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
 endobj
 29 0 obj
-<< /Length 4182 >>
+<< /Length 4156 >>
 stream
 BT
 /F1 9 Tf
@@ -1923,6 +1923,18 @@ T*
 (nix run .#iscy-backend -- init-demo) Tj
 T*
 (DATABASE_URL=sqlite:///db.sqlite3 RUST_BACKEND_BIND=127.0.0.1:9000 nix run .#iscy-backend) Tj
+T*
+() Tj
+T*
+(Produktive Erstinitialisierung erfolgt ohne Demo-Seed. Dafuer wird ein eigenes Passwort aus) Tj
+T*
+(einer Secret-Datei gelesen und ein initialer Admin angelegt:) Tj
+T*
+() Tj
+T*
+(ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy-initial-admin-password \\) Tj
+T*
+(nix run .#iscy-backend -- init-admin) Tj
 T*
 () Tj
 T*
@@ -2034,6 +2046,31 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+30 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
+endobj
+31 0 obj
+<< /Length 3700 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
+(Lokale Logins sind gegen einfache Brute-Force-Schleifen begrenzt: Nach fuenf fehlgeschlagenen) Tj
+T*
+(Versuchen pro Tenant/Username blockiert ISCY weitere Versuche fuer 15 Minuten. Der) Tj
+T*
+(Alertmanager-Webhook kann zusaetzlich zum Bearer-Token mit ISCYALERTMANAGERHMACSECRETFILE) Tj
+T*
+(signierte timestamp.body-Requests verlangen; das Replay-Fenster wird ueber) Tj
+T*
+(ISCYALERTMANAGERHMACMAXAGESECONDS gesteuert.) Tj
+T*
+() Tj
+T*
 (Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:) Tj
 T*
 () Tj
@@ -2046,19 +2083,6 @@ T*
 T*
 (- deploy/monitoring/grafana/iscy-operations-dashboard.json) Tj
 T*
-ET
-endstream
-endobj
-30 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
-endobj
-31 0 obj
-<< /Length 3440 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- deploy/monitoring/docker-compose.yml) Tj
 T*
 (- deploy/monitoring/nixos/iscy-monitoring.nix) Tj
@@ -2123,6 +2147,8 @@ T*
 T*
 (nix develop --command make rust-smoke) Tj
 T*
+(nix develop --command make rust-restore-smoke) Tj
+T*
 (nix develop --command make team-test) Tj
 T*
 (make rust-test) Tj
@@ -2177,6 +2203,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 3284 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (6.7 Docker-Betrieb in einfacher Sprache:) Tj
 T*
 () Tj
@@ -2203,19 +2242,6 @@ T*
 T*
 (- produktiv: make prod-up oder make prod-up-llm) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 3340 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Merksatz: Erst validieren, dann kurz testen, dann dauerhaft starten.) Tj
@@ -2334,6 +2360,19 @@ T*
 T*
 (4. Windows-Hardening umgesetzt) Tj
 T*
+ET
+endstream
+endobj
+34 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
+endobj
+35 0 obj
+<< /Length 3886 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- Baselines sind definiert.) Tj
 T*
 (- lokale Adminrechte, Makros, SMB und Firewall sind geregelt.) Tj
@@ -2360,19 +2399,6 @@ T*
 T*
 (Grundschutz wird in diesem Arbeitsstand bewusst zurueckgestellt. Der sinnvolle naechste Fokus) Tj
 T*
-ET
-endstream
-endobj
-34 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
-endobj
-35 0 obj
-<< /Length 3768 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (fuer ISCY ist Zero Trust als laufende technische Posture-Sicht.) Tj
 T*
 () Tj
@@ -2491,6 +2517,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+36 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
+endobj
+37 0 obj
+<< /Length 2852 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (ISCY ersetzt nicht:) Tj
 T*
 () Tj
@@ -2517,19 +2556,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-36 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
-endobj
-37 0 obj
-<< /Length 2341 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- mit einem Tenant und einem realen Scope starten) Tj
 T*
 (- lieber wenige, aber belastbare Daten pflegen) Tj
@@ -2649,16 +2675,16 @@ xref
 0000034467 00000 n
 0000039502 00000 n
 0000039630 00000 n
-0000043864 00000 n
-0000043992 00000 n
-0000047484 00000 n
-0000047612 00000 n
-0000051004 00000 n
-0000051132 00000 n
-0000054952 00000 n
-0000055080 00000 n
+0000043838 00000 n
+0000043966 00000 n
+0000047718 00000 n
+0000047846 00000 n
+0000051182 00000 n
+0000051310 00000 n
+0000055248 00000 n
+0000055376 00000 n
 trailer
 << /Size 38 /Root 1 0 R >>
 startxref
-57473
+58280
 %%EOF

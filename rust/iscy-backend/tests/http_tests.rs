@@ -917,6 +917,56 @@ async fn rust_auth_session_creates_cookie_and_drives_web_context() {
 }
 
 #[tokio::test]
+async fn rust_auth_session_rate_limits_repeated_failed_passwords() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    for _ in 0..5 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"tenant_id":1,"username":"admin","password":"wrong"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"tenant_id":1,"username":"admin","password":"wrong"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "login_rate_limited");
+}
+
+#[tokio::test]
 async fn account_users_require_admin_role() {
     let response = app_router()
         .oneshot(
@@ -9243,6 +9293,76 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             .await
             .unwrap();
     assert_eq!(mapping_count, 67);
+}
+
+#[tokio::test]
+async fn rust_db_admin_bootstraps_initial_admin_without_demo_seed() {
+    let root = test_media_root("initial-admin-db");
+    let db_path = root.join("initial-admin.sqlite3");
+    let database_url = format!("sqlite:///{}", db_path.display());
+    db_admin::run_db_admin_action(&database_url, db_admin::DbAdminAction::Migrate)
+        .await
+        .unwrap();
+    let outcome = db_admin::bootstrap_initial_admin(
+        &database_url,
+        db_admin::InitialAdminConfig {
+            tenant_name: "Production Tenant".to_string(),
+            tenant_slug: "production-tenant".to_string(),
+            username: "prod-admin".to_string(),
+            password: "SichererZugang2026Alpha!".to_string(),
+            email: "prod-admin@example.local".to_string(),
+            first_name: "Prod".to_string(),
+            last_name: "Admin".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.database_kind, "sqlite");
+    assert_eq!(outcome.tenant_id, 1);
+    assert_eq!(outcome.user_id, 1);
+    assert_eq!(outcome.username, "prod-admin");
+    assert!(outcome.created);
+
+    let second = db_admin::bootstrap_initial_admin(
+        &database_url,
+        db_admin::InitialAdminConfig {
+            tenant_name: "Production Tenant".to_string(),
+            tenant_slug: "production-tenant".to_string(),
+            username: "prod-admin".to_string(),
+            password: "NochEinZugang2026Beta!".to_string(),
+            email: "prod-admin@example.local".to_string(),
+            first_name: "Prod".to_string(),
+            last_name: "Admin".to_string(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.user_id, outcome.user_id);
+    assert!(!second.created);
+
+    let auth_store = AuthStore::connect(&database_url).await.unwrap();
+    let app = app_router_with_state(AppState::default().with_auth_store(Some(auth_store)));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"tenant_id":1,"username":"prod-admin","password":"SichererZugang2026Alpha!"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["authenticated"], true);
+    assert_eq!(payload["user"]["username"], "prod-admin");
+    assert_eq!(payload["user"]["roles"][0], "ADMIN");
 }
 
 #[tokio::test]

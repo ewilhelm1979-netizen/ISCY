@@ -4,7 +4,7 @@ COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
 COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 RUST_BACKEND_MANIFEST=rust/iscy-backend/Cargo.toml
 
-.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke docs-pdf canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
+.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke docs-pdf canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
 
 local-bootstrap: rust-init
 
@@ -12,7 +12,7 @@ local-check: rust-test
 
 local-test: rust-test
 
-team-test: rust-test rust-smoke
+team-test: rust-test rust-smoke rust-restore-smoke
 
 docker-check:
 	$(COMPOSE_DEV) config >/dev/null
@@ -109,6 +109,25 @@ rust-smoke:
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/product-security/overview" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/status/metrics?tenant_id=1&user_id=1" >/dev/null; \
 	echo "Rust smoke OK: $$url"
+
+rust-restore-smoke:
+	@tmpdir=$$(mktemp -d); \
+	db_path="$$tmpdir/iscy-source.sqlite3"; \
+	restore_path="$$tmpdir/iscy-restored.sqlite3"; \
+	db_url="sqlite:////$${db_path#/}"; \
+	restore_url="sqlite:////$${restore_path#/}"; \
+	media_dir="$$tmpdir/media"; \
+	restore_media="$$tmpdir/restored-media"; \
+	mkdir -p "$$media_dir/evidence"; \
+	printf 'restore smoke evidence\n' > "$$media_dir/evidence/probe.txt"; \
+	echo "Rust restore smoke source DB: $$db_url"; \
+	DATABASE_URL="$$db_url" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- init-demo; \
+	cp "$$db_path" "$$restore_path"; \
+	cp -a "$$media_dir" "$$restore_media"; \
+	DATABASE_URL="$$restore_url" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- migrate; \
+	test -s "$$restore_path"; \
+	test -f "$$restore_media/evidence/probe.txt"; \
+	echo "Rust restore smoke OK: $$restore_url"
 
 canary-daily:
 	./scripts/run_daily_canary.sh

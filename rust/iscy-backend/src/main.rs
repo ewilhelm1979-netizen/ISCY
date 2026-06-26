@@ -12,7 +12,7 @@ use iscy_backend::{
     control_store::ControlStore,
     cve_store::CveStore,
     dashboard_store::DashboardStore,
-    db_admin::{run_db_admin_action, DbAdminAction},
+    db_admin::{bootstrap_initial_admin, run_db_admin_action, DbAdminAction, InitialAdminConfig},
     evidence_store::EvidenceStore,
     hardening::{
         assert_db_admin_action_allowed, run_production_preflight, CommunitySecurityConfig,
@@ -49,6 +49,11 @@ async fn main() -> anyhow::Result<()> {
             "init-demo" => {
                 assert_db_admin_action_allowed(&security_config, DbAdminAction::InitDemo)?;
                 run_database_admin(DbAdminAction::InitDemo).await?;
+                return Ok(());
+            }
+            "init-admin" => {
+                run_database_admin(DbAdminAction::Migrate).await?;
+                run_initial_admin().await?;
                 return Ok(());
             }
             "help" | "--help" | "-h" => {
@@ -210,8 +215,48 @@ fn evidence_media_root_from_env() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("media"))
 }
 
+async fn run_initial_admin() -> anyhow::Result<()> {
+    let database_url = std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "sqlite:///db.sqlite3".to_string());
+    let password = iscy_backend::hardening::secret_value("ISCY_INITIAL_ADMIN_PASSWORD")?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "ISCY_INITIAL_ADMIN_PASSWORD oder ISCY_INITIAL_ADMIN_PASSWORD_FILE fehlt."
+            )
+        })?;
+    let config = InitialAdminConfig {
+        tenant_name: env_or("ISCY_INITIAL_ADMIN_TENANT_NAME", "ISCY Production Tenant"),
+        tenant_slug: env_or("ISCY_INITIAL_ADMIN_TENANT_SLUG", "iscy-production"),
+        username: env_or("ISCY_INITIAL_ADMIN_USERNAME", "iscy-admin"),
+        password,
+        email: env_or("ISCY_INITIAL_ADMIN_EMAIL", "iscy-admin@example.local"),
+        first_name: env_or("ISCY_INITIAL_ADMIN_FIRST_NAME", "ISCY"),
+        last_name: env_or("ISCY_INITIAL_ADMIN_LAST_NAME", "Admin"),
+    };
+    let outcome = bootstrap_initial_admin(&database_url, config).await?;
+    println!(
+        "ISCY Initial-Admin completed: kind={}, tenant_id={}, user_id={}, username={}, created={}",
+        outcome.database_kind,
+        outcome.tenant_id,
+        outcome.user_id,
+        outcome.username,
+        outcome.created
+    );
+    Ok(())
+}
+
+fn env_or(name: &str, fallback: &str) -> String {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
 fn print_usage() {
     println!(
-        "ISCY Rust backend\n\nCommands:\n  migrate    Apply Rust-owned DB migrations\n  seed-demo  Seed Rust demo data into an already migrated DB\n  init-demo  Apply migrations and seed demo data\n\nWithout a command the HTTP server starts."
+        "ISCY Rust backend\n\nCommands:\n  migrate      Apply Rust-owned DB migrations\n  seed-demo    Seed Rust demo data into an already migrated DB\n  init-demo    Apply migrations and seed demo data\n  init-admin   Apply migrations and create an initial production admin from ISCY_INITIAL_ADMIN_* env vars\n\nWithout a command the HTTP server starts."
     );
 }
