@@ -2,6 +2,15 @@ services:
   app:
     environment:
       RUST_BACKEND_BIND: "0.0.0.0:9000"
+      ISCY_APP_MODE: "demo"
+      ISCY_TRUST_PROXY_IDENTITY_HEADERS: "0"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - media_data:/app/media
 
@@ -19,7 +28,6 @@ services:
       - "8080:80"
     volumes:
       - ./docker/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
-      - media_data:/var/www/media:ro
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/health/live || exit 1"]
       interval: 20s
