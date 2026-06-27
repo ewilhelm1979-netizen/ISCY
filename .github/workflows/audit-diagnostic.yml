@@ -1,11 +1,11 @@
 name: RustSec audit diagnostic
 
 on:
-  push:
-    branches:
-      - maintenance/application-readiness-v23.7.27
+  pull_request:
     paths:
-      - .github/workflows/audit-diagnostic.yml
+      - "rust/iscy-backend/Cargo.lock"
+      - ".github/workflows/audit-diagnostic.yml"
+      - ".github/workflows/ci.yml"
 
 permissions:
   contents: read
