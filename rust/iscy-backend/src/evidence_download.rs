@@ -17,7 +17,7 @@ use iscy_backend::{
     evidence_store::EvidenceStore, request_context::AuthenticatedTenantContext, AppState,
 };
 use serde_json::json;
-use sqlx::Row;
+use sqlx::{postgres::PgRow, sqlite::SqliteRow, Row};
 
 const SESSION_COOKIE_NAME: &str = "iscy_session";
 const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
@@ -28,7 +28,6 @@ struct EvidenceDownloadRecord {
     title: String,
     file_name: String,
     sensitivity: String,
-    status: String,
     owner_id: Option<i64>,
     reviewed_by_id: Option<i64>,
 }
@@ -213,6 +212,7 @@ async fn download_evidence_for_context(
         }
     };
 
+    let file_length = file_bytes.len();
     let download_name = safe_download_name(&record, &file_path);
     let content_type = evidence_content_type(&download_name);
     let mut response = (StatusCode::OK, Bytes::from(file_bytes)).into_response();
@@ -228,7 +228,7 @@ async fn download_evidence_for_context(
     if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{download_name}\"")) {
         response.headers_mut().insert(CONTENT_DISPOSITION, value);
     }
-    if let Ok(value) = HeaderValue::from_str(&response.body().size_hint().lower().to_string()) {
+    if let Ok(value) = HeaderValue::from_str(&file_length.to_string()) {
         response.headers_mut().insert(CONTENT_LENGTH, value);
     }
 
@@ -251,7 +251,7 @@ async fn load_evidence_record(
         EvidenceStore::Postgres(pool) => {
             let row = sqlx::query(
                 r#"
-                SELECT id, title, file AS file_name, sensitivity, status, owner_id, reviewed_by_id
+                SELECT id, title, file AS file_name, sensitivity, owner_id, reviewed_by_id
                 FROM evidence_evidenceitem
                 WHERE tenant_id = $1 AND id = $2
                 "#,
@@ -260,12 +260,14 @@ async fn load_evidence_record(
             .bind(evidence_id)
             .fetch_optional(pool)
             .await?;
-            row.map(evidence_record_from_row).transpose().map_err(Into::into)
+            row.map(evidence_record_from_pg_row)
+                .transpose()
+                .map_err(Into::into)
         }
         EvidenceStore::Sqlite(pool) => {
             let row = sqlx::query(
                 r#"
-                SELECT id, title, file AS file_name, sensitivity, status, owner_id, reviewed_by_id
+                SELECT id, title, file AS file_name, sensitivity, owner_id, reviewed_by_id
                 FROM evidence_evidenceitem
                 WHERE tenant_id = ?1 AND id = ?2
                 "#,
@@ -274,26 +276,34 @@ async fn load_evidence_record(
             .bind(evidence_id)
             .fetch_optional(pool)
             .await?;
-            row.map(evidence_record_from_row).transpose().map_err(Into::into)
+            row.map(evidence_record_from_sqlite_row)
+                .transpose()
+                .map_err(Into::into)
         }
     }
 }
 
-fn evidence_record_from_row<R>(row: R) -> Result<EvidenceDownloadRecord, sqlx::Error>
-where
-    R: Row,
-    for<'c> &'c str: sqlx::ColumnIndex<R>,
-    String: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    i64: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    Option<i64>: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    Option<String>: for<'r> sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-{
+fn evidence_record_from_pg_row(row: PgRow) -> Result<EvidenceDownloadRecord, sqlx::Error> {
     Ok(EvidenceDownloadRecord {
         id: row.try_get("id")?,
         title: row.try_get("title")?,
-        file_name: row.try_get::<Option<String>, _>("file_name")?.unwrap_or_default(),
+        file_name: row
+            .try_get::<Option<String>, _>("file_name")?
+            .unwrap_or_default(),
         sensitivity: row.try_get("sensitivity")?,
-        status: row.try_get("status")?,
+        owner_id: row.try_get("owner_id")?,
+        reviewed_by_id: row.try_get("reviewed_by_id")?,
+    })
+}
+
+fn evidence_record_from_sqlite_row(row: SqliteRow) -> Result<EvidenceDownloadRecord, sqlx::Error> {
+    Ok(EvidenceDownloadRecord {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        file_name: row
+            .try_get::<Option<String>, _>("file_name")?
+            .unwrap_or_default(),
+        sensitivity: row.try_get("sensitivity")?,
         owner_id: row.try_get("owner_id")?,
         reviewed_by_id: row.try_get("reviewed_by_id")?,
     })
@@ -358,9 +368,9 @@ fn resolve_evidence_path(
     }
     let relative = FsPath::new(stored_path);
     if relative.is_absolute()
-        || relative.components().any(|component| {
-            !matches!(component, Component::Normal(_) | Component::CurDir)
-        })
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
     {
         return Err(PathResolutionError::Unsafe);
     }
@@ -400,7 +410,7 @@ fn safe_download_name(record: &EvidenceDownloadRecord, path: &FsPath) -> String 
         .and_then(|value| value.to_str())
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(&record.title);
-    let mut safe = source
+    let safe = source
         .chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
@@ -411,11 +421,11 @@ fn safe_download_name(record: &EvidenceDownloadRecord, path: &FsPath) -> String 
         })
         .take(160)
         .collect::<String>();
-    safe = safe.trim_matches('.').to_string();
+    let safe = safe.trim_matches('.');
     if safe.is_empty() {
         format!("evidence-{}.bin", record.id)
     } else {
-        safe
+        safe.to_string()
     }
 }
 
@@ -552,10 +562,49 @@ mod tests {
             title: "Security Evidence".to_string(),
             file_name: "evidence/security.txt".to_string(),
             sensitivity: sensitivity.to_string(),
-            status: "APPROVED".to_string(),
             owner_id,
             reviewed_by_id: None,
         }
+    }
+
+    async fn test_evidence_store(
+        evidence_id: i64,
+        tenant_id: i64,
+        file_name: &str,
+        sensitivity: &str,
+    ) -> EvidenceStore {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            CREATE TABLE evidence_evidenceitem (
+                id INTEGER PRIMARY KEY,
+                tenant_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                file TEXT NULL,
+                sensitivity TEXT NOT NULL,
+                owner_id INTEGER NULL,
+                reviewed_by_id INTEGER NULL
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO evidence_evidenceitem (id, tenant_id, title, file, sensitivity) VALUES (?1, ?2, 'Test Evidence', ?3, ?4)",
+        )
+        .bind(evidence_id)
+        .bind(tenant_id)
+        .bind(file_name)
+        .bind(sensitivity)
+        .execute(&pool)
+        .await
+        .unwrap();
+        EvidenceStore::from_sqlite_pool(pool)
     }
 
     #[test]
@@ -617,36 +666,7 @@ mod tests {
 
     #[tokio::test]
     async fn tenant_scoped_lookup_hides_foreign_evidence() {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::query(
-            r#"
-            CREATE TABLE evidence_evidenceitem (
-                id INTEGER PRIMARY KEY,
-                tenant_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                file TEXT NULL,
-                sensitivity TEXT NOT NULL,
-                status TEXT NOT NULL,
-                owner_id INTEGER NULL,
-                reviewed_by_id INTEGER NULL
-            )
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO evidence_evidenceitem (id, tenant_id, title, file, sensitivity, status) VALUES (7, 2, 'Foreign', 'foreign.txt', 'INTERNAL', 'APPROVED')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let store = EvidenceStore::from_sqlite_pool(pool);
+        let store = test_evidence_store(7, 2, "foreign.txt", "INTERNAL").await;
         assert!(load_evidence_record(&store, 1, 7)
             .await
             .unwrap()
@@ -667,35 +687,7 @@ mod tests {
 
     #[tokio::test]
     async fn download_enforces_role_path_and_private_headers() {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::query(
-            r#"
-            CREATE TABLE evidence_evidenceitem (
-                id INTEGER PRIMARY KEY,
-                tenant_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                file TEXT NULL,
-                sensitivity TEXT NOT NULL,
-                status TEXT NOT NULL,
-                owner_id INTEGER NULL,
-                reviewed_by_id INTEGER NULL
-            )
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO evidence_evidenceitem (id, tenant_id, title, file, sensitivity, status) VALUES (7, 1, 'Restricted', 'evidence/proof.txt', 'RESTRICTED', 'APPROVED')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
+        let store = test_evidence_store(7, 1, "evidence/proof.txt", "RESTRICTED").await;
         let root = std::env::temp_dir().join(format!(
             "iscy-evidence-download-{}-{}",
             process::id(),
@@ -707,7 +699,7 @@ mod tests {
         fs::create_dir_all(root.join("evidence")).unwrap();
         fs::write(root.join("evidence/proof.txt"), b"proof").unwrap();
         let state = AppState::new(None)
-            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool)))
+            .with_evidence_store(Some(store))
             .with_evidence_media_root(Some(root.clone()));
 
         let denied = download_evidence_for_context(state.clone(), 7, context(2, "CONTRIBUTOR"))
@@ -717,12 +709,18 @@ mod tests {
         let allowed = download_evidence_for_context(state, 7, context(3, "CISO")).await;
         assert_eq!(allowed.status(), StatusCode::OK);
         assert_eq!(
-            allowed.headers().get(axum::http::header::CACHE_CONTROL),
-            Some(&HeaderValue::from_static("private, no-store"))
+            allowed
+                .headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("private, no-store")
         );
         assert_eq!(
-            allowed.headers().get("x-content-type-options"),
-            Some(&HeaderValue::from_static("nosniff"))
+            allowed
+                .headers()
+                .get("x-content-type-options")
+                .and_then(|value| value.to_str().ok()),
+            Some("nosniff")
         );
         assert!(allowed
             .headers()
@@ -735,39 +733,18 @@ mod tests {
 
     #[tokio::test]
     async fn manipulated_stored_path_is_not_downloaded() {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::query(
-            r#"
-            CREATE TABLE evidence_evidenceitem (
-                id INTEGER PRIMARY KEY,
-                tenant_id INTEGER NOT NULL,
-                title TEXT NOT NULL,
-                file TEXT NULL,
-                sensitivity TEXT NOT NULL,
-                status TEXT NOT NULL,
-                owner_id INTEGER NULL,
-                reviewed_by_id INTEGER NULL
-            )
-            "#,
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO evidence_evidenceitem (id, tenant_id, title, file, sensitivity, status) VALUES (8, 1, 'Manipulated', '../secret.txt', 'INTERNAL', 'APPROVED')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        let root = std::env::temp_dir().join(format!("iscy-evidence-path-{}", process::id()));
+        let store = test_evidence_store(8, 1, "../secret.txt", "INTERNAL").await;
+        let root = std::env::temp_dir().join(format!(
+            "iscy-evidence-path-{}-{}",
+            process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         fs::create_dir_all(&root).unwrap();
         let state = AppState::new(None)
-            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool)))
+            .with_evidence_store(Some(store))
             .with_evidence_media_root(Some(root.clone()));
 
         let response = download_evidence_for_context(state, 8, context(2, "CONTRIBUTOR"))
