@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a reproducible problem in ISCY
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve ISCY. Do not use this form for suspected vulnerabilities. Follow SECURITY.md for private reporting.
+  - type: input
+    id: version
+    attributes:
+      label: ISCY version or commit
+      description: Provide the release, branch, or commit SHA where the issue occurs.
+      placeholder: v23.x, main, or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment method
+      options:
+        - NixOS or nix run
+        - Docker Compose
+        - Native or custom deployment
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, database, browser, and other relevant versions.
+      placeholder: NixOS 26.05, PostgreSQL 17, Firefox 152
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem description
+      description: Describe what happened and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide a minimal, repeatable sequence of steps.
+      placeholder: |
+        1. Start ISCY with ...
+        2. Open ...
+        3. Submit ...
+        4. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or screenshots
+      description: Remove credentials, tokens, personal data, and other sensitive information before submitting.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and pull requests for duplicates.
+          required: true
+        - label: This report does not disclose a suspected security vulnerability.
+          required: true
+        - label: I removed credentials and sensitive information from logs and screenshots.
+          required: true
