@@ -15,7 +15,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time"]
 tower = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 hmac = "0.12"
-getrandom = "0.3"
+getrandom = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rust_decimal = "1"
 sha2 = "0.10"
