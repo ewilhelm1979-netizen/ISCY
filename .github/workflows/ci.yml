@@ -26,6 +26,16 @@ jobs:
       - name: Run Rust backend tests
         run: |
           cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml
+      - name: Install Rust supply-chain tools
+        run: |
+          cargo install cargo-audit --locked
+          cargo install cargo-deny --locked
+      - name: Audit Rust dependency advisories
+        run: |
+          cargo audit --file rust/iscy-backend/Cargo.lock
+      - name: Check Rust dependency licenses and sources
+        run: |
+          cargo deny --manifest-path rust/iscy-backend/Cargo.toml check advisories licenses sources
 
   rust-bootstrap-smoke:
     runs-on: ubuntu-24.04
