@@ -1,0 +1,33 @@
+name: Evidence rustfmt artifact
+
+on:
+  pull_request:
+    paths:
+      - "rust/iscy-backend/src/evidence_download.rs"
+      - "rust/iscy-backend/src/main.rs"
+      - ".github/workflows/rustfmt-evidence-artifact.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Format Rust sources
+        run: cargo fmt --manifest-path rust/iscy-backend/Cargo.toml
+      - name: Collect formatted sources
+        run: |
+          mkdir -p formatted/rust/iscy-backend/src
+          cp rust/iscy-backend/src/main.rs formatted/rust/iscy-backend/src/main.rs
+          cp rust/iscy-backend/src/evidence_download.rs formatted/rust/iscy-backend/src/evidence_download.rs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-rustfmt-sources
+          path: formatted
+          if-no-files-found: error
