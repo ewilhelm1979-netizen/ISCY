@@ -1,5 +1,6 @@
 name: Bootstrap V23.7.27 RustSec fixes
 
+# One-time maintainer trigger after the workflow was installed on main.
 on:
   push:
     branches: ["main"]
