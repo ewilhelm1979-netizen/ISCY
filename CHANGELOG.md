@@ -8,6 +8,7 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- provide authenticated, tenant-scoped Evidence downloads with protection-class authorization, safe path resolution, private caching, and security audit events
 - deny direct reverse-proxy access to uploaded evidence under `/media/`
 - remove legacy URL identity parameters before requests reach non-development route handlers
 - keep the backend container port private in stage and production deployments
