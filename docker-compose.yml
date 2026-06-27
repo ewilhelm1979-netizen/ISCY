@@ -27,8 +27,6 @@ services:
       ISCY_MEDIA_ROOT: ${ISCY_MEDIA_ROOT:-/app/media}
       NVD_API_BASE_URL: ${NVD_API_BASE_URL:-https://services.nvd.nist.gov}
       NVD_API_KEY: ${NVD_API_KEY:-}
-    ports:
-      - "${ISCY_HTTP_PORT:-9000}:9000"
     volumes:
       - media_data:/app/media
     healthcheck:
