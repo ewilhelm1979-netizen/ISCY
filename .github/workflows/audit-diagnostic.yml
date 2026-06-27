@@ -16,25 +16,31 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
           fallback: none
-      - name: Export audit and dependency reports
+      - name: Generate patched lockfile and diagnostics
         run: |
+          cargo update --manifest-path rust/iscy-backend/Cargo.toml -p rustls-webpki --precise 0.103.13
+          cargo update --manifest-path rust/iscy-backend/Cargo.toml -p quinn-proto --precise 0.11.15
           cargo audit --file rust/iscy-backend/Cargo.lock --json > audit-report.json || true
           {
-            echo "=== rsa ==="
-            cargo tree --manifest-path rust/iscy-backend/Cargo.toml -i rsa || true
-            echo "=== quinn-proto ==="
-            cargo tree --manifest-path rust/iscy-backend/Cargo.toml -i quinn-proto || true
-            echo "=== rustls-webpki ==="
-            cargo tree --manifest-path rust/iscy-backend/Cargo.toml -i rustls-webpki || true
+            echo "=== rsa current target ==="
+            cargo tree --locked --manifest-path rust/iscy-backend/Cargo.toml -i rsa || true
+            echo "=== rsa all targets ==="
+            cargo tree --locked --manifest-path rust/iscy-backend/Cargo.toml --target all -i rsa || true
+            echo "=== quinn-proto all targets ==="
+            cargo tree --locked --manifest-path rust/iscy-backend/Cargo.toml --target all -i quinn-proto || true
+            echo "=== rustls-webpki all targets ==="
+            cargo tree --locked --manifest-path rust/iscy-backend/Cargo.toml --target all -i rustls-webpki || true
           } > dependency-paths.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: rustsec-audit-report
+          name: rustsec-patched-lock-diagnostic
           path: |
+            rust/iscy-backend/Cargo.lock
             audit-report.json
             dependency-paths.txt
           if-no-files-found: error
