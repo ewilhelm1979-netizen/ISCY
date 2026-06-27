@@ -1,6 +1,6 @@
 # ISCY Community Readiness - Phase 0/1 Bericht
 
-Status: READY WITH DOCUMENTED LIMITATIONS
+Status: IN PROGRESS WITH DOCUMENTED LIMITATIONS
 
 Dieser Bericht dokumentiert den ersten Community-Readiness-Lauf fuer Phase 0 und das erste P0-Paket aus Phase 1. Ziel war keine Big-Bang-Haertung, sondern eine belastbare Startbremse fuer produktionskritische Fehlkonfigurationen.
 
@@ -9,8 +9,8 @@ Dieser Bericht dokumentiert den ersten Community-Readiness-Lauf fuer Phase 0 und
 - Repository: `ewilhelm1979-netizen/ISCY`
 - In `main` integriert; Ursprungslauf: `hardening/community-readiness`
 - Ausgangsstand: `fbc4c4b`
-- ISCY Release-Basis: `v23.7.24`
-- Rust Backend: `0.3.20`
+- ISCY Release-Basis: `v23.7.25`
+- Rust Backend: `0.3.21`
 - Runtime: Rust-only Axum Backend
 
 ## Findings

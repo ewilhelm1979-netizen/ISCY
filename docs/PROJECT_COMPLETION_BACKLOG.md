@@ -10,6 +10,7 @@
 - Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck; Evidence-Quality bewertet Nachweisreife, offene Issues und Evidence-Needs. Version, SHA-256, Gueltigkeit, Retention und Schutzklasse werden mit Migration `0024_rust_evidence_lifecycle` persistiert und in Incident-/Regulatory-Exporten ausgewiesen.
 - Management-Review-Pakete koennen als Markdown, HTML, PDF und JSON exportiert werden und enthalten Ruecklinks zu Risiko, Control, Evidence, Incident und Roadmap.
 - Third-Party-/Supplier-Risk ist als Rust-Web-/API-Modul umgesetzt und bewertet Lieferanten aus Kritikalitaet, Vertrags-/Security-Annex-Bezug, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischem Scope, Review-Faelligkeit, Evidence, Produktkomponenten, offenen Schwachstellen und dokumentierten Risiken.
+- Agent Fleet Governance bewertet Sollbestand, Heartbeat-Freshness, Mindestscore und Finding-Grenzwerte je Tenant-, OS-, Asset-, Business-Unit- oder Deployment-Scope. Sichere Policy-Webhooks besitzen Cooldown, transiente Retries und Delivery-Audit.
 - Der Rust-only-Betrieb liefert Statusseite, JSON-Drilldown, Prometheus-Metriken, Alertmanager-Webhook mit optionaler Incident-/Evidence-Persistenz, AI-Governance-Signale, Grafana-Dashboard inklusive Product-Security-Panels, Compose-Beispiel und NixOS-Modul samt Beispielhost.
 
 ## Prioritaet P0 (vor breitem Produktivrollout)
@@ -42,7 +43,7 @@ Die technische Rust-Migration ist abgeschlossen. Die fachliche Weiterentwicklung
 
 Die dort priorisierten naechsten Produktbereiche sind:
 
-1. Agent-Flottenbetrieb und Benachrichtigungen
-2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
-3. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
+1. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
+2. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
+3. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
 4. Supplier-Review-Workflow mit Freigabehistorie, Unterauftragnehmern und Exit-Tests

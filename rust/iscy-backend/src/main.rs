@@ -1,7 +1,8 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use iscy_backend::{
     account_store::AccountStore,
+    agent_governance_store::AgentGovernanceStore,
     agent_store::AgentStore,
     ai_governance_store::AiGovernanceStore,
     app_router_with_state,
@@ -77,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
     let (
         cve_store,
         account_store,
+        agent_governance_store,
         agent_store,
         auth_store,
         tenant_store,
@@ -102,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
         Some(database_url) => {
             let cve_store = CveStore::connect(database_url).await?;
             let account_store = AccountStore::connect(database_url).await?;
+            let agent_governance_store = AgentGovernanceStore::connect(database_url).await?;
             let agent_store = AgentStore::connect(database_url).await?;
             let auth_store = AuthStore::connect(database_url).await?;
             let tenant_store = TenantStore::connect(database_url).await?;
@@ -126,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
             (
                 Some(cve_store),
                 Some(account_store),
+                Some(agent_governance_store),
                 Some(agent_store),
                 Some(auth_store),
                 Some(tenant_store),
@@ -151,11 +155,13 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => (
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None,
         ),
     };
+    let notification_worker_store = agent_governance_store.clone();
     let state = AppState::with_stores(cve_store, tenant_store)
         .with_account_store(account_store)
+        .with_agent_governance_store(agent_governance_store)
         .with_agent_store(agent_store)
         .with_auth_store(auth_store)
         .with_dashboard_store(dashboard_store)
@@ -180,10 +186,51 @@ async fn main() -> anyhow::Result<()> {
         .with_database_url(database_url)
         .with_security_config(security_config);
 
+    start_agent_notification_worker(notification_worker_store);
+
     let listener = TcpListener::bind(addr).await?;
     println!("ISCY Rust backend listening on http://{}", addr);
     axum::serve(listener, app_router_with_state(state)).await?;
     Ok(())
+}
+
+fn start_agent_notification_worker(store: Option<AgentGovernanceStore>) {
+    let Some(store) = store else {
+        return;
+    };
+    let interval_seconds = std::env::var("ISCY_AGENT_NOTIFICATION_INTERVAL_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(300);
+    if interval_seconds == 0 {
+        return;
+    }
+    let interval_seconds = interval_seconds.max(60);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(interval_seconds));
+        loop {
+            interval.tick().await;
+            let tenant_ids = match store.notification_tenant_ids().await {
+                Ok(tenant_ids) => tenant_ids,
+                Err(err) => {
+                    eprintln!("ISCY Agent-Notification-Worker konnte Tenants nicht lesen: {err}");
+                    continue;
+                }
+            };
+            for tenant_id in tenant_ids {
+                match store.dispatch_policy_notifications(tenant_id).await {
+                    Ok(result) if result.sent > 0 || result.failed > 0 => println!(
+                        "ISCY Agent-Notifications tenant={tenant_id} sent={} failed={} suppressed={}",
+                        result.sent, result.failed, result.suppressed
+                    ),
+                    Ok(_) => {}
+                    Err(err) => eprintln!(
+                        "ISCY Agent-Notification-Worker tenant={tenant_id} fehlgeschlagen: {err}"
+                    ),
+                }
+            }
+        }
+    });
 }
 
 async fn run_database_admin(action: DbAdminAction) -> anyhow::Result<()> {

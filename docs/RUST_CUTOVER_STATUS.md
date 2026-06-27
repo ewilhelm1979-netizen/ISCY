@@ -1,6 +1,6 @@
 # ISCY Rust-Cutover-Status
 
-Stand: 2026-06-26
+Stand: 2026-06-27
 
 ## Kurzfassung
 
@@ -38,6 +38,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Processes
 - AI Governance inklusive AI-Systemregister, AI-Act-Klassifizierung, Human Oversight, Monitoringplan, Evidence-Key, Governance-Gap-Berechnung, Review-Faelligkeit und Rust-only-Betriebssignalen
 - Product Security inklusive CSAF-/CycloneDX-/SPDX-Importhistorie, Import-Detailseiten, VEX-Status je Schwachstelle, SBOM-Diff, CRA-Readiness, CVE-Asset-Korrelation, automatischer Risiko-/Roadmap-Ableitung, CVE-Risiko-Review-Queue, Review-Filtern, Bulk-Aktionen, Evidence-Lueckenmetriken, Trend-Dashboard, Prometheus-Trendmetriken und Grafana-Panels fuer Alert-Incidents mit konkretem Incident-Drilldown, Coverage, Review-Trend und Importvalidierung
+- Zero Trust inklusive read-only Rust-Agent, Enrollment/Secret-Rotation, Offline-Queue, Policy-Profilen, erwarteter Flottenabdeckung, sicheren Policy-Webhooks, Cooldown/Retry und Delivery-Audit
 - CVE Feed, CVE Assessments und NVD-Import
 - User-Administration, Rollen, Gruppen und direkte Permissions
 

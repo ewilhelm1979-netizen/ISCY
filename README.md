@@ -33,12 +33,11 @@ ISCY follows a local-first and privacy-conscious approach. Its production runtim
 
 ISCY is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`).
 
+## Development and review note
 
-## Projekt- und Pruefhinweis
+Dieses Projekt wurde mit Unterstuetzung von OpenAI Codex entwickelt, iterativ migriert und technisch/fachlich plausibilisiert. Die fachliche Plausibilisierung orientiert sich an offiziellen Quellen und aktuellen Sicherheitspraktiken zu NIS2, DORA, Cyber Resilience Act, EU AI Act, DSGVO, ISO-27001-ISMS-Arbeit, CVE-/SBOM-/CSAF-Verarbeitung, Evidence-Steuerung, Incident Response und risikobasierter Roadmap-Planung.
 
-Dieses Projekt wurde mit Unterstuetzung von OpenAI Codex entwickelt, iterativ migriert und technisch/fachlich plausibilisiert. Die fachliche Pruefung orientiert sich an offiziellen Quellen und aktuellen Sicherheitspraktiken zu NIS2, DORA, Cyber Resilience Act, EU AI Act, DSGVO, ISO-27001-ISMS-Arbeit, CVE-/SBOM-/CSAF-Verarbeitung, Evidence-Steuerung, Incident Response und risikobasierter Roadmap-Planung.
-
-Der Stand ist damit fachlich konsistent und nach aktuellem Architekturverstaendnis sinnvoll aufgebaut: ISCY trennt keine Regulierungen in Silos, sondern verbindet Controls, Risiken, Assets, Product Security, AI Governance, Incidents, Evidence und Roadmap-Arbeit in einem nachvollziehbaren Governance-Modell. Das ersetzt keine externe Zertifizierung, Rechtsberatung oder formale Auditfreigabe, schafft aber eine belastbare fachliche Arbeitsbasis.
+Die Architektur verfolgt ein gemeinsames Governance-Modell statt separater Regulierungssilos und verbindet Controls, Risiken, Assets, Product Security, AI Governance, Incidents, Evidence und Roadmap-Arbeit. Diese Plausibilisierung ist keine unabhaengige fachliche Pruefung, Zertifizierung, Rechtsberatung oder formale Auditfreigabe. Regulatorische Unterstuetzung muss fuer Organisation, Rechtsraum und Einsatzkontext eigenstaendig bewertet werden.
 
 Fachliche Referenzen:
 
@@ -233,17 +232,17 @@ Management Reviews werden unter `/management-reviews/` als auditierbare Steuerun
 
 ## Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 umgesetzt, V23.7.20 ergaenzt das Management-Review- und Audit-Paket, V23.7.21 schliesst Export, Snapshot-Ruecklinks und Evidence-Qualitaet an, V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um, V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus, V23.7.24 ergaenzt AI Governance als eigenes Rust-Web-/API-Modul. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
+Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 umgesetzt, V23.7.20 ergaenzt das Management-Review- und Audit-Paket, V23.7.21 schliesst Export, Snapshot-Ruecklinks und Evidence-Qualitaet an, V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um, V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus, V23.7.24 ergaenzt AI Governance und V23.7.25 macht die Agent-Flotte ueber Sollprofile, Coverage und aktive Webhooks steuerbar. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
 
-1. Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Benachrichtigungskanaele
-2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
-3. AI-Governance direkt mit Risiken, Roadmap, Incidents und Changes verbinden
+1. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
+2. AI-Governance direkt mit Risiken, Roadmap, Incidents und Changes verbinden
+3. Benachrichtigungen auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
 4. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten
 5. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
 
 ## Zero-Trust Agent
 
-ISCY `0.3.20` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
+ISCY `0.3.21` enthaelt einen read-only Agent fuer Windows, macOS und Linux. Der Agent meldet Inventar, Heartbeats sowie OS-/MDM-/EDR- und Zero-Trust-Findings an die Rust-Plattform. Die Plattform stellt dazu `/zero-trust/` sowie API-Endpunkte unter `/api/v1/agents/...` bereit.
 
 Die produktive Agent-Aufnahme ist gehaertet:
 
@@ -264,7 +263,7 @@ Die lokalen Collector-Module pruefen read-only:
 - MDM-/Endpoint-Management-Signale
 - Endpoint Protection beziehungsweise EDR-Signale
 
-Die Webansicht `/zero-trust/` zeigt neben Score, Devices und Findings den naechsten fachlichen Fokus, Score-Badges und Severity-Badges. Die Betriebszentrale meldet zusaetzlich Agent-Abdeckung, seit 14 Tagen veraltete Heartbeats und kritische beziehungsweise hohe Agent-Findings.
+Die Webansicht `/zero-trust/` zeigt neben Score, Devices und Findings editierbare Policy-Profile. Sollabdeckung, Heartbeat-Alter, Mindestscore und maximal tolerierte High-/Critical-Findings lassen sich pro Tenant, OS-Familie, Asset-Typ, Business Unit oder Deployment-Channel bewerten. Administratoren koennen sichere Webhook-Kanaele mit Warnstufe, Cooldown und Bearer- oder HMAC-Secret-Referenz pflegen; Zustellungen werden auditierbar protokolliert und vom Hintergrundworker periodisch ausgewertet. Die Betriebszentrale meldet zusaetzlich Policy-Konformitaet, Sollabdeckung und Kanalbereitschaft.
 
 Deployment-Beispiele fuer systemd, NixOS, Windows Scheduled Tasks und macOS LaunchDaemons liegen unter [`deploy/agent/`](deploy/agent/). Details zu State, Queue, Secret-Rotation und Rollout stehen in [`docs/ZERO_TRUST_AGENT.md`](docs/ZERO_TRUST_AGENT.md).
 

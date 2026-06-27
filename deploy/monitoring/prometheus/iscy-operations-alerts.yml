@@ -70,3 +70,23 @@ groups:
         annotations:
           summary: "ISCY Strict Mode ist nicht aktiv"
           description: "RUST_STRICT_MODE ist nicht gesetzt oder nicht aktiv."
+
+      - alert: ISCYAgentPolicyCritical
+        expr: iscy_operations_signal{area="Agent Governance",signal="Agent-Policy-Konformitaet",level="critical"} == 2
+        for: 5m
+        labels:
+          severity: critical
+          service: iscy
+        annotations:
+          summary: "ISCY Agent-Policy ist kritisch verletzt"
+          description: "Mindestens ein Agent-Policy-Profil meldet eine kritische Abweichung."
+
+      - alert: ISCYAgentCoverageWarning
+        expr: iscy_operations_signal{area="Agent Governance",signal="Agent-Sollabdeckung",level=~"warn|critical"} >= 1
+        for: 30m
+        labels:
+          severity: warning
+          service: iscy
+        annotations:
+          summary: "ISCY Agent-Sollabdeckung ist verfehlt"
+          description: "Die frischen Agent-Meldungen liegen unter dem konfigurierten Sollbestand."

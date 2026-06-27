@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.24 / Rust 0.3.20
+Stand: ISCY V23.7.25 / Rust 0.3.21
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 
@@ -31,7 +31,7 @@ Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/opera
 - `POST /api/v1/operations/alertmanager`: Alertmanager-Webhook, der Alerts validiert, normalisiert und bei schreibendem Tenant-Kontext als Incident/Evidence persistieren kann.
 - `GET /api/v1/product-security/trends`: Product-Security-Trends zu CVE-Reviews, Evidence-Luecken, Importvalidierung, Coverage und Snapshots.
 
-Mit Tenant-Kontext liefern die Operations-Endpunkte zusaetzlich fachliche Signale zu ISCY-27, Supplier-Risk, Product Security, AI Governance, CVE-Reviews, Evidence-Luecken und Roadmap-Gaps:
+Mit Tenant-Kontext liefern die Operations-Endpunkte zusaetzlich fachliche Signale zu ISCY-27, Supplier-Risk, Product Security, AI Governance, Agent-Policy-Konformitaet, Sollabdeckung, Notification-Kanaelen, CVE-Reviews, Evidence-Luecken und Roadmap-Gaps:
 
 ```bash
 curl -fsS -H 'x-iscy-tenant-id: 1' -H 'x-iscy-user-id: 1' \
@@ -67,6 +67,7 @@ Wichtige Metriken:
 - `iscy_operations_alertmanager_incidents_total`: aus Alertmanager erzeugte Incident-Fallakten nach Status `all`, `open`, `triage`, `critical_open` und `resolved`.
 - `iscy_operations_alertmanager_incident_info`: Detailmetrik fuer Grafana-Drilldowns mit Labels `incident_id`, `title`, `severity`, `status`, `state`, `review_required` und `href`.
 - `iscy_operations_signal` enthaelt bei Tenant-Kontext auch AI-Governance-Signale fuer nicht bewertete AI-Systeme, faellige Reviews, fehlende Evidence und offene Governance-Gaps.
+- `iscy_operations_signal` enthaelt fuer die Agent-Flotte `Agent-Policy-Konformitaet`, `Agent-Sollabdeckung` und `Notification-Kanaele`. Kritische Policy-Verletzungen, verfehlte Coverage oder aktivierte Kanaele ohne verfuegbares Secret werden damit zentral sichtbar.
 - `iscy_product_security_coverage_percent`: SBOM-, CSAF- und Threat-/TARA-Coverage in Prozent.
 - `iscy_product_security_import_validation_total`: Product-Security-Importe nach Validierungsstatus.
 - `iscy_product_security_trend_signal`: aktuelle Trend-Signale wie offene CVE-Reviews, fehlende Evidence oder Importvalidierungsprobleme.

@@ -1,8 +1,13 @@
-use axum::body::{to_bytes, Body};
-use axum::http::{header::SET_COOKIE, Request, StatusCode};
+use axum::{
+    body::{to_bytes, Body},
+    http::{header::SET_COOKIE, Request, StatusCode},
+    routing::post,
+    Router,
+};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use iscy_backend::{
     account_store::AccountStore,
+    agent_governance_store::AgentGovernanceStore,
     agent_store::AgentStore,
     ai_governance_store::AiGovernanceStore,
     app_router, app_router_with_state,
@@ -35,6 +40,10 @@ use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use std::{
     fs,
     path::PathBuf,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tower::util::ServiceExt;
@@ -227,7 +236,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"AI Governance\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.20\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.21\""));
 }
 
 #[tokio::test]
@@ -640,8 +649,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0024_rust_evidence_lifecycle"));
-    assert!(html.contains("24/24 angewendet"));
+    assert!(html.contains("0025_rust_agent_fleet_governance"));
+    assert!(html.contains("25/25 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -1614,6 +1623,360 @@ async fn zero_trust_agent_token_enrollment_allows_secret_based_intake() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn agent_policy_governance_calculates_scoped_coverage_and_renders_web_ui() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_governance_store(Some(AgentGovernanceStore::from_sqlite_pool(
+                pool.clone(),
+            ))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enroll")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"stable_device_id":"policy-linux-01","hostname":"policy-linux-01","os_family":"linux","os_version":"NixOS","architecture":"x86_64","agent_version":"0.3.20","deployment_channel":"nixos"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let device_id = payload["device"]["id"].as_i64().unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/heartbeat"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(r#"{"agent_version":"0.3.20","status":"OK"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    for payload in [
+        r#"{"name":"Tenant rollout","description":"Tenant target","scope_type":"TENANT","scope_value":"","expected_device_count":2,"heartbeat_max_age_hours":24,"minimum_zero_trust_score":80,"max_critical_findings":0,"max_high_findings":0,"enabled":true}"#,
+        r#"{"name":"Linux baseline","description":"Linux target","scope_type":"OS_FAMILY","scope_value":"linux","expected_device_count":1,"heartbeat_max_age_hours":24,"minimum_zero_trust_score":80,"max_critical_findings":0,"max_high_findings":0,"enabled":true}"#,
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agents/policies")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::from(payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/governance")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["governance"]["summary"]["total_policies"], 2);
+    assert_eq!(payload["governance"]["summary"]["compliant_policies"], 1);
+    assert_eq!(payload["governance"]["summary"]["warning_policies"], 1);
+    assert_eq!(payload["governance"]["summary"]["coverage_percent"], 66);
+    let policies = payload["governance"]["policies"].as_array().unwrap();
+    let tenant_policy_id = policies
+        .iter()
+        .find(|policy| policy["name"] == "Tenant rollout")
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/agents/policies/{tenant_policy_id}"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"name":"Foreign update","description":"","scope_type":"TENANT","scope_value":"","expected_device_count":1,"heartbeat_max_age_hours":24,"minimum_zero_trust_score":80,"max_critical_findings":0,"max_high_findings":0,"enabled":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/zero-trust/?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Agent Policy &amp; Coverage"));
+    assert!(html.contains("Tenant rollout"));
+    assert!(html.contains("Linux baseline"));
+    assert!(html.contains("Policy anlegen"));
+    assert!(html.contains("Notification-Kanaele"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/zero-trust/policies/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from("name=Windows+baseline&description=Web+form&scope_type=OS_FAMILY&scope_value=windows&expected_device_count=1&heartbeat_max_age_hours=24&minimum_zero_trust_score=80&max_critical_findings=0&max_high_findings=0&enabled=on"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let policy_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM zero_trust_agent_policy_profile WHERE tenant_id=1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(policy_count, 3);
+}
+
+#[tokio::test]
+async fn agent_notification_webhook_delivers_once_and_audits_cooldown() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_governance_store(Some(AgentGovernanceStore::from_sqlite_pool(
+                pool.clone(),
+            ))),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let receiver_url = format!("http://{}/hook", listener.local_addr().unwrap());
+    let receiver_attempts = Arc::new(AtomicUsize::new(0));
+    let route_attempts = Arc::clone(&receiver_attempts);
+    let receiver = Router::new().route(
+        "/hook",
+        post(move || {
+            let route_attempts = Arc::clone(&route_attempts);
+            async move {
+                if route_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    StatusCode::SERVICE_UNAVAILABLE
+                } else {
+                    StatusCode::NO_CONTENT
+                }
+            }
+        }),
+    );
+    let receiver_task = tokio::spawn(async move {
+        axum::serve(listener, receiver).await.unwrap();
+    });
+    tokio::task::yield_now().await;
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/policies")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"name":"Required endpoints","description":"","scope_type":"TENANT","scope_value":"","expected_device_count":1,"heartbeat_max_age_hours":24,"minimum_zero_trust_score":80,"max_critical_findings":0,"max_high_findings":0,"enabled":true}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let channel_payload = serde_json::json!({
+        "name": "SOC webhook",
+        "endpoint_url": receiver_url,
+        "minimum_level": "WARN",
+        "event_types": ["AGENT_POLICY"],
+        "auth_type": "NONE",
+        "secret_env_name": "",
+        "cooldown_minutes": 60,
+        "enabled": true
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/notification-channels")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(channel_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/notification-channels")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(channel_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/notifications/evaluate")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["result"]["policy_violations"], 1);
+    assert_eq!(payload["result"]["sent"], 1, "{payload:#}");
+    assert_eq!(payload["result"]["failed"], 0, "{payload:#}");
+    assert!(receiver_attempts.load(Ordering::SeqCst) >= 2);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/notifications/evaluate")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["result"]["sent"], 0);
+    assert_eq!(payload["result"]["suppressed"], 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/notification-deliveries")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let deliveries = payload["deliveries"].as_array().unwrap();
+    assert_eq!(deliveries.len(), 1);
+    assert_eq!(deliveries[0]["status"], "SENT");
+    assert_eq!(deliveries[0]["response_status"], 204);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/zero-trust/?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("SOC webhook"));
+    assert!(html.contains("Notification Delivery Audit"));
+    assert!(html.contains("Jetzt auswerten"));
+
+    receiver_task.abort();
 }
 
 #[tokio::test]
@@ -9454,7 +9817,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0021_rust_product_security_vex_cra",
             "0022_rust_ai_governance_core",
             "0023_rust_security_runtime_state",
-            "0024_rust_evidence_lifecycle"
+            "0024_rust_evidence_lifecycle",
+            "0025_rust_agent_fleet_governance"
         ]
     );
     assert!(
@@ -9582,6 +9946,21 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     assert!(db_admin::sqlite_table_exists(&pool, "ai_governance_system")
         .await
         .unwrap());
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "zero_trust_agent_policy_profile")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "zero_trust_agent_notification_channel")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "zero_trust_agent_notification_delivery")
+            .await
+            .unwrap()
+    );
 
     let applied_again = db_admin::run_sqlite_migrations(&pool).await.unwrap();
     assert!(applied_again.is_empty());

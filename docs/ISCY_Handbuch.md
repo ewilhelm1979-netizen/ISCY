@@ -1,10 +1,12 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.24 / Rust 0.3.20)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.25 / Rust 0.3.21)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
-ISCY wurde in dieser Codebasis mit Unterstuetzung von OpenAI Codex entwickelt, nach Rust migriert und technisch/fachlich plausibilisiert. Die fachliche Ausrichtung wurde gegen offizielle EU-Quellen zu NIS2, der NIS2-Durchfuehrungsverordnung (EU) 2024/2690, DORA, Cyber Resilience Act und EU AI Act sowie gegen gaengige ISMS-, Product-Security-, CVE-/SBOM-/CSAF-, Evidence- und Incident-Response-Praktiken geprueft. Das ist keine externe Zertifizierung und keine Rechtsberatung, aber eine nachvollziehbare fachliche Arbeitsgrundlage.
+ISCY ist eine selbst gehostete, lokale und datenschutzbewusste Open-Source-Plattform unter `AGPL-3.0-only`. Die Rust-/Axum-Anwendung wird aktiv entwickelt und befindet sich in einer fruehen Community-Adoptionsphase; Schnittstellen, Datenmodelle und Betriebsverfahren koennen sich weiterentwickeln.
+
+ISCY wurde in dieser Codebasis mit Unterstuetzung von OpenAI Codex entwickelt, nach Rust migriert und technisch/fachlich plausibilisiert. Die fachliche Ausrichtung wurde mit offiziellen EU-Quellen zu NIS2, der NIS2-Durchfuehrungsverordnung (EU) 2024/2690, DORA, Cyber Resilience Act und EU AI Act sowie mit gaengigen ISMS-, Product-Security-, CVE-/SBOM-/CSAF-, Evidence- und Incident-Response-Praktiken abgeglichen. Das ist keine unabhaengige fachliche Pruefung, externe Zertifizierung oder Rechtsberatung. Regulatorische Unterstuetzung muss fuer Organisation, Rechtsraum und Einsatzkontext eigenstaendig bewertet werden.
 
 ## 1. Was ISCY ist
 
@@ -295,6 +297,8 @@ Typische Inhalte:
 - registrierte Agent-Devices
 - letzter Heartbeat
 - Zero-Trust-Score
+- Policy-Profile mit Sollbestand nach Tenant, OS, Asset-Typ, Business Unit oder Deployment-Channel
+- Soll-/Ist-Coverage, Heartbeat-Freshness und Finding-Grenzwerte je Policy
 - naechster fachlicher Fokus aus Score, Severity und Agent-Freshness
 - offene Findings nach Pillar und Severity
 - Check-Katalog fuer Windows, macOS und Linux
@@ -306,6 +310,7 @@ Fachlicher Nutzen:
 - Zero-Trust-Optimierung nachvollziehbar und auditierbar machen
 - Prioritaeten schneller erkennen, ohne Rohdaten manuell vergleichen zu muessen
 - Agent-Abdeckung, veraltete Heartbeats und kritische Findings in der Betriebszentrale ueberwachen
+- Policy-Abweichungen ueber sichere Webhooks aktiv zustellen und in der Delivery-Historie auditieren
 
 Fuer Nicht-Sicherheitsleute:
 Der Bereich zeigt, welche Geraete welche Sicherheitsluecken oder Nachweise melden.
@@ -332,6 +337,14 @@ uebertragen. Admins koennen das Secret ueber
 `POST /api/v1/agents/devices/{device_id}/rotate-secret` rotieren; das neue Secret
 wird nur einmal ausgegeben und muss ueber den sicheren Deployment-Kanal zum
 Endpoint gelangen.
+
+Policy-Profile legen den erwarteten Device-Bestand, das maximale Heartbeat-Alter,
+den Mindestscore und tolerierte High-/Critical-Findings fest. Administratoren
+koennen Webhook-Kanaele mit Warnstufe und Cooldown konfigurieren. Bearer- und
+HMAC-Secrets werden dabei nur ueber Environment-Variablennamen referenziert und
+nicht in der Datenbank gespeichert. Im Production-Modus sind ausschliesslich
+explizit erlaubte Zielhosts zulaessig; Redirects werden nicht verfolgt. Jeder
+Versuch bleibt mit Ergebnis, HTTP-Status und Payload nachvollziehbar.
 
 Die Weboberflaeche stellt Zero Trust bewusst als Arbeitsansicht dar:
 
@@ -992,26 +1005,28 @@ Was aktuell belastbar vorhanden ist:
 - offene Findings nach Severity
 - Fokuskarte fuer den naechsten fachlich sinnvollen Schritt
 - Flottensignale in Statusseite, JSON und Prometheus
+- editierbare Agent-Policy-Profile und erwartete Coverage nach fachlichem Scope
+- sichere Notification-Kanaele mit Cooldown, Delivery-Audit und periodischem Worker
 
 Was als naechstes fachlich am meisten bringt:
 
-1. Soll-/Ist-Abdeckung je Plattform messen
-   Pro Tenant oder Asset-Gruppe festlegen, wie viele Windows-, macOS- und Linux-Systeme erwartet werden, und diesen Sollbestand gegen aktive Agenten pruefen.
-2. Findings mit Risiken und Evidenzen verbinden  
+1. Findings mit Risiken und Evidenzen verbinden
    Aus wiederkehrenden High-/Critical-Findings sollten Risiken, Massnahmen und Evidenzanforderungen ableitbar sein.
-3. MDM-/EDR-Integrationen vorbereiten  
+2. MDM-/EDR-Integrationen vorbereiten
    Intune, Jamf, Microsoft Defender, Wazuh, CrowdStrike oder SentinelOne sollten zunaechst als Import-/Connector-Schicht angebunden werden, nicht als Fernsteuerung.
-4. Softwareinventar und CVE-Korrelation ergaenzen  
+3. Softwareinventar und CVE-Korrelation ergaenzen
    Agent- oder MDM-Inventar sollte mit dem CVE-Bereich verbunden werden, damit betroffene Systeme schneller sichtbar sind.
-5. Ausnahme- und Ablaufdatum erzwingen  
+4. Ausnahme- und Ablaufdatum erzwingen
    Akzeptierte Abweichungen sollten Owner, Begruendung, Laufzeit und Wiedervorlage haben.
+5. Enrollment-Token-Lifecycle vervollstaendigen
+   Token sollten im Web aufgelistet, widerrufen und mit Ablauf-/Nutzungsstatus auditierbar verwaltet werden.
 6. Signierte Agent-Pakete bauen  
    Die Service-Beispiele sind vorhanden; als naechster Schritt folgen Windows MSI/Intune-Paket, macOS PKG/Jamf-Profil und signierte Linux-Pakete.
 7. Remediation getrennt halten  
    Automatische Aenderungen am Endgeraet sollten erst spaeter als signierter, auditierbarer Policy-Schritt kommen.
 
 Fachliches Kurzurteil:
-ISCY ist fuer Zero Trust jetzt gut positioniert. Die naechste Reife entsteht nicht durch aggressivere Agenten, sondern durch bessere Abdeckung, Priorisierung, Nachweisverknuepfung und saubere Deployment-Pakete.
+ISCY ist fuer Zero Trust jetzt gut positioniert. Sollabdeckung und aktive Policy-Benachrichtigungen sind vorhanden; die naechste Reife entsteht durch Nachweisverknuepfung, Connectoren, Token-Lifecycle und saubere Deployment-Pakete.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
@@ -1053,13 +1068,13 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance als eigenes Rust-Web-/API-Modul hinzu. Migration `0024_rust_evidence_lifecycle` schliesst Version, SHA-256, Gueltigkeit, Retention und Schutzklasse an. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an. Migration `0025_rust_agent_fleet_governance` persistiert Policies, Kanaele und Delivery-Audit. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Benachrichtigungskanaele
-2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
-3. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
+1. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
+2. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
+3. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
 4. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
 5. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
 6. Performance-, HA- und visuelle Regressionstests

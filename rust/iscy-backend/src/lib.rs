@@ -29,6 +29,7 @@ use std::{
 };
 
 pub mod account_store;
+pub mod agent_governance_store;
 pub mod agent_store;
 pub mod ai_governance_store;
 pub mod assessment_store;
@@ -57,6 +58,7 @@ pub mod tenant_store;
 pub mod wizard_store;
 
 use account_store::AccountStore;
+use agent_governance_store::AgentGovernanceStore;
 use agent_store::AgentStore;
 use ai_governance_store::AiGovernanceStore;
 use assessment_store::AssessmentStore;
@@ -87,6 +89,7 @@ use wizard_store::WizardStore;
 pub struct AppState {
     pub account_store: Option<AccountStore>,
     pub ai_governance_store: Option<AiGovernanceStore>,
+    pub agent_governance_store: Option<AgentGovernanceStore>,
     pub agent_store: Option<AgentStore>,
     pub asset_store: Option<AssetStore>,
     pub assessment_store: Option<AssessmentStore>,
@@ -127,6 +130,7 @@ impl AppState {
         Self {
             account_store: None,
             ai_governance_store: None,
+            agent_governance_store: None,
             agent_store: None,
             asset_store: None,
             assessment_store: None,
@@ -160,6 +164,7 @@ impl AppState {
         Self {
             account_store: None,
             ai_governance_store: None,
+            agent_governance_store: None,
             agent_store: None,
             asset_store: None,
             assessment_store: None,
@@ -209,6 +214,14 @@ impl AppState {
 
     pub fn with_agent_store(mut self, agent_store: Option<AgentStore>) -> Self {
         self.agent_store = agent_store;
+        self
+    }
+
+    pub fn with_agent_governance_store(
+        mut self,
+        agent_governance_store: Option<AgentGovernanceStore>,
+    ) -> Self {
+        self.agent_governance_store = agent_governance_store;
         self
     }
 
@@ -499,11 +512,80 @@ pub struct AgentPostureResponse {
     pub posture: agent_store::AgentPostureOverview,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AgentFleetGovernanceResponse {
+    pub api_version: &'static str,
+    pub governance: agent_governance_store::AgentFleetGovernanceOverview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentPolicyWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub policy: agent_governance_store::AgentPolicyProfile,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentNotificationChannelWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub channel: agent_governance_store::AgentNotificationChannel,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentNotificationChannelsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub channels: Vec<agent_governance_store::AgentNotificationChannel>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentNotificationDeliveriesResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub deliveries: Vec<agent_governance_store::AgentNotificationDelivery>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentNotificationDispatchResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub result: agent_governance_store::AgentNotificationDispatchResult,
+}
+
 #[derive(Debug, Deserialize)]
 struct WebLoginForm {
     tenant_id: Option<i64>,
     username: String,
     password: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentPolicyForm {
+    policy_id: Option<i64>,
+    name: String,
+    description: String,
+    scope_type: String,
+    scope_value: String,
+    expected_device_count: i64,
+    heartbeat_max_age_hours: i64,
+    minimum_zero_trust_score: i64,
+    max_critical_findings: i64,
+    max_high_findings: i64,
+    enabled: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentNotificationChannelForm {
+    channel_id: Option<i64>,
+    name: String,
+    endpoint_url: String,
+    minimum_level: String,
+    event_types: String,
+    auth_type: String,
+    secret_env_name: String,
+    cooldown_minutes: i64,
+    enabled: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1199,6 +1281,8 @@ pub struct WebContextQuery {
     pub requirement_id: Option<i64>,
     pub evidence_id: Option<i64>,
     pub need_id: Option<i64>,
+    pub policy_id: Option<i64>,
+    pub channel_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2727,8 +2811,25 @@ fn write_permission_error(context: &AuthenticatedTenantContext) -> Option<Respon
     )
 }
 
+fn required_context_error_response(err: RequiredTenantContextError) -> Response {
+    (
+        err.status_code(),
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: err.error_code(),
+            message: err.message().to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn context_is_admin(context: &AuthenticatedTenantContext) -> bool {
+    context.is_superuser || context.is_staff || context.has_role("ADMIN")
+}
+
 fn admin_permission_error(context: &AuthenticatedTenantContext) -> Option<Response> {
-    if context.is_superuser || context.is_staff || context.has_role("ADMIN") {
+    if context_is_admin(context) {
         return None;
     }
     Some(
@@ -2806,6 +2907,64 @@ fn agent_store_error_response(err: anyhow::Error, action: &'static str) -> Respo
             api_version: "v1",
             error_code: if payload_error {
                 "invalid_agent_payload"
+            } else {
+                "database_error"
+            },
+            message: format!("{action}: {details}"),
+        }),
+    )
+        .into_response()
+}
+
+fn agent_governance_store_missing_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "database_not_configured",
+            message: "Rust-Agent-Governance-Store ist nicht konfiguriert.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn agent_governance_not_found_response(
+    error_code: &'static str,
+    message: &'static str,
+) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: message.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn agent_governance_store_error_response(err: anyhow::Error, action: &'static str) -> Response {
+    let details = err
+        .chain()
+        .map(|cause| cause.to_string())
+        .collect::<Vec<_>>()
+        .join(": ");
+    let payload_error = details.contains("Agent-")
+        || details.contains("Notification-")
+        || details.contains("Webhook");
+    (
+        if payload_error {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        },
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: if payload_error {
+                "invalid_agent_governance_payload"
             } else {
                 "database_error"
             },
@@ -3750,6 +3909,278 @@ async fn agent_posture(State(state): State<AppState>, headers: HeaderMap) -> Res
         Err(err) => {
             agent_store_error_response(err, "Zero-Trust-Posture konnte nicht gelesen werden")
         }
+    }
+}
+
+async fn agent_fleet_governance(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_governance_store else {
+        return agent_governance_store_missing_response();
+    };
+    match store
+        .fleet_governance_overview(context.tenant_id, context_is_admin(&context))
+        .await
+    {
+        Ok(governance) => (
+            StatusCode::OK,
+            Json(AgentFleetGovernanceResponse {
+                api_version: "v1",
+                governance,
+            }),
+        )
+            .into_response(),
+        Err(err) => agent_governance_store_error_response(
+            err,
+            "Agent-Fleet-Governance konnte nicht gelesen werden",
+        ),
+    }
+}
+
+async fn agent_policy_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_governance_store::AgentPolicyWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_governance_store else {
+        return agent_governance_store_missing_response();
+    };
+    match store
+        .create_policy(context.tenant_id, Some(context.user_id), payload)
+        .await
+    {
+        Ok(policy) => (
+            StatusCode::CREATED,
+            Json(AgentPolicyWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                policy,
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            agent_governance_store_error_response(err, "Agent-Policy konnte nicht erstellt werden")
+        }
+    }
+}
+
+async fn agent_policy_update(
+    Path(policy_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_governance_store::AgentPolicyWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_governance_store else {
+        return agent_governance_store_missing_response();
+    };
+    match store
+        .update_policy(context.tenant_id, policy_id, payload)
+        .await
+    {
+        Ok(Some(policy)) => (
+            StatusCode::OK,
+            Json(AgentPolicyWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                policy,
+            }),
+        )
+            .into_response(),
+        Ok(None) => agent_governance_not_found_response(
+            "agent_policy_not_found",
+            "Agent-Policy wurde nicht gefunden.",
+        ),
+        Err(err) => agent_governance_store_error_response(
+            err,
+            "Agent-Policy konnte nicht aktualisiert werden",
+        ),
+    }
+}
+
+async fn agent_notification_channels(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_governance_store else {
+        return agent_governance_store_missing_response();
+    };
+    match store.list_notification_channels(context.tenant_id).await {
+        Ok(channels) => (
+            StatusCode::OK,
+            Json(AgentNotificationChannelsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                channels,
+            }),
+        )
+            .into_response(),
+        Err(err) => agent_governance_store_error_response(
+            err,
+            "Notification-Kanaele konnten nicht gelesen werden",
+        ),
+    }
+}
+
+async fn agent_notification_channel_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_governance_store::AgentNotificationChannelWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_governance_store else {
+        return agent_governance_store_missing_response();
+    };
+    match store
+        .create_notification_channel(context.tenant_id, Some(context.user_id), payload)
+        .await
+    {
+        Ok(channel) => (
+            StatusCode::CREATED,
+            Json(AgentNotificationChannelWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                channel,
+            }),
+        )
+            .into_response(),
+        Err(err) => agent_governance_store_error_response(
+            err,
+            "Notification-Kanal konnte nicht erstellt werden",
+        ),
+    }
+}
+
+async fn agent_notification_channel_update(
+    Path(channel_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_governance_store::AgentNotificationChannelWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_governance_store else {
+        return agent_governance_store_missing_response();
+    };
+    match store
+        .update_notification_channel(context.tenant_id, channel_id, payload)
+        .await
+    {
+        Ok(Some(channel)) => (
+            StatusCode::OK,
+            Json(AgentNotificationChannelWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                channel,
+            }),
+        )
+            .into_response(),
+        Ok(None) => agent_governance_not_found_response(
+            "agent_notification_channel_not_found",
+            "Notification-Kanal wurde nicht gefunden.",
+        ),
+        Err(err) => agent_governance_store_error_response(
+            err,
+            "Notification-Kanal konnte nicht aktualisiert werden",
+        ),
+    }
+}
+
+async fn agent_notification_deliveries(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_governance_store else {
+        return agent_governance_store_missing_response();
+    };
+    match store
+        .list_notification_deliveries(context.tenant_id, 100)
+        .await
+    {
+        Ok(deliveries) => (
+            StatusCode::OK,
+            Json(AgentNotificationDeliveriesResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                deliveries,
+            }),
+        )
+            .into_response(),
+        Err(err) => agent_governance_store_error_response(
+            err,
+            "Notification-Deliveries konnten nicht gelesen werden",
+        ),
+    }
+}
+
+async fn agent_notifications_evaluate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_governance_store else {
+        return agent_governance_store_missing_response();
+    };
+    match store.dispatch_policy_notifications(context.tenant_id).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(AgentNotificationDispatchResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(err) => agent_governance_store_error_response(
+            err,
+            "Agent-Notifications konnten nicht ausgewertet werden",
+        ),
     }
 }
 
@@ -9151,8 +9582,33 @@ async fn web_zero_trust(
     let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Zero Trust", "/zero-trust/");
     };
-    let Some(store) = state.agent_store else {
+    let auth_context = authenticated_tenant_context(&state, &headers).await.ok();
+    let can_write = auth_context
+        .as_ref()
+        .is_some_and(|context| context.can_write());
+    let can_admin = auth_context.as_ref().is_some_and(context_is_admin);
+    let Some(store) = state.agent_store.clone() else {
         return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent");
+    };
+    let governance_section = match state.agent_governance_store.as_ref() {
+        Some(governance_store) => match governance_store
+            .fleet_governance_overview(context.tenant_id, can_admin)
+            .await
+        {
+            Ok(governance) => agent_governance_web_sections(
+                &context,
+                &governance,
+                can_write,
+                can_admin,
+                query.policy_id,
+                query.channel_id,
+            ),
+            Err(err) => format!(
+                r#"<section class="panel wide"><h2>Agent Governance</h2><p>{}</p></section>"#,
+                html_escape(&err.to_string())
+            ),
+        },
+        None => r#"<section class="panel wide"><h2>Agent Governance</h2><p>Agent-Governance-Store ist nicht konfiguriert.</p></section>"#.to_string(),
     };
     match store.posture_overview(context.tenant_id).await {
         Ok(posture) => {
@@ -9234,6 +9690,7 @@ async fn web_zero_trust(
                     <p>{}</p>
                   </article>
                 </section>
+                {}
                 <section class="metrics">
                   {}
                   {}
@@ -9278,6 +9735,7 @@ async fn web_zero_trust(
                 score_band_badge(posture.average_zero_trust_score),
                 html_escape(&priority_title),
                 html_escape(&priority_detail),
+                governance_section,
                 metric_card("ZT Score", posture.average_zero_trust_score),
                 metric_card("Devices", posture.device_count),
                 metric_card("Aktiv", posture.active_device_count),
@@ -9310,6 +9768,536 @@ async fn web_zero_trust(
             web_page("Zero Trust", "/zero-trust/", Some(&context), &body)
         }
         Err(err) => web_error_page("Zero Trust", "/zero-trust/", &context, &err.to_string()),
+    }
+}
+
+fn agent_governance_web_sections(
+    context: &WebContext,
+    governance: &agent_governance_store::AgentFleetGovernanceOverview,
+    can_write: bool,
+    can_admin: bool,
+    selected_policy_id: Option<i64>,
+    selected_channel_id: Option<i64>,
+) -> String {
+    let policy_rows = governance
+        .policies
+        .iter()
+        .map(|policy| {
+            let evaluation = governance
+                .evaluations
+                .iter()
+                .find(|evaluation| evaluation.policy_id == policy.id);
+            let edit_href = web_path_with_context(
+                &format!("/zero-trust/?policy_id={}", policy.id),
+                Some(context),
+            );
+            let scope = if policy.scope_value.is_empty() {
+                policy.scope_type.clone()
+            } else {
+                format!("{}: {}", policy.scope_type, policy.scope_value)
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&policy.name),
+                html_escape(&scope),
+                policy.expected_device_count,
+                evaluation
+                    .map(|evaluation| evaluation.fresh_device_count.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                evaluation
+                    .map(|evaluation| format!("{}%", evaluation.coverage_percent))
+                    .unwrap_or_else(|| "-".to_string()),
+                evaluation
+                    .map(|evaluation| agent_policy_level_badge(&evaluation.level))
+                    .unwrap_or_else(|| web_badge("Inaktiv", "muted-badge")),
+                evaluation
+                    .map(|evaluation| agent_policy_issue_text(&evaluation.issues))
+                    .unwrap_or_else(|| "-".to_string()),
+                yes_no_badge(policy.enabled),
+                if can_write {
+                    format!(r#"<a href="{}">Bearbeiten</a>"#, html_escape(&edit_href))
+                } else {
+                    "-".to_string()
+                },
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let selected_policy = selected_policy_id.and_then(|policy_id| {
+        governance
+            .policies
+            .iter()
+            .find(|policy| policy.id == policy_id)
+    });
+    let policy_form = if can_write {
+        agent_policy_web_form(selected_policy)
+    } else {
+        String::new()
+    };
+    let admin_sections = if can_admin {
+        agent_notification_web_sections(context, governance, selected_channel_id)
+    } else {
+        String::new()
+    };
+    format!(
+        r#"
+        <section class="metrics">
+          {}
+          {}
+          {}
+          {}
+        </section>
+        <section class="panel wide">
+          <h2>Agent Policy &amp; Coverage</h2>
+          <table>
+            <thead><tr><th>Policy</th><th>Scope</th><th>Soll</th><th>Frisch</th><th>Coverage</th><th>Status</th><th>Issues</th><th>Aktiv</th><th>Aktion</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </section>
+        {}
+        {}
+        "#,
+        metric_card("Policies", governance.summary.total_policies),
+        metric_card("Konform", governance.summary.compliant_policies),
+        metric_card("Policy Coverage", governance.summary.coverage_percent),
+        metric_card(
+            "Policy-Issues",
+            governance.summary.warning_policies + governance.summary.critical_policies,
+        ),
+        if policy_rows.is_empty() {
+            web_empty_row(9, "Keine Agent-Policy-Profile vorhanden.")
+        } else {
+            policy_rows
+        },
+        policy_form,
+        admin_sections,
+    )
+}
+
+fn agent_policy_web_form(policy: Option<&agent_governance_store::AgentPolicyProfile>) -> String {
+    let policy_id = policy
+        .map(|policy| {
+            format!(
+                r#"<input type="hidden" name="policy_id" value="{}">"#,
+                policy.id
+            )
+        })
+        .unwrap_or_default();
+    let name = policy.map(|policy| policy.name.as_str()).unwrap_or("");
+    let description = policy
+        .map(|policy| policy.description.as_str())
+        .unwrap_or("");
+    let scope_type = policy
+        .map(|policy| policy.scope_type.as_str())
+        .unwrap_or("TENANT");
+    let scope_value = policy
+        .map(|policy| policy.scope_value.as_str())
+        .unwrap_or("");
+    let expected = policy
+        .map(|policy| policy.expected_device_count)
+        .unwrap_or(1);
+    let max_age = policy
+        .map(|policy| policy.heartbeat_max_age_hours)
+        .unwrap_or(24);
+    let score = policy
+        .map(|policy| policy.minimum_zero_trust_score)
+        .unwrap_or(80);
+    let critical = policy
+        .map(|policy| policy.max_critical_findings)
+        .unwrap_or(0);
+    let high = policy.map(|policy| policy.max_high_findings).unwrap_or(0);
+    let enabled = policy.map(|policy| policy.enabled).unwrap_or(true);
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>{}</h2>
+          <form method="post" action="/zero-trust/policies/" class="form-grid">
+            {}
+            <label>Name<input name="name" maxlength="128" required value="{}"></label>
+            <label>Scope<select name="scope_type">{}</select></label>
+            <label>Scope-Wert<input name="scope_value" maxlength="128" value="{}"></label>
+            <label>Soll-Devices<input type="number" name="expected_device_count" min="1" max="100000" required value="{}"></label>
+            <label>Heartbeat max. Stunden<input type="number" name="heartbeat_max_age_hours" min="1" max="8760" required value="{}"></label>
+            <label>Minimum Score<input type="number" name="minimum_zero_trust_score" min="0" max="100" required value="{}"></label>
+            <label>Max. kritisch<input type="number" name="max_critical_findings" min="0" max="100000" required value="{}"></label>
+            <label>Max. hoch<input type="number" name="max_high_findings" min="0" max="100000" required value="{}"></label>
+            <label class="wide">Beschreibung<textarea name="description" rows="3">{}</textarea></label>
+            <label class="check"><input type="checkbox" name="enabled"{}> Aktiv</label>
+            <div class="actions"><button type="submit">Policy speichern</button></div>
+          </form>
+        </section>
+        "#,
+        if policy.is_some() {
+            "Policy bearbeiten"
+        } else {
+            "Policy anlegen"
+        },
+        policy_id,
+        html_escape(name),
+        agent_policy_scope_options(scope_type),
+        html_escape(scope_value),
+        expected,
+        max_age,
+        score,
+        critical,
+        high,
+        html_escape(description),
+        checked_attr(enabled),
+    )
+}
+
+fn agent_notification_web_sections(
+    context: &WebContext,
+    governance: &agent_governance_store::AgentFleetGovernanceOverview,
+    selected_channel_id: Option<i64>,
+) -> String {
+    let channel_rows = governance
+        .notification_channels
+        .iter()
+        .map(|channel| {
+            let edit_href = web_path_with_context(
+                &format!("/zero-trust/?channel_id={}", channel.id),
+                Some(context),
+            );
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Bearbeiten</a></td></tr>"#,
+                html_escape(&channel.name),
+                html_escape(&channel.minimum_level),
+                html_escape(&channel.auth_type),
+                yes_no_badge(channel.secret_available),
+                channel.cooldown_minutes,
+                yes_no_badge(channel.enabled),
+                html_escape(channel.last_success_at.as_deref().unwrap_or("-")),
+                html_escape(&edit_href),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let delivery_rows = governance
+        .recent_deliveries
+        .iter()
+        .map(|delivery| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                delivery.id,
+                delivery.channel_id,
+                html_escape(&delivery.level),
+                html_escape(&delivery.status),
+                delivery
+                    .response_status
+                    .map(|status| status.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                html_escape(&delivery.created_at),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let selected_channel = selected_channel_id.and_then(|channel_id| {
+        governance
+            .notification_channels
+            .iter()
+            .find(|channel| channel.id == channel_id)
+    });
+    format!(
+        r#"
+        <section class="panel wide">
+          <div class="section-heading"><h2>Notification-Kanaele</h2><form method="post" action="/zero-trust/notifications/evaluate"><button type="submit">Jetzt auswerten</button></form></div>
+          <table>
+            <thead><tr><th>Kanal</th><th>Minimum</th><th>Auth</th><th>Secret bereit</th><th>Cooldown</th><th>Aktiv</th><th>Letzter Erfolg</th><th>Aktion</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </section>
+        {}
+        <section class="panel wide">
+          <h2>Notification Delivery Audit</h2>
+          <table>
+            <thead><tr><th>ID</th><th>Kanal</th><th>Level</th><th>Status</th><th>HTTP</th><th>Zeit</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </section>
+        "#,
+        if channel_rows.is_empty() {
+            web_empty_row(8, "Keine Notification-Kanaele vorhanden.")
+        } else {
+            channel_rows
+        },
+        agent_notification_channel_web_form(selected_channel),
+        if delivery_rows.is_empty() {
+            web_empty_row(6, "Keine Notification-Deliveries vorhanden.")
+        } else {
+            delivery_rows
+        },
+    )
+}
+
+fn agent_notification_channel_web_form(
+    channel: Option<&agent_governance_store::AgentNotificationChannel>,
+) -> String {
+    let channel_id = channel
+        .map(|channel| {
+            format!(
+                r#"<input type="hidden" name="channel_id" value="{}">"#,
+                channel.id
+            )
+        })
+        .unwrap_or_default();
+    let name = channel.map(|channel| channel.name.as_str()).unwrap_or("");
+    let endpoint = channel
+        .map(|channel| channel.endpoint_url.as_str())
+        .unwrap_or("");
+    let minimum = channel
+        .map(|channel| channel.minimum_level.as_str())
+        .unwrap_or("WARN");
+    let auth_type = channel
+        .map(|channel| channel.auth_type.as_str())
+        .unwrap_or("NONE");
+    let secret_env = channel
+        .map(|channel| channel.secret_env_name.as_str())
+        .unwrap_or("");
+    let cooldown = channel
+        .map(|channel| channel.cooldown_minutes)
+        .unwrap_or(60);
+    let enabled = channel.map(|channel| channel.enabled).unwrap_or(true);
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>{}</h2>
+          <form method="post" action="/zero-trust/notification-channels/" class="form-grid">
+            {}
+            <label>Name<input name="name" maxlength="128" required value="{}"></label>
+            <label class="wide">Webhook URL<input type="url" name="endpoint_url" required value="{}"></label>
+            <label>Minimum<select name="minimum_level">{}{}</select></label>
+            <label>Auth<select name="auth_type">{}{}{}</select></label>
+            <label>Secret Environment<input name="secret_env_name" maxlength="128" value="{}"></label>
+            <label>Cooldown Minuten<input type="number" name="cooldown_minutes" min="1" max="10080" required value="{}"></label>
+            <input type="hidden" name="event_types" value="AGENT_POLICY">
+            <label class="check"><input type="checkbox" name="enabled"{}> Aktiv</label>
+            <div class="actions"><button type="submit">Kanal speichern</button></div>
+          </form>
+        </section>
+        "#,
+        if channel.is_some() {
+            "Kanal bearbeiten"
+        } else {
+            "Kanal anlegen"
+        },
+        channel_id,
+        html_escape(name),
+        html_escape(endpoint),
+        option_tag("WARN", "Warn", minimum),
+        option_tag("CRITICAL", "Kritisch", minimum),
+        option_tag("NONE", "Ohne Auth", auth_type),
+        option_tag("BEARER", "Bearer", auth_type),
+        option_tag("HMAC_SHA256", "HMAC SHA-256", auth_type),
+        html_escape(secret_env),
+        cooldown,
+        checked_attr(enabled),
+    )
+}
+
+fn agent_policy_scope_options(selected: &str) -> String {
+    [
+        ("TENANT", "Tenant"),
+        ("OS_FAMILY", "OS-Familie"),
+        ("ASSET_TYPE", "Asset-Typ"),
+        ("BUSINESS_UNIT", "Business Unit"),
+        ("DEPLOYMENT_CHANNEL", "Deployment-Kanal"),
+    ]
+    .iter()
+    .map(|(value, label)| option_tag(value, label, selected))
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn agent_policy_level_badge(level: &str) -> String {
+    match level {
+        "CRITICAL" => web_badge("Kritisch", "danger"),
+        "WARN" => web_badge("Pruefen", "warn"),
+        _ => web_badge("Konform", "ok"),
+    }
+}
+
+fn agent_policy_issue_text(issues: &[String]) -> String {
+    if issues.is_empty() {
+        return "-".to_string();
+    }
+    issues
+        .iter()
+        .map(|issue| html_escape(issue))
+        .collect::<Vec<_>>()
+        .join("<br>")
+}
+
+async fn web_agent_policy_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAgentPolicyForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Zero Trust", "/zero-trust/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.agent_governance_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent Governance")
+            .into_response();
+    };
+    let policy_id = form.policy_id;
+    let payload = agent_policy_payload_from_web(form);
+    let result = if let Some(policy_id) = policy_id {
+        store
+            .update_policy(auth_context.tenant_id, policy_id, payload)
+            .await
+            .map(|policy| policy.is_some())
+    } else {
+        store
+            .create_policy(auth_context.tenant_id, Some(auth_context.user_id), payload)
+            .await
+            .map(|_| true)
+    };
+    match result {
+        Ok(true) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Ok(false) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Agent-Policy wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => {
+            web_error_page("Zero Trust", "/zero-trust/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
+async fn web_agent_notification_channel_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAgentNotificationChannelForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Zero Trust", "/zero-trust/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = admin_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.agent_governance_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent Governance")
+            .into_response();
+    };
+    let channel_id = form.channel_id;
+    let payload = agent_notification_channel_payload_from_web(form);
+    let result = if let Some(channel_id) = channel_id {
+        store
+            .update_notification_channel(auth_context.tenant_id, channel_id, payload)
+            .await
+            .map(|channel| channel.is_some())
+    } else {
+        store
+            .create_notification_channel(
+                auth_context.tenant_id,
+                Some(auth_context.user_id),
+                payload,
+            )
+            .await
+            .map(|_| true)
+    };
+    match result {
+        Ok(true) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Ok(false) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Notification-Kanal wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => {
+            web_error_page("Zero Trust", "/zero-trust/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
+async fn web_agent_notifications_evaluate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Zero Trust", "/zero-trust/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = admin_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.agent_governance_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent Governance")
+            .into_response();
+    };
+    match store
+        .dispatch_policy_notifications(auth_context.tenant_id)
+        .await
+    {
+        Ok(_) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Err(err) => {
+            web_error_page("Zero Trust", "/zero-trust/", &context, &err.to_string()).into_response()
+        }
+    }
+}
+
+fn agent_policy_payload_from_web(
+    form: WebAgentPolicyForm,
+) -> agent_governance_store::AgentPolicyWriteRequest {
+    agent_governance_store::AgentPolicyWriteRequest {
+        name: form.name,
+        description: form.description,
+        scope_type: form.scope_type,
+        scope_value: form.scope_value,
+        expected_device_count: form.expected_device_count,
+        heartbeat_max_age_hours: form.heartbeat_max_age_hours,
+        minimum_zero_trust_score: form.minimum_zero_trust_score,
+        max_critical_findings: form.max_critical_findings,
+        max_high_findings: form.max_high_findings,
+        enabled: form.enabled.is_some(),
+    }
+}
+
+fn agent_notification_channel_payload_from_web(
+    form: WebAgentNotificationChannelForm,
+) -> agent_governance_store::AgentNotificationChannelWriteRequest {
+    agent_governance_store::AgentNotificationChannelWriteRequest {
+        name: form.name,
+        endpoint_url: form.endpoint_url,
+        minimum_level: form.minimum_level,
+        event_types: form
+            .event_types
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+            .collect(),
+        auth_type: form.auth_type,
+        secret_env_name: form.secret_env_name,
+        cooldown_minutes: form.cooldown_minutes,
+        enabled: form.enabled.is_some(),
+    }
+}
+
+fn web_context_from_auth(context: &AuthenticatedTenantContext) -> WebContext {
+    WebContext {
+        tenant_id: context.tenant_id,
+        user_id: context.user_id,
+        user_email: context.user_email.clone(),
     }
 }
 
@@ -21284,6 +22272,11 @@ fn status_store_statuses(state: &AppState) -> Vec<StatusStoreStatus> {
             configured: state.agent_store.is_some(),
             scope: "Zero-Trust-Posture",
         },
+        StatusStoreStatus {
+            name: "Agent Governance",
+            configured: state.agent_governance_store.is_some(),
+            scope: "Policy, Sollabdeckung und Notifications",
+        },
     ]
 }
 
@@ -21405,6 +22398,7 @@ async fn status_operations_overview(
             signals.extend(product_security_operation_signals(state, context).await);
             signals.extend(ai_governance_operation_signals(state, context).await);
             signals.extend(agent_operation_signals(state, context).await);
+            signals.extend(agent_governance_operation_signals(state, context).await);
         }
         None => {
             signals.push(StatusSignal::new(
@@ -21447,6 +22441,13 @@ async fn status_operations_overview(
                 "Agent-Abdeckung",
                 StatusSignalLevel::Warn,
                 "Tenant-Kontext fehlt; Flottenabdeckung und Heartbeat-Lage brauchen tenant_id und user_id.",
+                Some("/zero-trust/".to_string()),
+            ));
+            signals.push(StatusSignal::new(
+                "Agent Governance",
+                "Agent-Policy-Konformitaet",
+                StatusSignalLevel::Warn,
+                "Tenant-Kontext fehlt; Policy- und Sollabdeckung brauchen tenant_id und user_id.",
                 Some("/zero-trust/".to_string()),
             ));
         }
@@ -21535,6 +22536,98 @@ async fn agent_operation_signals(state: &AppState, context: &WebContext) -> Vec<
             href,
         )],
     }
+}
+
+async fn agent_governance_operation_signals(
+    state: &AppState,
+    context: &WebContext,
+) -> Vec<StatusSignal> {
+    let href = Some(web_path_with_context("/zero-trust/", Some(context)));
+    let Some(store) = state.agent_governance_store.as_ref() else {
+        return vec![StatusSignal::new(
+            "Agent Governance",
+            "Agent-Policy-Konformitaet",
+            StatusSignalLevel::Warn,
+            "Agent-Governance-Store ist nicht konfiguriert.",
+            href,
+        )];
+    };
+    let governance = match store
+        .fleet_governance_overview(context.tenant_id, true)
+        .await
+    {
+        Ok(governance) => governance,
+        Err(err) => {
+            return vec![StatusSignal::new(
+                "Agent Governance",
+                "Agent-Policy-Konformitaet",
+                StatusSignalLevel::Danger,
+                format!("Agent-Governance konnte nicht gelesen werden: {err}"),
+                href,
+            )]
+        }
+    };
+    let enabled_channels = governance
+        .notification_channels
+        .iter()
+        .filter(|channel| channel.enabled)
+        .count() as i64;
+    let missing_secrets = governance
+        .notification_channels
+        .iter()
+        .filter(|channel| channel.enabled && !channel.secret_available)
+        .count() as i64;
+    let summary = &governance.summary;
+    vec![
+        StatusSignal::new(
+            "Agent Governance",
+            "Agent-Policy-Konformitaet",
+            if summary.critical_policies > 0 {
+                StatusSignalLevel::Danger
+            } else if summary.warning_policies > 0 || summary.total_policies == 0 {
+                StatusSignalLevel::Warn
+            } else {
+                StatusSignalLevel::Ok
+            },
+            format!(
+                "{}/{} Policies konform, {} Warnung, {} kritisch.",
+                summary.compliant_policies,
+                summary.total_policies,
+                summary.warning_policies,
+                summary.critical_policies
+            ),
+            href.clone(),
+        ),
+        StatusSignal::new(
+            "Agent Governance",
+            "Agent-Sollabdeckung",
+            if summary.total_policies == 0 || summary.coverage_percent < 100 {
+                StatusSignalLevel::Warn
+            } else {
+                StatusSignalLevel::Ok
+            },
+            format!(
+                "{}% Policy-Coverage, {}/{} frische Devices ueber alle Scopes.",
+                summary.coverage_percent,
+                summary.fresh_devices_across_scopes,
+                summary.expected_devices_across_scopes
+            ),
+            href.clone(),
+        ),
+        StatusSignal::new(
+            "Agent Governance",
+            "Notification-Kanaele",
+            if enabled_channels == 0 || missing_secrets > 0 {
+                StatusSignalLevel::Warn
+            } else {
+                StatusSignalLevel::Ok
+            },
+            format!(
+                "{enabled_channels} Kanaele aktiv, {missing_secrets} Secret-Referenzen nicht verfuegbar."
+            ),
+            href,
+        ),
+    ]
 }
 
 async fn evidence_operation_signals(state: &AppState, context: &WebContext) -> Vec<StatusSignal> {
@@ -24789,6 +25882,28 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(operations_alertmanager_webhook),
         )
         .route("/api/v1/agents/posture", get(agent_posture))
+        .route("/api/v1/agents/governance", get(agent_fleet_governance))
+        .route("/api/v1/agents/policies", post(agent_policy_create))
+        .route(
+            "/api/v1/agents/policies/{policy_id}",
+            patch(agent_policy_update),
+        )
+        .route(
+            "/api/v1/agents/notification-channels",
+            get(agent_notification_channels).post(agent_notification_channel_create),
+        )
+        .route(
+            "/api/v1/agents/notification-channels/{channel_id}",
+            patch(agent_notification_channel_update),
+        )
+        .route(
+            "/api/v1/agents/notification-deliveries",
+            get(agent_notification_deliveries),
+        )
+        .route(
+            "/api/v1/agents/notifications/evaluate",
+            post(agent_notifications_evaluate),
+        )
         .route("/api/v1/agents/devices", get(agent_devices))
         .route(
             "/api/v1/agents/enrollment-tokens",
@@ -25029,6 +26144,15 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/operations/incidents/", get(web_operations_incidents))
         .route("/zero-trust/", get(web_zero_trust))
+        .route("/zero-trust/policies/", post(web_agent_policy_submit))
+        .route(
+            "/zero-trust/notification-channels/",
+            post(web_agent_notification_channel_submit),
+        )
+        .route(
+            "/zero-trust/notifications/evaluate",
+            post(web_agent_notifications_evaluate),
+        )
         .route("/incidents/", get(web_incidents).post(web_incidents_submit))
         .route(
             "/incidents/runbook-templates/",

@@ -177,13 +177,16 @@ Umgesetzt:
 - administrative Agent-Secret-Rotation mit sofortiger Invalidierung des alten Secrets
 - systemd-Timer, NixOS-Modul, Windows Scheduled Task und macOS LaunchDaemon
 - Flottensignale in Betriebszentrale, JSON und Prometheus fuer Abdeckung, veraltete Heartbeats und kritische Findings
+- Migration `0025_rust_agent_fleet_governance` fuer tenantgebundene Policy-Profile, Notification-Kanaele und Delivery-Audit
+- editierbare Policy-Profile fuer Tenant, OS-Familie, Asset-Typ, Business Unit und Deployment-Channel
+- Soll-/Ist-Coverage, Heartbeat-Freshness, Mindestscore und Finding-Grenzwerte je Policy
+- sichere Webhook-Kanaele mit Production-Allowlist, Bearer-/HMAC-Secret-Referenz, Redirect-Sperre und Cooldown
+- periodischer Worker, manuelle Auswertung, Delivery-Historie sowie Operations-/Prometheus-Signale
 
 Offen:
 
 - Enrollment-Token widerrufen und deren Lifecycle im Web verwalten.
-- Agent-Policy-Profile pro Tenant oder Asset-Gruppe pflegen.
-- Benachrichtigungen fuer ablaufende Evidence, offene CVE-Reviews, offene Nicht-Meldeentscheidungen, Agent-Posture-Abweichungen und Roadmap-Tasks einbauen.
-- erwartete Endpoint-Abdeckung nach Plattform beziehungsweise Asset-Gruppe gegen tatsaechlich meldende Agenten messen.
+- Das Notification-Modell auf ablaufende Evidence, offene CVE-Reviews, offene Nicht-Meldeentscheidungen und Roadmap-Tasks erweitern.
 - signierte MSI-/PKG-/deb-/rpm-Pakete und Release-Provenance bereitstellen.
 
 Erfolgskriterium:
@@ -192,9 +195,9 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Benachrichtigungskanaele.
-2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben.
-3. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln.
+1. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben.
+2. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln.
+3. Benachrichtigungen auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern.
 4. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
 5. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
 6. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
@@ -204,9 +207,10 @@ Erfolgskriterium:
 | Horizont | Arbeitspaket | Ergebnis |
 | --- | --- | --- |
 | Erledigt | Agent-State, Secret-Rotation, Offline-Queue und OS-Service-Beispiele | Agenten behalten ihre Identitaet, puffern Ausfaelle und koennen auf Linux, NixOS, Windows und macOS periodisch betrieben werden. |
-| Jetzt | Agent-Policy, erwartete Coverage und Benachrichtigungen | Flottenabweichungen werden gegen einen Sollbestand bewertet und kritische Signale aktiv zugestellt. |
+| Erledigt | Agent-Policy, erwartete Coverage und Policy-Webhooks | Flottenabweichungen werden gegen einen Sollbestand bewertet, aktiv zugestellt und auditierbar protokolliert. |
 | Jetzt | Product-Security-Evidence-Pakete und Produkt-Lifecycle | Release-/PSIRT-Freigaben enthalten SBOM, VEX, Advisories, Support-Ende, offene Risiken und Evidence. |
 | Danach | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
+| Danach | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
 | Danach | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen und Exit-Test-Nachweise. |
 | Danach | Management-/Regulatory-Templates | Wiederholbare Quartals-, Audit-, NIS2-, DORA- und DSGVO-Pakete werden kontextsensitiv erzeugt. |
 | Reifegrad | Evidence-Disposition und Objektspeicher | Legal Hold, kontrollierte Loeschung, periodische Integritaetspruefung und Storage-Restore sind auditierbar. |

@@ -1,6 +1,6 @@
 # Zero-Trust Agent
 
-Version: ISCY Rust Backend `0.3.20`
+Version: ISCY Rust Backend `0.3.21`
 
 ## Zielbild
 
@@ -49,6 +49,14 @@ POST /api/v1/agents/devices/{device_id}/rotate-secret
 POST /api/v1/agents/devices/{device_id}/heartbeat
 GET  /api/v1/agents/devices/{device_id}/findings
 POST /api/v1/agents/devices/{device_id}/findings
+GET  /api/v1/agents/governance
+POST /api/v1/agents/policies
+PATCH /api/v1/agents/policies/{policy_id}
+GET  /api/v1/agents/notification-channels
+POST /api/v1/agents/notification-channels
+PATCH /api/v1/agents/notification-channels/{channel_id}
+GET  /api/v1/agents/notification-deliveries
+POST /api/v1/agents/notifications/evaluate
 ```
 
 Admin-/Demo-Headers:
@@ -152,6 +160,47 @@ auf den Endpoint gebracht werden. Ein einmaliger Lauf mit
 den lokalen State. Bei mTLS-Bindung muss weiterhin derselbe validierte
 Fingerprint uebergeben werden.
 
+## Policy-Profile und Sollabdeckung
+
+Unter `/zero-trust/` koennen schreibberechtigte Nutzer Policy-Profile anlegen
+und bearbeiten. Ein Profil definiert Sollbestand, maximales Heartbeat-Alter,
+Mindestscore sowie Grenzwerte fuer kritische und hohe Findings. Unterstuetzte
+Scopes sind:
+
+- `TENANT`: alle Agenten des Mandanten
+- `OS_FAMILY`: beispielsweise `linux`, `windows` oder `macos`
+- `ASSET_TYPE`: der am Device verknuepfte Asset-Typ
+- `BUSINESS_UNIT`: ID oder Name der Business Unit
+- `DEPLOYMENT_CHANNEL`: beispielsweise `nixos`, `intune` oder `jamf`
+
+ISCY berechnet je Profil gemeldete, aktive, frische und fehlende Devices,
+Coverage, Flottenscore sowie High-/Critical-Findings. Ueberlappende Scopes
+werden in der Gesamt-Coverage bewusst mehrfach gezaehlt; sie misst die Erfuellung
+der Policy-Sollwerte und ist keine eindeutige Endpoint-Inventur.
+
+## Aktive Benachrichtigungen
+
+Administratoren koennen Webhook-Kanaele in derselben Webansicht pflegen. Der
+Event `AGENT_POLICY` sendet Abweichungen als CloudEvents-aehnliches JSON. Pro
+Policy, Stufe und Kanal unterdrueckt ein konfigurierbarer Cooldown erfolgreiche
+Doppelmeldungen. Jeder Versuch wird mit Status, HTTP-Code, Fehler und Payload in
+der Delivery-Historie protokolliert. Transiente Verbindungs-/Timeoutfehler sowie
+HTTP 429, 500, 502, 503 und 504 werden begrenzt erneut versucht; permanente
+Clientfehler werden nicht wiederholt.
+
+Unterstuetzte Authentisierung:
+
+- `NONE`: nur fuer bewusst ungeschuetzte Ziele
+- `BEARER`: Secret aus der in `secret_env_name` referenzierten Variable
+- `HMAC_SHA256`: Signatur `sha256=<hex>` ueber `timestamp.payload`
+
+Secrets werden nicht in der Datenbank gespeichert. HTTP ist nur fuer Loopback
+oder mit `ISCY_NOTIFICATION_ALLOW_HTTP=1` erlaubt. Im Production-Modus muss der
+Zielhost zusaetzlich exakt in `ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS` stehen;
+Redirects werden nicht verfolgt. Der Hintergrundworker wertet standardmaessig
+alle 300 Sekunden aus. `ISCY_AGENT_NOTIFICATION_INTERVAL_SECONDS=0` deaktiviert
+ihn, andere positive Werte werden auf mindestens 60 Sekunden begrenzt.
+
 ## Windows-Agent
 
 Der Windows-Agent ist kein eigener Python-Zweig, sondern dasselbe Rust-Binary `iscy-agent`. Der Quellcode ist bereits im Repository enthalten. Ein `.exe` wird auf Windows so gebaut:
@@ -198,7 +247,7 @@ Die Plattform kann zusaetzlich diese Zero-Trust-Pruefpunkte ueber dieselben Find
 - Softwareinventar fuer CVE-Korrelation
 - Removable-Media-Policy
 
-Wichtig: In `0.3.20` liest der Agent lokale OS-/MDM-/EDR-Signale nur read-only und konservativ. Wenn ein Signal nicht sicher bestaetigt werden kann, wird das als offene Evidenzluecke gemeldet statt als erfundener Compliance-Nachweis.
+Wichtig: In `0.3.21` liest der Agent lokale OS-/MDM-/EDR-Signale nur read-only und konservativ. Wenn ein Signal nicht sicher bestaetigt werden kann, wird das als offene Evidenzluecke gemeldet statt als erfundener Compliance-Nachweis.
 
 ## Deployment-Artefakte
 
@@ -273,13 +322,16 @@ Remediation sollte erst als eigener, policy-signierter und auditierbarer Schritt
 
 ## Plattform-Integration
 
-Die Migrationen `0007_rust_zero_trust_agent_core` und `0008_rust_agent_enrollment_hardening` fuegen hinzu:
+Die Migrationen `0007_rust_zero_trust_agent_core`, `0008_rust_agent_enrollment_hardening` und `0025_rust_agent_fleet_governance` fuegen hinzu:
 
 - `zero_trust_agent_device`
 - `zero_trust_agent_heartbeat`
 - `zero_trust_agent_finding`
 - `zero_trust_agent_check_catalog`
 - `zero_trust_agent_enrollment_token`
+- `zero_trust_agent_policy_profile`
+- `zero_trust_agent_notification_channel`
+- `zero_trust_agent_notification_delivery`
 
 Die Webansicht ist unter `/zero-trust/` verfuegbar.
 
@@ -289,3 +341,5 @@ zusaetzlich:
 - aktive Agenten im Verhaeltnis zu registrierten Devices
 - seit mindestens 14 Tagen veraltete Heartbeats
 - kritische und hohe offene Agent-Findings
+- Policy-Konformitaet und erwartete Coverage ueber alle konfigurierten Scopes
+- aktivierte Notification-Kanaele und fehlende Secret-Konfiguration

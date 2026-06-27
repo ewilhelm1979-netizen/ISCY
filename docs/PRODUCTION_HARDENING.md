@@ -52,6 +52,26 @@ x-iscy-alert-nonce: <optionaler-eindeutiger-request-wert>
 
 Fuer Rotation kann temporaer `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE` gesetzt werden. Wenn der Security-Store aktiv ist, speichert ISCY verwendete Nonces im Replay-Fenster. Fehlt `x-iscy-alert-nonce`, wird die Kombination aus Timestamp und Signatur als Nonce-Schluessel genutzt.
 
+## Agent-Policy-Webhooks
+
+Agent-Notification-Kanaele duerfen produktiv nur auf explizit erlaubte Hosts
+zeigen. Betreiber setzen beispielsweise:
+
+```text
+ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS=soc-webhook.example.org
+ISCY_NOTIFICATION_ALLOW_HTTP=0
+ISCY_AGENT_NOTIFICATION_SECRET=<secret>
+```
+
+Der Kanal speichert bei Bearer- oder HMAC-Authentisierung nur
+`ISCY_AGENT_NOTIFICATION_SECRET` als Referenz, nicht den Wert. HTTPS ist der
+Standard, URL-Zugangsdaten und Redirects sind gesperrt. Die Host-Allowlist wird
+beim Speichern und erneut bei jeder Zustellung geprueft. Transiente
+Verbindungs-/Timeoutfehler und ausgewaehlte HTTP-Status werden begrenzt erneut
+versucht; Cooldown und Delivery-Audit reduzieren Doppelmeldungen und halten das
+Ergebnis nachvollziehbar. DNS-/Netzwerk-Egress sollte zusaetzlich auf
+Infrastrukturebene beschraenkt werden.
+
 ## Restore-Drills
 
 `make rust-restore-smoke` prueft lokal SQLite plus Media-Dateien als zusammengehoerige Evidence-Einheit. Der Drill erzeugt einen Evidence-Upload ueber die Rust-API, restauriert Datenbank und Media-Verzeichnis, liest den Dateipfad aus der restaurierten Evidence-Zeile und vergleicht die SHA-256-Pruefsumme vor und nach dem Restore. Fuer PostgreSQL gibt es einen optionalen Drill gegen zwei wegwerfbare Testdatenbanken:

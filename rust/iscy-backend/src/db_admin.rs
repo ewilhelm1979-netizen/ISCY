@@ -182,6 +182,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_EVIDENCE_LIFECYCLE_SCHEMA,
         postgres_sql: POSTGRES_EVIDENCE_LIFECYCLE_SCHEMA,
     },
+    Migration {
+        version: "0025_rust_agent_fleet_governance",
+        sqlite_sql: SQLITE_AGENT_FLEET_GOVERNANCE_SCHEMA,
+        postgres_sql: POSTGRES_AGENT_FLEET_GOVERNANCE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1252,6 +1257,138 @@ CREATE INDEX IF NOT EXISTS idx_evidence_valid_until
     ON evidence_evidenceitem(tenant_id, valid_until);
 CREATE INDEX IF NOT EXISTS idx_evidence_retention_until
     ON evidence_evidenceitem(tenant_id, retention_until);
+"#;
+
+const SQLITE_AGENT_FLEET_GOVERNANCE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS zero_trust_agent_policy_profile (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    name varchar(128) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    scope_type varchar(32) NOT NULL DEFAULT 'TENANT',
+    scope_value varchar(128) NOT NULL DEFAULT '',
+    expected_device_count INTEGER NOT NULL DEFAULT 1,
+    heartbeat_max_age_hours INTEGER NOT NULL DEFAULT 24,
+    minimum_zero_trust_score INTEGER NOT NULL DEFAULT 80,
+    max_critical_findings INTEGER NOT NULL DEFAULT 0,
+    max_high_findings INTEGER NOT NULL DEFAULT 0,
+    enabled bool NOT NULL DEFAULT 1,
+    created_by_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_policy_tenant
+    ON zero_trust_agent_policy_profile(tenant_id, enabled, scope_type);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_notification_channel (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    name varchar(128) NOT NULL,
+    channel_type varchar(32) NOT NULL DEFAULT 'WEBHOOK',
+    endpoint_url TEXT NOT NULL,
+    minimum_level varchar(16) NOT NULL DEFAULT 'WARN',
+    event_types_json TEXT NOT NULL DEFAULT '["AGENT_POLICY"]',
+    auth_type varchar(32) NOT NULL DEFAULT 'NONE',
+    secret_env_name varchar(128) NOT NULL DEFAULT '',
+    cooldown_minutes INTEGER NOT NULL DEFAULT 60,
+    enabled bool NOT NULL DEFAULT 1,
+    created_by_id INTEGER NULL,
+    last_success_at TEXT NULL,
+    last_failure_at TEXT NULL,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_notification_channel_tenant
+    ON zero_trust_agent_notification_channel(tenant_id, enabled);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_notification_delivery (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    policy_id INTEGER NULL,
+    event_key varchar(255) NOT NULL,
+    event_type varchar(64) NOT NULL DEFAULT 'AGENT_POLICY',
+    level varchar(16) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'PENDING',
+    response_status INTEGER NULL,
+    error_message TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    delivered_at TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_notification_delivery_tenant
+    ON zero_trust_agent_notification_delivery(tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_notification_delivery_event
+    ON zero_trust_agent_notification_delivery(tenant_id, channel_id, event_key, status, created_at);
+"#;
+
+const POSTGRES_AGENT_FLEET_GOVERNANCE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS zero_trust_agent_policy_profile (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    name varchar(128) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    scope_type varchar(32) NOT NULL DEFAULT 'TENANT',
+    scope_value varchar(128) NOT NULL DEFAULT '',
+    expected_device_count INTEGER NOT NULL DEFAULT 1,
+    heartbeat_max_age_hours INTEGER NOT NULL DEFAULT 24,
+    minimum_zero_trust_score INTEGER NOT NULL DEFAULT 80,
+    max_critical_findings INTEGER NOT NULL DEFAULT 0,
+    max_high_findings INTEGER NOT NULL DEFAULT 0,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_policy_tenant
+    ON zero_trust_agent_policy_profile(tenant_id, enabled, scope_type);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_notification_channel (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    name varchar(128) NOT NULL,
+    channel_type varchar(32) NOT NULL DEFAULT 'WEBHOOK',
+    endpoint_url TEXT NOT NULL,
+    minimum_level varchar(16) NOT NULL DEFAULT 'WARN',
+    event_types_json TEXT NOT NULL DEFAULT '["AGENT_POLICY"]',
+    auth_type varchar(32) NOT NULL DEFAULT 'NONE',
+    secret_env_name varchar(128) NOT NULL DEFAULT '',
+    cooldown_minutes INTEGER NOT NULL DEFAULT 60,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_by_id BIGINT NULL,
+    last_success_at TEXT NULL,
+    last_failure_at TEXT NULL,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_notification_channel_tenant
+    ON zero_trust_agent_notification_channel(tenant_id, enabled);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_notification_delivery (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    policy_id BIGINT NULL,
+    event_key varchar(255) NOT NULL,
+    event_type varchar(64) NOT NULL DEFAULT 'AGENT_POLICY',
+    level varchar(16) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'PENDING',
+    response_status INTEGER NULL,
+    error_message TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    delivered_at TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_notification_delivery_tenant
+    ON zero_trust_agent_notification_delivery(tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_notification_delivery_event
+    ON zero_trust_agent_notification_delivery(tenant_id, channel_id, event_key, status, created_at);
 "#;
 
 const SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"
