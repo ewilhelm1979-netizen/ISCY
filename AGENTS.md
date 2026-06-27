@@ -19,20 +19,16 @@ A change that appears local can affect tenant isolation, evidence confidentialit
 2. URL query parameters such as `tenant_id`, `user_id`, and `user_email` must never establish identity outside development-only compatibility flows.
 3. Caller-controlled `x-iscy-*` headers must not be trusted unless the configured proxy boundary is both explicit and verified.
 4. Every object read, write, export, review, and download must remain tenant-scoped in the database query itself.
-5. New object routes require negative tests for:
-   - missing authentication,
-   - insufficient role,
-   - foreign tenant,
-   - manipulated object ID,
-   - manipulated identity context.
+5. New object routes require negative tests for missing authentication, insufficient role, foreign tenant, manipulated object ID, and manipulated identity context.
 
 ### Evidence and sensitive files
 
 1. Evidence files are private application data.
 2. Evidence must not be exposed through a public static path, shared web-root, directory listing, or unauthenticated reverse-proxy alias.
-3. A future evidence-download endpoint must validate session, tenant, object ownership, role, sensitivity, and lifecycle state before returning bytes.
-4. Evidence responses must use private/no-store caching and should create an auditable access event.
+3. The authenticated Evidence-download endpoints must continue to validate session, tenant, object ownership, role, sensitivity, and safe media-root containment before returning bytes.
+4. Evidence responses must use private/no-store caching and must emit an auditable access decision without logging secrets or stored file paths.
 5. Temporary upload files must be removed after validation or persistence failures.
+6. Direct static `/media/` delivery must not be restored.
 
 ### Secrets and logging
 
@@ -47,7 +43,9 @@ A change that appears local can affect tenant isolation, evidence confidentialit
 2. Runtime containers must not run as root unless a narrowly documented technical requirement exists.
 3. Do not publish the backend container port directly in stage or production when the reverse proxy is the intended ingress boundary.
 4. Production startup must fail closed when required security assumptions are missing.
-5. New external dependencies require a documented reason and lockfile review.
+5. New external dependencies require a documented reason, lockfile review, advisory check, license review, and source-policy review.
+6. Major dependency upgrades must be isolated, reviewed against upstream migration notes, and tested separately from routine patch maintenance.
+7. Do not weaken or remove mandatory CI checks to make a pull request mergeable.
 
 ### Webhooks, agents, and outbound requests
 
@@ -70,6 +68,8 @@ Run the relevant subset and explain any skipped command:
 cargo fmt --manifest-path rust/iscy-backend/Cargo.toml -- --check
 cargo clippy --locked --manifest-path rust/iscy-backend/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml
+cargo audit --file rust/iscy-backend/Cargo.lock --ignore RUSTSEC-2023-0071
+cargo deny --manifest-path rust/iscy-backend/Cargo.toml check advisories licenses sources
 make rust-smoke
 make rust-restore-smoke
 docker compose config
@@ -78,30 +78,16 @@ docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml 
 docker build --file rust/iscy-backend/Dockerfile rust/iscy-backend
 ```
 
+`RUSTSEC-2023-0071` is ignored only because `rsa` is present in the lockfile through the disabled optional `sqlx-mysql` dependency path and is not reachable from any ISCY target. Re-evaluate and remove the exception if dependency features change.
+
 Changes to authorization, tenant scoping, evidence, webhooks, imports, backup/restore, or deployment defaults require focused negative tests in addition to the general suite.
 
 ## Pull-request expectations
 
-Every substantial pull request should state:
-
-- the user or operational problem,
-- the security boundaries affected,
-- migrations or compatibility effects,
-- tests executed,
-- known limitations,
-- documentation updated.
+Every substantial pull request should state the user or operational problem, affected security boundaries, migrations or compatibility effects, tests executed, known limitations, and documentation updated.
 
 AI assistance must be disclosed as described in `CONTRIBUTING.md`. The human contributor remains responsible for correctness, security, licensing, provenance, and review.
 
 ## Prohibited shortcuts
 
-Do not:
-
-- bypass authorization because a route is “internal,”
-- use query parameters as production identity,
-- serve evidence from `/media/` or another public static directory,
-- weaken production preflight to make a deployment start,
-- introduce permissive wildcard webhook destinations,
-- silence failing backup, restore, migration, or security checks with unconditional `|| true`,
-- print secrets for debugging,
-- disable tests instead of fixing or documenting the underlying issue.
+Do not bypass authorization because a route is internal, use query parameters as production identity, serve Evidence from a public static directory, weaken production preflight, introduce permissive wildcard webhook destinations, silence security-critical failures with unconditional `|| true`, print secrets for debugging, or disable tests instead of fixing the underlying issue.
