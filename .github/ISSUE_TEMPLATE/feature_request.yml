@@ -1,0 +1,63 @@
+name: Feature request
+description: Propose a focused improvement or new capability
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for proposing an improvement. Larger architectural changes should be discussed before implementation.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or need
+      description: Describe the user, operational, compliance, or security problem to solve.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Explain the expected behavior and the smallest useful scope.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Relevant area
+      multiple: true
+      options:
+        - ISMS and controls
+        - Risk management
+        - Incidents and reporting
+        - Evidence and audits
+        - Supplier risk
+        - Product security
+        - SBOM, CSAF, VEX, or CVE processing
+        - AI governance
+        - Zero Trust posture
+        - Operations and monitoring
+        - Authentication or authorization
+        - User interface
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe current workarounds or other approaches you evaluated.
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and privacy considerations
+      description: Note possible effects on access control, tenant isolation, sensitive data, auditability, or secure defaults.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues and pull requests for similar proposals.
+          required: true
+        - label: This request does not contain confidential or security-sensitive information.
+          required: true
