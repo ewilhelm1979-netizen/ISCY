@@ -118,13 +118,7 @@ async fn download_evidence_for_context(
             return evidence_not_found_response();
         }
         Err(_) => {
-            audit_download(
-                Some(&context),
-                evidence_id,
-                None,
-                "deny",
-                "database_error",
-            );
+            audit_download(Some(&context), evidence_id, None, "deny", "database_error");
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "evidence_database_error",
@@ -336,12 +330,7 @@ fn evidence_download_allowed(
         ),
         "RESTRICTED" => has_any_role(
             context,
-            &[
-                "ADMIN",
-                "CISO",
-                "ISMS_MANAGER",
-                "COMPLIANCE_MANAGER",
-            ],
+            &["ADMIN", "CISO", "ISMS_MANAGER", "COMPLIANCE_MANAGER"],
         ),
         _ => false,
     }
@@ -610,7 +599,10 @@ mod tests {
     #[test]
     fn extracts_bearer_before_cookie() {
         let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer bearer-token"));
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_static("Bearer bearer-token"),
+        );
         headers.insert(
             axum::http::header::COOKIE,
             HeaderValue::from_static("iscy_session=cookie-token"),
@@ -667,20 +659,13 @@ mod tests {
     #[tokio::test]
     async fn tenant_scoped_lookup_hides_foreign_evidence() {
         let store = test_evidence_store(7, 2, "foreign.txt", "INTERNAL").await;
-        assert!(load_evidence_record(&store, 1, 7)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(load_evidence_record(&store, 1, 7).await.unwrap().is_none());
     }
 
     #[tokio::test]
     async fn unauthenticated_handler_returns_unauthorized() {
-        let response = download_evidence(
-            Path(7),
-            State(AppState::new(None)),
-            HeaderMap::new(),
-        )
-        .await;
+        let response =
+            download_evidence(Path(7), State(AppState::new(None)), HeaderMap::new()).await;
 
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
@@ -702,8 +687,8 @@ mod tests {
             .with_evidence_store(Some(store))
             .with_evidence_media_root(Some(root.clone()));
 
-        let denied = download_evidence_for_context(state.clone(), 7, context(2, "CONTRIBUTOR"))
-            .await;
+        let denied =
+            download_evidence_for_context(state.clone(), 7, context(2, "CONTRIBUTOR")).await;
         assert_eq!(denied.status(), StatusCode::FORBIDDEN);
 
         let allowed = download_evidence_for_context(state, 7, context(3, "CISO")).await;
@@ -747,8 +732,7 @@ mod tests {
             .with_evidence_store(Some(store))
             .with_evidence_media_root(Some(root.clone()));
 
-        let response = download_evidence_for_context(state, 8, context(2, "CONTRIBUTOR"))
-            .await;
+        let response = download_evidence_for_context(state, 8, context(2, "CONTRIBUTOR")).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         fs::remove_dir_all(root).unwrap();
