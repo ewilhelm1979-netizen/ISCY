@@ -1,0 +1,29 @@
+name: RustSec audit diagnostic
+
+on:
+  push:
+    branches:
+      - maintenance/application-readiness-v23.7.27
+    paths:
+      - .github/workflows/audit-diagnostic.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+          fallback: none
+      - name: Export audit report
+        run: |
+          cargo audit --file rust/iscy-backend/Cargo.lock --json > audit-report.json || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustsec-audit-report
+          path: audit-report.json
+          if-no-files-found: error
