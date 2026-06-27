@@ -19,12 +19,7 @@ A change that appears local can affect tenant isolation, evidence confidentialit
 2. URL query parameters such as `tenant_id`, `user_id`, and `user_email` must never establish identity outside development-only compatibility flows.
 3. Caller-controlled `x-iscy-*` headers must not be trusted unless the configured proxy boundary is both explicit and verified.
 4. Every object read, write, export, review, and download must remain tenant-scoped in the database query itself.
-5. New object routes require negative tests for:
-   - missing authentication,
-   - insufficient role,
-   - foreign tenant,
-   - manipulated object ID,
-   - manipulated identity context.
+5. New object routes require negative tests for missing authentication, insufficient role, foreign tenant, manipulated object ID, and manipulated identity context.
 
 ### Evidence and sensitive files
 
@@ -49,7 +44,8 @@ A change that appears local can affect tenant isolation, evidence confidentialit
 3. Do not publish the backend container port directly in stage or production when the reverse proxy is the intended ingress boundary.
 4. Production startup must fail closed when required security assumptions are missing.
 5. New external dependencies require a documented reason, lockfile review, advisory check, license review, and source-policy review.
-6. Do not weaken or remove mandatory CI checks to make a pull request mergeable.
+6. Major dependency upgrades must be isolated, reviewed against upstream migration notes, and tested separately from routine patch maintenance.
+7. Do not weaken or remove mandatory CI checks to make a pull request mergeable.
 
 ### Webhooks, agents, and outbound requests
 
@@ -86,26 +82,10 @@ Changes to authorization, tenant scoping, evidence, webhooks, imports, backup/re
 
 ## Pull-request expectations
 
-Every substantial pull request should state:
-
-- the user or operational problem,
-- the security boundaries affected,
-- migrations or compatibility effects,
-- tests executed,
-- known limitations,
-- documentation updated.
+Every substantial pull request should state the user or operational problem, affected security boundaries, migrations or compatibility effects, tests executed, known limitations, and documentation updated.
 
 AI assistance must be disclosed as described in `CONTRIBUTING.md`. The human contributor remains responsible for correctness, security, licensing, provenance, and review.
 
 ## Prohibited shortcuts
 
-Do not:
-
-- bypass authorization because a route is “internal,”
-- use query parameters as production identity,
-- serve evidence from `/media/` or another public static directory,
-- weaken production preflight to make a deployment start,
-- introduce permissive wildcard webhook destinations,
-- silence failing backup, restore, migration, or security checks with unconditional `|| true`,
-- print secrets for debugging,
-- disable tests instead of fixing or documenting the underlying issue.
+Do not bypass authorization because a route is internal, use query parameters as production identity, serve Evidence from a public static directory, weaken production preflight, introduce permissive wildcard webhook destinations, silence security-critical failures with unconditional `|| true`, print secrets for debugging, or disable tests instead of fixing the underlying issue.
