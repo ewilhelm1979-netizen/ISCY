@@ -5,6 +5,9 @@ on:
     branches: ["main", "master"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   rust-backend-tests:
     runs-on: ubuntu-24.04
@@ -19,10 +22,10 @@ jobs:
           cargo fmt --manifest-path rust/iscy-backend/Cargo.toml -- --check
       - name: Run Rust clippy
         run: |
-          cargo clippy --manifest-path rust/iscy-backend/Cargo.toml --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path rust/iscy-backend/Cargo.toml --all-targets -- -D warnings
       - name: Run Rust backend tests
         run: |
-          cargo test --manifest-path rust/iscy-backend/Cargo.toml
+          cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml
 
   rust-bootstrap-smoke:
     runs-on: ubuntu-24.04
@@ -104,11 +107,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Validate docker compose files
+      - name: Validate effective compose configurations
         run: |
           cp .env.example .env
-          docker compose -f docker-compose.yml config
-          docker compose -f docker-compose.yml -f docker-compose.llm.yml config
-          docker compose -f docker-compose.yml -f docker-compose.stage.yml config
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml config
-          docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml config
+          docker compose config
+          docker compose --env-file .env -f docker-compose.yml -f docker-compose.llm.yml config
+          docker compose --env-file .env -f docker-compose.yml -f docker-compose.stage.yml config
+          docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml config
+          docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml config
+      - name: Build hardened application image
+        run: |
+          docker build --file rust/iscy-backend/Dockerfile rust/iscy-backend

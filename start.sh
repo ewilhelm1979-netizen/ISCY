@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$PROJECT_DIR"
@@ -10,6 +11,7 @@ err()  { printf '\033[1;31m[ERR ]\033[0m %s\n' "$1" >&2; }
 
 if [ ! -f ".env" ] && [ -f ".env.example" ]; then
   cp .env.example .env
+  chmod 600 .env
   info ".env aus .env.example erstellt."
 fi
 
@@ -23,6 +25,7 @@ if [ -f ".env" ]; then
   fi
   if [ -w ".env" ]; then
     ENV_FILE_WRITABLE=1
+    chmod 600 .env
   else
     warn ".env ist vorhanden, aber nicht schreibbar; Startwerte werden nicht in .env aktualisiert."
   fi
@@ -63,6 +66,7 @@ set_env_var() {
     printf '%s=%s\n' "$key" "$value" >"$tmp"
   fi
   mv "$tmp" .env
+  chmod 600 .env
 }
 
 env_database_url="$(env_file_value DATABASE_URL || true)"
@@ -113,7 +117,7 @@ run_backend() {
   elif command -v nix >/dev/null 2>&1; then
     nix run .#iscy-backend -- "$@"
   elif command -v cargo >/dev/null 2>&1; then
-    cargo run --manifest-path rust/iscy-backend/Cargo.toml --bin iscy-backend -- "$@"
+    cargo run --locked --manifest-path rust/iscy-backend/Cargo.toml --bin iscy-backend -- "$@"
   else
     err "Weder nix noch cargo gefunden. Bitte nix develop nutzen oder Rust installieren."
     exit 1
@@ -121,7 +125,8 @@ run_backend() {
 }
 
 info "ISCY startet im Rust-only-Modus."
-info "DATABASE_URL=$DATABASE_URL"
+database_scheme="${DATABASE_URL%%:*}"
+info "DATABASE_URL ist konfiguriert (Schema: ${database_scheme:-unbekannt})."
 info "RUST_BACKEND_BIND=$RUST_BACKEND_BIND"
 
 if [ "${ISCY_SKIP_INIT_DEMO:-0}" != "1" ]; then
@@ -137,5 +142,5 @@ if [ -n "${ISCY_BACKEND_BIN:-}" ]; then
 elif command -v nix >/dev/null 2>&1; then
   exec nix run .#iscy-backend
 else
-  exec cargo run --manifest-path rust/iscy-backend/Cargo.toml --bin iscy-backend
+  exec cargo run --locked --manifest-path rust/iscy-backend/Cargo.toml --bin iscy-backend
 fi

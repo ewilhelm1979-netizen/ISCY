@@ -1,5 +1,8 @@
+mod security_boundary;
+
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
+use axum::middleware;
 use iscy_backend::{
     account_store::AccountStore,
     agent_governance_store::AgentGovernanceStore,
@@ -32,6 +35,7 @@ use iscy_backend::{
     wizard_store::WizardStore,
     AppState,
 };
+use security_boundary::sanitize_legacy_identity_query;
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -69,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let addr: SocketAddr = std::env::var("RUST_BACKEND_BIND")
-        .unwrap_or_else(|_| "0.0.0.0:9000".to_string())
+        .unwrap_or_else(|_| "127.0.0.1:9000".to_string())
         .parse()?;
     let database_url = std::env::var("DATABASE_URL")
         .ok()
@@ -184,13 +188,17 @@ async fn main() -> anyhow::Result<()> {
         .with_product_security_store(product_security_store)
         .with_ai_governance_store(ai_governance_store)
         .with_database_url(database_url)
-        .with_security_config(security_config);
+        .with_security_config(security_config.clone());
 
     start_agent_notification_worker(notification_worker_store);
 
     let listener = TcpListener::bind(addr).await?;
     println!("ISCY Rust backend listening on http://{}", addr);
-    axum::serve(listener, app_router_with_state(state)).await?;
+    let app = app_router_with_state(state).layer(middleware::from_fn_with_state(
+        security_config,
+        sanitize_legacy_identity_query,
+    ));
+    axum::serve(listener, app).await?;
     Ok(())
 }
 
