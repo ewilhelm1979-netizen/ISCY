@@ -133,7 +133,7 @@ Backup files contain production database and evidence data. File permissions, in
 - evidence storage remains attached only to the application service
 - evidence metadata contains tenant and sensitivity information
 
-**Required future control:** A dedicated authenticated download endpoint must validate tenant, role, lifecycle state, and sensitivity, return private/no-store headers, and record access.
+**Implemented control:** Dedicated authenticated download routes resolve identity from a valid ISCY session, load the Evidence record with a tenant-scoped query, apply role and sensitivity authorization, constrain canonical paths to the configured media root, return private/no-store attachment responses, and emit structured allow/deny security events.
 
 ### Malicious upload or import
 
@@ -276,6 +276,7 @@ A release must not knowingly violate these rules:
 | Tenant isolation | store and HTTP foreign-tenant tests |
 | Evidence upload | size/type/reference tests and restore smoke |
 | Direct evidence serving | reverse-proxy configuration test/manual HTTP check |
+| Authenticated Evidence download | session-only authentication, tenant-scoped lookup, protection-class tests, and path-manipulation negative tests |
 | Production preflight | hardening unit/integration tests and readiness script |
 | Container privilege | Docker build and runtime inspection |
 | Backup integrity | generated `SHA256SUMS` and restore preflight |
@@ -284,7 +285,7 @@ A release must not knowingly violate these rules:
 
 ## Known limitations and next steps
 
-- authenticated evidence-byte download is not yet implemented; direct proxy access is intentionally denied
+- authenticated Evidence downloads emit structured runtime security events; durable database-backed download audit persistence and an explicit lifecycle-state denial policy remain future hardening options
 - backup manifests are checksummed but not cryptographically signed
 - backup encryption depends on the operator's storage or transfer layer
 - base container and GitHub Action references are not yet all pinned by digest/commit SHA
