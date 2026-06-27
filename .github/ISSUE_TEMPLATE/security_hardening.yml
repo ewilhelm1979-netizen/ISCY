@@ -1,0 +1,30 @@
+name: Security improvement
+description: Propose a defensive improvement
+title: "[Security improvement]: "
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Proposed improvement
+      description: Describe the requested defensive change.
+    validations:
+      required: true
+  - type: textarea
+    id: benefit
+    attributes:
+      label: Expected benefit
+      description: Explain how the change improves the project.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Operational impact
+      description: Describe compatibility, migration, or performance considerations.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmation
+      options:
+        - label: I reviewed the project security policy before submitting this public proposal.
+          required: true
