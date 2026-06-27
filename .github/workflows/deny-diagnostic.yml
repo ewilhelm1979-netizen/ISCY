@@ -1,0 +1,28 @@
+name: Cargo deny diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "deny.toml"
+      - ".github/workflows/deny-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+          fallback: none
+      - name: Export license and source report
+        run: |
+          cargo deny --manifest-path rust/iscy-backend/Cargo.toml check licenses sources > cargo-deny-report.txt 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-deny-diagnostic
+          path: cargo-deny-report.txt
+          if-no-files-found: error
