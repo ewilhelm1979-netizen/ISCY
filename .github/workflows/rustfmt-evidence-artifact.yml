@@ -1,33 +1,34 @@
-name: Evidence rustfmt artifact
+name: Apply Evidence rustfmt
 
 on:
-  pull_request:
-    paths:
-      - "rust/iscy-backend/src/evidence_download.rs"
-      - "rust/iscy-backend/src/main.rs"
-      - ".github/workflows/rustfmt-evidence-artifact.yml"
+  push:
+    branches:
+      - security/evidence-download-v23.7.26
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   format:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: security/evidence-download-v23.7.26
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           components: rustfmt
       - name: Format Rust sources
         run: cargo fmt --manifest-path rust/iscy-backend/Cargo.toml
-      - name: Collect formatted sources
+      - name: Commit canonical formatting
         run: |
-          mkdir -p formatted/rust/iscy-backend/src
-          cp rust/iscy-backend/src/main.rs formatted/rust/iscy-backend/src/main.rs
-          cp rust/iscy-backend/src/evidence_download.rs formatted/rust/iscy-backend/src/evidence_download.rs
-      - uses: actions/upload-artifact@v4
-        with:
-          name: evidence-rustfmt-sources
-          path: formatted
-          if-no-files-found: error
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rust/iscy-backend/src/main.rs rust/iscy-backend/src/evidence_download.rs
+          if git diff --cached --quiet; then
+            echo "No formatting changes required."
+            exit 0
+          fi
+          git commit -m "Apply canonical rustfmt output"
+          git push origin HEAD:security/evidence-download-v23.7.26
