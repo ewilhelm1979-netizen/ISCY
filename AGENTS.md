@@ -30,9 +30,10 @@ A change that appears local can affect tenant isolation, evidence confidentialit
 
 1. Evidence files are private application data.
 2. Evidence must not be exposed through a public static path, shared web-root, directory listing, or unauthenticated reverse-proxy alias.
-3. A future evidence-download endpoint must validate session, tenant, object ownership, role, sensitivity, and lifecycle state before returning bytes.
-4. Evidence responses must use private/no-store caching and should create an auditable access event.
+3. The authenticated Evidence-download endpoints must continue to validate session, tenant, object ownership, role, sensitivity, and safe media-root containment before returning bytes.
+4. Evidence responses must use private/no-store caching and must emit an auditable access decision without logging secrets or stored file paths.
 5. Temporary upload files must be removed after validation or persistence failures.
+6. Direct static `/media/` delivery must not be restored.
 
 ### Secrets and logging
 
@@ -47,7 +48,8 @@ A change that appears local can affect tenant isolation, evidence confidentialit
 2. Runtime containers must not run as root unless a narrowly documented technical requirement exists.
 3. Do not publish the backend container port directly in stage or production when the reverse proxy is the intended ingress boundary.
 4. Production startup must fail closed when required security assumptions are missing.
-5. New external dependencies require a documented reason and lockfile review.
+5. New external dependencies require a documented reason, lockfile review, advisory check, license review, and source-policy review.
+6. Do not weaken or remove mandatory CI checks to make a pull request mergeable.
 
 ### Webhooks, agents, and outbound requests
 
@@ -70,6 +72,8 @@ Run the relevant subset and explain any skipped command:
 cargo fmt --manifest-path rust/iscy-backend/Cargo.toml -- --check
 cargo clippy --locked --manifest-path rust/iscy-backend/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml
+cargo audit --file rust/iscy-backend/Cargo.lock
+cargo deny --manifest-path rust/iscy-backend/Cargo.toml check advisories licenses sources
 make rust-smoke
 make rust-restore-smoke
 docker compose config
