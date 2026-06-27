@@ -1,0 +1,31 @@
+[Unit]
+Description=ISCY read-only posture agent
+Documentation=https://github.com/ewilhelm1979-netizen/ISCY/blob/main/docs/ZERO_TRUST_AGENT.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+EnvironmentFile=-/etc/iscy-agent/agent.env
+Environment=ISCY_AGENT_STATE_PATH=/var/lib/iscy-agent/state.json
+Environment=ISCY_AGENT_QUEUE_DIR=/var/lib/iscy-agent/queue
+Environment=ISCY_AGENT_CHANNEL=systemd
+ExecStart=/usr/local/bin/iscy-agent
+StateDirectory=iscy-agent
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

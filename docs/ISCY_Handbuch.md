@@ -305,6 +305,7 @@ Fachlicher Nutzen:
 - Findings in Risiken, Evidenzen und Roadmap-Arbeit ueberfuehren
 - Zero-Trust-Optimierung nachvollziehbar und auditierbar machen
 - Prioritaeten schneller erkennen, ohne Rohdaten manuell vergleichen zu muessen
+- Agent-Abdeckung, veraltete Heartbeats und kritische Findings in der Betriebszentrale ueberwachen
 
 Fuer Nicht-Sicherheitsleute:
 Der Bereich zeigt, welche Geraete welche Sicherheitsluecken oder Nachweise melden.
@@ -321,6 +322,16 @@ Was die Agenten aktuell testen koennen:
 - Endpoint Protection/EDR: Windows Defender Status, macOS EDR-/Security-Agent-Pfade, Linux-Dienste und Pfade fuer Wazuh, auditd, Microsoft Defender, CrowdStrike, SentinelOne, osquery und vergleichbare Agenten
 
 Die Agenten arbeiten read-only. Wenn ein Signal nicht sicher bestaetigt werden kann, meldet ISCY eine offene Evidenzluecke statt einen erfundenen Nachweis.
+
+Nach dem ersten tokenbasierten Enrollment speichert der Agent Device-ID und
+Agent-Secret lokal. Unter Unix sind State-Verzeichnis und State-Datei mit `0700`
+beziehungsweise `0600` geschuetzt; der Windows-Installer setzt restriktive ACLs.
+Temporaer nicht zustellbare Reports werden in einer standardmaessig auf 100
+Eintraege begrenzten Offline-Queue gepuffert und beim naechsten Lauf zuerst
+uebertragen. Admins koennen das Secret ueber
+`POST /api/v1/agents/devices/{device_id}/rotate-secret` rotieren; das neue Secret
+wird nur einmal ausgegeben und muss ueber den sicheren Deployment-Kanal zum
+Endpoint gelangen.
 
 Die Weboberflaeche stellt Zero Trust bewusst als Arbeitsansicht dar:
 
@@ -877,7 +888,11 @@ ISCY_AGENT_ENROLLMENT_TOKEN=<token> \
 nix run .#iscy-agent
 ```
 
-Merksatz: Erst ISCY starten, dann den Agent per `--self-test` pruefen, danach mit Token oder Agent-Secret an die Plattform melden.
+Danach nutzt der Agent automatisch seinen lokalen State. Fertige Betriebsbeispiele
+fuer systemd, NixOS, Windows Scheduled Tasks und macOS LaunchDaemons liegen unter
+`deploy/agent/`; Details stehen in `docs/ZERO_TRUST_AGENT.md`.
+
+Merksatz: Erst ISCY starten, dann den Agent per `--self-test` pruefen, einmalig mit Token enrollen und anschliessend ohne Token periodisch betreiben.
 
 ### 6.7 Docker-Betrieb in einfacher Sprache
 
@@ -969,15 +984,19 @@ Was aktuell belastbar vorhanden ist:
 - Rust-only Backend mit Zero-Trust-Webansicht unter `/zero-trust/`
 - read-only Agent fuer Windows, macOS und Linux
 - Enrollment-Token, Agent-Secret und optionale mTLS-Fingerprint-Bindung
+- persistenter Agent-State und begrenzte Offline-Queue
+- administrative Agent-Secret-Rotation
+- systemd-, NixOS-, Windows- und macOS-Betriebsbeispiele
 - Inventar, Heartbeat und lokale OS-/MDM-/EDR-Findings
 - Scores nach Device und Pillar
 - offene Findings nach Severity
 - Fokuskarte fuer den naechsten fachlich sinnvollen Schritt
+- Flottensignale in Statusseite, JSON und Prometheus
 
 Was als naechstes fachlich am meisten bringt:
 
-1. Agent-Abdeckung je Plattform messen  
-   Pro Tenant sichtbar machen, wie viele Windows-, macOS- und Linux-Systeme erwartet werden und wie viele davon frisch melden.
+1. Soll-/Ist-Abdeckung je Plattform messen
+   Pro Tenant oder Asset-Gruppe festlegen, wie viele Windows-, macOS- und Linux-Systeme erwartet werden, und diesen Sollbestand gegen aktive Agenten pruefen.
 2. Findings mit Risiken und Evidenzen verbinden  
    Aus wiederkehrenden High-/Critical-Findings sollten Risiken, Massnahmen und Evidenzanforderungen ableitbar sein.
 3. MDM-/EDR-Integrationen vorbereiten  
@@ -987,7 +1006,7 @@ Was als naechstes fachlich am meisten bringt:
 5. Ausnahme- und Ablaufdatum erzwingen  
    Akzeptierte Abweichungen sollten Owner, Begruendung, Laufzeit und Wiedervorlage haben.
 6. Signierte Agent-Pakete bauen  
-   Windows MSI/Intune-Paket, macOS PKG/Jamf-Profil und Linux systemd-Pakete sind fuer produktive Rollouts wichtiger als weitere Einzelchecks.
+   Die Service-Beispiele sind vorhanden; als naechster Schritt folgen Windows MSI/Intune-Paket, macOS PKG/Jamf-Profil und signierte Linux-Pakete.
 7. Remediation getrennt halten  
    Automatische Aenderungen am Endgeraet sollten erst spaeter als signierter, auditierbarer Policy-Schritt kommen.
 
@@ -1038,7 +1057,7 @@ Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organi
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Agent-Flottenbetrieb und Benachrichtigungen
+1. Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Benachrichtigungskanaele
 2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
 3. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
 4. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests

@@ -1506,6 +1506,67 @@ async fn zero_trust_agent_token_enrollment_allows_secret_based_intake() {
     assert_eq!(response.status(), StatusCode::CREATED);
 
     let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/rotate-secret"))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/rotate-secret"))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response
+        .headers()
+        .get("cache-control")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("no-store"));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rotated_secret = payload["agent_secret"].as_str().unwrap().to_string();
+    assert!(rotated_secret.starts_with("iscy_agent_"));
+    assert_ne!(rotated_secret, agent_secret);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/rotate-secret"))
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -1513,6 +1574,39 @@ async fn zero_trust_agent_token_enrollment_allows_secret_based_intake() {
                 .header("content-type", "application/json")
                 .header("x-iscy-tenant-id", "1")
                 .header("x-iscy-agent-secret", agent_secret.as_str())
+                .header("x-iscy-agent-mtls-fingerprint", "sha256:lab-client")
+                .body(Body::from(r#"{"agent_version":"0.3.0","status":"OK"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/heartbeat"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-agent-secret", rotated_secret.as_str())
+                .header("x-iscy-agent-mtls-fingerprint", "sha256:lab-client")
+                .body(Body::from(r#"{"agent_version":"0.3.0","status":"OK"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/devices/{device_id}/heartbeat"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-agent-secret", rotated_secret.as_str())
                 .header("x-iscy-agent-mtls-fingerprint", "sha256:wrong-client")
                 .body(Body::from(r#"{"agent_version":"0.3.0","status":"OK"}"#))
                 .unwrap(),
@@ -9927,6 +10021,7 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
         AppState::default()
             .with_control_store(Some(ControlStore::from_sqlite_pool(pool.clone())))
             .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
             .with_product_security_store(Some(ProductSecurityStore::from_sqlite_pool(
                 pool.clone(),
             ))),
@@ -9956,6 +10051,9 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     assert!(html.contains("SBOM/CSAF Importlage"));
     assert!(html.contains("Evidence abgelaufen"));
     assert!(html.contains("Retention dokumentiert"));
+    assert!(html.contains("Agent-Abdeckung"));
+    assert!(html.contains("Agent-Heartbeats veraltet"));
+    assert!(html.contains("Kritische Agent-Findings"));
     assert!(html.contains("Cutover-Aktionen"));
     assert!(html.contains("ISCY-27-Gaps in Roadmap ueberfuehren"));
 
@@ -9999,6 +10097,12 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     assert!(signals
         .iter()
         .any(|signal| signal["signal"] == "Retention-Pruefung faellig"));
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "Agent-Abdeckung"));
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "Agent-Heartbeats veraltet"));
 
     let response = app
         .clone()
@@ -10026,6 +10130,9 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     ));
     assert!(
         metrics.contains("iscy_operations_signal{area=\"Evidence\",signal=\"Evidence abgelaufen\"")
+    );
+    assert!(
+        metrics.contains("iscy_operations_signal{area=\"Agent Fleet\",signal=\"Agent-Abdeckung\"")
     );
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
     assert!(metrics.contains("iscy_product_security_coverage_percent{kind=\"sbom\""));

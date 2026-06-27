@@ -3,7 +3,10 @@ use axum::{
     extract::{DefaultBodyLimit, Json, Path, State},
     extract::{Form, Query},
     http::{
-        header::{AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, LOCATION, SET_COOKIE},
+        header::{
+            AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, LOCATION,
+            SET_COOKIE,
+        },
         HeaderMap, HeaderValue, StatusCode,
     },
     middleware,
@@ -449,6 +452,14 @@ pub struct AgentEnrollmentTokenCreateResponse {
     pub api_version: &'static str,
     pub token: String,
     pub enrollment: agent_store::AgentEnrollmentTokenSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentSecretRotationResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub agent_secret: String,
+    pub device: agent_store::AgentDeviceSummary,
 }
 
 #[derive(Debug, Serialize)]
@@ -3974,6 +3985,70 @@ async fn agent_enroll(
         Err(err) => {
             agent_store_error_response(err, "Agent-Enrollment konnte nicht gespeichert werden")
         }
+    }
+}
+
+async fn agent_secret_rotate(
+    Path(device_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Agent-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .rotate_agent_secret(context.tenant_id, device_id)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            [(CACHE_CONTROL, HeaderValue::from_static("no-store"))],
+            Json(AgentSecretRotationResponse {
+                accepted: true,
+                api_version: "v1",
+                agent_secret: result.agent_secret,
+                device: result.device,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "agent_device_not_found",
+                message: "Agent-Device wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response(),
+        Err(err) => agent_store_error_response(err, "Agent-Secret konnte nicht rotiert werden"),
     }
 }
 
@@ -21325,6 +21400,7 @@ async fn status_operations_overview(
             signals.extend(evidence_operation_signals(state, context).await);
             signals.extend(product_security_operation_signals(state, context).await);
             signals.extend(ai_governance_operation_signals(state, context).await);
+            signals.extend(agent_operation_signals(state, context).await);
         }
         None => {
             signals.push(StatusSignal::new(
@@ -21362,6 +21438,13 @@ async fn status_operations_overview(
                 "Tenant-Kontext fehlt; AI-Governance-Signale brauchen tenant_id und user_id.",
                 Some("/ai-governance/".to_string()),
             ));
+            signals.push(StatusSignal::new(
+                "Agent Fleet",
+                "Agent-Abdeckung",
+                StatusSignalLevel::Warn,
+                "Tenant-Kontext fehlt; Flottenabdeckung und Heartbeat-Lage brauchen tenant_id und user_id.",
+                Some("/zero-trust/".to_string()),
+            ));
         }
     }
 
@@ -21376,6 +21459,77 @@ async fn status_operations_overview(
         exit_code: severity.exit_code(),
         rows: status_signal_rows(&signals),
         signals,
+    }
+}
+
+async fn agent_operation_signals(state: &AppState, context: &WebContext) -> Vec<StatusSignal> {
+    let href = Some(web_path_with_context("/zero-trust/", Some(context)));
+    let Some(store) = state.agent_store.as_ref() else {
+        return vec![StatusSignal::new(
+            "Agent Fleet",
+            "Agent-Abdeckung",
+            StatusSignalLevel::Warn,
+            "Agent-Store ist nicht konfiguriert.",
+            href,
+        )];
+    };
+    match store.posture_overview(context.tenant_id).await {
+        Ok(posture) => vec![
+            StatusSignal::new(
+                "Agent Fleet",
+                "Agent-Abdeckung",
+                if posture.device_count > 0 && posture.active_device_count == posture.device_count {
+                    StatusSignalLevel::Ok
+                } else {
+                    StatusSignalLevel::Warn
+                },
+                format!(
+                    "{}/{} registrierte Endpoints sind aktiv.",
+                    posture.active_device_count, posture.device_count
+                ),
+                href.clone(),
+            ),
+            StatusSignal::new(
+                "Agent Fleet",
+                "Agent-Heartbeats veraltet",
+                if posture.stale_device_count == 0 {
+                    StatusSignalLevel::Ok
+                } else {
+                    StatusSignalLevel::Warn
+                },
+                format!(
+                    "{} Endpoints haben seit mindestens 14 Tagen keinen aktuellen Heartbeat.",
+                    posture.stale_device_count
+                ),
+                href.clone(),
+            ),
+            StatusSignal::new(
+                "Agent Fleet",
+                "Kritische Agent-Findings",
+                if posture.critical_finding_count > 0 {
+                    StatusSignalLevel::Danger
+                } else if posture.high_finding_count > 0 {
+                    StatusSignalLevel::Warn
+                } else {
+                    StatusSignalLevel::Ok
+                },
+                format!(
+                    "{} kritisch, {} hoch, {} Findings insgesamt offen; Flottenscore {}%.",
+                    posture.critical_finding_count,
+                    posture.high_finding_count,
+                    posture.open_finding_count,
+                    posture.average_zero_trust_score
+                ),
+                href,
+            ),
+        ],
+        Err(err) => vec![StatusSignal::new(
+            "Agent Fleet",
+            "Agent-Abdeckung",
+            StatusSignalLevel::Danger,
+            format!("Agent-Posture konnte nicht gelesen werden: {err}"),
+            href,
+        )],
     }
 }
 
@@ -24637,6 +24791,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(agent_enrollment_token_create),
         )
         .route("/api/v1/agents/enroll", post(agent_enroll))
+        .route(
+            "/api/v1/agents/devices/{device_id}/rotate-secret",
+            post(agent_secret_rotate),
+        )
         .route(
             "/api/v1/agents/devices/{device_id}/heartbeat",
             post(agent_heartbeat),

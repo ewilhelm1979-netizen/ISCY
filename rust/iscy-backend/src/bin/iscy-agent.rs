@@ -1,6 +1,12 @@
-use std::{env, fs, path::Path as FsPath, process::Command};
+use std::{
+    env, fs,
+    path::{Path as FsPath, PathBuf},
+    process::Command,
+    time::Duration,
+};
 
-use serde::Serialize;
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 #[derive(Debug)]
@@ -11,11 +17,14 @@ struct AgentConfig {
     enrollment_token: Option<String>,
     agent_secret: Option<String>,
     mtls_fingerprint: Option<String>,
+    state_path: PathBuf,
+    queue_dir: PathBuf,
+    queue_max_files: usize,
     dry_run: bool,
     self_test: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct DeviceInventory {
     asset_id: Option<i64>,
     stable_device_id: String,
@@ -25,6 +34,29 @@ struct DeviceInventory {
     architecture: String,
     agent_version: String,
     deployment_channel: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AgentState {
+    tenant_id: i64,
+    stable_device_id: String,
+    device_id: i64,
+    agent_secret: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QueuedReport {
+    queued_at: String,
+    device_id: i64,
+    heartbeat: Value,
+    findings: Value,
+}
+
+#[derive(Debug)]
+enum ReportFailure {
+    Retryable(String),
+    Fatal(String),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -44,14 +76,94 @@ fn main() -> anyhow::Result<()> {
                     "uses_enrollment_token": config.enrollment_token.is_some(),
                     "uses_agent_secret": config.agent_secret.is_some(),
                     "mtls_fingerprint_set": config.mtls_fingerprint.is_some()
+                },
+                "runtime": {
+                    "state_path": config.state_path,
+                    "queue_dir": config.queue_dir,
+                    "queue_max_files": config.queue_max_files
                 }
             }))?
         );
         return Ok(());
     }
 
-    let client = reqwest::blocking::Client::builder().build()?;
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .build()?;
     let base_url = config.backend_url.trim_end_matches('/');
+    let existing_state = load_agent_state(&config.state_path)?;
+    if let Some(state) = existing_state.as_ref() {
+        if state.tenant_id != config.tenant_id
+            || state.stable_device_id != inventory.stable_device_id
+        {
+            anyhow::bail!(
+                "Agent state belongs to a different tenant or stable device ID: {}",
+                config.state_path.display()
+            );
+        }
+    }
+
+    let (device_id, agent_secret) = if let Some(state) = existing_state {
+        (
+            state.device_id,
+            config.agent_secret.clone().or(state.agent_secret),
+        )
+    } else {
+        enroll_agent(&client, base_url, &config, &inventory)?
+    };
+    persist_agent_state(
+        &config.state_path,
+        &AgentState {
+            tenant_id: config.tenant_id,
+            stable_device_id: inventory.stable_device_id.clone(),
+            device_id,
+            agent_secret: agent_secret.clone(),
+            updated_at: Utc::now().to_rfc3339(),
+        },
+    )?;
+
+    match flush_queued_reports(
+        &client,
+        base_url,
+        &config,
+        agent_secret.as_deref(),
+        device_id,
+    ) {
+        Ok(flushed) if flushed > 0 => println!("ISCY agent flushed {flushed} queued report(s)"),
+        Ok(_) => {}
+        Err(ReportFailure::Retryable(message)) => {
+            eprintln!("ISCY agent queue remains pending: {message}");
+        }
+        Err(ReportFailure::Fatal(message)) => anyhow::bail!(message),
+    }
+
+    let report = QueuedReport {
+        queued_at: Utc::now().to_rfc3339(),
+        device_id,
+        heartbeat,
+        findings,
+    };
+    match send_report(&client, base_url, &config, agent_secret.as_deref(), &report) {
+        Ok(()) => println!("ISCY agent reported posture for device {device_id}"),
+        Err(ReportFailure::Retryable(message)) => {
+            let queued_path = enqueue_report(&config, &report)?;
+            println!(
+                "ISCY agent queued posture for device {device_id} at {}: {message}",
+                queued_path.display()
+            );
+        }
+        Err(ReportFailure::Fatal(message)) => anyhow::bail!(message),
+    }
+    Ok(())
+}
+
+fn enroll_agent(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    config: &AgentConfig,
+    inventory: &DeviceInventory,
+) -> anyhow::Result<(i64, Option<String>)> {
     let mut enroll_request = client
         .post(format!("{base_url}/api/v1/agents/enroll"))
         .header("x-iscy-tenant-id", config.tenant_id.to_string());
@@ -76,33 +188,7 @@ fn main() -> anyhow::Result<()> {
         .and_then(Value::as_str)
         .map(ToString::to_string)
         .or_else(|| config.agent_secret.clone());
-
-    let heartbeat_request = authenticated_agent_request(
-        client.post(format!(
-            "{base_url}/api/v1/agents/devices/{device_id}/heartbeat"
-        )),
-        &config,
-        agent_secret.as_deref(),
-    );
-    heartbeat_request
-        .json(&heartbeat)
-        .send()?
-        .error_for_status()?;
-
-    let findings_request = authenticated_agent_request(
-        client.post(format!(
-            "{base_url}/api/v1/agents/devices/{device_id}/findings"
-        )),
-        &config,
-        agent_secret.as_deref(),
-    );
-    findings_request
-        .json(&findings)
-        .send()?
-        .error_for_status()?;
-
-    println!("ISCY agent reported posture for device {device_id}");
-    Ok(())
+    Ok((device_id, agent_secret))
 }
 
 fn parse_config() -> anyhow::Result<AgentConfig> {
@@ -125,6 +211,28 @@ fn parse_config() -> anyhow::Result<AgentConfig> {
         .or_else(|| env::var("ISCY_USER_ID").ok())
         .unwrap_or_else(|| "1".to_string())
         .parse::<i64>()?;
+    let state_path = arg_value(&args, "--state-path")
+        .or_else(|| env::var("ISCY_AGENT_STATE_PATH").ok())
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(default_agent_state_path);
+    let queue_dir = arg_value(&args, "--queue-dir")
+        .or_else(|| env::var("ISCY_AGENT_QUEUE_DIR").ok())
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            state_path
+                .parent()
+                .unwrap_or_else(|| FsPath::new("."))
+                .join("queue")
+        });
+    let queue_max_files = arg_value(&args, "--queue-max-files")
+        .or_else(|| env::var("ISCY_AGENT_QUEUE_MAX_FILES").ok())
+        .unwrap_or_else(|| "100".to_string())
+        .parse::<usize>()?;
+    if !(1..=10_000).contains(&queue_max_files) {
+        anyhow::bail!("ISCY_AGENT_QUEUE_MAX_FILES must be between 1 and 10000");
+    }
 
     Ok(AgentConfig {
         backend_url,
@@ -139,9 +247,208 @@ fn parse_config() -> anyhow::Result<AgentConfig> {
         mtls_fingerprint: arg_value(&args, "--mtls-fingerprint")
             .or_else(|| env::var("ISCY_AGENT_MTLS_FINGERPRINT").ok())
             .filter(|value| !value.trim().is_empty()),
+        state_path,
+        queue_dir,
+        queue_max_files,
         dry_run,
         self_test,
     })
+}
+
+fn default_agent_state_path() -> PathBuf {
+    if let Ok(path) = env::var("XDG_STATE_HOME") {
+        if !path.trim().is_empty() {
+            return PathBuf::from(path).join("iscy-agent/state.json");
+        }
+    }
+    if let Ok(path) = env::var("LOCALAPPDATA") {
+        if !path.trim().is_empty() {
+            return PathBuf::from(path).join("ISCY/Agent/state.json");
+        }
+    }
+    if let Ok(path) = env::var("HOME") {
+        if !path.trim().is_empty() {
+            return PathBuf::from(path).join(".local/state/iscy-agent/state.json");
+        }
+    }
+    env::temp_dir().join("iscy-agent/state.json")
+}
+
+fn load_agent_state(path: &FsPath) -> anyhow::Result<Option<AgentState>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path)?;
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|err| anyhow::anyhow!("Agent state {} is invalid: {err}", path.display()))
+}
+
+fn persist_agent_state(path: &FsPath, state: &AgentState) -> anyhow::Result<()> {
+    secure_write_json(path, state)
+}
+
+fn secure_write_json<T: Serialize>(path: &FsPath, value: &T) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent)?;
+    set_directory_permissions(parent)?;
+    let temp_path = path.with_extension(format!("tmp-{}", std::process::id()));
+    fs::write(&temp_path, serde_json::to_vec_pretty(value)?)?;
+    set_file_permissions(&temp_path)?;
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    fs::rename(&temp_path, path)?;
+    set_file_permissions(path)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_directory_permissions(path: &FsPath) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_directory_permissions(_path: &FsPath) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_file_permissions(path: &FsPath) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_file_permissions(_path: &FsPath) -> anyhow::Result<()> {
+    Ok(())
+}
+
+fn send_report(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    config: &AgentConfig,
+    agent_secret: Option<&str>,
+    report: &QueuedReport,
+) -> Result<(), ReportFailure> {
+    let heartbeat_request = authenticated_agent_request(
+        client.post(format!(
+            "{base_url}/api/v1/agents/devices/{}/heartbeat",
+            report.device_id
+        )),
+        config,
+        agent_secret,
+    );
+    send_agent_json(heartbeat_request, &report.heartbeat, "heartbeat")?;
+    let findings_request = authenticated_agent_request(
+        client.post(format!(
+            "{base_url}/api/v1/agents/devices/{}/findings",
+            report.device_id
+        )),
+        config,
+        agent_secret,
+    );
+    send_agent_json(findings_request, &report.findings, "findings")
+}
+
+fn send_agent_json(
+    request: reqwest::blocking::RequestBuilder,
+    payload: &Value,
+    kind: &str,
+) -> Result<(), ReportFailure> {
+    let response = request
+        .json(payload)
+        .send()
+        .map_err(|err| ReportFailure::Retryable(format!("Agent {kind} transport failed: {err}")))?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let detail = response.text().unwrap_or_default();
+    let message = format!("Agent {kind} rejected with HTTP {status}: {detail}");
+    if status.is_server_error() || status.as_u16() == 429 {
+        Err(ReportFailure::Retryable(message))
+    } else {
+        Err(ReportFailure::Fatal(message))
+    }
+}
+
+fn enqueue_report(config: &AgentConfig, report: &QueuedReport) -> anyhow::Result<PathBuf> {
+    fs::create_dir_all(&config.queue_dir)?;
+    set_directory_permissions(&config.queue_dir)?;
+    let mut files = queued_report_files(&config.queue_dir)?;
+    while files.len() >= config.queue_max_files {
+        if let Some(oldest) = files.first().cloned() {
+            fs::remove_file(&oldest)?;
+            files.remove(0);
+        }
+    }
+    let nonce = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| Utc::now().timestamp_millis() * 1_000_000);
+    let path = config
+        .queue_dir
+        .join(format!("{nonce:020}-{}.json", std::process::id()));
+    secure_write_json(&path, report)?;
+    Ok(path)
+}
+
+fn queued_report_files(queue_dir: &FsPath) -> anyhow::Result<Vec<PathBuf>> {
+    if !queue_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files = fs::read_dir(queue_dir)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    Ok(files)
+}
+
+fn flush_queued_reports(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    config: &AgentConfig,
+    agent_secret: Option<&str>,
+    device_id: i64,
+) -> Result<usize, ReportFailure> {
+    let files = queued_report_files(&config.queue_dir)
+        .map_err(|err| ReportFailure::Fatal(format!("Agent queue could not be read: {err}")))?;
+    let mut flushed = 0;
+    for path in files {
+        let report = match fs::read(&path)
+            .map_err(|err| err.to_string())
+            .and_then(|bytes| {
+                serde_json::from_slice::<QueuedReport>(&bytes).map_err(|err| err.to_string())
+            }) {
+            Ok(report) if report.device_id == device_id => report,
+            Ok(_) | Err(_) => {
+                let invalid_path = path.with_extension("invalid");
+                fs::rename(&path, &invalid_path).map_err(|err| {
+                    ReportFailure::Fatal(format!(
+                        "Invalid queue entry could not be isolated: {err}"
+                    ))
+                })?;
+                continue;
+            }
+        };
+        send_report(client, base_url, config, agent_secret, &report)?;
+        fs::remove_file(&path).map_err(|err| {
+            ReportFailure::Fatal(format!("Flushed queue entry could not be removed: {err}"))
+        })?;
+        flushed += 1;
+    }
+    Ok(flushed)
 }
 
 fn authenticated_agent_request(
@@ -943,13 +1250,45 @@ fn command_output(command: &str, args: &[&str]) -> Option<String> {
 
 fn print_usage() {
     println!(
-        "ISCY Agent\n\nOptions:\n  --backend-url URL          ISCY backend URL\n  --tenant-id ID             Tenant ID\n  --user-id ID               User ID for local/admin intake fallback\n  --enrollment-token TOKEN   One-time or scoped enrollment token\n  --agent-secret SECRET      Existing agent secret for secret-based intake\n  --mtls-fingerprint FP      Client certificate fingerprint forwarded by mTLS proxy\n  --dry-run                  Print payloads without sending\n  --self-test                Print local inventory and exit\n\nEnvironment:\n  ISCY_BACKEND_URL, ISCY_TENANT_ID, ISCY_USER_ID, ISCY_AGENT_ENROLLMENT_TOKEN, ISCY_AGENT_SECRET, ISCY_AGENT_MTLS_FINGERPRINT, ISCY_AGENT_DEVICE_ID, ISCY_ASSET_ID"
+        "ISCY Agent\n\nOptions:\n  --backend-url URL          ISCY backend URL\n  --tenant-id ID             Tenant ID\n  --user-id ID               User ID for local/admin intake fallback\n  --enrollment-token TOKEN   One-time or scoped enrollment token\n  --agent-secret SECRET      Existing or newly rotated agent secret\n  --mtls-fingerprint FP      Client certificate fingerprint forwarded by mTLS proxy\n  --state-path PATH          Persisted device ID and secret state\n  --queue-dir PATH           Offline report queue directory\n  --queue-max-files COUNT    Maximum queued reports (1-10000, default 100)\n  --dry-run                  Print payloads without sending or writing state\n  --self-test                Print local inventory and exit without side effects\n\nEnvironment:\n  ISCY_BACKEND_URL, ISCY_TENANT_ID, ISCY_USER_ID, ISCY_AGENT_ENROLLMENT_TOKEN, ISCY_AGENT_SECRET, ISCY_AGENT_MTLS_FINGERPRINT, ISCY_AGENT_STATE_PATH, ISCY_AGENT_QUEUE_DIR, ISCY_AGENT_QUEUE_MAX_FILES, ISCY_AGENT_DEVICE_ID, ISCY_ASSET_ID"
     );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_runtime_dir(name: &str) -> PathBuf {
+        let nonce = Utc::now()
+            .timestamp_nanos_opt()
+            .unwrap_or_else(|| Utc::now().timestamp_millis() * 1_000_000);
+        env::temp_dir().join(format!("iscy-agent-{name}-{}-{nonce}", std::process::id()))
+    }
+
+    fn test_config(root: &FsPath, queue_max_files: usize) -> AgentConfig {
+        AgentConfig {
+            backend_url: "http://127.0.0.1:9000".to_string(),
+            tenant_id: 1,
+            user_id: 1,
+            enrollment_token: None,
+            agent_secret: None,
+            mtls_fingerprint: None,
+            state_path: root.join("state.json"),
+            queue_dir: root.join("queue"),
+            queue_max_files,
+            dry_run: false,
+            self_test: false,
+        }
+    }
+
+    fn test_report(device_id: i64, sequence: i64) -> QueuedReport {
+        QueuedReport {
+            queued_at: format!("2026-06-27T00:00:{sequence:02}Z"),
+            device_id,
+            heartbeat: json!({ "sequence": sequence }),
+            findings: json!({ "findings": [], "sequence": sequence }),
+        }
+    }
 
     fn test_inventory(os_family: &str) -> DeviceInventory {
         DeviceInventory {
@@ -1007,5 +1346,86 @@ mod tests {
         assert!(check_ids.contains(&"network.host_firewall"));
         assert!(check_ids.contains(&"identity.mdm_enrollment"));
         assert!(check_ids.contains(&"device.endpoint_protection"));
+    }
+
+    #[test]
+    fn persisted_agent_state_roundtrips() {
+        let root = test_runtime_dir("state");
+        let path = root.join("state.json");
+        let state = AgentState {
+            tenant_id: 7,
+            stable_device_id: "workstation-7".to_string(),
+            device_id: 42,
+            agent_secret: Some("iscy_agent_test".to_string()),
+            updated_at: "2026-06-27T00:00:00Z".to_string(),
+        };
+
+        persist_agent_state(&path, &state).unwrap();
+        let loaded = load_agent_state(&path).unwrap().unwrap();
+
+        assert_eq!(loaded.tenant_id, 7);
+        assert_eq!(loaded.stable_device_id, "workstation-7");
+        assert_eq!(loaded.device_id, 42);
+        assert_eq!(loaded.agent_secret.as_deref(), Some("iscy_agent_test"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn offline_queue_is_bounded_and_keeps_newest_reports() {
+        let root = test_runtime_dir("queue");
+        let config = test_config(&root, 2);
+
+        let first = enqueue_report(&config, &test_report(9, 1)).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        let second = enqueue_report(&config, &test_report(9, 2)).unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        let third = enqueue_report(&config, &test_report(9, 3)).unwrap();
+        let files = queued_report_files(&config.queue_dir).unwrap();
+
+        assert_eq!(files.len(), 2);
+        assert!(!first.exists());
+        assert!(second.exists());
+        assert!(third.exists());
+        let sequences = files
+            .iter()
+            .map(|path| {
+                let report: QueuedReport =
+                    serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                report.heartbeat["sequence"].as_i64().unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(sequences, vec![2, 3]);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn malformed_offline_queue_entries_are_isolated() {
+        let root = test_runtime_dir("invalid-queue");
+        let config = test_config(&root, 10);
+        fs::create_dir_all(&config.queue_dir).unwrap();
+        let malformed = config.queue_dir.join("0001.json");
+        fs::write(&malformed, b"not-json").unwrap();
+        let client = reqwest::blocking::Client::new();
+
+        let flushed =
+            flush_queued_reports(&client, "http://127.0.0.1:1", &config, Some("unused"), 9)
+                .unwrap();
+
+        assert_eq!(flushed, 0);
+        assert!(!malformed.exists());
+        assert!(config.queue_dir.join("0001.invalid").exists());
+        assert!(queued_report_files(&config.queue_dir).unwrap().is_empty());
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

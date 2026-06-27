@@ -45,6 +45,7 @@ POST /api/v1/agents/enrollment-tokens
 POST /api/v1/agents/enroll
 GET  /api/v1/agents/posture
 GET  /api/v1/agents/devices
+POST /api/v1/agents/devices/{device_id}/rotate-secret
 POST /api/v1/agents/devices/{device_id}/heartbeat
 GET  /api/v1/agents/devices/{device_id}/findings
 POST /api/v1/agents/devices/{device_id}/findings
@@ -106,6 +107,51 @@ nix run .#iscy-agent
 
 Wenn beim Enrollment ein `agent_secret` zurueckkommt, nutzt der Agent es sofort fuer Heartbeat und Findings. Fuer spaetere Starts kann es als `ISCY_AGENT_SECRET` oder `--agent-secret` uebergeben werden.
 
+## Persistenter State und Offline-Queue
+
+Nach dem ersten erfolgreichen Enrollment speichert der Agent Tenant-ID, stabile
+Device-ID, serverseitige Device-ID und Agent-Secret lokal. Ein Neustart verwendet
+diesen State und enrollt das Device nicht erneut.
+
+Standardpfade:
+
+- Linux/macOS mit XDG: `$XDG_STATE_HOME/iscy-agent/state.json`
+- Linux/macOS ohne XDG: `$HOME/.local/state/iscy-agent/state.json`
+- Windows: `%LOCALAPPDATA%\ISCY\Agent\state.json`
+- Queue: Unterverzeichnis `queue` neben der State-Datei
+
+Die Pfade lassen sich mit `--state-path`, `--queue-dir`,
+`ISCY_AGENT_STATE_PATH` und `ISCY_AGENT_QUEUE_DIR` festlegen. Unter Unix werden
+Verzeichnisse mit Modus `0700` und Dateien mit `0600` geschrieben. Der
+Windows-Installer unter `deploy/agent/windows/` setzt eine ACL fuer `SYSTEM` und
+lokale Administratoren.
+
+Transportfehler, HTTP 429 und HTTP 5xx werden als temporaer behandelt. Der
+vollstaendige Report wird in der lokalen Queue abgelegt und beim naechsten Lauf
+vor dem aktuellen Report uebertragen. Die Queue ist standardmaessig auf 100
+Dateien begrenzt und arbeitet mit At-least-once-Zustellung. Der Grenzwert ist
+ueber `--queue-max-files` oder `ISCY_AGENT_QUEUE_MAX_FILES` konfigurierbar.
+Dauerhafte HTTP-4xx-Fehler werden nicht endlos gequeued, sondern als
+Konfigurations- oder Authentisierungsfehler beendet.
+
+## Agent-Secret rotieren
+
+Die Rotation ist eine administrative Aktion. Das alte Secret wird sofort
+ungueltig; das neue Secret erscheint genau einmal in der API-Antwort.
+
+```bash
+curl -fsS -X POST http://127.0.0.1:9000/api/v1/agents/devices/<device_id>/rotate-secret \
+  -H 'x-iscy-tenant-id: 1' \
+  -H 'x-iscy-user-id: 1' \
+  -H 'x-iscy-roles: ADMIN'
+```
+
+Das neue `agent_secret` muss anschliessend ueber den sicheren Deployment-Kanal
+auf den Endpoint gebracht werden. Ein einmaliger Lauf mit
+`ISCY_AGENT_SECRET=<neu>` beziehungsweise `--agent-secret <neu>` aktualisiert
+den lokalen State. Bei mTLS-Bindung muss weiterhin derselbe validierte
+Fingerprint uebergeben werden.
+
 ## Windows-Agent
 
 Der Windows-Agent ist kein eigener Python-Zweig, sondern dasselbe Rust-Binary `iscy-agent`. Der Quellcode ist bereits im Repository enthalten. Ein `.exe` wird auf Windows so gebaut:
@@ -116,6 +162,11 @@ cargo build --release --manifest-path rust/iscy-backend/Cargo.toml --bin iscy-ag
 ```
 
 Fuer Intune oder andere MDM-Systeme kann dieses Binary als Win32-App verteilt und mit `ISCY_BACKEND_URL`, `ISCY_TENANT_ID` und `ISCY_AGENT_ENROLLMENT_TOKEN` gestartet werden.
+
+Ein produktionsnaher Scheduled-Task-Installer liegt unter
+`deploy/agent/windows/install-iscy-agent-task.ps1`. Er fuehrt das initiale
+Enrollment aus, haertet das State-Verzeichnis und registriert einen periodischen
+Task unter `SYSTEM`.
 
 ## Was der Agent aktuell prueft
 
@@ -149,13 +200,64 @@ Die Plattform kann zusaetzlich diese Zero-Trust-Pruefpunkte ueber dieselben Find
 
 Wichtig: In `0.3.20` liest der Agent lokale OS-/MDM-/EDR-Signale nur read-only und konservativ. Wenn ein Signal nicht sicher bestaetigt werden kann, wird das als offene Evidenzluecke gemeldet statt als erfundener Compliance-Nachweis.
 
-## Deployment-Zielpfade
+## Deployment-Artefakte
 
-| Plattform | MVP-Start | Zielpaket |
+| Plattform | Vorhandenes Betriebsbeispiel | Naechster Paket-Schritt |
 |---|---|---|
-| Windows | manuell oder MDM Script | MSI / Intune Win32 App |
-| macOS | manuell oder MDM Script | PKG / Jamf / Apple MDM |
-| Linux | systemd timer/service | deb, rpm oder tarball |
+| Windows | Scheduled Task unter `SYSTEM` | signiertes MSI / Intune Win32 App |
+| macOS | LaunchDaemon | signiertes/notarisiertes PKG / Jamf-Profil |
+| Linux | gehaerteter systemd Timer | signiertes deb, rpm oder tarball |
+| NixOS | deklaratives NixOS-Modul | paketierter Flake-Output |
+
+Die Dateien liegen unter `deploy/agent/`.
+
+### Linux mit systemd
+
+```bash
+sudo install -Dm755 rust/iscy-backend/target/release/iscy-agent /usr/local/bin/iscy-agent
+sudo install -Dm644 deploy/agent/systemd/iscy-agent.service /etc/systemd/system/iscy-agent.service
+sudo install -Dm644 deploy/agent/systemd/iscy-agent.timer /etc/systemd/system/iscy-agent.timer
+sudo install -Dm600 deploy/agent/systemd/iscy-agent.env.example /etc/iscy-agent/agent.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now iscy-agent.timer
+```
+
+Die Environment-Datei enthaelt das Enrollment-Token nur fuer den ersten Lauf.
+Nach erfolgreichem Enrollment wird die Token-Zeile entfernt.
+
+### NixOS
+
+Das Modul `deploy/agent/nixos/iscy-agent.nix` wird importiert und mindestens mit
+Backend-URL sowie dem installierten Binary-Pfad konfiguriert:
+
+```nix
+{
+  imports = [ ./deploy/agent/nixos/iscy-agent.nix ];
+  services.iscy-agent = {
+    enable = true;
+    binary = "/usr/local/bin/iscy-agent";
+    backendUrl = "https://iscy.example.org";
+    tenantId = 1;
+  };
+}
+```
+
+### Windows
+
+```powershell
+.\deploy\agent\windows\install-iscy-agent-task.ps1 `
+  -BackendUrl "https://iscy.example.org" `
+  -TenantId 1 `
+  -EnrollmentToken "iscy_enroll_replace_me"
+```
+
+### macOS
+
+Das Binary wird unter `/usr/local/libexec/iscy-agent` installiert und einmalig
+als `root` mit Enrollment-Token gestartet. Danach wird die angepasste plist nach
+`/Library/LaunchDaemons/com.iscy.agent.plist` kopiert und mit
+`launchctl bootstrap system` aktiviert. Das Secret steht nicht in der plist,
+sondern im geschuetzten State unter `/Library/Application Support/ISCY Agent/`.
 
 ## Sicherheitsgrenzen
 
@@ -180,3 +282,10 @@ Die Migrationen `0007_rust_zero_trust_agent_core` und `0008_rust_agent_enrollmen
 - `zero_trust_agent_enrollment_token`
 
 Die Webansicht ist unter `/zero-trust/` verfuegbar.
+
+Die Betriebszentrale unter `/status/` und ihre JSON-/Prometheus-Ausgaben zeigen
+zusaetzlich:
+
+- aktive Agenten im Verhaeltnis zu registrierten Devices
+- seit mindestens 14 Tagen veraltete Heartbeats
+- kritische und hohe offene Agent-Findings

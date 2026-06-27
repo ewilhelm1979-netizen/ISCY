@@ -170,13 +170,21 @@ Erfolgskriterium:
 
 Ziel: Der Zero-Trust-Agent soll vom lokalen Collector zum betrieblich verwaltbaren Flottenbaustein wachsen.
 
-Umsetzungsidee:
+Umgesetzt:
 
-- systemd-Service, Windows-Service und macOS-LaunchAgent-Beispiele bereitstellen.
-- Enrollment-Token und Agent-Secrets rotieren.
-- Offline-Queue fuer Findings und Heartbeats ergaenzen.
+- persistenter, restriktiv geschuetzter Agent-State ohne Re-Enrollment bei jedem Start
+- begrenzte At-least-once-Offline-Queue fuer Heartbeats und Findings
+- administrative Agent-Secret-Rotation mit sofortiger Invalidierung des alten Secrets
+- systemd-Timer, NixOS-Modul, Windows Scheduled Task und macOS LaunchDaemon
+- Flottensignale in Betriebszentrale, JSON und Prometheus fuer Abdeckung, veraltete Heartbeats und kritische Findings
+
+Offen:
+
+- Enrollment-Token widerrufen und deren Lifecycle im Web verwalten.
 - Agent-Policy-Profile pro Tenant oder Asset-Gruppe pflegen.
 - Benachrichtigungen fuer ablaufende Evidence, offene CVE-Reviews, offene Nicht-Meldeentscheidungen, Agent-Posture-Abweichungen und Roadmap-Tasks einbauen.
+- erwartete Endpoint-Abdeckung nach Plattform beziehungsweise Asset-Gruppe gegen tatsaechlich meldende Agenten messen.
+- signierte MSI-/PKG-/deb-/rpm-Pakete und Release-Provenance bereitstellen.
 
 Erfolgskriterium:
 
@@ -184,7 +192,7 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Agent-Flottenbetrieb und Benachrichtigungen fuer Skalierung und Alltagstauglichkeit.
+1. Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Benachrichtigungskanaele.
 2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben.
 3. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln.
 4. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
@@ -195,7 +203,8 @@ Erfolgskriterium:
 
 | Horizont | Arbeitspaket | Ergebnis |
 | --- | --- | --- |
-| Jetzt | Agent-Flottenbetrieb, Secret-Rotation, Offline-Queue und Benachrichtigungen | Agenten sind auf mehreren Endpoints betrieblich verwaltbar und kritische Signale werden aktiv zugestellt. |
+| Erledigt | Agent-State, Secret-Rotation, Offline-Queue und OS-Service-Beispiele | Agenten behalten ihre Identitaet, puffern Ausfaelle und koennen auf Linux, NixOS, Windows und macOS periodisch betrieben werden. |
+| Jetzt | Agent-Policy, erwartete Coverage und Benachrichtigungen | Flottenabweichungen werden gegen einen Sollbestand bewertet und kritische Signale aktiv zugestellt. |
 | Jetzt | Product-Security-Evidence-Pakete und Produkt-Lifecycle | Release-/PSIRT-Freigaben enthalten SBOM, VEX, Advisories, Support-Ende, offene Risiken und Evidence. |
 | Danach | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
 | Danach | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen und Exit-Test-Nachweise. |

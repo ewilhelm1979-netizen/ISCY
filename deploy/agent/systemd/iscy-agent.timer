@@ -1,0 +1,12 @@
+[Unit]
+Description=Collect ISCY endpoint posture every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+RandomizedDelaySec=2min
+Persistent=true
+Unit=iscy-agent.service
+
+[Install]
+WantedBy=timers.target

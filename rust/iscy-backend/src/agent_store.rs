@@ -68,6 +68,12 @@ pub struct AgentEnrollWithSecret {
     pub agent_secret: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentSecretRotationResult {
+    pub device: AgentDeviceSummary,
+    pub agent_secret: String,
+}
+
 #[derive(Debug, Clone)]
 struct EnrollmentTokenGrant {
     id: i64,
@@ -404,6 +410,27 @@ impl AgentStore {
         }
     }
 
+    pub async fn rotate_agent_secret(
+        &self,
+        tenant_id: i64,
+        device_id: i64,
+    ) -> anyhow::Result<Option<AgentSecretRotationResult>> {
+        let agent_secret = random_secret("iscy_agent")?;
+        let agent_secret_hash = sha256_hex(&agent_secret);
+        let updated = match self {
+            Self::Postgres(pool) => {
+                rotate_agent_secret_postgres(pool, tenant_id, device_id, &agent_secret_hash).await?
+            }
+            Self::Sqlite(pool) => {
+                rotate_agent_secret_sqlite(pool, tenant_id, device_id, &agent_secret_hash).await?
+            }
+        };
+        Ok(updated.map(|device| AgentSecretRotationResult {
+            device,
+            agent_secret,
+        }))
+    }
+
     pub async fn record_heartbeat(
         &self,
         tenant_id: i64,
@@ -661,6 +688,98 @@ async fn update_device_agent_auth_sqlite(
     .await
     .context("SQLite-Agent-Device-Auth konnte nicht aktualisiert werden")?;
     Ok(())
+}
+
+async fn rotate_agent_secret_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    device_id: i64,
+    agent_secret_hash: &str,
+) -> anyhow::Result<Option<AgentDeviceSummary>> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("PostgreSQL-Agent-Secret-Transaktion konnte nicht gestartet werden")?;
+    let result = sqlx::query(
+        r#"
+        UPDATE zero_trust_agent_device
+        SET agent_secret_hash = $1,
+            auth_model = 'enrollment_token',
+            updated_at = CURRENT_TIMESTAMP::text
+        WHERE tenant_id = $2 AND id = $3 AND enrollment_status = 'ACTIVE'
+        "#,
+    )
+    .bind(agent_secret_hash)
+    .bind(tenant_id)
+    .bind(device_id)
+    .execute(&mut *transaction)
+    .await
+    .context("PostgreSQL-Agent-Secret konnte nicht rotiert werden")?;
+    if result.rows_affected() == 0 {
+        transaction
+            .rollback()
+            .await
+            .context("PostgreSQL-Agent-Secret-Transaktion konnte nicht verworfen werden")?;
+        return Ok(None);
+    }
+    let row = sqlx::query(device_detail_postgres_sql())
+        .bind(tenant_id)
+        .bind(device_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("PostgreSQL-Agent-Device konnte nach Rotation nicht gelesen werden")?;
+    let device = device_from_pg_row(row)?;
+    transaction
+        .commit()
+        .await
+        .context("PostgreSQL-Agent-Secret-Rotation konnte nicht gespeichert werden")?;
+    Ok(Some(device))
+}
+
+async fn rotate_agent_secret_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    device_id: i64,
+    agent_secret_hash: &str,
+) -> anyhow::Result<Option<AgentDeviceSummary>> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("SQLite-Agent-Secret-Transaktion konnte nicht gestartet werden")?;
+    let result = sqlx::query(
+        r#"
+        UPDATE zero_trust_agent_device
+        SET agent_secret_hash = ?1,
+            auth_model = 'enrollment_token',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = ?2 AND id = ?3 AND enrollment_status = 'ACTIVE'
+        "#,
+    )
+    .bind(agent_secret_hash)
+    .bind(tenant_id)
+    .bind(device_id)
+    .execute(&mut *transaction)
+    .await
+    .context("SQLite-Agent-Secret konnte nicht rotiert werden")?;
+    if result.rows_affected() == 0 {
+        transaction
+            .rollback()
+            .await
+            .context("SQLite-Agent-Secret-Transaktion konnte nicht verworfen werden")?;
+        return Ok(None);
+    }
+    let row = sqlx::query(device_detail_sqlite_sql())
+        .bind(tenant_id)
+        .bind(device_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("SQLite-Agent-Device konnte nach Rotation nicht gelesen werden")?;
+    let device = device_from_sqlite_row(row)?;
+    transaction
+        .commit()
+        .await
+        .context("SQLite-Agent-Secret-Rotation konnte nicht gespeichert werden")?;
+    Ok(Some(device))
 }
 
 async fn consume_enrollment_token_postgres(

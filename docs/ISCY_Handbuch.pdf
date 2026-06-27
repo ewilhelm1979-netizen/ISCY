@@ -640,7 +640,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 13 0 R >>
 endobj
 13 0 obj
-<< /Length 3096 >>
+<< /Length 3180 >>
 stream
 BT
 /F1 9 Tf
@@ -730,6 +730,10 @@ T*
 T*
 (- Prioritaeten schneller erkennen, ohne Rohdaten manuell vergleichen zu muessen) Tj
 T*
+(- Agent-Abdeckung, veraltete Heartbeats und kritische Findings in der Betriebszentrale) Tj
+T*
+(ueberwachen) Tj
+T*
 () Tj
 T*
 (Fuer Nicht-Sicherheitsleute:) Tj
@@ -782,13 +786,9 @@ T*
 T*
 () Tj
 T*
-(Die Weboberflaeche stellt Zero Trust bewusst als Arbeitsansicht dar:) Tj
+(Nach dem ersten tokenbasierten Enrollment speichert der Agent Device-ID und) Tj
 T*
-() Tj
-T*
-(- Score-Karte fuer die aktuelle Zero-Trust-Reife) Tj
-T*
-(- Fokuskarte fuer den naechsten sinnvollen Schritt) Tj
+(Agent-Secret lokal. Unter Unix sind State-Verzeichnis und State-Datei mit 0700) Tj
 T*
 ET
 endstream
@@ -797,12 +797,36 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 15 0 R >>
 endobj
 15 0 obj
-<< /Length 2527 >>
+<< /Length 2905 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+(beziehungsweise 0600 geschuetzt; der Windows-Installer setzt restriktive ACLs.) Tj
+T*
+(Temporaer nicht zustellbare Reports werden in einer standardmaessig auf 100) Tj
+T*
+(Eintraege begrenzten Offline-Queue gepuffert und beim naechsten Lauf zuerst) Tj
+T*
+(uebertragen. Admins koennen das Secret ueber) Tj
+T*
+(POST /api/v1/agents/devices/{deviceid}/rotate-secret rotieren; das neue Secret) Tj
+T*
+(wird nur einmal ausgegeben und muss ueber den sicheren Deployment-Kanal zum) Tj
+T*
+(Endpoint gelangen.) Tj
+T*
+() Tj
+T*
+(Die Weboberflaeche stellt Zero Trust bewusst als Arbeitsansicht dar:) Tj
+T*
+() Tj
+T*
+(- Score-Karte fuer die aktuelle Zero-Trust-Reife) Tj
+T*
+(- Fokuskarte fuer den naechsten sinnvollen Schritt) Tj
+T*
 (- Severity-Badges fuer kritische, hohe, mittlere und niedrige Findings) Tj
 T*
 (- mobile Navigation und horizontal scrollbare Tabellen fuer kleine Displays) Tj
@@ -923,6 +947,19 @@ T*
 T*
 (- Management-Einbindung) Tj
 T*
+ET
+endstream
+endobj
+16 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 17 0 R >>
+endobj
+17 0 obj
+<< /Length 3195 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Fuer Nicht-Sicherheitsleute:) Tj
@@ -947,19 +984,6 @@ T*
 T*
 (- Evidence hochladen) Tj
 T*
-ET
-endstream
-endobj
-16 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 17 0 R >>
-endobj
-17 0 obj
-<< /Length 3154 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Evidence aktualisieren) Tj
 T*
 (- Evidence Needs synchronisieren) Tj
@@ -1080,6 +1104,19 @@ T*
 T*
 (5.13 Roadmap:) Tj
 T*
+ET
+endstream
+endobj
+18 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 19 0 R >>
+endobj
+19 0 obj
+<< /Length 1872 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Zweck:) Tj
@@ -1104,19 +1141,6 @@ T*
 T*
 (- direkte Evidence-Verknuepfung je Roadmap-Task) Tj
 T*
-ET
-endstream
-endobj
-18 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 19 0 R >>
-endobj
-19 0 obj
-<< /Length 2209 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Fachlicher Nutzen:) Tj
@@ -1237,6 +1261,19 @@ T*
 T*
 (- CVE-Asset-Korrelation) Tj
 T*
+ET
+endstream
+endobj
+20 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
+endobj
+21 0 obj
+<< /Length 3683 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- CVE-Risiko-Review-Queue) Tj
 T*
 (- CRA-Readiness) Tj
@@ -1261,19 +1298,6 @@ T*
 T*
 (- SBOM-Vergleich zwischen Importstaenden, damit neue, entfernte und geaenderte Komponenten) Tj
 T*
-ET
-endstream
-endobj
-20 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
-endobj
-21 0 obj
-<< /Length 3723 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (sichtbar werden) Tj
 T*
 (- CRA-Readiness je Produkt aus SBOM, VEX/CVE-Triage, PSIRT/Advisories, Threat/TARA und) Tj
@@ -1394,6 +1418,19 @@ T*
 T*
 (verboten/nicht freigegeben) Tj
 T*
+ET
+endstream
+endobj
+22 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
+endobj
+23 0 obj
+<< /Length 3735 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- Anforderungen fuer Klassifizierung, Risikomanagement, Human Oversight, Logging, Transparenz,) Tj
 T*
 (Cybersecurity/Robustheit sowie Monitoring/Evidence) Tj
@@ -1418,19 +1455,6 @@ T*
 T*
 (Review-Modell.) Tj
 T*
-ET
-endstream
-endobj
-22 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
-endobj
-23 0 obj
-<< /Length 3573 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Fachliche Reviews koennen frueh erkennen, ob Einstufung, Oversight, Monitoring oder Evidence) Tj
 T*
 (fehlen.) Tj
@@ -1551,6 +1575,19 @@ T*
 T*
 (Fuer lokale Tests und air-gapped Prueflaeufe kann der NVD-Import statt eines HTTP-Endpunkts) Tj
 T*
+ET
+endstream
+endobj
+24 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
+endobj
+25 0 obj
+<< /Length 3441 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (auch eine lokale NVD-JSON-Datei lesen, wenn NVDAPIBASEURL als) Tj
 T*
 (file:///pfad/zur/nvd-response.json gesetzt wird.) Tj
@@ -1575,19 +1612,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-24 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
-endobj
-25 0 obj
-<< /Length 3617 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (6. Typische Arbeitsablaeufe:) Tj
 T*
 () Tj
@@ -1708,6 +1732,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+26 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
+endobj
+27 0 obj
+<< /Length 5118 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (1. Nicht bewertet) Tj
 T*
 (2. Nicht erheblich) Tj
@@ -1732,19 +1769,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-26 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
-endobj
-27 0 obj
-<< /Length 5143 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Erst wenn ein Incident auf Erheblich / NIS2 meldepflichtig gesetzt wird, berechnet ISCY die) Tj
 T*
 (relevanten Fristen aus dem Erkennungszeitpunkt:) Tj
@@ -1865,6 +1889,19 @@ T*
 T*
 (6. Priorisieren) Tj
 T*
+ET
+endstream
+endobj
+28 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
+endobj
+29 0 obj
+<< /Length 3803 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Kritikalitaet und Dringlichkeit anhand Impact, Privilege-Level, Ausbreitungs- und) Tj
 T*
 (Datenabflussrisiko einstufen.) Tj
@@ -1889,19 +1926,6 @@ T*
 T*
 (Merksatz: Erst verstehen, dann bewerten, dann eindaemmen, dann eskalieren - wenn Risiko oder) Tj
 T*
-ET
-endstream
-endobj
-28 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
-endobj
-29 0 obj
-<< /Length 3744 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Komplexitaet es verlangen.) Tj
 T*
 () Tj
@@ -2022,6 +2046,19 @@ T*
 T*
 (Fuer Community-Readiness und Production-Hardening sind zusaetzlich diese Dokumente) Tj
 T*
+ET
+endstream
+endobj
+30 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
+endobj
+31 0 obj
+<< /Length 4900 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (verbindlich:) Tj
 T*
 () Tj
@@ -2046,19 +2083,6 @@ T*
 T*
 (Phase-1-Risiken.) Tj
 T*
-ET
-endstream
-endobj
-30 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
-endobj
-31 0 obj
-<< /Length 4789 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Im Production-Modus \(ISCYAPPMODE=production\) bricht ISCY den Start ab, wenn kritische Annahmen) Tj
@@ -2179,6 +2203,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 3103 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Wichtige lokale Pruefbefehle:) Tj
 T*
 () Tj
@@ -2203,19 +2240,6 @@ T*
 T*
 (make rust-smoke) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 3007 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (make team-test) Tj
 T*
 (nix flake check) Tj
@@ -2268,9 +2292,17 @@ T*
 T*
 () Tj
 T*
-(Merksatz: Erst ISCY starten, dann den Agent per --self-test pruefen, danach mit Token oder) Tj
+(Danach nutzt der Agent automatisch seinen lokalen State. Fertige Betriebsbeispiele) Tj
 T*
-(Agent-Secret an die Plattform melden.) Tj
+(fuer systemd, NixOS, Windows Scheduled Tasks und macOS LaunchDaemons liegen unter) Tj
+T*
+(deploy/agent/; Details stehen in docs/ZEROTRUSTAGENT.md.) Tj
+T*
+() Tj
+T*
+(Merksatz: Erst ISCY starten, dann den Agent per --self-test pruefen, einmalig mit Token) Tj
+T*
+(enrollen und anschliessend ohne Token periodisch betreiben.) Tj
 T*
 () Tj
 T*
@@ -2328,6 +2360,19 @@ T*
 T*
 (Fuer ISCY bedeutet das praktisch:) Tj
 T*
+ET
+endstream
+endobj
+34 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
+endobj
+35 0 obj
+<< /Length 3537 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (1. Produkt-Scope und Komponenten sauber pflegen.) Tj
@@ -2360,19 +2405,6 @@ T*
 T*
 (- MFA, starke Authentisierung und Session-Kontrollen aktivieren.) Tj
 T*
-ET
-endstream
-endobj
-34 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
-endobj
-35 0 obj
-<< /Length 3786 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Security-Baselines und Patch-Stand regelmaessig pruefen.) Tj
 T*
 (- Ueber ISCY als Prozess + Evidenz + Review dokumentieren.) Tj
@@ -2471,6 +2503,12 @@ T*
 T*
 (- Enrollment-Token, Agent-Secret und optionale mTLS-Fingerprint-Bindung) Tj
 T*
+(- persistenter Agent-State und begrenzte Offline-Queue) Tj
+T*
+(- administrative Agent-Secret-Rotation) Tj
+T*
+(- systemd-, NixOS-, Windows- und macOS-Betriebsbeispiele) Tj
+T*
 (- Inventar, Heartbeat und lokale OS-/MDM-/EDR-Findings) Tj
 T*
 (- Scores nach Device und Pillar) Tj
@@ -2479,17 +2517,32 @@ T*
 T*
 (- Fokuskarte fuer den naechsten fachlich sinnvollen Schritt) Tj
 T*
+ET
+endstream
+endobj
+36 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
+endobj
+37 0 obj
+<< /Length 3831 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
+(- Flottensignale in Statusseite, JSON und Prometheus) Tj
+T*
 () Tj
 T*
 (Was als naechstes fachlich am meisten bringt:) Tj
 T*
 () Tj
 T*
-(1. Agent-Abdeckung je Plattform messen) Tj
+(1. Soll-/Ist-Abdeckung je Plattform messen) Tj
 T*
-(Pro Tenant sichtbar machen, wie viele Windows-, macOS- und Linux-Systeme erwartet werden und) Tj
+(Pro Tenant oder Asset-Gruppe festlegen, wie viele Windows-, macOS- und Linux-Systeme erwartet) Tj
 T*
-(wie viele davon frisch melden.) Tj
+(werden, und diesen Sollbestand gegen aktive Agenten pruefen.) Tj
 T*
 (2. Findings mit Risiken und Evidenzen verbinden) Tj
 T*
@@ -2515,22 +2568,9 @@ T*
 T*
 (6. Signierte Agent-Pakete bauen) Tj
 T*
-(Windows MSI/Intune-Paket, macOS PKG/Jamf-Profil und Linux systemd-Pakete sind fuer produktive) Tj
+(Die Service-Beispiele sind vorhanden; als naechster Schritt folgen Windows MSI/Intune-Paket,) Tj
 T*
-ET
-endstream
-endobj
-36 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
-endobj
-37 0 obj
-<< /Length 4010 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
-(Rollouts wichtiger als weitere Einzelchecks.) Tj
+(macOS PKG/Jamf-Profil und signierte Linux-Pakete.) Tj
 T*
 (7. Remediation getrennt halten) Tj
 T*
@@ -2634,6 +2674,19 @@ T*
 T*
 (Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil) Tj
 T*
+ET
+endstream
+endobj
+38 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 39 0 R >>
+endobj
+39 0 obj
+<< /Length 2123 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und) Tj
 T*
 (Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks) Tj
@@ -2656,7 +2709,7 @@ T*
 T*
 () Tj
 T*
-(1. Agent-Flottenbetrieb und Benachrichtigungen) Tj
+(1. Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Benachrichtigungskanaele) Tj
 T*
 (2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben) Tj
 T*
@@ -2674,19 +2727,6 @@ T*
 T*
 (Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern) Tj
 T*
-ET
-endstream
-endobj
-38 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 39 0 R >>
-endobj
-39 0 obj
-<< /Length 657 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product) Tj
 T*
 (Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen) Tj
@@ -2736,34 +2776,34 @@ xref
 0000009424 00000 n
 0000011420 00000 n
 0000011548 00000 n
-0000014696 00000 n
-0000014824 00000 n
-0000017403 00000 n
-0000017531 00000 n
-0000020737 00000 n
-0000020865 00000 n
-0000023126 00000 n
-0000023254 00000 n
-0000027029 00000 n
-0000027157 00000 n
-0000030782 00000 n
-0000030910 00000 n
-0000034579 00000 n
-0000034707 00000 n
-0000039902 00000 n
-0000040030 00000 n
-0000043826 00000 n
-0000043954 00000 n
-0000048795 00000 n
-0000048923 00000 n
-0000051982 00000 n
-0000052110 00000 n
-0000055948 00000 n
-0000056076 00000 n
-0000060138 00000 n
-0000060266 00000 n
+0000014780 00000 n
+0000014908 00000 n
+0000017865 00000 n
+0000017993 00000 n
+0000021240 00000 n
+0000021368 00000 n
+0000023292 00000 n
+0000023420 00000 n
+0000027155 00000 n
+0000027283 00000 n
+0000031070 00000 n
+0000031198 00000 n
+0000034691 00000 n
+0000034819 00000 n
+0000039989 00000 n
+0000040117 00000 n
+0000043972 00000 n
+0000044100 00000 n
+0000049052 00000 n
+0000049180 00000 n
+0000052335 00000 n
+0000052463 00000 n
+0000056052 00000 n
+0000056180 00000 n
+0000060063 00000 n
+0000060191 00000 n
 trailer
 << /Size 40 /Root 1 0 R >>
 startxref
-60974
+62366
 %%EOF

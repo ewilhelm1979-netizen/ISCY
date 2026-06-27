@@ -215,7 +215,7 @@ Management Reviews werden unter `/management-reviews/` als auditierbare Steuerun
 
 Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist mit V23.7.19 umgesetzt, V23.7.20 ergaenzt das Management-Review- und Audit-Paket, V23.7.21 schliesst Export, Snapshot-Ruecklinks und Evidence-Qualitaet an, V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um, V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus, V23.7.24 ergaenzt AI Governance als eigenes Rust-Web-/API-Modul. Die weitere Produktagenda liegt in [docs/ISCY_STRATEGIC_ROADMAP.md](docs/ISCY_STRATEGIC_ROADMAP.md) und priorisiert:
 
-1. Agent-Flottenbetrieb und Benachrichtigungen
+1. Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Benachrichtigungskanaele
 2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
 3. AI-Governance direkt mit Risiken, Roadmap, Incidents und Changes verbinden
 4. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten
@@ -230,6 +230,9 @@ Die produktive Agent-Aufnahme ist gehaertet:
 - Admins erstellen Enrollment-Token ueber `POST /api/v1/agents/enrollment-tokens`.
 - Agenten enrollen mit `x-iscy-agent-enrollment-token` und erhalten einmalig ein Agent-Secret.
 - Heartbeats und Findings koennen danach mit `x-iscy-agent-secret` gemeldet werden.
+- Device-ID und Agent-Secret werden lokal mit restriktiven Dateirechten gespeichert; ein Neustart braucht kein erneutes Enrollment.
+- Temporaer nicht zustellbare Heartbeats und Findings landen in einer begrenzten Offline-Queue und werden beim naechsten Lauf zuerst uebertragen.
+- Admins koennen Agent-Secrets ueber `POST /api/v1/agents/devices/{device_id}/rotate-secret` rotieren; das neue Secret wird nur in dieser Antwort im Klartext geliefert.
 - Optional kann ein mTLS-Client-Zertifikat per Fingerprint an Token und Agent gebunden werden.
 
 Die lokalen Collector-Module pruefen read-only:
@@ -241,7 +244,9 @@ Die lokalen Collector-Module pruefen read-only:
 - MDM-/Endpoint-Management-Signale
 - Endpoint Protection beziehungsweise EDR-Signale
 
-Die Webansicht `/zero-trust/` zeigt neben Score, Devices und Findings jetzt auch den naechsten fachlichen Fokus, Score-Badges und Severity-Badges fuer eine schnellere Priorisierung.
+Die Webansicht `/zero-trust/` zeigt neben Score, Devices und Findings den naechsten fachlichen Fokus, Score-Badges und Severity-Badges. Die Betriebszentrale meldet zusaetzlich Agent-Abdeckung, seit 14 Tagen veraltete Heartbeats und kritische beziehungsweise hohe Agent-Findings.
+
+Deployment-Beispiele fuer systemd, NixOS, Windows Scheduled Tasks und macOS LaunchDaemons liegen unter [`deploy/agent/`](deploy/agent/). Details zu State, Queue, Secret-Rotation und Rollout stehen in [`docs/ZERO_TRUST_AGENT.md`](docs/ZERO_TRUST_AGENT.md).
 
 Lokaler Payload-Test:
 
