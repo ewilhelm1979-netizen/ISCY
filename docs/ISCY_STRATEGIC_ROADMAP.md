@@ -1,6 +1,6 @@
 # ISCY Strategic Roadmap
 
-Stand: 2026-06-26
+Stand: 2026-06-27
 
 Diese Roadmap beschreibt die fachlich sinnvollen naechsten Ausbaustufen nach dem Rust-only-Cutover. Sie ersetzt die alte Rust-Migrationsroadmap nicht, sondern beginnt danach: ISCY ist technisch auf Rust umgestellt und soll nun fachlich reifer, pruefbarer und im Betrieb wirksamer werden.
 
@@ -70,7 +70,7 @@ Erfolgskriterium:
 
 Ziel: Evidence soll nicht nur vorhanden sein, sondern belastbar bewertet werden.
 
-Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt.
+Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert.
 
 Umgesetzt:
 
@@ -79,12 +79,18 @@ Umgesetzt:
 - Evidence-Quality-Score je Evidence Item aus Status, Review, Datei-/Artefaktreferenz, Traceability, Owner und Review-Notiz.
 - Issue-Queue fuer fehlende Datei, fehlenden Review, fehlenden Owner, fehlende Traceability oder fehlende Review-Notiz.
 - Evidence-Need-Reife mit offen, teilweise und abgedeckt.
-- Exportpakete sollen Evidence-Qualitaet und fehlende Nachweise explizit ausweisen.
+- Migration `0024_rust_evidence_lifecycle` fuer serverseitige Versionsketten, SHA-256, Gueltigkeit, Aufbewahrungsfrist/-begruendung und Schutzklasse.
+- Automatische SHA-256-Bildung bei Datei-Uploads; der Hash wird nicht aus Client-Eingaben uebernommen.
+- Tenantgebundene Versionskette ueber `supersedes_id`; pro Vorgaenger ist genau ein direkter Nachfolger zulaessig.
+- Schutzklassen `PUBLIC`, `INTERNAL`, `CONFIDENTIAL` und `RESTRICTED`.
+- Quality-Issues und Betriebszentrale fuer abgelaufene, bald ablaufende, ungehashte oder ohne Retention gefuehrte Evidence.
+- Incident-/NIS2-/DORA-/DSGVO-Exporte weisen Version, Schutzklasse, Gueltigkeit und SHA-256 aus.
 
 Naechste Vertiefung:
 
-- Evidence um Gueltigkeit, Ablaufdatum, Hash, Version, Sensitivitaet und Retention-Klasse erweitern.
-- Warnungen fuer ablaufende oder ungepruefte Nachweise anzeigen.
+- Periodische Re-Hash-Pruefung gespeicherter Dateien und Quarantaene bei Integritaetsabweichung.
+- Legal-Hold-, Freigabe- und dokumentierter Loesch-/Disposition-Workflow nach Ende der Retention.
+- Optionales S3-/Objektspeicher-Backend inklusive Restore- und Integritaetsdrill.
 
 Erfolgskriterium:
 
@@ -180,9 +186,22 @@ Erfolgskriterium:
 
 1. Agent-Flottenbetrieb und Benachrichtigungen fuer Skalierung und Alltagstauglichkeit.
 2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben.
-3. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity.
-4. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln.
-5. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
+3. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln.
+4. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
+5. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
+6. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
+
+## Verbleibende Roadmap
+
+| Horizont | Arbeitspaket | Ergebnis |
+| --- | --- | --- |
+| Jetzt | Agent-Flottenbetrieb, Secret-Rotation, Offline-Queue und Benachrichtigungen | Agenten sind auf mehreren Endpoints betrieblich verwaltbar und kritische Signale werden aktiv zugestellt. |
+| Jetzt | Product-Security-Evidence-Pakete und Produkt-Lifecycle | Release-/PSIRT-Freigaben enthalten SBOM, VEX, Advisories, Support-Ende, offene Risiken und Evidence. |
+| Danach | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
+| Danach | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen und Exit-Test-Nachweise. |
+| Danach | Management-/Regulatory-Templates | Wiederholbare Quartals-, Audit-, NIS2-, DORA- und DSGVO-Pakete werden kontextsensitiv erzeugt. |
+| Reifegrad | Evidence-Disposition und Objektspeicher | Legal Hold, kontrollierte Loeschung, periodische Integritaetspruefung und Storage-Restore sind auditierbar. |
+| Reifegrad | Performance, HA und visuelle Regression | Lastgrenzen, Mehrinstanzbetrieb und UI-Regressionen sind messbar abgesichert. |
 
 ## Abgrenzung
 

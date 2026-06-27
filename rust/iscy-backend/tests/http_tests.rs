@@ -30,6 +30,7 @@ use iscy_backend::{
     wizard_store::WizardStore,
     AppState,
 };
+use sha2::{Digest, Sha256};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use std::{
     fs,
@@ -639,8 +640,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0023_rust_security_runtime_state"));
-    assert!(html.contains("23/23 angewendet"));
+    assert!(html.contains("0024_rust_evidence_lifecycle"));
+    assert!(html.contains("24/24 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -5056,6 +5057,18 @@ async fn evidence_quality_reports_maturity_and_issue_queue() {
         .unwrap();
     create_evidence_tables(&pool).await;
     insert_evidence_fixture(&pool).await;
+    sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET valid_until = '2020-12-31',
+            retention_until = '2021-12-31',
+            retention_reason = 'Historischer Incident-Nachweis'
+        WHERE id = 11
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let app = app_router_with_state(
         AppState::default()
             .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
@@ -5081,13 +5094,30 @@ async fn evidence_quality_reports_maturity_and_issue_queue() {
     assert_eq!(payload["quality"]["summary"]["total_items"], 2);
     assert_eq!(payload["quality"]["summary"]["approved_items"], 1);
     assert_eq!(payload["quality"]["summary"]["open_needs"], 1);
+    assert_eq!(payload["quality"]["summary"]["items_with_hash"], 1);
+    assert_eq!(payload["quality"]["summary"]["expired_items"], 1);
+    assert_eq!(payload["quality"]["summary"]["retention_defined_items"], 2);
+    assert_eq!(payload["quality"]["summary"]["retention_due_items"], 1);
     assert_eq!(payload["quality"]["items"][0]["quality_level"], "reif");
+    assert_eq!(
+        payload["quality"]["items"][0]["sensitivity"],
+        "CONFIDENTIAL"
+    );
+    assert_eq!(payload["quality"]["items"][0]["valid_until"], "2027-12-31");
     assert_eq!(payload["quality"]["items"][1]["title"], "Incident Playbook");
     assert!(payload["quality"]["items"][1]["issues"]
         .as_array()
         .unwrap()
         .iter()
         .any(|issue| issue == "Datei oder Artefaktreferenz fehlt."));
+    assert!(payload["quality"]["items"][1]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| {
+            issue
+            == "Aufbewahrungsfrist ist erreicht; Legal Hold oder kontrollierte Disposition pruefen."
+        }));
     assert!(payload["quality"]["needs"]
         .as_array()
         .unwrap()
@@ -5261,6 +5291,10 @@ async fn evidence_upload_creates_item_writes_file_and_syncs_needs() {
             ("requirement_id", "2"),
             ("incident_id", "1"),
             ("status", "SUBMITTED"),
+            ("sensitivity", "CONFIDENTIAL"),
+            ("valid_until", "2027-06-30"),
+            ("retention_until", "2030-06-30"),
+            ("retention_reason", "NIS2 audit evidence"),
         ],
         Some((
             "file",
@@ -5295,6 +5329,14 @@ async fn evidence_upload_creates_item_writes_file_and_syncs_needs() {
     assert_eq!(payload["item"]["title"], "Uploaded Rust Evidence");
     assert_eq!(payload["item"]["owner_id"], 7);
     assert_eq!(payload["item"]["incident_id"], 1);
+    assert_eq!(payload["item"]["version_number"], 1);
+    assert_eq!(payload["item"]["sensitivity"], "CONFIDENTIAL");
+    assert_eq!(payload["item"]["valid_until"], "2027-06-30");
+    assert_eq!(payload["item"]["retention_until"], "2030-06-30");
+    assert_eq!(
+        payload["item"]["file_sha256"],
+        format!("{:x}", Sha256::digest(b"rust evidence file\n"))
+    );
     assert_eq!(
         payload["item"]["incident_title"],
         "Credential phishing campaign"
@@ -5327,6 +5369,168 @@ async fn evidence_upload_creates_item_writes_file_and_syncs_needs() {
 }
 
 #[tokio::test]
+async fn evidence_upload_creates_tenant_scoped_version_chain() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let media_root = test_media_root("evidence-version-chain");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    let upload_version = |boundary: &'static str| {
+        let body = multipart_body(
+            boundary,
+            &[
+                ("title", "MFA Rollout Screenshot"),
+                ("supersedes_id", "10"),
+                ("status", "SUBMITTED"),
+                ("sensitivity", "RESTRICTED"),
+                ("valid_until", "2028-12-31"),
+                ("retention_until", "2031-12-31"),
+                ("retention_reason", "Audit history"),
+            ],
+            Some((
+                "file",
+                "mfa-v2.txt",
+                "text/plain",
+                b"mfa evidence version two\n",
+            )),
+        );
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/evidence/uploads")
+            .header("x-iscy-tenant-id", "42")
+            .header("x-iscy-user-id", "7")
+            .header("x-iscy-roles", "ADMIN")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .unwrap()
+    };
+
+    let response = app
+        .clone()
+        .oneshot(upload_version("evidence-version-two"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["item"]["version_number"], 2);
+    assert_eq!(payload["item"]["supersedes_id"], 10);
+    assert_eq!(payload["item"]["sensitivity"], "RESTRICTED");
+    assert_eq!(
+        payload["item"]["file_sha256"],
+        format!("{:x}", Sha256::digest(b"mfa evidence version two\n"))
+    );
+
+    let duplicate = app
+        .oneshot(upload_version("evidence-duplicate-successor"))
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(duplicate.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_evidence_upload");
+    assert_eq!(regular_file_count(&media_root), 1);
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn evidence_upload_rejects_invalid_lifecycle_and_removes_staged_files() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let media_root = test_media_root("invalid-evidence-lifecycle");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    for (boundary, sensitivity, valid_until, retention_until) in [
+        (
+            "invalid-sensitivity-boundary",
+            "TOP_SECRET",
+            "2028-12-31",
+            "2030-12-31",
+        ),
+        (
+            "invalid-retention-boundary",
+            "INTERNAL",
+            "2030-12-31",
+            "2028-12-31",
+        ),
+        (
+            "invalid-date-boundary",
+            "INTERNAL",
+            "31.12.2028",
+            "2030-12-31",
+        ),
+    ] {
+        let body = multipart_body(
+            boundary,
+            &[
+                ("title", "Invalid Lifecycle Evidence"),
+                ("status", "SUBMITTED"),
+                ("sensitivity", sensitivity),
+                ("valid_until", valid_until),
+                ("retention_until", retention_until),
+            ],
+            Some((
+                "file",
+                "invalid-lifecycle.txt",
+                "text/plain",
+                b"must be removed\n",
+            )),
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/evidence/uploads")
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "ADMIN")
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error_code"], "invalid_evidence_upload");
+    }
+
+    assert_eq!(regular_file_count(&media_root), 0);
+    let evidence_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evidence_evidenceitem")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(evidence_count, 3);
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
 async fn evidence_upload_rejects_foreign_tenant_links_and_removes_staged_files() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -5342,9 +5546,10 @@ async fn evidence_upload_rejects_foreign_tenant_links_and_removes_staged_files()
             .with_evidence_media_root(Some(media_root.clone())),
     );
 
-    for (boundary, session_id, incident_id) in [
-        ("foreign-session-boundary", "102", "1"),
-        ("foreign-incident-boundary", "100", "2"),
+    for (boundary, session_id, incident_id, supersedes_id) in [
+        ("foreign-session-boundary", "102", "1", ""),
+        ("foreign-incident-boundary", "100", "2", ""),
+        ("foreign-version-boundary", "100", "1", "12"),
     ] {
         let body = multipart_body(
             boundary,
@@ -5352,6 +5557,7 @@ async fn evidence_upload_rejects_foreign_tenant_links_and_removes_staged_files()
                 ("title", "Rejected Foreign Evidence"),
                 ("session_id", session_id),
                 ("incident_id", incident_id),
+                ("supersedes_id", supersedes_id),
                 ("status", "SUBMITTED"),
             ],
             Some((
@@ -5428,6 +5634,11 @@ async fn rust_web_evidence_accepts_file_upload_from_form() {
     assert!(html.contains("PRODUCT-SECURITY:CVE:CVE-2026-0001"));
     assert!(html.contains("Patch proof"));
     assert!(html.contains("/evidence/quality/"));
+    assert!(html.contains("Vorgaenger-ID"));
+    assert!(html.contains("Schutzklasse"));
+    assert!(html.contains("Gueltig bis"));
+    assert!(html.contains("Aufbewahren bis"));
+    assert!(html.contains("Retention-Begruendung"));
     assert!(
         html.contains(r#"name="return_to" value="/product-security/?tenant_id=42&amp;user_id=7""#)
     );
@@ -9148,7 +9359,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0020_rust_supplier_risk_core",
             "0021_rust_product_security_vex_cra",
             "0022_rust_ai_governance_core",
-            "0023_rust_security_runtime_state"
+            "0023_rust_security_runtime_state",
+            "0024_rust_evidence_lifecycle"
         ]
     );
     assert!(
@@ -9182,6 +9394,24 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             .await
             .unwrap()
     );
+    let evidence_columns = sqlx::query("PRAGMA table_info(evidence_evidenceitem)")
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<_>>();
+    for column in [
+        "version_number",
+        "supersedes_id",
+        "file_sha256",
+        "valid_until",
+        "retention_until",
+        "retention_reason",
+        "sensitivity",
+    ] {
+        assert!(evidence_columns.iter().any(|name| name == column));
+    }
     assert!(db_admin::sqlite_table_exists(&pool, "incidents_incident")
         .await
         .unwrap());
@@ -9696,6 +9926,7 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     let app = app_router_with_state(
         AppState::default()
             .with_control_store(Some(ControlStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
             .with_product_security_store(Some(ProductSecurityStore::from_sqlite_pool(
                 pool.clone(),
             ))),
@@ -9723,6 +9954,8 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     assert!(html.contains("Offene CVE-Reviews"));
     assert!(html.contains("Kritische CVEs offen"));
     assert!(html.contains("SBOM/CSAF Importlage"));
+    assert!(html.contains("Evidence abgelaufen"));
+    assert!(html.contains("Retention dokumentiert"));
     assert!(html.contains("Cutover-Aktionen"));
     assert!(html.contains("ISCY-27-Gaps in Roadmap ueberfuehren"));
 
@@ -9757,6 +9990,15 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     assert!(signals
         .iter()
         .any(|signal| signal["signal"] == "SBOM/CSAF Importlage"));
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "Evidence laeuft bald ab"));
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "Retention dokumentiert"));
+    assert!(signals
+        .iter()
+        .any(|signal| signal["signal"] == "Retention-Pruefung faellig"));
 
     let response = app
         .clone()
@@ -9782,6 +10024,9 @@ async fn rust_status_page_generates_control_gap_roadmap_tasks() {
     assert!(metrics.contains(
         "iscy_operations_signal{area=\"Product Security\",signal=\"Offene CVE-Reviews\""
     ));
+    assert!(
+        metrics.contains("iscy_operations_signal{area=\"Evidence\",signal=\"Evidence abgelaufen\"")
+    );
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
     assert!(metrics.contains("iscy_product_security_coverage_percent{kind=\"sbom\""));
     assert!(metrics.contains("iscy_product_security_import_validation_total{status=\"invalid\""));
@@ -13399,6 +13644,13 @@ async fn create_incident_evidence_support_tables(pool: &SqlitePool) {
             description TEXT NOT NULL,
             linked_requirement varchar(128) NOT NULL,
             file varchar(100) NULL,
+            version_number INTEGER NOT NULL DEFAULT 1,
+            supersedes_id INTEGER NULL,
+            file_sha256 varchar(64) NOT NULL DEFAULT '',
+            valid_until TEXT NULL,
+            retention_until TEXT NULL,
+            retention_reason TEXT NOT NULL DEFAULT '',
+            sensitivity varchar(24) NOT NULL DEFAULT 'INTERNAL',
             status varchar(16) NOT NULL,
             owner_id INTEGER NULL,
             review_notes TEXT NOT NULL,
@@ -13540,6 +13792,13 @@ async fn create_evidence_tables(pool: &SqlitePool) {
             description TEXT NOT NULL,
             linked_requirement varchar(128) NOT NULL,
             file varchar(100) NULL,
+            version_number INTEGER NOT NULL DEFAULT 1,
+            supersedes_id INTEGER NULL,
+            file_sha256 varchar(64) NOT NULL DEFAULT '',
+            valid_until TEXT NULL,
+            retention_until TEXT NULL,
+            retention_reason TEXT NOT NULL DEFAULT '',
+            sensitivity varchar(24) NOT NULL DEFAULT 'INTERNAL',
             status varchar(16) NOT NULL,
             owner_id INTEGER NULL,
             review_notes TEXT NOT NULL,
@@ -13786,6 +14045,20 @@ async fn insert_evidence_fixture(pool: &SqlitePool) {
                 '2026-04-16T10:00:00Z',
                 '2026-04-16T11:00:00Z'
             )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET file_sha256 = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            valid_until = '2027-12-31',
+            retention_until = '2030-12-31',
+            retention_reason = 'Audit- und Nachweisaufbewahrung',
+            sensitivity = 'CONFIDENTIAL'
+        WHERE id = 10
         "#,
     )
     .execute(pool)

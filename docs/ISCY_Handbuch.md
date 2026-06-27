@@ -403,6 +403,11 @@ Typische Funktionen:
 - nach dem Speichern automatisch zur Ausgangsseite zurueckkehren
 - Evidence-Qualitaet unter `/evidence/quality/` auswerten
 - Score, Reifegrad und Issues fuer Nachweise und Evidence Needs anzeigen
+- Datei-Uploads automatisch mit SHA-256 kennzeichnen
+- Nachweise ueber Vorgaenger-ID und serverseitige Versionsnummer versionieren
+- Gueltigkeit, Aufbewahrungsfrist, Retention-Begruendung und Schutzklasse pflegen
+- abgelaufene und innerhalb von 30 Tagen ablaufende Nachweise in Quality-Queue und Betriebszentrale erkennen
+- Version, Schutzklasse, Gueltigkeit und SHA-256 in Incident-/Regulatory-Exporten ausweisen
 
 Fachlicher Nutzen:
 
@@ -411,6 +416,7 @@ Fachlicher Nutzen:
 - weniger Suche nach Dokumenten
 - klarere Rueckverfolgbarkeit durch stabile Linked-Requirement- und Evidence-Key-Bezuege
 - belastbarere Aussage, ob Nachweise nur vorhanden oder wirklich reviewt und verwertbar sind
+- nachvollziehbare Integritaet und Lifecycle-Steuerung ohne pauschal fest codierte gesetzliche Aufbewahrungsfrist
 
 Fuer Nicht-Sicherheitsleute:
 Evidence ist der Ordner mit den Belegen, aber strukturiert und auswertbar.
@@ -1028,14 +1034,16 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance als eigenes Rust-Web-/API-Modul hinzu. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance als eigenes Rust-Web-/API-Modul hinzu. Migration `0024_rust_evidence_lifecycle` schliesst Version, SHA-256, Gueltigkeit, Retention und Schutzklasse an. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
 1. Agent-Flottenbetrieb und Benachrichtigungen
 2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
-3. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity
-4. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
+3. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
+4. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
+5. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
+6. Performance-, HA- und visuelle Regressionstests
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 

@@ -205,7 +205,7 @@ AI Governance wird unter `/ai-governance/` als eigenes Rust-Web-/API-Modul gefue
 
 Evidence-Links aus Risks, Roadmap, Incidents, Product Security und AI Governance fuellen Titel, Beschreibung, Linked Requirement, Status und Ruecksprungziel vor. Dadurch kann ein Nachweis direkt aus dem fachlichen Kontext erstellt werden und landet nach dem Upload wieder dort, wo die Arbeit begonnen hat.
 
-Evidence-Qualitaet wird unter `/evidence/quality/` und `GET /api/v1/evidence/quality` als Nachweisreife ausgewertet. ISCY berechnet fuer Evidence Items Score, Reifegrad und Issues aus Status, Review, Datei-/Artefaktreferenz, Traceability, Owner und Review-Notiz. Evidence Needs werden parallel als offen, teilweise oder abgedeckt bewertet, damit Audits nicht nur "Nachweis vorhanden", sondern "Nachweis belastbar" sehen.
+Evidence-Qualitaet wird unter `/evidence/quality/` und `GET /api/v1/evidence/quality` als Nachweisreife ausgewertet. ISCY berechnet fuer Evidence Items Score, Reifegrad und Issues aus Status, Review, Datei-/Artefaktreferenz, Traceability, Owner und Review-Notiz. Migration `0024_rust_evidence_lifecycle` ergaenzt serverseitige Versionsketten, automatisch berechnete SHA-256-Hashes, Gueltigkeit, Retention mit Begruendung und die Schutzklassen `PUBLIC`, `INTERNAL`, `CONFIDENTIAL` und `RESTRICTED`. Abgelaufene und bald ablaufende Nachweise erscheinen in Quality-Queue und Betriebszentrale; Incident-/NIS2-/DORA-/DSGVO-Pakete weisen Lifecycle und Hash aus. Evidence Needs werden parallel als offen, teilweise oder abgedeckt bewertet, damit Audits nicht nur "Nachweis vorhanden", sondern "Nachweis belastbar" sehen.
 
 Suppliers werden unter `/suppliers/` als Third-Party-Risk-Register gefuehrt. ISCY bewertet Lieferanten, Cloud-, SaaS-, IKT- und Produktzulieferer aus Kritikalitaet, Vertrags-/Security-Annex-Bezug, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischem Scope, Review-Faelligkeit, Evidence, Produktkomponenten, offenen Schwachstellen und dokumentierten Risiken. Maschinenlesbar stehen `GET /api/v1/suppliers` und `GET /api/v1/suppliers/{id}` bereit. Die Webansicht zeigt Score, offene Issues und direkten Evidence-Prefill je Supplier.
 
@@ -217,8 +217,9 @@ Die Rust-Migration ist abgeschlossen. Das regulatorische Organisationsprofil ist
 
 1. Agent-Flottenbetrieb und Benachrichtigungen
 2. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
-3. Evidence-Qualitaet vertiefen: Hash, Versionierung, Ablaufdatum, Retention und Sensitivity
+3. AI-Governance direkt mit Risiken, Roadmap, Incidents und Changes verbinden
 4. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten
+5. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
 
 ## Zero-Trust Agent
 

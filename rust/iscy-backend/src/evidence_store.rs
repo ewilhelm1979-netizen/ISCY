@@ -1,4 +1,5 @@
 use anyhow::{bail, Context};
+use chrono::{Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
@@ -36,6 +37,11 @@ pub struct EvidenceQualitySummary {
     pub items_with_file: i64,
     pub linked_items: i64,
     pub owner_assigned_items: i64,
+    pub items_with_hash: i64,
+    pub expired_items: i64,
+    pub expiring_items: i64,
+    pub retention_defined_items: i64,
+    pub retention_due_items: i64,
     pub open_needs: i64,
     pub partial_needs: i64,
     pub covered_needs: i64,
@@ -57,6 +63,10 @@ pub struct EvidenceQualityItem {
     pub reviewed_at: Option<String>,
     pub file_name: Option<String>,
     pub linked_requirement: String,
+    pub version_number: i64,
+    pub sensitivity: String,
+    pub valid_until: Option<String>,
+    pub retention_until: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,6 +113,13 @@ pub struct EvidenceItemSummary {
     pub description: String,
     pub linked_requirement: String,
     pub file_name: Option<String>,
+    pub version_number: i64,
+    pub supersedes_id: Option<i64>,
+    pub file_sha256: String,
+    pub valid_until: Option<String>,
+    pub retention_until: Option<String>,
+    pub retention_reason: String,
+    pub sensitivity: String,
     pub status: String,
     pub status_label: String,
     pub owner_id: Option<i64>,
@@ -166,6 +183,12 @@ pub struct EvidenceItemCreateRequest {
     pub description: String,
     pub linked_requirement: String,
     pub file_name: Option<String>,
+    pub supersedes_id: Option<i64>,
+    pub file_sha256: String,
+    pub valid_until: Option<String>,
+    pub retention_until: Option<String>,
+    pub retention_reason: String,
+    pub sensitivity: String,
     pub status: Option<String>,
     pub review_notes: String,
 }
@@ -363,6 +386,37 @@ fn evidence_quality_from_overview(overview: EvidenceOverview) -> EvidenceQuality
         .iter()
         .filter(|item| item.owner_id.is_some())
         .count() as i64;
+    let today = Utc::now().date_naive();
+    let items_with_hash = overview
+        .evidence_items
+        .iter()
+        .filter(|item| !item.file_sha256.is_empty())
+        .count() as i64;
+    let expired_items = overview
+        .evidence_items
+        .iter()
+        .filter(|item| evidence_date(item.valid_until.as_deref()).is_some_and(|date| date < today))
+        .count() as i64;
+    let expiring_items = overview
+        .evidence_items
+        .iter()
+        .filter(|item| {
+            evidence_date(item.valid_until.as_deref())
+                .is_some_and(|date| date >= today && date <= today + Duration::days(30))
+        })
+        .count() as i64;
+    let retention_defined_items = overview
+        .evidence_items
+        .iter()
+        .filter(|item| item.retention_until.is_some())
+        .count() as i64;
+    let retention_due_items = overview
+        .evidence_items
+        .iter()
+        .filter(|item| {
+            evidence_date(item.retention_until.as_deref()).is_some_and(|date| date < today)
+        })
+        .count() as i64;
     let items = overview
         .evidence_items
         .iter()
@@ -386,6 +440,11 @@ fn evidence_quality_from_overview(overview: EvidenceOverview) -> EvidenceQuality
             items_with_file,
             linked_items,
             owner_assigned_items,
+            items_with_hash,
+            expired_items,
+            expiring_items,
+            retention_defined_items,
+            retention_due_items,
             open_needs: overview.need_summary.open,
             partial_needs: overview.need_summary.partial,
             covered_needs: overview.need_summary.covered,
@@ -440,6 +499,43 @@ fn evidence_quality_item(item: &EvidenceItemSummary) -> EvidenceQualityItem {
     } else {
         issues.push("Review-Notiz fehlt.".to_string());
     }
+    let today = Utc::now().date_naive();
+    if item.file_name.is_some() && item.file_sha256.is_empty() {
+        score -= 10;
+        issues.push("SHA-256-Integritaetsnachweis fuer die Datei fehlt.".to_string());
+    }
+    match evidence_date(item.valid_until.as_deref()) {
+        Some(date) if date < today => {
+            score -= 20;
+            issues
+                .push("Evidence ist abgelaufen und muss erneuert oder ersetzt werden.".to_string());
+        }
+        Some(date) if date <= today + Duration::days(30) => {
+            score -= 5;
+            issues.push("Evidence laeuft innerhalb von 30 Tagen ab.".to_string());
+        }
+        Some(_) => {}
+        None => {
+            score -= 5;
+            issues.push("Gueltigkeitsdatum fehlt.".to_string());
+        }
+    }
+    if item.retention_until.is_none() {
+        score -= 5;
+        issues.push("Aufbewahrungsfrist fehlt.".to_string());
+    }
+    if item.retention_until.is_some() && item.retention_reason.trim().is_empty() {
+        score -= 3;
+        issues.push("Begruendung der Aufbewahrungsfrist fehlt.".to_string());
+    }
+    if evidence_date(item.retention_until.as_deref()).is_some_and(|date| date < today) {
+        score -= 5;
+        issues.push(
+            "Aufbewahrungsfrist ist erreicht; Legal Hold oder kontrollierte Disposition pruefen."
+                .to_string(),
+        );
+    }
+    let score = score.max(0);
     EvidenceQualityItem {
         id: item.id,
         title: item.title.clone(),
@@ -453,7 +549,15 @@ fn evidence_quality_item(item: &EvidenceItemSummary) -> EvidenceQualityItem {
         reviewed_at: item.reviewed_at.clone(),
         file_name: item.file_name.clone(),
         linked_requirement: item.linked_requirement.clone(),
+        version_number: item.version_number,
+        sensitivity: item.sensitivity.clone(),
+        valid_until: item.valid_until.clone(),
+        retention_until: item.retention_until.clone(),
     }
+}
+
+fn evidence_date(value: Option<&str>) -> Option<NaiveDate> {
+    value.and_then(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
 }
 
 fn evidence_quality_need(need: &RequirementEvidenceNeedSummary) -> EvidenceQualityNeed {
@@ -714,6 +818,15 @@ async fn create_evidence_item_postgres(
     let description = payload.description.trim().to_string();
     let review_notes = payload.review_notes.trim().to_string();
     let file_name = payload.file_name.clone();
+    let version_number =
+        next_evidence_version_postgres(pool, tenant_id, payload.supersedes_id).await?;
+    let file_sha256 = normalize_file_sha256(&payload.file_sha256)?;
+    let valid_until = normalize_evidence_date(payload.valid_until.as_deref(), "Gueltig bis")?;
+    let retention_until =
+        normalize_evidence_date(payload.retention_until.as_deref(), "Aufbewahren bis")?;
+    validate_evidence_lifecycle_dates(valid_until.as_deref(), retention_until.as_deref())?;
+    let sensitivity = normalize_evidence_sensitivity(&payload.sensitivity)?;
+    let retention_reason = payload.retention_reason.trim().to_string();
     let id: i64 = sqlx::query_scalar(
         r#"
         INSERT INTO evidence_evidenceitem (
@@ -728,6 +841,13 @@ async fn create_evidence_item_postgres(
             description,
             linked_requirement,
             file,
+            version_number,
+            supersedes_id,
+            file_sha256,
+            valid_until,
+            retention_until,
+            retention_reason,
+            sensitivity,
             status,
             owner_id,
             review_notes,
@@ -736,7 +856,7 @@ async fn create_evidence_item_postgres(
             created_at,
             updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NULL, NULL, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, NULL, NULL, NOW(), NOW())
         RETURNING id
         "#,
     )
@@ -751,6 +871,13 @@ async fn create_evidence_item_postgres(
     .bind(description)
     .bind(linked_requirement)
     .bind(file_name)
+    .bind(version_number)
+    .bind(payload.supersedes_id)
+    .bind(file_sha256)
+    .bind(valid_until)
+    .bind(retention_until)
+    .bind(retention_reason)
+    .bind(sensitivity)
     .bind(status)
     .bind(owner_id)
     .bind(review_notes)
@@ -776,6 +903,15 @@ async fn create_evidence_item_sqlite(
     let description = payload.description.trim().to_string();
     let review_notes = payload.review_notes.trim().to_string();
     let file_name = payload.file_name.clone();
+    let version_number =
+        next_evidence_version_sqlite(pool, tenant_id, payload.supersedes_id).await?;
+    let file_sha256 = normalize_file_sha256(&payload.file_sha256)?;
+    let valid_until = normalize_evidence_date(payload.valid_until.as_deref(), "Gueltig bis")?;
+    let retention_until =
+        normalize_evidence_date(payload.retention_until.as_deref(), "Aufbewahren bis")?;
+    validate_evidence_lifecycle_dates(valid_until.as_deref(), retention_until.as_deref())?;
+    let sensitivity = normalize_evidence_sensitivity(&payload.sensitivity)?;
+    let retention_reason = payload.retention_reason.trim().to_string();
     let result = sqlx::query(
         r#"
         INSERT INTO evidence_evidenceitem (
@@ -790,6 +926,13 @@ async fn create_evidence_item_sqlite(
             description,
             linked_requirement,
             file,
+            version_number,
+            supersedes_id,
+            file_sha256,
+            valid_until,
+            retention_until,
+            retention_reason,
+            sensitivity,
             status,
             owner_id,
             review_notes,
@@ -798,7 +941,7 @@ async fn create_evidence_item_sqlite(
             created_at,
             updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL, NULL, datetime('now'), datetime('now'))
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, NULL, NULL, datetime('now'), datetime('now'))
         "#,
     )
     .bind(tenant_id)
@@ -812,6 +955,13 @@ async fn create_evidence_item_sqlite(
     .bind(description)
     .bind(linked_requirement)
     .bind(file_name)
+    .bind(version_number)
+    .bind(payload.supersedes_id)
+    .bind(file_sha256)
+    .bind(valid_until)
+    .bind(retention_until)
+    .bind(retention_reason)
+    .bind(sensitivity)
     .bind(status)
     .bind(owner_id)
     .bind(review_notes)
@@ -853,6 +1003,13 @@ async fn list_evidence_items_postgres(
             item.description,
             item.linked_requirement,
             item.file AS file_name,
+            item.version_number,
+            item.supersedes_id,
+            item.file_sha256,
+            item.valid_until,
+            item.retention_until,
+            item.retention_reason,
+            item.sensitivity,
             item.status,
             item.owner_id,
             COALESCE(
@@ -933,6 +1090,13 @@ async fn list_evidence_items_sqlite(
             item.description,
             item.linked_requirement,
             item.file AS file_name,
+            item.version_number,
+            item.supersedes_id,
+            item.file_sha256,
+            item.valid_until,
+            item.retention_until,
+            item.retention_reason,
+            item.sensitivity,
             item.status,
             item.owner_id,
             COALESCE(
@@ -1236,6 +1400,13 @@ fn evidence_item_detail_postgres_sql() -> &'static str {
         item.description,
         item.linked_requirement,
         item.file AS file_name,
+        item.version_number,
+        item.supersedes_id,
+        item.file_sha256,
+        item.valid_until,
+        item.retention_until,
+        item.retention_reason,
+        item.sensitivity,
         item.status,
         item.owner_id,
         COALESCE(
@@ -1295,6 +1466,13 @@ fn evidence_item_detail_sqlite_sql() -> &'static str {
         item.description,
         item.linked_requirement,
         item.file AS file_name,
+        item.version_number,
+        item.supersedes_id,
+        item.file_sha256,
+        item.valid_until,
+        item.retention_until,
+        item.retention_reason,
+        item.sensitivity,
         item.status,
         item.owner_id,
         COALESCE(
@@ -1354,6 +1532,13 @@ fn evidence_item_from_pg_row(row: PgRow) -> Result<EvidenceItemSummary, sqlx::Er
         description: row.try_get("description")?,
         linked_requirement: row.try_get("linked_requirement")?,
         file_name: row.try_get("file_name")?,
+        version_number: row.try_get("version_number")?,
+        supersedes_id: row.try_get("supersedes_id")?,
+        file_sha256: row.try_get("file_sha256")?,
+        valid_until: row.try_get("valid_until")?,
+        retention_until: row.try_get("retention_until")?,
+        retention_reason: row.try_get("retention_reason")?,
+        sensitivity: row.try_get("sensitivity")?,
         status_label: evidence_status_label(&status).to_string(),
         status,
         owner_id: row.try_get("owner_id")?,
@@ -1392,6 +1577,13 @@ fn evidence_item_from_sqlite_row(row: SqliteRow) -> Result<EvidenceItemSummary, 
         description: row.try_get("description")?,
         linked_requirement: row.try_get("linked_requirement")?,
         file_name: row.try_get("file_name")?,
+        version_number: row.try_get("version_number")?,
+        supersedes_id: row.try_get("supersedes_id")?,
+        file_sha256: row.try_get("file_sha256")?,
+        valid_until: row.try_get("valid_until")?,
+        retention_until: row.try_get("retention_until")?,
+        retention_reason: row.try_get("retention_reason")?,
+        sensitivity: row.try_get("sensitivity")?,
         status_label: evidence_status_label(&status).to_string(),
         status,
         owner_id: row.try_get("owner_id")?,
@@ -1605,6 +1797,121 @@ async fn validate_evidence_item_refs_sqlite(
         }
     }
     Ok(())
+}
+
+async fn next_evidence_version_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    supersedes_id: Option<i64>,
+) -> anyhow::Result<i64> {
+    let Some(supersedes_id) = supersedes_id else {
+        return Ok(1);
+    };
+    let previous: Option<i64> = sqlx::query_scalar(
+        "SELECT version_number FROM evidence_evidenceitem WHERE tenant_id = $1 AND id = $2",
+    )
+    .bind(tenant_id)
+    .bind(supersedes_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Evidence-Vorgaenger konnte nicht validiert werden")?;
+    let version = previous
+        .map(|version| version + 1)
+        .ok_or_else(|| anyhow::anyhow!("Evidence-Vorgaenger wurde nicht gefunden."))?;
+    let successor_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM evidence_evidenceitem WHERE tenant_id = $1 AND supersedes_id = $2)",
+    )
+    .bind(tenant_id)
+    .bind(supersedes_id)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Evidence-Versionskette konnte nicht validiert werden")?;
+    if successor_exists {
+        bail!("Evidence-Vorgaenger wurde bereits ersetzt.");
+    }
+    Ok(version)
+}
+
+async fn next_evidence_version_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    supersedes_id: Option<i64>,
+) -> anyhow::Result<i64> {
+    let Some(supersedes_id) = supersedes_id else {
+        return Ok(1);
+    };
+    let previous: Option<i64> = sqlx::query_scalar(
+        "SELECT version_number FROM evidence_evidenceitem WHERE tenant_id = ?1 AND id = ?2",
+    )
+    .bind(tenant_id)
+    .bind(supersedes_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Evidence-Vorgaenger konnte nicht validiert werden")?;
+    let version = previous
+        .map(|version| version + 1)
+        .ok_or_else(|| anyhow::anyhow!("Evidence-Vorgaenger wurde nicht gefunden."))?;
+    let successor_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM evidence_evidenceitem WHERE tenant_id = ?1 AND supersedes_id = ?2)",
+    )
+    .bind(tenant_id)
+    .bind(supersedes_id)
+    .fetch_one(pool)
+    .await
+    .context("SQLite-Evidence-Versionskette konnte nicht validiert werden")?;
+    if successor_exists {
+        bail!("Evidence-Vorgaenger wurde bereits ersetzt.");
+    }
+    Ok(version)
+}
+
+fn normalize_file_sha256(value: &str) -> anyhow::Result<String> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok(value);
+    }
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        bail!("SHA-256 muss aus genau 64 Hex-Zeichen bestehen.");
+    }
+    Ok(value)
+}
+
+fn normalize_evidence_date(value: Option<&str>, label: &str) -> anyhow::Result<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .with_context(|| format!("{label} muss ein gueltiges Datum im Format YYYY-MM-DD sein."))?;
+    Ok(Some(value.to_string()))
+}
+
+fn validate_evidence_lifecycle_dates(
+    valid_until: Option<&str>,
+    retention_until: Option<&str>,
+) -> anyhow::Result<()> {
+    let (Some(valid_until), Some(retention_until)) = (valid_until, retention_until) else {
+        return Ok(());
+    };
+    if retention_until < valid_until {
+        bail!("Aufbewahren bis darf nicht vor Gueltig bis liegen.");
+    }
+    Ok(())
+}
+
+fn normalize_evidence_sensitivity(value: &str) -> anyhow::Result<String> {
+    let value = value.trim().to_ascii_uppercase();
+    let value = if value.is_empty() {
+        "INTERNAL".to_string()
+    } else {
+        value
+    };
+    if !matches!(
+        value.as_str(),
+        "PUBLIC" | "INTERNAL" | "CONFIDENTIAL" | "RESTRICTED"
+    ) {
+        bail!("Evidence-Schutzklasse ist ungueltig.");
+    }
+    Ok(value)
 }
 
 async fn linked_requirement_for_postgres(

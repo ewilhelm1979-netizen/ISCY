@@ -64,6 +64,12 @@ nix develop --command make rust-postgres-restore-drill
 
 Der Drill initialisiert die Source-Datenbank mit Demo-Daten, erzeugt einen `pg_dump`, leert das Restore-Ziel, spielt den Dump ein und validiert anschliessend die Migrationstabelle.
 
+## Evidence-Integritaet und Lifecycle
+
+Migration `0024_rust_evidence_lifecycle` persistiert fuer Evidence Items Version, Vorgaenger, SHA-256, Gueltigkeit, Aufbewahrungsdatum/-begruendung und Schutzklasse. Der Datei-Hash wird beim Upload serverseitig aus den empfangenen Bytes berechnet. Versionsvorgaenger werden tenantgebunden validiert; ein Vorgaenger darf nur einen direkten Nachfolger besitzen. Die Quality-Queue und Betriebszentrale melden abgelaufene, bald ablaufende und zur Retention-Pruefung faellige Nachweise.
+
+SHA-256 belegt Dateiintegritaet, ersetzt aber weder eine digitale Signatur noch einen vertrauenswuerdigen Zeitstempel. Produktive Betreiber muessen Aufbewahrungsfristen fachlich festlegen; ISCY codiert bewusst keine universelle gesetzliche Frist. Legal Hold, Freigabe zur Loeschung und periodische Re-Hash-Pruefung bleiben als naechste Haertungsstufe dokumentiert.
+
 ## Security Header
 
 ISCY setzt zentral:

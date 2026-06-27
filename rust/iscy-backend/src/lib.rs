@@ -16,7 +16,7 @@ use chrono::{Datelike, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
@@ -1426,6 +1426,7 @@ struct EvidenceUploadFile {
 struct SavedEvidenceFile {
     relative_path: String,
     absolute_path: PathBuf,
+    sha256: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -2622,6 +2623,12 @@ fn alertmanager_evidence_payload(
         description: alertmanager_alert_detail(alert),
         linked_requirement: format!("OPERATIONS:ALERTMANAGER:{}", alert.alertname),
         file_name: None,
+        supersedes_id: None,
+        file_sha256: String::new(),
+        valid_until: None,
+        retention_until: None,
+        retention_reason: "Alertmanager-Fallakte; Aufbewahrung nach Incident-Policy.".to_string(),
+        sensitivity: "INTERNAL".to_string(),
         status: Some("SUBMITTED".to_string()),
         review_notes: "Automatisch aus Alertmanager-Webhook erzeugt.".to_string(),
     }
@@ -2731,7 +2738,11 @@ fn account_payload_error(err: &anyhow::Error) -> bool {
 fn evidence_upload_payload_error(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         let message = cause.to_string();
-        message.contains("nicht gefunden") || message.contains("darf nicht leer sein")
+        message.contains("nicht gefunden")
+            || message.contains("darf nicht")
+            || message.contains("muss ")
+            || message.contains("ungueltig")
+            || message.contains("bereits ersetzt")
     })
 }
 
@@ -7298,6 +7309,23 @@ async fn evidence_upload(
             .cloned()
             .unwrap_or_default(),
         file_name: saved_file.as_ref().map(|file| file.relative_path.clone()),
+        supersedes_id: optional_i64_form_field(&form.fields, "supersedes_id"),
+        file_sha256: saved_file
+            .as_ref()
+            .map(|file| file.sha256.clone())
+            .unwrap_or_default(),
+        valid_until: form.fields.get("valid_until").cloned(),
+        retention_until: form.fields.get("retention_until").cloned(),
+        retention_reason: form
+            .fields
+            .get("retention_reason")
+            .cloned()
+            .unwrap_or_default(),
+        sensitivity: form
+            .fields
+            .get("sensitivity")
+            .cloned()
+            .unwrap_or_else(|| "INTERNAL".to_string()),
         status: form.fields.get("status").cloned(),
         review_notes: form.fields.get("review_notes").cloned().unwrap_or_default(),
     };
@@ -10249,7 +10277,7 @@ async fn web_incident_detail(
                 <article id="incident-evidence" class="panel wide">
                   <h2>Evidence</h2>
                   <table>
-                    <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
+                    <thead><tr><th>Titel</th><th>Version</th><th>Klasse</th><th>Status</th><th>Requirement</th><th>Gueltig bis</th><th>SHA-256</th><th>Datei</th></tr></thead>
                     <tbody>{}</tbody>
                   </table>
                   {}
@@ -10954,13 +10982,26 @@ async fn web_evidence(
                 .evidence_items
                 .iter()
                 .map(|item| {
+                    let hash = if item.file_sha256.is_empty() {
+                        "-"
+                    } else {
+                        item.file_sha256.get(..12).unwrap_or(&item.file_sha256)
+                    };
                     format!(
-                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        r#"<tr><td>{}</td><td>v{}</td><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td></tr>"#,
                         html_escape(&item.title),
+                        item.version_number,
+                        html_escape(&item.sensitivity),
                         html_escape(&item.status_label),
+                        html_escape(item.valid_until.as_deref().unwrap_or("-")),
+                        html_escape(hash),
                         html_escape(item.owner_display.as_deref().unwrap_or("-")),
-                        html_escape(item.requirement_code.as_deref().unwrap_or("-")),
-                        html_escape(item.incident_title.as_deref().unwrap_or("-")),
+                        html_escape(
+                            item.incident_title
+                                .as_deref()
+                                .or(item.requirement_code.as_deref())
+                                .unwrap_or("-"),
+                        ),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -10981,7 +11022,7 @@ async fn web_evidence(
                 <section class="grid">
                   <article class="panel wide">
                     <table>
-                      <thead><tr><th>Titel</th><th>Status</th><th>Owner</th><th>Requirement</th><th>Incident</th></tr></thead>
+                      <thead><tr><th>Titel</th><th>Version</th><th>Schutzklasse</th><th>Status</th><th>Gueltig bis</th><th>SHA-256</th><th>Owner</th><th>Verknuepfung</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                   </article>
@@ -10996,9 +11037,15 @@ async fn web_evidence(
                         <label>Requirement-ID<input name="requirement_id" type="number" min="1" value="{}"></label>
                         <label>Control-ID<input name="control_id" type="number" min="1" value="{}"></label>
                         <label>Incident-ID<input name="incident_id" type="number" min="1" value="{}"></label>
+                        <label>Vorgaenger-ID<input name="supersedes_id" type="number" min="1"></label>
+                        <label>Schutzklasse<select name="sensitivity">{}</select></label>
+                        <label>Gueltig bis<input name="valid_until" type="date"></label>
+                        <label>Aufbewahren bis<input name="retention_until" type="date"></label>
                       </div>
                       <label>Linked Requirement<input name="linked_requirement" type="text" value="{}"></label>
                       <label>Beschreibung<textarea name="description" rows="4">{}</textarea></label>
+                      <label>Retention-Begruendung<textarea name="retention_reason" rows="2"></textarea></label>
+                      <label>Review-Notiz<textarea name="review_notes" rows="2"></textarea></label>
                       <label>Datei<input name="file" type="file" accept=".pdf,.docx,.xlsx,.png,.jpg,.jpeg,.csv,.txt"></label>
                       <button type="submit">Evidence speichern</button>
                     </form>
@@ -11013,7 +11060,7 @@ async fn web_evidence(
                 metric_card("Qualitaet", overview.evidence_items.len() as i64),
                 web_path_with_context("/evidence/quality/", Some(&context)),
                 if rows.is_empty() {
-                    r#"<tr><td colspan="5">Keine Evidenzen vorhanden.</td></tr>"#.to_string()
+                    r#"<tr><td colspan="8">Keine Evidenzen vorhanden.</td></tr>"#.to_string()
                 } else {
                     rows
                 },
@@ -11025,6 +11072,7 @@ async fn web_evidence(
                 html_escape(&prefill_requirement_id),
                 html_escape(&prefill_control_id),
                 html_escape(&prefill_incident_id),
+                evidence_sensitivity_options_for("INTERNAL"),
                 html_escape(prefill_linked_requirement),
                 html_escape(prefill_description),
             );
@@ -11062,9 +11110,12 @@ async fn web_evidence_quality(
                 .map(|item| {
                     let href = web_path_with_context(&item.href, Some(&context));
                     format!(
-                        r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}%</td><td>{}</td></tr>"#,
+                        r#"<tr><td><a href="{}">{}</a></td><td>v{} · {}</td><td>{}</td><td>{}</td><td>{}</td><td>{}%</td><td>{}</td></tr>"#,
                         html_escape(&href),
                         html_escape(&item.title),
+                        item.version_number,
+                        html_escape(&item.sensitivity),
+                        html_escape(item.valid_until.as_deref().unwrap_or("-")),
                         html_escape(&item.status_label),
                         html_escape(&item.quality_level),
                         item.quality_score,
@@ -11099,11 +11150,16 @@ async fn web_evidence_quality(
                   {}
                   {}
                   {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
                 </section>
                 <section class="panel wide">
                   <h2>Nachweisreife</h2>
                   <table>
-                    <thead><tr><th>Evidence</th><th>Status</th><th>Level</th><th>Score</th><th>Issues</th></tr></thead>
+                    <thead><tr><th>Evidence</th><th>Version / Klasse</th><th>Gueltig bis</th><th>Status</th><th>Level</th><th>Score</th><th>Issues</th></tr></thead>
                     <tbody>{}</tbody>
                   </table>
                 </section>
@@ -11121,8 +11177,13 @@ async fn web_evidence_quality(
                 metric_card("Freigegeben", quality.summary.approved_items),
                 metric_card("Reviewed", quality.summary.reviewed_items),
                 metric_card("Offene Needs", quality.summary.open_needs),
+                metric_card("Mit Hash", quality.summary.items_with_hash),
+                metric_card("Abgelaufen", quality.summary.expired_items),
+                metric_card("Laeuft bald ab", quality.summary.expiring_items),
+                metric_card("Retention gesetzt", quality.summary.retention_defined_items),
+                metric_card("Retention faellig", quality.summary.retention_due_items),
                 if item_rows.is_empty() {
-                    web_empty_row(5, "Keine Evidence-Qualitaetsluecken sichtbar.")
+                    web_empty_row(7, "Keine Evidence-Qualitaetsluecken sichtbar.")
                 } else {
                     item_rows
                 },
@@ -11207,6 +11268,23 @@ async fn web_evidence_upload(
             .cloned()
             .unwrap_or_default(),
         file_name: saved_file.as_ref().map(|file| file.relative_path.clone()),
+        supersedes_id: optional_i64_form_field(&form.fields, "supersedes_id"),
+        file_sha256: saved_file
+            .as_ref()
+            .map(|file| file.sha256.clone())
+            .unwrap_or_default(),
+        valid_until: form.fields.get("valid_until").cloned(),
+        retention_until: form.fields.get("retention_until").cloned(),
+        retention_reason: form
+            .fields
+            .get("retention_reason")
+            .cloned()
+            .unwrap_or_default(),
+        sensitivity: form
+            .fields
+            .get("sensitivity")
+            .cloned()
+            .unwrap_or_else(|| "INTERNAL".to_string()),
         status: form.fields.get("status").cloned(),
         review_notes: form.fields.get("review_notes").cloned().unwrap_or_default(),
     };
@@ -13547,9 +13625,13 @@ async fn web_controls(
                             <label>Control<select name="control_id">{}</select></label>
                             <label>Titel<input name="title" type="text" required></label>
                             <label>Status<select name="status">{}</select></label>
+                            <label>Schutzklasse<select name="sensitivity">{}</select></label>
+                            <label>Gueltig bis<input name="valid_until" type="date"></label>
+                            <label>Aufbewahren bis<input name="retention_until" type="date"></label>
                           </div>
                           <label>Linked Requirement<input name="linked_requirement" type="text" value="ISCY-27"></label>
                           <label>Beschreibung<textarea name="description" rows="3"></textarea></label>
+                          <label>Retention-Begruendung<textarea name="retention_reason" rows="2"></textarea></label>
                           <label>Datei<input name="file" type="file" accept=".pdf,.docx,.xlsx,.png,.jpg,.jpeg,.csv,.txt"></label>
                           <button type="submit">Evidence an Control haengen</button>
                         </form>
@@ -13559,6 +13641,7 @@ async fn web_controls(
                     html_escape(&web_path_with_context("/controls/", Some(&context))),
                     control_options,
                     evidence_status_options_for("SUBMITTED"),
+                    evidence_sensitivity_options_for("INTERNAL"),
                 )
             } else {
                 String::new()
@@ -16909,8 +16992,8 @@ fn incident_nis2_markdown(
 
 ## Evidence
 
-| Titel | Status | Requirement | Datei |
-| --- | --- | --- | --- |
+| Titel | Version | Klasse | Status | Requirement | Gueltig bis | SHA-256 | Datei |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 {}
 
 ## Audit-Timeline
@@ -17770,7 +17853,7 @@ fn incident_nis2_html(
   <pre>{}</pre>
   <h2>Evidence</h2>
   <table>
-    <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
+    <thead><tr><th>Titel</th><th>Version</th><th>Klasse</th><th>Status</th><th>Requirement</th><th>Gueltig bis</th><th>SHA-256</th><th>Datei</th></tr></thead>
     <tbody>{}</tbody>
   </table>
   <h2>Audit-Timeline</h2>
@@ -17904,11 +17987,19 @@ fn incident_nis2_pdf(
         for item in evidence_items {
             lines.extend(wrap_pdf_text(
                 &format!(
-                    "{} | {} | {} | {}",
+                    "{} | v{} | {} | {} | {} | {} | {} | SHA-256 {}",
                     item.title,
+                    item.version_number,
+                    item.sensitivity,
                     item.status_label,
                     item.requirement_code.as_deref().unwrap_or("-"),
-                    item.file_name.as_deref().unwrap_or("-")
+                    item.valid_until.as_deref().unwrap_or("-"),
+                    item.file_name.as_deref().unwrap_or("-"),
+                    if item.file_sha256.is_empty() {
+                        "-"
+                    } else {
+                        &item.file_sha256
+                    }
                 ),
                 92,
             ));
@@ -17997,8 +18088,8 @@ fn incident_regulatory_package_markdown(
 
 ## Evidence
 
-| Titel | Status | Requirement | Datei |
-| --- | --- | --- | --- |
+| Titel | Version | Klasse | Status | Requirement | Gueltig bis | SHA-256 | Datei |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 {}
 
 ## Audit-Timeline
@@ -18096,7 +18187,7 @@ fn incident_regulatory_package_html(
   <p>{}</p>
   <h2>Evidence</h2>
   <table>
-    <thead><tr><th>Titel</th><th>Status</th><th>Requirement</th><th>Datei</th></tr></thead>
+    <thead><tr><th>Titel</th><th>Version</th><th>Klasse</th><th>Status</th><th>Requirement</th><th>Gueltig bis</th><th>SHA-256</th><th>Datei</th></tr></thead>
     <tbody>{}</tbody>
   </table>
   <h2>Audit-Timeline</h2>
@@ -18178,11 +18269,19 @@ fn incident_regulatory_package_pdf(
         for item in evidence_items {
             lines.extend(wrap_pdf_text(
                 &format!(
-                    "{} | {} | {} | {}",
+                    "{} | v{} | {} | {} | {} | {} | {} | SHA-256 {}",
                     item.title,
+                    item.version_number,
+                    item.sensitivity,
                     item.status_label,
                     item.requirement_code.as_deref().unwrap_or("-"),
-                    item.file_name.as_deref().unwrap_or("-")
+                    item.valid_until.as_deref().unwrap_or("-"),
+                    item.file_name.as_deref().unwrap_or("-"),
+                    if item.file_sha256.is_empty() {
+                        "-"
+                    } else {
+                        &item.file_sha256
+                    }
                 ),
                 92,
             ));
@@ -18402,16 +18501,24 @@ async fn record_incident_evidence_event(
 
 fn incident_evidence_rows(evidence_items: &[evidence_store::EvidenceItemSummary]) -> String {
     if evidence_items.is_empty() {
-        return web_empty_row(4, "Keine Evidence mit diesem Incident verknuepft.");
+        return web_empty_row(8, "Keine Evidence mit diesem Incident verknuepft.");
     }
     evidence_items
         .iter()
         .map(|item| {
             format!(
-                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                r#"<tr><td>{}</td><td>v{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td></tr>"#,
                 html_escape(&item.title),
+                item.version_number,
+                html_escape(&item.sensitivity),
                 html_escape(&item.status_label),
                 html_escape(item.requirement_code.as_deref().unwrap_or("-")),
+                html_escape(item.valid_until.as_deref().unwrap_or("-")),
+                html_escape(if item.file_sha256.is_empty() {
+                    "-"
+                } else {
+                    &item.file_sha256
+                }),
                 html_escape(item.file_name.as_deref().unwrap_or("-")),
             )
         })
@@ -18991,9 +19098,14 @@ fn incident_evidence_upload_panel(
             <label>Status<select name="status">{}</select></label>
             <label>Session-ID<input name="session_id" type="number" min="1"></label>
             <label>Requirement-ID<input name="requirement_id" type="number" min="1"></label>
+            <label>Vorgaenger-ID<input name="supersedes_id" type="number" min="1"></label>
+            <label>Schutzklasse<select name="sensitivity">{}</select></label>
+            <label>Gueltig bis<input name="valid_until" type="date"></label>
+            <label>Aufbewahren bis<input name="retention_until" type="date"></label>
           </div>
           <label>Linked Requirement<input name="linked_requirement" type="text"></label>
           <label>Beschreibung<textarea name="description" rows="3"></textarea></label>
+          <label>Retention-Begruendung<textarea name="retention_reason" rows="2"></textarea></label>
           <label>Datei<input name="file" type="file" accept=".pdf,.docx,.xlsx,.png,.jpg,.jpeg,.csv,.txt"></label>
           <button type="submit">Evidence an Fallakte haengen</button>
         </form>
@@ -19001,6 +19113,7 @@ fn incident_evidence_upload_panel(
         incident_id,
         html_escape(&return_to),
         evidence_status_options_for("SUBMITTED"),
+        evidence_sensitivity_options_for("INTERNAL"),
     )
 }
 
@@ -19008,16 +19121,24 @@ fn incident_evidence_markdown_rows(
     evidence_items: &[evidence_store::EvidenceItemSummary],
 ) -> String {
     if evidence_items.is_empty() {
-        return "| - | - | - | - |".to_string();
+        return "| - | - | - | - | - | - | - | - |".to_string();
     }
     evidence_items
         .iter()
         .map(|item| {
             format!(
-                "| {} | {} | {} | {} |",
+                "| {} | v{} | {} | {} | {} | {} | {} | {} |",
                 md_value(&item.title),
+                item.version_number,
+                md_value(&item.sensitivity),
                 md_value(&item.status_label),
                 md_optional(item.requirement_code.as_deref()),
+                md_optional(item.valid_until.as_deref()),
+                md_value(if item.file_sha256.is_empty() {
+                    "-"
+                } else {
+                    &item.file_sha256
+                }),
                 md_optional(item.file_name.as_deref()),
             )
         })
@@ -21201,6 +21322,7 @@ async fn status_operations_overview(
     match context {
         Some(context) => {
             signals.extend(control_operation_signals(state, context).await);
+            signals.extend(evidence_operation_signals(state, context).await);
             signals.extend(product_security_operation_signals(state, context).await);
             signals.extend(ai_governance_operation_signals(state, context).await);
         }
@@ -21218,6 +21340,13 @@ async fn status_operations_overview(
                 StatusSignalLevel::Warn,
                 "Tenant-Kontext fehlt; CVE-Reviews brauchen tenant_id und user_id.",
                 Some("/product-security/".to_string()),
+            ));
+            signals.push(StatusSignal::new(
+                "Evidence",
+                "Evidence-Lifecycle",
+                StatusSignalLevel::Warn,
+                "Tenant-Kontext fehlt; Ablauf- und Retention-Signale brauchen tenant_id und user_id.",
+                Some("/evidence/quality/".to_string()),
             ));
             signals.push(StatusSignal::new(
                 "Product Security",
@@ -21247,6 +21376,89 @@ async fn status_operations_overview(
         exit_code: severity.exit_code(),
         rows: status_signal_rows(&signals),
         signals,
+    }
+}
+
+async fn evidence_operation_signals(state: &AppState, context: &WebContext) -> Vec<StatusSignal> {
+    let href = Some(web_path_with_context("/evidence/quality/", Some(context)));
+    let Some(store) = state.evidence_store.as_ref() else {
+        return vec![StatusSignal::new(
+            "Evidence",
+            "Evidence-Lifecycle",
+            StatusSignalLevel::Warn,
+            "Evidence-Store ist nicht konfiguriert.",
+            href,
+        )];
+    };
+    match store
+        .evidence_quality(context.tenant_id, None, 1000, 100)
+        .await
+    {
+        Ok(quality) => vec![
+            StatusSignal::new(
+                "Evidence",
+                "Evidence abgelaufen",
+                if quality.summary.expired_items == 0 {
+                    StatusSignalLevel::Ok
+                } else {
+                    StatusSignalLevel::Danger
+                },
+                format!(
+                    "{} Nachweise sind abgelaufen.",
+                    quality.summary.expired_items
+                ),
+                href.clone(),
+            ),
+            StatusSignal::new(
+                "Evidence",
+                "Evidence laeuft bald ab",
+                if quality.summary.expiring_items == 0 {
+                    StatusSignalLevel::Ok
+                } else {
+                    StatusSignalLevel::Warn
+                },
+                format!(
+                    "{} Nachweise laufen innerhalb von 30 Tagen ab.",
+                    quality.summary.expiring_items
+                ),
+                href.clone(),
+            ),
+            StatusSignal::new(
+                "Evidence",
+                "Retention dokumentiert",
+                if quality.summary.retention_defined_items == quality.summary.total_items {
+                    StatusSignalLevel::Ok
+                } else {
+                    StatusSignalLevel::Warn
+                },
+                format!(
+                    "{}/{} Nachweise haben eine Aufbewahrungsfrist.",
+                    quality.summary.retention_defined_items, quality.summary.total_items
+                ),
+                href,
+            ),
+            StatusSignal::new(
+                "Evidence",
+                "Retention-Pruefung faellig",
+                if quality.summary.retention_due_items == 0 {
+                    StatusSignalLevel::Ok
+                } else {
+                    StatusSignalLevel::Warn
+                },
+                format!(
+                    "{} Nachweise haben das Aufbewahrungsdatum erreicht.",
+                    quality.summary.retention_due_items
+                ),
+                Some(web_path_with_context("/evidence/quality/", Some(context))),
+            ),
+        ],
+        Err(err) => vec![StatusSignal::new(
+            "Evidence",
+            "Evidence-Lifecycle",
+            StatusSignalLevel::Warn,
+            format!("Evidence-Lifecycle konnte nicht gelesen werden: {err}"),
+            href,
+        )],
     }
 }
 
@@ -22443,6 +22655,7 @@ fn save_evidence_upload(
     Ok(SavedEvidenceFile {
         relative_path,
         absolute_path,
+        sha256: format!("{:x}", Sha256::digest(&file.data)),
     })
 }
 
@@ -23364,6 +23577,31 @@ fn evidence_status_options_for(selected_status: &str) -> String {
     .iter()
     .map(|(code, label)| {
         let selected = if *code == selected_status {
+            " selected"
+        } else {
+            ""
+        };
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            html_escape(code),
+            selected,
+            html_escape(label),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn evidence_sensitivity_options_for(selected_sensitivity: &str) -> String {
+    [
+        ("PUBLIC", "Oeffentlich"),
+        ("INTERNAL", "Intern"),
+        ("CONFIDENTIAL", "Vertraulich"),
+        ("RESTRICTED", "Streng vertraulich"),
+    ]
+    .iter()
+    .map(|(code, label)| {
+        let selected = if *code == selected_sensitivity {
             " selected"
         } else {
             ""

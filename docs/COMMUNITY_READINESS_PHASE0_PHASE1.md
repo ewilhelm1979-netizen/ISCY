@@ -41,6 +41,7 @@ Dieser Bericht dokumentiert den ersten Community-Readiness-Lauf fuer Phase 0 und
 - Zentrale Middleware fuer Security Header.
 - Zentrale Deny-by-default-Grenze fuer `x-iscy-*` Identity Header im Production-Profil.
 - Routenspezifische Tenant-Negativtests fuer sensible Detail-, Write-, Evidence- und Exportpfade; fremde Evidence-Referenzen werden ohne Datenpreisgabe abgelehnt und temporaere Dateien entfernt.
+- Evidence-Lifecycle mit tenantgebundener Versionskette, serverseitigem SHA-256, Gueltigkeit, Retention, Schutzklasse und operativen Ablauf-/Disposition-Signalen.
 - Security-Signale in `/status/`, `/status/operations.json` und `/metrics`.
 
 ## Offene Risiken
@@ -49,6 +50,7 @@ Dieser Bericht dokumentiert den ersten Community-Readiness-Lauf fuer Phase 0 und
 - Ohne Security-Store bleiben Login-Rate-Limiting und HMAC-Nonce-Erkennung auf Einzelprozess/Timestamp-Fenster begrenzt.
 - PostgreSQL-Restore wird als optionaler Drill unterstuetzt; produktive Backup-Speicher, RPO/RTO und Restore-Freigaben bleiben Betreiberaufgabe.
 - Objektspeicher-/S3-artige Evidence-Backends sind noch nicht Teil des automatischen Restore-Drills.
+- SHA-256 wird beim Upload gebildet; periodische Re-Hash-Pruefung, digitale Signatur/Zeitstempel und Legal-Hold-/Disposition-Workflow sind noch nicht automatisiert.
 
 ## Empfehlung
 

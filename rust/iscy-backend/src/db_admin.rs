@@ -177,6 +177,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_SECURITY_RUNTIME_STATE_SCHEMA,
         postgres_sql: POSTGRES_SECURITY_RUNTIME_STATE_SCHEMA,
     },
+    Migration {
+        version: "0024_rust_evidence_lifecycle",
+        sqlite_sql: SQLITE_EVIDENCE_LIFECYCLE_SCHEMA,
+        postgres_sql: POSTGRES_EVIDENCE_LIFECYCLE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1213,6 +1218,40 @@ CREATE TABLE IF NOT EXISTS iscy_security_hmac_nonce (
 );
 CREATE INDEX IF NOT EXISTS idx_iscy_security_hmac_nonce_expiry
     ON iscy_security_hmac_nonce(expires_at);
+"#;
+
+const SQLITE_EVIDENCE_LIFECYCLE_SCHEMA: &str = r#"
+ALTER TABLE evidence_evidenceitem ADD COLUMN version_number INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE evidence_evidenceitem ADD COLUMN supersedes_id INTEGER NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN file_sha256 varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN valid_until TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN retention_until TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN retention_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN sensitivity varchar(24) NOT NULL DEFAULT 'INTERNAL';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_single_successor
+    ON evidence_evidenceitem(tenant_id, supersedes_id)
+    WHERE supersedes_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_evidence_valid_until
+    ON evidence_evidenceitem(tenant_id, valid_until);
+CREATE INDEX IF NOT EXISTS idx_evidence_retention_until
+    ON evidence_evidenceitem(tenant_id, retention_until);
+"#;
+
+const POSTGRES_EVIDENCE_LIFECYCLE_SCHEMA: &str = r#"
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS version_number BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS supersedes_id BIGINT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS file_sha256 varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS valid_until TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS retention_until TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS retention_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS sensitivity varchar(24) NOT NULL DEFAULT 'INTERNAL';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_single_successor
+    ON evidence_evidenceitem(tenant_id, supersedes_id)
+    WHERE supersedes_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_evidence_valid_until
+    ON evidence_evidenceitem(tenant_id, valid_until);
+CREATE INDEX IF NOT EXISTS idx_evidence_retention_until
+    ON evidence_evidenceitem(tenant_id, retention_until);
 "#;
 
 const SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"
