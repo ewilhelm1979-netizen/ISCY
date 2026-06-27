@@ -2728,6 +2728,13 @@ fn account_payload_error(err: &anyhow::Error) -> bool {
         .any(|cause| cause.to_string().contains("Account-Feld"))
 }
 
+fn evidence_upload_payload_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("nicht gefunden") || message.contains("darf nicht leer sein")
+    })
+}
+
 fn account_store_error_response(err: anyhow::Error, action: &'static str) -> Response {
     let payload_error = account_payload_error(&err);
     let details = err
@@ -7332,13 +7339,17 @@ async fn evidence_upload(
             if let Some(file) = saved_file.as_ref() {
                 let _ = fs::remove_file(&file.absolute_path);
             }
-            let message = err.to_string();
-            let status = if message.contains("wurde nicht gefunden")
-                || message.contains("darf nicht leer sein")
-            {
+            let payload_error = evidence_upload_payload_error(&err);
+            let status = if payload_error {
                 StatusCode::BAD_REQUEST
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
+            };
+            let message = if payload_error {
+                "Evidence-Verknuepfung ist ungueltig oder fuer diesen Tenant nicht verfuegbar."
+                    .to_string()
+            } else {
+                format!("Evidence konnte nicht erstellt werden: {err}")
             };
             (
                 status,
@@ -7350,7 +7361,7 @@ async fn evidence_upload(
                     } else {
                         "database_error"
                     },
-                    message: format!("Evidence konnte nicht erstellt werden: {message}"),
+                    message,
                 }),
             )
                 .into_response()

@@ -7,7 +7,7 @@ Dieser Bericht dokumentiert den ersten Community-Readiness-Lauf fuer Phase 0 und
 ## Gepruefter Stand
 
 - Repository: `ewilhelm1979-netizen/ISCY`
-- Branch fuer diesen Lauf: `hardening/community-readiness`
+- In `main` integriert; Ursprungslauf: `hardening/community-readiness`
 - Ausgangsstand: `fbc4c4b`
 - ISCY Release-Basis: `v23.7.24`
 - Rust Backend: `0.3.20`
@@ -36,19 +36,20 @@ Dieser Bericht dokumentiert den ersten Community-Readiness-Lauf fuer Phase 0 und
 - `init-admin` erzeugt den ersten produktiven Tenant/Admin ohne Demo-Seed und ohne Beispielpasswort.
 - DB-gestuetztes Login-Rate-Limiting blockiert wiederholte Fehlversuche pro Tenant/Username und funktioniert bei gemeinsamem Security-Store instanzuebergreifend.
 - Alertmanager-Webhook unterstuetzt HMAC-SHA256 ueber `timestamp.body` inklusive Zeitfenster, Nonce-Persistenz und Previous-Secret fuer Rotation.
-- `make rust-restore-smoke` prueft einen einfachen SQLite-/Media-Restore lokal automatisiert.
+- `make rust-restore-smoke` prueft einen echten Evidence-Upload, SQLite-/Media-Restore, restaurierte DB-Dateireferenz und SHA-256-Dateiintegritaet lokal automatisiert.
 - `make rust-postgres-restore-drill` prueft optional Dump/Restore gegen zwei wegwerfbare PostgreSQL-Testdatenbanken.
 - Zentrale Middleware fuer Security Header.
 - Zentrale Deny-by-default-Grenze fuer `x-iscy-*` Identity Header im Production-Profil.
+- Routenspezifische Tenant-Negativtests fuer sensible Detail-, Write-, Evidence- und Exportpfade; fremde Evidence-Referenzen werden ohne Datenpreisgabe abgelehnt und temporaere Dateien entfernt.
 - Security-Signale in `/status/`, `/status/operations.json` und `/metrics`.
 
 ## Offene Risiken
 
-- Vollstaendige Tenant-Isolation muss weiterhin routenweise durch Negativtests verdichtet werden.
+- Tenant-Isolation ist fuer die vorhandenen sensiblen Kernpfade verdichtet; jede neue objektbezogene Route braucht weiterhin einen Fremdmandanten-Negativtest.
 - Ohne Security-Store bleiben Login-Rate-Limiting und HMAC-Nonce-Erkennung auf Einzelprozess/Timestamp-Fenster begrenzt.
 - PostgreSQL-Restore wird als optionaler Drill unterstuetzt; produktive Backup-Speicher, RPO/RTO und Restore-Freigaben bleiben Betreiberaufgabe.
 - Objektspeicher-/S3-artige Evidence-Backends sind noch nicht Teil des automatischen Restore-Drills.
 
 ## Empfehlung
 
-Phase 1 ist fuer Community-/Einzelinstanzbetrieb und kleine Mehrinstanz-Setups deutlich belastbarer. Naechster fachlicher Schritt vor Phase 2: Tenant-Isolation-Negativtests verdichten, produktive Backup-/Restore-Runbooks je Zielumgebung nachweisen und Evidence-Storage-Backends in Restore-Drills einbeziehen.
+Phase 1 ist fuer Community-/Einzelinstanzbetrieb und kleine Mehrinstanz-Setups deutlich belastbarer. Naechster fachlicher Schritt vor Phase 2: produktive Backup-/Restore-Runbooks je Zielumgebung mit RPO/RTO nachweisen, optionale Evidence-Storage-Backends in Restore-Drills einbeziehen und die Tenant-Negativtest-Matrix bei jeder neuen Objekt-Route fortschreiben.

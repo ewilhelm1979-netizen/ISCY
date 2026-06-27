@@ -67,7 +67,7 @@ nix run .#iscy-backend -- init-admin
 
 ## Restore-Drills
 
-Der lokale Standard-Smoke prueft SQLite und Media-Dateien:
+Der lokale Standard-Smoke startet eine isolierte Rust-Instanz, legt einen echten Evidence-Upload an und restauriert SQLite-Datenbank plus Media-Verzeichnis. Der Drill prueft anschliessend, ob die restaurierte Evidence-Zeile denselben Dateipfad referenziert und ob die SHA-256-Pruefsumme der Datei unveraendert ist:
 
 ```bash
 nix develop --command make rust-restore-smoke

@@ -806,6 +806,8 @@ Im Production-Modus (`ISCY_APP_MODE=production`) bricht ISCY den Start ab, wenn 
 
 Lokale Logins sind gegen einfache Brute-Force-Schleifen begrenzt: Nach fuenf fehlgeschlagenen Versuchen pro Tenant/Username blockiert ISCY weitere Versuche fuer 15 Minuten. Mit angewendeter Migration `0023_rust_security_runtime_state` wird dieser Zustand im Security-Store persistiert und kann von mehreren Backend-Instanzen gemeinsam genutzt werden. Der Alertmanager-Webhook kann zusaetzlich zum Bearer-Token mit `ISCY_ALERTMANAGER_HMAC_SECRET_FILE` signierte `timestamp.body`-Requests verlangen; das Replay-Fenster wird ueber `ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS` gesteuert. Optional kann `x-iscy-alert-nonce` gesendet werden; bei aktivem Security-Store speichert ISCY verwendete Nonces im Replay-Fenster und lehnt Wiederholungen ab.
 
+Die Tenant-Isolation wird nicht nur auf Listen, sondern auch auf sensible Objektoperationen angewendet. Negativtests decken fremde Detail-, Write- und Exportzugriffe fuer Kernobjekte ab, darunter Incidents mit NIS2-/DORA-/DSGVO- und Timeline-Exporten sowie Management-Review-Pakete. Evidence-Uploads duerfen keine Session und keinen Incident eines fremden Tenants referenzieren. ISCY antwortet in diesem Fall ohne Fremdmandantendaten mit `400 invalid_evidence_upload` und entfernt die bereits temporaer gespeicherte Datei.
+
 Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:
 
 - `deploy/monitoring/prometheus/iscy-scrape.yml`
@@ -842,6 +844,8 @@ make rust-smoke
 make team-test
 nix flake check
 ```
+
+`rust-restore-smoke` erzeugt ueber die laufende Rust-API einen Evidence-Upload, restauriert SQLite-Datenbank und Media-Verzeichnis und prueft danach die DB-Dateireferenz sowie die unveraenderte SHA-256-Pruefsumme. Damit wird nicht nur die Existenz irgendeiner Datei, sondern die Integritaet eines zusammengehoerigen Evidence-Artefakts getestet.
 
 Agent-Payload lokal testen:
 

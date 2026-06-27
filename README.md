@@ -116,6 +116,8 @@ nix develop --command make rust-restore-smoke
 nix develop --command make team-test
 ```
 
+`rust-restore-smoke` legt per HTTP einen echten Evidence-Nachweis an und prueft nach dem SQLite-/Media-Restore sowohl die Datenbankreferenz als auch die SHA-256-Integritaet der wiederhergestellten Datei.
+
 Optionaler PostgreSQL-Restore-Drill mit zwei wegwerfbaren Testdatenbanken:
 
 ```bash

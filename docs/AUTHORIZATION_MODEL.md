@@ -36,4 +36,6 @@ Vor jedem Production-Cutover muessen mindestens diese Szenarien abgedeckt sein:
 - manipulierte Objekt-ID,
 - ungeschuetzte Admin-Funktionen.
 
-Der erste Hardening-Lauf deckt die zentrale Production-Header-Grenze ab. Weitere routenspezifische Tenant-Isolationstests bleiben Phase-1-Restarbeit.
+Die zentrale Production-Header-Grenze und die fachlichen Store-Abfragen sind durch Negativtests abgesichert. Die routenspezifische Suite prueft unter anderem fremde Supplier, Prozesse, Produkte, Product-Security-Tasks, Vulnerabilities, Risiken, Incidents, Incident-Writes, NIS2-/DORA-/DSGVO- und Timeline-Exporte, Evidence-Session-/Incident-Verknuepfungen, Roadmaps, Wizard-Sessions, Reports und Management-Review-Details/-Writes/-Exporte.
+
+Evidence-Uploads validieren tenantgebundene Session-, Massnahmen- und Incident-Referenzen vor dem Insert. Bei einer ungueltigen oder fremden Referenz antwortet die API mit `400 invalid_evidence_upload`, gibt keine Fremdmandantendaten preis und entfernt eine bereits temporaer geschriebene Upload-Datei. Die Negativtest-Matrix bleibt ein fortlaufendes Release-Gate: neue objektbezogene Read-, Write- oder Export-Routen muessen einen Fremdmandantenfall erhalten.

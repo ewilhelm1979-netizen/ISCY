@@ -4493,6 +4493,82 @@ async fn incident_detail_blocks_foreign_tenant_incident() {
 }
 
 #[tokio::test]
+async fn incident_writes_and_exports_block_foreign_tenant_incident() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    insert_incident_event_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let update = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/incidents/2")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"status":"RESOLVED"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(update.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "incident_not_found");
+
+    for path in [
+        "/api/v1/incidents/2/nis2-export",
+        "/api/v1/incidents/2/nis2-export.html",
+        "/api/v1/incidents/2/nis2-export.pdf",
+        "/api/v1/incidents/2/dora-export",
+        "/api/v1/incidents/2/dora-export.html",
+        "/api/v1/incidents/2/dora-export.pdf",
+        "/api/v1/incidents/2/dsgvo-export",
+        "/api/v1/incidents/2/dsgvo-export.html",
+        "/api/v1/incidents/2/dsgvo-export.pdf",
+        "/api/v1/incidents/2/timeline.csv",
+        "/api/v1/incidents/2/timeline.json",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "path: {path}");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error_code"], "incident_not_found", "path: {path}");
+    }
+
+    let foreign_status: String =
+        sqlx::query_scalar("SELECT status FROM incidents_incident WHERE id = 2")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(foreign_status, "TRIAGE");
+}
+
+#[tokio::test]
 async fn incident_update_updates_status_and_sent_marker() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -5247,6 +5323,76 @@ async fn evidence_upload_creates_item_writes_file_and_syncs_needs() {
     .unwrap();
     assert_eq!(synced.0, "COVERED");
     assert_eq!(synced.1, 2);
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn evidence_upload_rejects_foreign_tenant_links_and_removes_staged_files() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let media_root = test_media_root("foreign-evidence-upload");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    for (boundary, session_id, incident_id) in [
+        ("foreign-session-boundary", "102", "1"),
+        ("foreign-incident-boundary", "100", "2"),
+    ] {
+        let body = multipart_body(
+            boundary,
+            &[
+                ("title", "Rejected Foreign Evidence"),
+                ("session_id", session_id),
+                ("incident_id", incident_id),
+                ("status", "SUBMITTED"),
+            ],
+            Some((
+                "file",
+                "foreign-link.txt",
+                "text/plain",
+                b"must not survive validation\n",
+            )),
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/evidence/uploads")
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "ADMIN")
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, StatusCode::BAD_REQUEST, "payload: {payload}");
+        assert_eq!(payload["error_code"], "invalid_evidence_upload");
+    }
+
+    let evidence_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evidence_evidenceitem")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(evidence_count, 3);
+    assert_eq!(regular_file_count(&media_root), 0);
     let _ = fs::remove_dir_all(media_root);
 }
 
@@ -6904,6 +7050,73 @@ async fn management_review_exports_markdown_html_pdf_and_json() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["api_version"], "v1");
     assert_eq!(payload["package"]["title"], "Q2 Steering Review");
+}
+
+#[tokio::test]
+async fn management_review_detail_write_and_exports_block_foreign_tenant_package() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_management_review_table(&pool).await;
+    insert_management_review_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    for path in [
+        "/api/v1/reports/management-reviews/22",
+        "/api/v1/reports/management-reviews/22/export",
+        "/api/v1/reports/management-reviews/22/export.html",
+        "/api/v1/reports/management-reviews/22/export.pdf",
+        "/api/v1/reports/management-reviews/22/export.json",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "path: {path}");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            payload["error_code"], "management_review_not_found",
+            "path: {path}"
+        );
+    }
+
+    let update = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/reports/management-reviews/22")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"status":"APPROVED","decision_notes":"cross tenant"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::NOT_FOUND);
+
+    let foreign_status: String =
+        sqlx::query_scalar("SELECT status FROM reports_managementreviewpackage WHERE id = 22")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(foreign_status, "DRAFT");
 }
 
 #[tokio::test]
@@ -10176,6 +10389,23 @@ fn test_media_root(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!("iscy-{name}-{}-{nonce}", std::process::id()));
     fs::create_dir_all(&root).unwrap();
     root
+}
+
+fn regular_file_count(path: &std::path::Path) -> usize {
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                regular_file_count(&path)
+            } else {
+                usize::from(path.is_file())
+            }
+        })
+        .sum()
 }
 
 fn nvd_fixture_base_url(name: &str, payload: serde_json::Value) -> String {

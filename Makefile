@@ -118,15 +118,42 @@ rust-restore-smoke:
 	restore_url="sqlite:////$${restore_path#/}"; \
 	media_dir="$$tmpdir/media"; \
 	restore_media="$$tmpdir/restored-media"; \
-	mkdir -p "$$media_dir/evidence"; \
-	printf 'restore smoke evidence\n' > "$$media_dir/evidence/probe.txt"; \
+	cookie_file="$$tmpdir/iscy-restore.cookies"; \
+	evidence_file="$$tmpdir/restore-evidence.txt"; \
+	bind="$${RUST_RESTORE_BIND:-127.0.0.1:19001}"; \
+	host="$${bind%:*}"; \
+	port="$${bind##*:}"; \
+	if [ "$$host" = "0.0.0.0" ]; then host="127.0.0.1"; fi; \
+	url="http://$$host:$$port"; \
+	command -v jq >/dev/null; \
+	printf 'restore smoke evidence\n' > "$$evidence_file"; \
 	echo "Rust restore smoke source DB: $$db_url"; \
 	DATABASE_URL="$$db_url" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- init-demo; \
+	DATABASE_URL="$$db_url" ISCY_MEDIA_ROOT="$$media_dir" RUST_BACKEND_BIND="$$bind" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend >"$$tmpdir/iscy-source.log" 2>&1 & \
+	pid="$$!"; \
+	trap 'kill "$$pid" >/dev/null 2>&1 || true' EXIT INT TERM; \
+	for _ in $$(seq 1 60); do \
+		if curl -fsS "$$url/health/live" >/dev/null 2>&1; then break; fi; \
+		if ! kill -0 "$$pid" >/dev/null 2>&1; then cat "$$tmpdir/iscy-source.log"; exit 1; fi; \
+		sleep 1; \
+	done; \
+	curl -fsS "$$url/health/live" >/dev/null; \
+	curl -fsS -c "$$cookie_file" -H "content-type: application/json" -d '{"tenant_id":1,"username":"admin","password":"Admin123!"}' "$$url/api/v1/auth/sessions" >/dev/null; \
+	upload_json=$$(curl -fsS -b "$$cookie_file" -F title='Restore Integrity Probe' -F status='SUBMITTED' -F "file=@$$evidence_file;filename=restore-evidence.txt;type=text/plain" "$$url/api/v1/evidence/uploads"); \
+	relative_file=$$(printf '%s' "$$upload_json" | jq -er '.item.file_name'); \
+	source_hash=$$(sha256sum "$$media_dir/$$relative_file" | cut -d ' ' -f 1); \
+	kill "$$pid" >/dev/null 2>&1 || true; \
+	wait "$$pid" 2>/dev/null || true; \
+	pid=""; \
 	cp "$$db_path" "$$restore_path"; \
 	cp -a "$$media_dir" "$$restore_media"; \
 	DATABASE_URL="$$restore_url" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- migrate; \
 	test -s "$$restore_path"; \
-	test -f "$$restore_media/evidence/probe.txt"; \
+	restored_file=$$(sqlite3 "$$restore_path" "SELECT file FROM evidence_evidenceitem WHERE tenant_id = 1 AND title = 'Restore Integrity Probe' ORDER BY id DESC LIMIT 1;"); \
+	test "$$restored_file" = "$$relative_file"; \
+	test -f "$$restore_media/$$restored_file"; \
+	restored_hash=$$(sha256sum "$$restore_media/$$restored_file" | cut -d ' ' -f 1); \
+	test "$$restored_hash" = "$$source_hash"; \
 	echo "Rust restore smoke OK: $$restore_url"
 
 rust-postgres-restore-drill:

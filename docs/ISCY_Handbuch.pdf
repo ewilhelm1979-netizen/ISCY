@@ -3,7 +3,7 @@
 << /Type /Catalog /Pages 2 0 R >>
 endobj
 2 0 obj
-<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R] /Count 17 >>
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R] /Count 18 >>
 endobj
 3 0 obj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
@@ -2053,7 +2053,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
 endobj
 31 0 obj
-<< /Length 4040 >>
+<< /Length 4618 >>
 stream
 BT
 /F1 9 Tf
@@ -2076,6 +2076,20 @@ T*
 (bei aktivem Security-Store speichert ISCY verwendete Nonces im Replay-Fenster und lehnt) Tj
 T*
 (Wiederholungen ab.) Tj
+T*
+() Tj
+T*
+(Die Tenant-Isolation wird nicht nur auf Listen, sondern auch auf sensible Objektoperationen) Tj
+T*
+(angewendet. Negativtests decken fremde Detail-, Write- und Exportzugriffe fuer Kernobjekte ab,) Tj
+T*
+(darunter Incidents mit NIS2-/DORA-/DSGVO- und Timeline-Exporten sowie) Tj
+T*
+(Management-Review-Pakete. Evidence-Uploads duerfen keine Session und keinen Incident eines) Tj
+T*
+(fremden Tenants referenzieren. ISCY antwortet in diesem Fall ohne Fremdmandantendaten mit 400) Tj
+T*
+(invalidevidenceupload und entfernt die bereits temporaer gespeicherte Datei.) Tj
 T*
 () Tj
 T*
@@ -2179,6 +2193,29 @@ T*
 T*
 () Tj
 T*
+(rust-restore-smoke erzeugt ueber die laufende Rust-API einen Evidence-Upload, restauriert) Tj
+T*
+(SQLite-Datenbank und Media-Verzeichnis und prueft danach die DB-Dateireferenz sowie die) Tj
+T*
+(unveraenderte SHA-256-Pruefsumme. Damit wird nicht nur die Existenz irgendeiner Datei, sondern) Tj
+T*
+(die Integritaet eines zusammengehoerigen Evidence-Artefakts getestet.) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 3000 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Agent-Payload lokal testen:) Tj
 T*
 () Tj
@@ -2203,19 +2240,6 @@ T*
 T*
 (Produktive Agenten sollten mit Enrollment-Token aufgenommen werden:) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 3153 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (ISCY_BACKEND_URL=http://127.0.0.1:9000 \\) Tj
@@ -2336,6 +2360,19 @@ T*
 T*
 (- Kritische Schnittstellen \(z. B. OPC UA, MES, SCADA, Identitaetsprovider\) inventarisieren.) Tj
 T*
+ET
+endstream
+endobj
+34 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
+endobj
+35 0 obj
+<< /Length 3813 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- Notfall- und Wiederanlaufablaeufe fuer Produktion ueben.) Tj
 T*
 (- In ISCY als Risiko, Massnahme, Evidenz und Incident-Playbook abbilden.) Tj
@@ -2360,19 +2397,6 @@ T*
 T*
 (- make docker-smoke ist ohne Fehler durchgelaufen.) Tj
 T*
-ET
-endstream
-endobj
-34 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
-endobj
-35 0 obj
-<< /Length 3897 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (2. CRA-Readiness sichtbar) Tj
 T*
 (- Product-Security-Scope ist gepflegt.) Tj
@@ -2493,6 +2517,19 @@ T*
 T*
 (aggressivere Agenten, sondern durch bessere Abdeckung, Priorisierung, Nachweisverknuepfung und) Tj
 T*
+ET
+endstream
+endobj
+36 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
+endobj
+37 0 obj
+<< /Length 3788 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (saubere Deployment-Pakete.) Tj
 T*
 () Tj
@@ -2517,19 +2554,6 @@ T*
 T*
 (- Evidence: Nachweis) Tj
 T*
-ET
-endstream
-endobj
-36 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
-endobj
-37 0 obj
-<< /Length 3298 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- CVE: standardisierte Kennung fuer eine bekannte Schwachstelle) Tj
 T*
 (- CVSS: Basisscore fuer technische Schwere) Tj
@@ -2650,6 +2674,19 @@ T*
 T*
 (- in Pull Requests geprueft werden kann) Tj
 T*
+ET
+endstream
+endobj
+38 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 39 0 R >>
+endobj
+39 0 obj
+<< /Length 160 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Das PDF-Handbuch docs/ISCYHandbuch.pdf wird reproduzierbar aus Markdown erzeugt:) Tj
@@ -2662,47 +2699,49 @@ ET
 endstream
 endobj
 xref
-0 38
+0 40
 0000000000 65535 f
 0000000009 00000 n
 0000000058 00000 n
-0000000226 00000 n
-0000000296 00000 n
-0000000422 00000 n
-0000003678 00000 n
-0000003804 00000 n
-0000006692 00000 n
-0000006818 00000 n
-0000009289 00000 n
-0000009417 00000 n
-0000011413 00000 n
-0000011541 00000 n
-0000014689 00000 n
-0000014817 00000 n
-0000017396 00000 n
-0000017524 00000 n
-0000020411 00000 n
-0000020539 00000 n
-0000022994 00000 n
-0000023122 00000 n
-0000026775 00000 n
-0000026903 00000 n
-0000030435 00000 n
-0000030563 00000 n
-0000034339 00000 n
-0000034467 00000 n
-0000039502 00000 n
-0000039630 00000 n
-0000043838 00000 n
-0000043966 00000 n
-0000048058 00000 n
-0000048186 00000 n
-0000051391 00000 n
-0000051519 00000 n
-0000055468 00000 n
-0000055596 00000 n
+0000000233 00000 n
+0000000303 00000 n
+0000000429 00000 n
+0000003685 00000 n
+0000003811 00000 n
+0000006699 00000 n
+0000006825 00000 n
+0000009296 00000 n
+0000009424 00000 n
+0000011420 00000 n
+0000011548 00000 n
+0000014696 00000 n
+0000014824 00000 n
+0000017403 00000 n
+0000017531 00000 n
+0000020418 00000 n
+0000020546 00000 n
+0000023001 00000 n
+0000023129 00000 n
+0000026782 00000 n
+0000026910 00000 n
+0000030442 00000 n
+0000030570 00000 n
+0000034346 00000 n
+0000034474 00000 n
+0000039509 00000 n
+0000039637 00000 n
+0000043845 00000 n
+0000043973 00000 n
+0000048643 00000 n
+0000048771 00000 n
+0000051823 00000 n
+0000051951 00000 n
+0000055816 00000 n
+0000055944 00000 n
+0000059784 00000 n
+0000059912 00000 n
 trailer
-<< /Size 38 /Root 1 0 R >>
+<< /Size 40 /Root 1 0 R >>
 startxref
-58946
+60123
 %%EOF

@@ -54,7 +54,7 @@ Fuer Rotation kann temporaer `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE` geset
 
 ## Restore-Drills
 
-`make rust-restore-smoke` prueft lokal SQLite plus Media-Dateien. Fuer PostgreSQL gibt es einen optionalen Drill gegen zwei wegwerfbare Testdatenbanken:
+`make rust-restore-smoke` prueft lokal SQLite plus Media-Dateien als zusammengehoerige Evidence-Einheit. Der Drill erzeugt einen Evidence-Upload ueber die Rust-API, restauriert Datenbank und Media-Verzeichnis, liest den Dateipfad aus der restaurierten Evidence-Zeile und vergleicht die SHA-256-Pruefsumme vor und nach dem Restore. Fuer PostgreSQL gibt es einen optionalen Drill gegen zwei wegwerfbare Testdatenbanken:
 
 ```bash
 ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_source \
