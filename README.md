@@ -1,18 +1,38 @@
-# ISCY V23.7.24 / Rust 0.3.20
+# ISCY
 
-ISCY ist eine ISMS-/Cybersecurity-Plattform mit ISO 27001-, NIS2- und KRITIS-Unterstuetzung, Incident-/Meldeworkflow, Third-Party-/Supplier-Risk, Product Security, AI Governance, Zero-Trust-Agent-Posture, lokalem CVE-Enrichment und lokalem LLM-Betrieb.
+**Self-hosted open-source cybersecurity governance for ISMS, product security, AI governance, and regulatory evidence.**
 
-Der Runtime-Cutover nach Rust ist abgeschlossen: Die produktive Anwendung laeuft ueber den Rust-Axum-Service in `rust/iscy-backend`. Die fruehere Django/Python-Anwendung, ihre Templates, Settings, Requirements und Startpfade wurden aus dem Repository entfernt.
+ISCY connects risks, controls, assets, incidents, evidence, supplier risk, product security, SBOM, CSAF, VEX, and CVE workflows in one auditable platform.
+
+It is designed for organizations working with regulatory requirements and security frameworks such as:
+
+* ISO 27001
+* NIS2
+* DORA
+* Cyber Resilience Act
+* EU AI Act
+* GDPR
+* KRITIS
+
+ISCY follows a local-first and privacy-conscious approach. Its production runtime is implemented in Rust using Axum and can be operated in NixOS or Docker-based environments.
+
+> **Project status:** ISCY is actively developed and currently in an early community-adoption phase. Interfaces, data models, and operational procedures may continue to evolve.
+
+## Core capabilities
+
+* ISMS risk, control, and evidence management
+* Security incident and regulatory reporting workflows
+* Product security and vulnerability management
+* SBOM, CSAF, VEX, and CVE processing
+* Supplier and third-party risk management
+* AI governance and regulatory traceability
+* Zero Trust posture collection
+* Audit-ready evidence and management reporting
 
 ## License
 
-ISCY is licensed under the GNU Affero General Public License v3.0 only
-(`AGPL-3.0-only`).
+ISCY is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`).
 
-Versions published before the license change remain available under the
-license terms that applied to those versions.
-
-See the [LICENSE](LICENSE) file for the complete license text.
 
 ## Projekt- und Pruefhinweis
 
