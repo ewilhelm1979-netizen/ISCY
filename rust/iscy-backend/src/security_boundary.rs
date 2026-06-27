@@ -10,8 +10,8 @@ use iscy_backend::hardening::{AppMode, CommunitySecurityConfig};
 
 const LEGACY_IDENTITY_QUERY_KEYS: &[&str] = &["tenant_id", "user_id", "user_email"];
 
-/// Removes legacy URL identity context before production requests reach any
-/// route handler. A valid session or bearer token remains available through
+/// Removes legacy URL identity context before non-development requests reach
+/// any route handler. A valid session or bearer token remains available through
 /// headers/cookies, while unauthenticated query-only context becomes empty.
 pub async fn sanitize_legacy_identity_query(
     State(config): State<CommunitySecurityConfig>,
@@ -46,7 +46,9 @@ fn sanitized_uri(uri: &Uri) -> Result<Option<Uri>, axum::http::uri::InvalidUri> 
     };
 
     let segments = query.split('&').collect::<Vec<_>>();
-    let contains_legacy_identity = segments.iter().any(|segment| is_legacy_identity_segment(segment));
+    let contains_legacy_identity = segments
+        .iter()
+        .any(|segment| is_legacy_identity_segment(segment));
     if !contains_legacy_identity {
         return Ok(None);
     }
