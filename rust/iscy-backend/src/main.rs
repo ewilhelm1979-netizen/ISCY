@@ -1,8 +1,9 @@
+mod evidence_download;
 mod security_boundary;
 
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
-use axum::middleware;
+use axum::{middleware, routing::get, Router};
 use iscy_backend::{
     account_store::AccountStore,
     agent_governance_store::AgentGovernanceStore,
@@ -194,10 +195,22 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = TcpListener::bind(addr).await?;
     println!("ISCY Rust backend listening on http://{}", addr);
-    let app = app_router_with_state(state).layer(middleware::from_fn_with_state(
-        security_config,
-        sanitize_legacy_identity_query,
-    ));
+    let evidence_download_router = Router::new()
+        .route(
+            "/api/v1/evidence/{evidence_id}/download",
+            get(evidence_download::download_evidence),
+        )
+        .route(
+            "/evidence/{evidence_id}/download",
+            get(evidence_download::download_evidence),
+        )
+        .with_state(state.clone());
+    let app = evidence_download_router
+        .merge(app_router_with_state(state))
+        .layer(middleware::from_fn_with_state(
+            security_config,
+            sanitize_legacy_identity_query,
+        ));
     axum::serve(listener, app).await?;
     Ok(())
 }
