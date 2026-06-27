@@ -45,27 +45,17 @@ fn sanitized_uri(uri: &Uri) -> Result<Option<Uri>, axum::http::uri::InvalidUri> 
         return Ok(None);
     };
 
-    let pairs = form_urlencoded::parse(query.as_bytes()).collect::<Vec<_>>();
-    let contains_legacy_identity = pairs.iter().any(|(key, _)| {
-        LEGACY_IDENTITY_QUERY_KEYS
-            .iter()
-            .any(|blocked| key.as_ref() == *blocked)
-    });
+    let segments = query.split('&').collect::<Vec<_>>();
+    let contains_legacy_identity = segments.iter().any(|segment| is_legacy_identity_segment(segment));
     if !contains_legacy_identity {
         return Ok(None);
     }
 
-    let mut serializer = form_urlencoded::Serializer::new(String::new());
-    for (key, value) in pairs {
-        if LEGACY_IDENTITY_QUERY_KEYS
-            .iter()
-            .any(|blocked| key.as_ref() == *blocked)
-        {
-            continue;
-        }
-        serializer.append_pair(&key, &value);
-    }
-    let sanitized_query = serializer.finish();
+    let sanitized_query = segments
+        .into_iter()
+        .filter(|segment| !is_legacy_identity_segment(segment))
+        .collect::<Vec<_>>()
+        .join("&");
 
     let mut rebuilt = uri.path().to_string();
     if !sanitized_query.is_empty() {
@@ -74,6 +64,56 @@ fn sanitized_uri(uri: &Uri) -> Result<Option<Uri>, axum::http::uri::InvalidUri> 
     }
 
     rebuilt.parse::<Uri>().map(Some)
+}
+
+fn is_legacy_identity_segment(segment: &str) -> bool {
+    let raw_key = segment
+        .split_once('=')
+        .map(|(key, _)| key)
+        .unwrap_or(segment);
+    let Some(decoded_key) = percent_decode_query_key(raw_key.as_bytes()) else {
+        return false;
+    };
+
+    LEGACY_IDENTITY_QUERY_KEYS
+        .iter()
+        .any(|blocked| decoded_key == *blocked)
+}
+
+fn percent_decode_query_key(input: &[u8]) -> Option<String> {
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        match input[index] {
+            b'%' => {
+                if index + 2 >= input.len() {
+                    return None;
+                }
+                let high = hex_value(input[index + 1])?;
+                let low = hex_value(input[index + 2])?;
+                decoded.push((high << 4) | low);
+                index += 3;
+            }
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            value => {
+                decoded.push(value);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -105,6 +145,20 @@ mod tests {
         let sanitized = sanitized_uri(&uri).unwrap().unwrap();
 
         assert_eq!(sanitized.to_string(), "/risks/?review_filter=open");
+    }
+
+    #[test]
+    fn preserves_original_encoding_for_other_parameters() {
+        let uri: Uri = "/evidence/?tenant_id=4&return_to=%2Fincidents%2F1%3Ftimeline%3Dall"
+            .parse()
+            .unwrap();
+
+        let sanitized = sanitized_uri(&uri).unwrap().unwrap();
+
+        assert_eq!(
+            sanitized.to_string(),
+            "/evidence/?return_to=%2Fincidents%2F1%3Ftimeline%3Dall"
+        );
     }
 
     #[test]
