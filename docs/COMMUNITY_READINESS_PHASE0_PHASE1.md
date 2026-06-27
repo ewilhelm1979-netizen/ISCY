@@ -9,8 +9,8 @@ Dieser Bericht dokumentiert den ersten Community-Readiness-Lauf fuer Phase 0 und
 - Repository: `ewilhelm1979-netizen/ISCY`
 - In `main` integriert; Ursprungslauf: `hardening/community-readiness`
 - Ausgangsstand: `fbc4c4b`
-- ISCY Release-Basis: `v23.7.25`
-- Rust Backend: `0.3.21`
+- ISCY Release-Basis: `v23.7.26`
+- Rust Backend: `0.3.22`
 - Runtime: Rust-only Axum Backend
 
 ## Findings

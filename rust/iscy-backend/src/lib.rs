@@ -46,6 +46,7 @@ pub mod import_preview;
 pub mod import_store;
 pub mod incident_store;
 pub mod process_store;
+pub mod product_security_package_store;
 pub mod product_security_store;
 pub mod report_store;
 pub mod request_context;
@@ -705,6 +706,22 @@ struct WebProductSecurityCveReviewBulkForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct WebProductSecurityEvidencePackageCreateForm {
+    product_id: i64,
+    release_id: Option<i64>,
+    psirt_case_id: Option<i64>,
+    package_type: String,
+    title: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebProductSecurityEvidencePackageReviewForm {
+    status: String,
+    decision: String,
+    review_notes: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebRiskReviewForm {
     action: String,
     review_notes: Option<String>,
@@ -1023,6 +1040,29 @@ pub struct ProductSecuritySbomDiffResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub diff: product_security_store::ProductSecuritySbomDiff,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductSecurityEvidencePackagesResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub metrics: product_security_package_store::ProductSecurityEvidencePackageMetrics,
+    pub packages: Vec<product_security_package_store::ProductSecurityEvidencePackageSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductSecurityEvidencePackageDetailResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub detail: product_security_package_store::ProductSecurityEvidencePackageDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProductSecurityEvidencePackageWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub detail: product_security_package_store::ProductSecurityEvidencePackageDetail,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5648,6 +5688,245 @@ async fn product_security_product_detail(
         )
             .into_response(),
     }
+}
+
+async fn product_security_evidence_packages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.product_security_store else {
+        return product_security_package_store_missing_response();
+    };
+    let packages = match store.evidence_packages(context.tenant_id, 500).await {
+        Ok(packages) => packages,
+        Err(err) => return product_security_package_error_response(err),
+    };
+    let metrics = match store.evidence_package_metrics(context.tenant_id).await {
+        Ok(metrics) => metrics,
+        Err(err) => return product_security_package_error_response(err),
+    };
+    (
+        StatusCode::OK,
+        Json(ProductSecurityEvidencePackagesResponse {
+            api_version: "v1",
+            tenant_id: context.tenant_id,
+            metrics,
+            packages,
+        }),
+    )
+        .into_response()
+}
+
+async fn product_security_evidence_package_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<
+        product_security_package_store::ProductSecurityEvidencePackageCreateRequest,
+    >,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return product_security_package_store_missing_response();
+    };
+    match store
+        .create_evidence_package(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => (
+            StatusCode::CREATED,
+            Json(ProductSecurityEvidencePackageWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Err(err) => product_security_package_invalid_response(err),
+    }
+}
+
+async fn product_security_evidence_package_detail(
+    Path(package_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.product_security_store else {
+        return product_security_package_store_missing_response();
+    };
+    match store
+        .evidence_package_detail(context.tenant_id, package_id)
+        .await
+    {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(ProductSecurityEvidencePackageDetailResponse {
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => product_security_package_not_found_response(),
+        Err(err) => product_security_package_error_response(err),
+    }
+}
+
+async fn product_security_evidence_package_review(
+    Path(package_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<
+        product_security_package_store::ProductSecurityEvidencePackageReviewRequest,
+    >,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return product_security_package_store_missing_response();
+    };
+    match store
+        .review_evidence_package(context.tenant_id, package_id, context.user_id, payload)
+        .await
+    {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(ProductSecurityEvidencePackageWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => product_security_package_not_found_response(),
+        Err(err) => product_security_package_invalid_response(err),
+    }
+}
+
+async fn product_security_evidence_package_refresh(
+    Path(package_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return product_security_package_store_missing_response();
+    };
+    match store
+        .refresh_evidence_package(context.tenant_id, package_id, context.user_id)
+        .await
+    {
+        Ok(Some(detail)) => (
+            StatusCode::CREATED,
+            Json(ProductSecurityEvidencePackageWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => product_security_package_not_found_response(),
+        Err(err) => product_security_package_invalid_response(err),
+    }
+}
+
+async fn product_security_evidence_package_export(
+    Path((package_id, format)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.product_security_store else {
+        return product_security_package_store_missing_response();
+    };
+    match store
+        .evidence_package_detail(context.tenant_id, package_id)
+        .await
+    {
+        Ok(Some(detail)) => product_security_evidence_package_download_response(&detail, &format),
+        Ok(None) => product_security_package_not_found_response(),
+        Err(err) => product_security_package_error_response(err),
+    }
+}
+
+fn product_security_package_store_missing_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "database_not_configured",
+            message: "Rust-Product-Security-Store ist nicht konfiguriert.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn product_security_package_not_found_response() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "product_security_evidence_package_not_found",
+            message: "Product-Security-Evidence-Paket wurde nicht gefunden.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn product_security_package_invalid_response(err: anyhow::Error) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "invalid_product_security_evidence_package",
+            message: err.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn product_security_package_error_response(err: anyhow::Error) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "database_error",
+            message: format!(
+                "Product-Security-Evidence-Paket konnte nicht verarbeitet werden: {err}"
+            ),
+        }),
+    )
+        .into_response()
 }
 
 async fn product_security_product_roadmap(
@@ -13629,6 +13908,11 @@ async fn web_status(
             "SBOM, CSAF, CVE-Reviews und CRA/AI-Act-Signale",
         ),
         web_link_card(
+            "Evidence-Pakete",
+            &web_path_with_context("/product-security/evidence-packages/", context.as_ref()),
+            "Versionierte Release- und PSIRT-Entscheidungsgrundlagen",
+        ),
+        web_link_card(
             "Incidents",
             &web_path_with_context("/incidents/", context.as_ref()),
             "Alert-Fallakten, Runbooks, Evidence und Meldepakete",
@@ -16433,7 +16717,7 @@ async fn web_product_security(
             );
             let body = format!(
                 r#"
-                <section class="hero compact"><h1>Product Security</h1><p>Tenant {} · {}</p></section>
+                <section class="hero compact"><h1>Product Security</h1><p>Tenant {} · {} · <a href="{}">Evidence-Pakete</a></p></section>
                 <section class="metrics">
                   {}
                   {}
@@ -16505,6 +16789,7 @@ async fn web_product_security(
                 "#,
                 overview.tenant_id,
                 html_escape(&overview.matrix.summary),
+                web_path_with_context("/product-security/evidence-packages/", Some(&context)),
                 metric_card("Produkte", overview.posture.products),
                 metric_card("Offene Vulns", overview.posture.open_vulnerabilities),
                 metric_card(
@@ -16588,6 +16873,582 @@ async fn web_product_security(
             &err.to_string(),
         ),
     }
+}
+
+async fn web_product_security_evidence_packages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Evidence-Pakete", "/product-security/");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    let Some(store) = state.product_security_store.as_ref() else {
+        return web_store_missing(
+            "Evidence-Pakete",
+            "/product-security/",
+            &context,
+            "Product Security",
+        );
+    };
+    let packages = match store.evidence_packages(context.tenant_id, 500).await {
+        Ok(packages) => packages,
+        Err(err) => {
+            return web_error_page(
+                "Evidence-Pakete",
+                "/product-security/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let metrics = match store.evidence_package_metrics(context.tenant_id).await {
+        Ok(metrics) => metrics,
+        Err(err) => {
+            return web_error_page(
+                "Evidence-Pakete",
+                "/product-security/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let overview = match store.overview(context.tenant_id, 500, 1).await {
+        Ok(Some(overview)) => overview,
+        Ok(None) => {
+            return web_error_page(
+                "Evidence-Pakete",
+                "/product-security/",
+                &context,
+                "Tenant wurde nicht gefunden.",
+            )
+        }
+        Err(err) => {
+            return web_error_page(
+                "Evidence-Pakete",
+                "/product-security/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+
+    let product_options = overview
+        .products
+        .iter()
+        .map(|product| {
+            format!(
+                r#"<option value="{}">{} ({})</option>"#,
+                product.id,
+                html_escape(&product.name),
+                html_escape(&product.code),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let mut release_options = Vec::new();
+    let mut psirt_options = Vec::new();
+    for product in &overview.products {
+        if let Ok(Some(detail)) = store.detail(context.tenant_id, product.id).await {
+            release_options.extend(detail.releases.iter().map(|release| {
+                format!(
+                    r#"<option value="{}">{} · {} ({})</option>"#,
+                    release.id,
+                    html_escape(&product.name),
+                    html_escape(&release.version),
+                    html_escape(&release.status_label),
+                )
+            }));
+            psirt_options.extend(detail.psirt_cases.iter().map(|case| {
+                format!(
+                    r#"<option value="{}">{} · {} · {}</option>"#,
+                    case.id,
+                    html_escape(&product.name),
+                    html_escape(&case.case_id),
+                    html_escape(&case.title),
+                )
+            }));
+        }
+    }
+    let package_rows = packages
+        .iter()
+        .map(|package| {
+            let href = web_path_with_context(
+                &format!(
+                    "/product-security/evidence-packages/{}",
+                    package.id
+                ),
+                Some(&context),
+            );
+            let scope = package
+                .release_version
+                .as_deref()
+                .or(package.psirt_case_identifier.as_deref())
+                .unwrap_or("-");
+            format!(
+                r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>v{}</td><td>{}</td><td>{}</td><td>{}%</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                href,
+                html_escape(&package.title),
+                html_escape(&package.package_type_label),
+                package.version_number,
+                html_escape(&package.product_name),
+                html_escape(scope),
+                package.readiness_percent,
+                web_badge(
+                    &package.status_label,
+                    product_security_evidence_package_status_class(&package.status),
+                ),
+                package.blocker_count,
+                html_escape(&package.updated_at),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let create_panel = if can_write {
+        format!(
+            r#"<article class="panel wide"><h2>Evidence-Paket erzeugen</h2><form method="post" action="{}"><div class="form-grid"><label>Typ<select name="package_type"><option value="RELEASE">Release</option><option value="PSIRT">PSIRT</option></select></label><label>Produkt<select name="product_id" required><option value="">Auswaehlen</option>{}</select></label><label>Release<select name="release_id"><option value="">Nur fuer PSIRT optional</option>{}</select></label><label>PSIRT-Case<select name="psirt_case_id"><option value="">Nur fuer Release leer lassen</option>{}</select></label></div><label>Titel<input name="title" placeholder="Automatisch aus Scope ableiten"></label><button type="submit">Paketversion erzeugen</button></form><p>Release-Pakete benoetigen ein Release, PSIRT-Pakete einen PSIRT-Case. Der aktuelle Nachweisstand wird als unveraenderliche Version eingefroren.</p></article>"#,
+            web_path_with_context("/product-security/evidence-packages/", Some(&context)),
+            product_options,
+            release_options.join(""),
+            psirt_options.join(""),
+        )
+    } else {
+        String::new()
+    };
+    let body = format!(
+        r#"<section class="hero compact"><h1>Product-Security Evidence-Pakete</h1><p>Versionierte Entscheidungsgrundlagen fuer Release- und PSIRT-Freigaben · <a href="{}">Product Security</a></p></section><section class="metrics">{}{}{}{}{}{}</section><section class="grid"><article class="panel wide"><h2>Paketregister</h2><table><thead><tr><th>Paket</th><th>Typ</th><th>Version</th><th>Produkt</th><th>Scope</th><th>Readiness</th><th>Status</th><th>Blocker</th><th>Aktualisiert</th></tr></thead><tbody>{}</tbody></table></article>{}<article class="panel wide"><h2>Einordnung</h2><p>Evidence-Pakete unterstuetzen dokumentierte Release- und PSIRT-Entscheidungen. Sie ersetzen weder Rechtsberatung noch Zertifizierung, Konformitaetsbewertung oder Audit-Aussagen.</p></article></section>"#,
+        web_path_with_context("/product-security/", Some(&context)),
+        metric_card("Pakete", metrics.total),
+        metric_card("Entwurf", metrics.draft),
+        metric_card("Im Review", metrics.in_review),
+        metric_card("Freigegeben", metrics.approved),
+        metric_card("Aenderungen", metrics.changes_requested),
+        metric_card("Mit Blockern", metrics.packages_with_blockers),
+        if package_rows.is_empty() {
+            web_empty_row(9, "Noch keine Evidence-Pakete vorhanden.")
+        } else {
+            package_rows
+        },
+        create_panel,
+    );
+    web_page(
+        "Evidence-Pakete",
+        "/product-security/",
+        Some(&context),
+        &body,
+    )
+}
+
+async fn web_product_security_evidence_package_detail(
+    Path(package_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Evidence-Paket", "/product-security/");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    let Some(store) = state.product_security_store.as_ref() else {
+        return web_store_missing(
+            "Evidence-Paket",
+            "/product-security/",
+            &context,
+            "Product Security",
+        );
+    };
+    let detail = match store
+        .evidence_package_detail(context.tenant_id, package_id)
+        .await
+    {
+        Ok(Some(detail)) => detail,
+        Ok(None) => {
+            return web_error_page(
+                "Evidence-Paket",
+                "/product-security/",
+                &context,
+                "Evidence-Paket wurde nicht gefunden.",
+            )
+        }
+        Err(err) => {
+            return web_error_page(
+                "Evidence-Paket",
+                "/product-security/",
+                &context,
+                &err.to_string(),
+            )
+        }
+    };
+    let package = &detail.package;
+    let item_rows = detail
+        .items
+        .iter()
+        .map(|item| {
+            let reference = if item.href.trim().is_empty() {
+                "-".to_string()
+            } else {
+                format!(
+                    r#"<a href="{}">Oeffnen</a>"#,
+                    web_path_with_context(&item.href, Some(&context))
+                )
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&item.category_label),
+                html_escape(&item.title),
+                web_badge(
+                    &item.status_label,
+                    product_security_evidence_package_item_class(&item.status, item.blocker),
+                ),
+                yes_no(item.required),
+                yes_no(item.blocker),
+                html_escape(&item.detail),
+                reference,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let back_href = web_path_with_context("/product-security/evidence-packages/", Some(&context));
+    let detail_path = format!("/product-security/evidence-packages/{package_id}");
+    let evidence_key = if package.package_type == "PSIRT" {
+        format!(
+            "PRODUCT_SECURITY:PSIRT:{}",
+            package.psirt_case_id.unwrap_or_default()
+        )
+    } else {
+        format!(
+            "PRODUCT_SECURITY:RELEASE:{}",
+            package.release_id.unwrap_or_default()
+        )
+    };
+    let evidence_href = evidence_prefill_href(
+        &context,
+        &format!("Evidence fuer {}", package.title),
+        &format!(
+            "Nachweis fuer Product-Security Evidence-Paket {} Version {}.",
+            package.id, package.version_number
+        ),
+        &evidence_key,
+        Some("SUBMITTED"),
+        Some(&web_path_with_context(&detail_path, Some(&context))),
+    );
+    let actions = if can_write {
+        format!(
+            r#"<article class="panel wide"><h2>Review und Versionierung</h2><form method="post" action="{}"><div class="form-grid"><label>Status<select name="status">{}</select></label><label>Entscheidung<select name="decision">{}</select></label></div><label>Review-Notiz<textarea name="review_notes" rows="3">{}</textarea></label><button type="submit">Review speichern</button></form><form method="post" action="{}"><button type="submit">Neue Paketversion aus aktuellem Stand erzeugen</button></form><p><a href="{}">Evidence verknuepfen</a></p></article>"#,
+            web_path_with_context(&format!("{detail_path}/review"), Some(&context)),
+            product_security_evidence_package_status_options(&package.status),
+            product_security_evidence_package_decision_options(&package.decision),
+            html_escape(&package.review_notes),
+            web_path_with_context(&format!("{detail_path}/refresh"), Some(&context)),
+            evidence_href,
+        )
+    } else {
+        String::new()
+    };
+    let exports = ["markdown", "html", "pdf", "json"]
+        .iter()
+        .map(|format| {
+            format!(
+                r#"<a href="{}">{}</a>"#,
+                web_path_with_context(&format!("{detail_path}/export/{format}"), Some(&context)),
+                format.to_ascii_uppercase(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let body = format!(
+        r#"<section class="hero compact"><h1>{}</h1><p><a href="{}">Evidence-Pakete</a> · {} · Version {} · {}</p></section><section class="metrics">{}{}{}{}{}</section><section class="grid"><article class="panel wide"><h2>Freigabekontext</h2><p>{}</p><p><strong>Produkt:</strong> {} · <strong>Release:</strong> {} · <strong>PSIRT:</strong> {}</p><p><strong>Review:</strong> {}</p><p><strong>Exporte:</strong> {}</p></article><article class="panel wide"><h2>Eingefrorene Nachweispositionen</h2><table><thead><tr><th>Kategorie</th><th>Position</th><th>Status</th><th>Pflicht</th><th>Blocker</th><th>Detail</th><th>Referenz</th></tr></thead><tbody>{}</tbody></table></article>{}<article class="panel wide"><h2>Hinweis</h2><p>Dieses Paket ist eine Entscheidungshilfe. Es stellt keine Rechtsberatung, Zertifizierung, Konformitaetsbewertung oder Audit-Aussage dar.</p></article></section>"#,
+        html_escape(&package.title),
+        back_href,
+        html_escape(&package.package_type_label),
+        package.version_number,
+        web_badge(
+            &package.status_label,
+            product_security_evidence_package_status_class(&package.status)
+        ),
+        metric_card("Readiness %", package.readiness_percent),
+        metric_card("Blocker", package.blocker_count),
+        metric_card("Warnungen", package.warning_count),
+        metric_card("Positionen", detail.items.len() as i64),
+        metric_card("Version", package.version_number),
+        html_escape(&package.summary),
+        html_escape(&package.product_name),
+        html_escape(package.release_version.as_deref().unwrap_or("-")),
+        html_escape(package.psirt_case_identifier.as_deref().unwrap_or("-")),
+        html_escape(if package.review_notes.trim().is_empty() {
+            "Noch keine Review-Notiz."
+        } else {
+            &package.review_notes
+        }),
+        exports,
+        if item_rows.is_empty() {
+            web_empty_row(7, "Keine Nachweispositionen vorhanden.")
+        } else {
+            item_rows
+        },
+        actions,
+    );
+    web_page(
+        "Evidence-Paket",
+        "/product-security/",
+        Some(&context),
+        &body,
+    )
+}
+
+async fn web_product_security_evidence_package_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebProductSecurityEvidencePackageCreateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Evidence-Pakete", "/product-security/").into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Evidence-Pakete",
+            "/product-security/",
+            &context,
+            "Product Security",
+        )
+        .into_response();
+    };
+    let payload = product_security_package_store::ProductSecurityEvidencePackageCreateRequest {
+        product_id: form.product_id,
+        release_id: form.release_id,
+        psirt_case_id: form.psirt_case_id,
+        package_type: form.package_type,
+        title: form.title,
+    };
+    match store
+        .create_evidence_package(auth_context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(detail) => Redirect::to(&web_path_with_context(
+            &format!("/product-security/evidence-packages/{}", detail.package.id),
+            Some(&context),
+        ))
+        .into_response(),
+        Err(err) => web_error_page(
+            "Evidence-Pakete",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_product_security_evidence_package_review(
+    Path(package_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebProductSecurityEvidencePackageReviewForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Evidence-Paket", "/product-security/").into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Evidence-Paket",
+            "/product-security/",
+            &context,
+            "Product Security",
+        )
+        .into_response();
+    };
+    let payload = product_security_package_store::ProductSecurityEvidencePackageReviewRequest {
+        status: form.status,
+        decision: form.decision,
+        review_notes: form.review_notes,
+    };
+    match store
+        .review_evidence_package(
+            auth_context.tenant_id,
+            package_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            &format!("/product-security/evidence-packages/{package_id}"),
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Evidence-Paket",
+            "/product-security/",
+            &context,
+            "Evidence-Paket wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Evidence-Paket",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_product_security_evidence_package_refresh(
+    Path(package_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Evidence-Paket", "/product-security/").into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Evidence-Paket",
+            "/product-security/",
+            &context,
+            "Product Security",
+        )
+        .into_response();
+    };
+    match store
+        .refresh_evidence_package(auth_context.tenant_id, package_id, auth_context.user_id)
+        .await
+    {
+        Ok(Some(detail)) => Redirect::to(&web_path_with_context(
+            &format!("/product-security/evidence-packages/{}", detail.package.id),
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Evidence-Paket",
+            "/product-security/",
+            &context,
+            "Evidence-Paket wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Evidence-Paket",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_product_security_evidence_package_export(
+    Path((package_id, format)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Evidence-Paket", "/product-security/").into_response();
+    };
+    let Some(store) = state.product_security_store else {
+        return web_store_missing(
+            "Evidence-Paket",
+            "/product-security/",
+            &context,
+            "Product Security",
+        )
+        .into_response();
+    };
+    match store
+        .evidence_package_detail(context.tenant_id, package_id)
+        .await
+    {
+        Ok(Some(detail)) => product_security_evidence_package_download_response(&detail, &format),
+        Ok(None) => web_error_page(
+            "Evidence-Paket",
+            "/product-security/",
+            &context,
+            "Evidence-Paket wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Evidence-Paket",
+            "/product-security/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+fn product_security_evidence_package_status_class(status: &str) -> &'static str {
+    match status {
+        "APPROVED" => "ok",
+        "CHANGES_REQUESTED" => "danger",
+        "IN_REVIEW" => "warn",
+        "ARCHIVED" => "neutral",
+        _ => "info",
+    }
+}
+
+fn product_security_evidence_package_item_class(status: &str, blocker: bool) -> &'static str {
+    if blocker {
+        "danger"
+    } else if matches!(status, "READY" | "VALID" | "CLOSED" | "FIXED" | "PUBLISHED") {
+        "ok"
+    } else if matches!(status, "WARNING" | "DRAFT" | "UNDER_INVESTIGATION") {
+        "warn"
+    } else {
+        "info"
+    }
+}
+
+fn product_security_evidence_package_status_options(selected: &str) -> String {
+    [
+        ("DRAFT", "Entwurf"),
+        ("IN_REVIEW", "Im Review"),
+        ("CHANGES_REQUESTED", "Aenderungen erforderlich"),
+        ("APPROVED", "Freigegeben"),
+        ("ARCHIVED", "Archiviert"),
+    ]
+    .iter()
+    .map(|(value, label)| option_tag(value, label, selected))
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn product_security_evidence_package_decision_options(selected: &str) -> String {
+    [
+        ("PENDING", "Ausstehend"),
+        ("APPROVED", "Freigegeben"),
+        ("CONDITIONAL", "Bedingt freigegeben"),
+        ("REJECTED", "Abgelehnt"),
+    ]
+    .iter()
+    .map(|(value, label)| option_tag(value, label, selected))
+    .collect::<Vec<_>>()
+    .join("")
 }
 
 async fn web_product_security_thresholds_submit(
@@ -18230,6 +19091,189 @@ enum ProductSecurityImportHistoryFormat {
     Json,
 }
 
+fn product_security_evidence_package_download_response(
+    detail: &product_security_package_store::ProductSecurityEvidencePackageDetail,
+    format: &str,
+) -> Response {
+    let file_stem = format!(
+        "iscy-product-security-evidence-package-{}-v{}",
+        detail.package.id, detail.package.version_number
+    );
+    match format.trim().to_ascii_lowercase().as_str() {
+        "md" | "markdown" => markdown_download_response(
+            &format!("{file_stem}.md"),
+            product_security_evidence_package_markdown(detail),
+        ),
+        "html" => html_download_response(
+            &format!("{file_stem}.html"),
+            product_security_evidence_package_html(detail),
+        ),
+        "pdf" => binary_download_response(
+            &format!("{file_stem}.pdf"),
+            "application/pdf",
+            product_security_evidence_package_pdf(detail),
+        ),
+        "json" => text_download_response(
+            &format!("{file_stem}.json"),
+            "application/json; charset=utf-8",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "api_version": "v1",
+                "evidence_package": detail,
+                "notice": "Decision support only; no legal advice, certification, conformity assessment, or audit opinion."
+            }))
+            .unwrap_or_else(|_| "{}".to_string()),
+        ),
+        _ => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "unsupported_export_format",
+                message: "Unterstuetzte Formate: markdown, html, pdf, json.".to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+fn product_security_evidence_package_markdown(
+    detail: &product_security_package_store::ProductSecurityEvidencePackageDetail,
+) -> String {
+    let package = &detail.package;
+    let mut body = format!(
+        "# ISCY Product-Security Evidence-Paket: {}\n\n| Feld | Wert |\n| --- | --- |\n| Paket-ID | {} |\n| Typ | {} |\n| Version | {} |\n| Produkt | {} |\n| Release | {} |\n| PSIRT-Case | {} |\n| Status | {} |\n| Entscheidung | {} |\n| Readiness | {} % |\n| Blocker | {} |\n| Warnungen | {} |\n| Erstellt | {} |\n| Aktualisiert | {} |\n\n## Zusammenfassung\n\n{}\n\n## Review\n\n{}\n\n## Eingefrorene Nachweispositionen\n\n| Kategorie | Position | Status | Pflicht | Blocker | Detail | Referenz |\n| --- | --- | --- | --- | --- | --- | --- |\n",
+        md_value(&package.title),
+        package.id,
+        md_value(&package.package_type_label),
+        package.version_number,
+        md_value(&package.product_name),
+        md_optional(package.release_version.as_deref()),
+        md_optional(package.psirt_case_identifier.as_deref()),
+        md_value(&package.status_label),
+        md_value(&package.decision_label),
+        package.readiness_percent,
+        package.blocker_count,
+        package.warning_count,
+        md_value(&package.created_at),
+        md_value(&package.updated_at),
+        md_value(&package.summary),
+        md_value(&package.review_notes),
+    );
+    for item in &detail.items {
+        body.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            md_value(&item.category_label),
+            md_value(&item.title),
+            md_value(&item.status_label),
+            if item.required { "Ja" } else { "Nein" },
+            if item.blocker { "Ja" } else { "Nein" },
+            md_value(&item.detail),
+            md_value(&item.href),
+        ));
+    }
+    body.push_str("\n> Entscheidungshilfe; keine Rechtsberatung, Zertifizierung, Konformitaetsbewertung oder Audit-Aussage.\n");
+    body
+}
+
+fn product_security_evidence_package_html(
+    detail: &product_security_package_store::ProductSecurityEvidencePackageDetail,
+) -> String {
+    let package = &detail.package;
+    let rows = detail
+        .items
+        .iter()
+        .map(|item| {
+            let reference = if item.href.trim().is_empty() {
+                "-".to_string()
+            } else {
+                format!(r#"<a href="{}">Oeffnen</a>"#, html_escape(&item.href))
+            };
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&item.category_label),
+                html_escape(&item.title),
+                html_escape(&item.status_label),
+                if item.required { "Ja" } else { "Nein" },
+                if item.blocker { "Ja" } else { "Nein" },
+                html_escape(&item.detail),
+                reference,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        r#"<!doctype html><html lang="de"><head><meta charset="utf-8"><title>ISCY Evidence-Paket {}</title><style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:32px auto;padding:0 20px;color:#17212b}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #c9d2dc;padding:8px;text-align:left;vertical-align:top}}th{{background:#eef3f6}}.notice{{margin-top:24px;padding:12px;border-left:4px solid #527586;background:#f4f7f8}}</style></head><body><h1>{}</h1><p><strong>{}</strong> · Version {} · {} · Entscheidung: {}</p><p>Produkt: {} · Release: {} · PSIRT-Case: {}</p><p>Readiness: {} % · Blocker: {} · Warnungen: {}</p><h2>Zusammenfassung</h2><p>{}</p><h2>Review</h2><p>{}</p><h2>Eingefrorene Nachweispositionen</h2><table><thead><tr><th>Kategorie</th><th>Position</th><th>Status</th><th>Pflicht</th><th>Blocker</th><th>Detail</th><th>Referenz</th></tr></thead><tbody>{}</tbody></table><p class="notice">Entscheidungshilfe; keine Rechtsberatung, Zertifizierung, Konformitaetsbewertung oder Audit-Aussage.</p></body></html>"#,
+        package.id,
+        html_escape(&package.title),
+        html_escape(&package.package_type_label),
+        package.version_number,
+        html_escape(&package.status_label),
+        html_escape(&package.decision_label),
+        html_escape(&package.product_name),
+        html_escape(package.release_version.as_deref().unwrap_or("-")),
+        html_escape(package.psirt_case_identifier.as_deref().unwrap_or("-")),
+        package.readiness_percent,
+        package.blocker_count,
+        package.warning_count,
+        html_escape(&package.summary),
+        html_escape(if package.review_notes.trim().is_empty() {
+            "-"
+        } else {
+            &package.review_notes
+        }),
+        rows,
+    )
+}
+
+fn product_security_evidence_package_pdf(
+    detail: &product_security_package_store::ProductSecurityEvidencePackageDetail,
+) -> Vec<u8> {
+    let package = &detail.package;
+    let mut lines = vec![
+        format!("ISCY Product-Security Evidence-Paket: {}", package.title),
+        format!(
+            "Paket-ID: {} | Version: {} | Typ: {}",
+            package.id, package.version_number, package.package_type_label
+        ),
+        format!(
+            "Produkt: {} | Release: {} | PSIRT: {}",
+            package.product_name,
+            package.release_version.as_deref().unwrap_or("-"),
+            package.psirt_case_identifier.as_deref().unwrap_or("-")
+        ),
+        format!(
+            "Status: {} | Entscheidung: {}",
+            package.status_label, package.decision_label
+        ),
+        format!(
+            "Readiness: {} % | Blocker: {} | Warnungen: {}",
+            package.readiness_percent, package.blocker_count, package.warning_count
+        ),
+        String::new(),
+        "Zusammenfassung:".to_string(),
+    ];
+    lines.extend(wrap_pdf_text(&package.summary, 92));
+    lines.push(String::new());
+    lines.push("Nachweispositionen:".to_string());
+    for item in &detail.items {
+        lines.extend(wrap_pdf_text(
+            &format!(
+                "{} | {} | {} | Pflicht: {} | Blocker: {} | {}",
+                item.category_label,
+                item.title,
+                item.status_label,
+                if item.required { "Ja" } else { "Nein" },
+                if item.blocker { "Ja" } else { "Nein" },
+                item.detail,
+            ),
+            92,
+        ));
+    }
+    lines.push(String::new());
+    lines.push("Entscheidungshilfe; keine Rechtsberatung, Zertifizierung, Konformitaetsbewertung oder Audit-Aussage.".to_string());
+    simple_pdf_document(&lines)
+}
+
 fn incident_export_download_response(
     incident: &incident_store::IncidentSummary,
     evidence_items: &[evidence_store::EvidenceItemSummary],
@@ -19376,19 +20420,45 @@ fn incident_regulatory_package_pdf(
 }
 
 fn simple_pdf_document(lines: &[String]) -> Vec<u8> {
-    let mut content = String::from("BT\n/F1 9 Tf\n50 800 Td\n10 TL\n");
-    for line in lines.iter().take(76) {
-        content.push_str(&format!("({}) Tj\nT*\n", pdf_escape(line)));
-    }
-    content.push_str("ET\n");
-
-    let objects = [
+    let page_chunks = if lines.is_empty() {
+        vec![&[][..]]
+    } else {
+        lines.chunks(76).collect::<Vec<_>>()
+    };
+    let page_ids = (0..page_chunks.len())
+        .map(|index| 4 + index * 2)
+        .collect::<Vec<_>>();
+    let kids = page_ids
+        .iter()
+        .map(|id| format!("{id} 0 R"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut objects = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>".to_string(),
+        format!(
+            "<< /Type /Pages /Kids [{}] /Count {} >>",
+            kids,
+            page_chunks.len()
+        ),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
-        format!("<< /Length {} >>\nstream\n{}endstream", content.len(), content),
     ];
+    for (index, chunk) in page_chunks.iter().enumerate() {
+        let page_id = page_ids[index];
+        let content_id = page_id + 1;
+        let mut content = String::from("BT\n/F1 9 Tf\n50 800 Td\n10 TL\n");
+        for line in *chunk {
+            content.push_str(&format!("({}) Tj\nT*\n", pdf_escape(line)));
+        }
+        content.push_str("ET\n");
+        objects.push(format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents {content_id} 0 R >>"
+        ));
+        objects.push(format!(
+            "<< /Length {} >>\nstream\n{}endstream",
+            content.len(),
+            content
+        ));
+    }
     let mut pdf = String::from("%PDF-1.4\n");
     let mut offsets = Vec::with_capacity(objects.len());
     for (index, object) in objects.iter().enumerate() {
@@ -22430,6 +23500,13 @@ async fn status_operations_overview(
                 Some("/product-security/".to_string()),
             ));
             signals.push(StatusSignal::new(
+                "Product Security",
+                "Evidence-Paket-Freigaben",
+                StatusSignalLevel::Warn,
+                "Tenant-Kontext fehlt; Release-/PSIRT-Pakete brauchen tenant_id und user_id.",
+                Some("/product-security/evidence-packages/".to_string()),
+            ));
+            signals.push(StatusSignal::new(
                 "AI Governance",
                 "AI-Systeme nicht bewertet",
                 StatusSignalLevel::Warn,
@@ -22819,6 +23896,16 @@ async fn product_security_operation_signals(
                 "Product-Security-Store ist nicht konfiguriert.",
                 Some(web_path_with_context("/product-security/", Some(context))),
             ),
+            StatusSignal::new(
+                "Product Security",
+                "Evidence-Paket-Freigaben",
+                StatusSignalLevel::Warn,
+                "Product-Security-Store ist nicht konfiguriert.",
+                Some(web_path_with_context(
+                    "/product-security/evidence-packages/",
+                    Some(context),
+                )),
+            ),
         ];
     };
     match store.overview(context.tenant_id, 25, 10).await {
@@ -22844,6 +23931,10 @@ async fn product_security_operation_signals(
                 .map(|product| product.sbom_component_count)
                 .sum::<i64>();
             let sbom_coverage = ratio_percent(sbom_components, total_components);
+            let package_metrics = store
+                .evidence_package_metrics(context.tenant_id)
+                .await
+                .unwrap_or_default();
             vec![
                 StatusSignal::new(
                     "Product Security",
@@ -22908,6 +23999,32 @@ async fn product_security_operation_signals(
                         sbom_coverage
                     ),
                     Some(web_path_with_context("/product-security/", Some(context))),
+                ),
+                StatusSignal::new(
+                    "Product Security",
+                    "Evidence-Paket-Freigaben",
+                    if package_metrics.packages_with_blockers > 0 {
+                        StatusSignalLevel::Danger
+                    } else if package_metrics.total == 0
+                        || package_metrics.draft > 0
+                        || package_metrics.in_review > 0
+                        || package_metrics.changes_requested > 0
+                    {
+                        StatusSignalLevel::Warn
+                    } else {
+                        StatusSignalLevel::Ok
+                    },
+                    format!(
+                        "{} Pakete, {} freigegeben, {} im Review, {} mit Blockern.",
+                        package_metrics.total,
+                        package_metrics.approved,
+                        package_metrics.in_review,
+                        package_metrics.packages_with_blockers,
+                    ),
+                    Some(web_path_with_context(
+                        "/product-security/evidence-packages/",
+                        Some(context),
+                    )),
                 ),
             ]
         }
@@ -25956,6 +27073,23 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(product_security_product_roadmap),
         )
         .route(
+            "/api/v1/product-security/evidence-packages",
+            get(product_security_evidence_packages).post(product_security_evidence_package_create),
+        )
+        .route(
+            "/api/v1/product-security/evidence-packages/{package_id}",
+            get(product_security_evidence_package_detail)
+                .patch(product_security_evidence_package_review),
+        )
+        .route(
+            "/api/v1/product-security/evidence-packages/{package_id}/refresh",
+            post(product_security_evidence_package_refresh),
+        )
+        .route(
+            "/api/v1/product-security/evidence-packages/{package_id}/export/{format}",
+            get(product_security_evidence_package_export),
+        )
+        .route(
             "/api/v1/product-security/roadmap-tasks/{task_id}",
             patch(product_security_roadmap_task_update),
         )
@@ -26300,6 +27434,27 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/product-security/", get(web_product_security))
         .route(
+            "/product-security/evidence-packages/",
+            get(web_product_security_evidence_packages)
+                .post(web_product_security_evidence_package_create),
+        )
+        .route(
+            "/product-security/evidence-packages/{package_id}",
+            get(web_product_security_evidence_package_detail),
+        )
+        .route(
+            "/product-security/evidence-packages/{package_id}/review",
+            post(web_product_security_evidence_package_review),
+        )
+        .route(
+            "/product-security/evidence-packages/{package_id}/refresh",
+            post(web_product_security_evidence_package_refresh),
+        )
+        .route(
+            "/product-security/evidence-packages/{package_id}/export/{format}",
+            get(web_product_security_evidence_package_export),
+        )
+        .route(
             "/product-security/thresholds",
             post(web_product_security_thresholds_submit),
         )
@@ -26374,7 +27529,7 @@ mod tests {
 
     use super::{
         alertmanager_hmac_message, alertmanager_hmac_secret_matches, hex_encode_bytes,
-        normalize_cve_id, AlertmanagerHmacSha256,
+        normalize_cve_id, simple_pdf_document, AlertmanagerHmacSha256,
     };
 
     #[test]
@@ -26399,5 +27554,17 @@ mod tests {
             &message,
             &signature
         ));
+    }
+
+    #[test]
+    fn simple_pdf_document_keeps_lines_across_multiple_pages() {
+        let lines = (0..77)
+            .map(|index| format!("Evidence line {index}"))
+            .collect::<Vec<_>>();
+        let pdf = String::from_utf8(simple_pdf_document(&lines)).unwrap();
+
+        assert!(pdf.contains("/Count 2"));
+        assert!(pdf.contains("Evidence line 0"));
+        assert!(pdf.contains("Evidence line 76"));
     }
 }

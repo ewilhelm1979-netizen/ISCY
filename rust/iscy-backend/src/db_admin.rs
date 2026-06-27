@@ -187,6 +187,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AGENT_FLEET_GOVERNANCE_SCHEMA,
         postgres_sql: POSTGRES_AGENT_FLEET_GOVERNANCE_SCHEMA,
     },
+    Migration {
+        version: "0026_rust_product_security_evidence_packages",
+        sqlite_sql: SQLITE_PRODUCT_SECURITY_EVIDENCE_PACKAGE_SCHEMA,
+        postgres_sql: POSTGRES_PRODUCT_SECURITY_EVIDENCE_PACKAGE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1389,6 +1394,124 @@ CREATE INDEX IF NOT EXISTS idx_agent_notification_delivery_tenant
     ON zero_trust_agent_notification_delivery(tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_agent_notification_delivery_event
     ON zero_trust_agent_notification_delivery(tenant_id, channel_id, event_key, status, created_at);
+"#;
+
+const SQLITE_PRODUCT_SECURITY_EVIDENCE_PACKAGE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS product_security_evidencepackage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    release_id INTEGER NULL,
+    psirt_case_id INTEGER NULL,
+    supersedes_id INTEGER NULL,
+    package_type varchar(16) NOT NULL DEFAULT 'RELEASE',
+    version_number INTEGER NOT NULL DEFAULT 1,
+    title varchar(255) NOT NULL,
+    status varchar(24) NOT NULL DEFAULT 'DRAFT',
+    decision varchar(24) NOT NULL DEFAULT 'PENDING',
+    readiness_percent INTEGER NOT NULL DEFAULT 0,
+    blocker_count INTEGER NOT NULL DEFAULT 0,
+    warning_count INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    review_notes TEXT NOT NULL DEFAULT '',
+    snapshot_json TEXT NOT NULL DEFAULT '{}',
+    created_by_id INTEGER NULL,
+    reviewed_by_id INTEGER NULL,
+    reviewed_at TEXT NULL,
+    approved_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, package_type, product_id, release_id, psirt_case_id, version_number)
+);
+CREATE INDEX IF NOT EXISTS idx_product_security_evidence_package_tenant
+    ON product_security_evidencepackage(tenant_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_product_security_evidence_package_scope
+    ON product_security_evidencepackage(tenant_id, product_id, release_id, psirt_case_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_product_security_evidence_package_version
+    ON product_security_evidencepackage(
+        tenant_id, package_type, product_id,
+        COALESCE(release_id, 0), COALESCE(psirt_case_id, 0), version_number
+    );
+
+CREATE TABLE IF NOT EXISTS product_security_evidencepackageitem (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    package_id INTEGER NOT NULL,
+    category varchar(32) NOT NULL,
+    source_type varchar(32) NOT NULL,
+    source_id INTEGER NULL,
+    reference_key varchar(128) NOT NULL DEFAULT '',
+    title varchar(255) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'INFO',
+    required bool NOT NULL DEFAULT 0,
+    blocker bool NOT NULL DEFAULT 0,
+    detail TEXT NOT NULL DEFAULT '',
+    href TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_product_security_evidence_package_item
+    ON product_security_evidencepackageitem(tenant_id, package_id, sort_order, id);
+"#;
+
+const POSTGRES_PRODUCT_SECURITY_EVIDENCE_PACKAGE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS product_security_evidencepackage (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    product_id BIGINT NOT NULL,
+    release_id BIGINT NULL,
+    psirt_case_id BIGINT NULL,
+    supersedes_id BIGINT NULL,
+    package_type varchar(16) NOT NULL DEFAULT 'RELEASE',
+    version_number INTEGER NOT NULL DEFAULT 1,
+    title varchar(255) NOT NULL,
+    status varchar(24) NOT NULL DEFAULT 'DRAFT',
+    decision varchar(24) NOT NULL DEFAULT 'PENDING',
+    readiness_percent INTEGER NOT NULL DEFAULT 0,
+    blocker_count INTEGER NOT NULL DEFAULT 0,
+    warning_count INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    review_notes TEXT NOT NULL DEFAULT '',
+    snapshot_json TEXT NOT NULL DEFAULT '{}',
+    created_by_id BIGINT NULL,
+    reviewed_by_id BIGINT NULL,
+    reviewed_at TEXT NULL,
+    approved_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, package_type, product_id, release_id, psirt_case_id, version_number)
+);
+CREATE INDEX IF NOT EXISTS idx_product_security_evidence_package_tenant
+    ON product_security_evidencepackage(tenant_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_product_security_evidence_package_scope
+    ON product_security_evidencepackage(tenant_id, product_id, release_id, psirt_case_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_product_security_evidence_package_version
+    ON product_security_evidencepackage(
+        tenant_id, package_type, product_id,
+        COALESCE(release_id, 0), COALESCE(psirt_case_id, 0), version_number
+    );
+
+CREATE TABLE IF NOT EXISTS product_security_evidencepackageitem (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    package_id BIGINT NOT NULL,
+    category varchar(32) NOT NULL,
+    source_type varchar(32) NOT NULL,
+    source_id BIGINT NULL,
+    reference_key varchar(128) NOT NULL DEFAULT '',
+    title varchar(255) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'INFO',
+    required BOOLEAN NOT NULL DEFAULT FALSE,
+    blocker BOOLEAN NOT NULL DEFAULT FALSE,
+    detail TEXT NOT NULL DEFAULT '',
+    href TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text
+);
+CREATE INDEX IF NOT EXISTS idx_product_security_evidence_package_item
+    ON product_security_evidencepackageitem(tenant_id, package_id, sort_order, id);
 "#;
 
 const SQLITE_INCIDENT_RUNBOOK_EVIDENCE_EXPORT_SCHEMA: &str = r#"

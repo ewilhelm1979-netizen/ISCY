@@ -122,7 +122,7 @@ Erfolgskriterium:
 
 - ISCY kann zeigen, welche externen Abhaengigkeiten kritisch sind, welche Nachweise fehlen und welche Risiken daraus entstehen.
 
-## Prioritaet 5: Product-Security-Reife (umgesetzt in V23.7.23)
+## Prioritaet 5: Product-Security-Reife (umgesetzt in V23.7.23 und V23.7.26)
 
 Ziel: Der bestehende Product-Security-Bereich soll von Import/Korrelation zu einem echten PSIRT-/CRA-Arbeitsplatz wachsen.
 
@@ -131,6 +131,11 @@ Umgesetzt:
 - VEX-Status je Schwachstelle aufnehmen: affected, not affected, fixed, under investigation.
 - SBOM-Diff zwischen Importstaenden anzeigen.
 - CRA-Readiness je Produkt aus SBOM, VEX/CVE-Triage, PSIRT/Advisories, Threat/TARA und Lifecycle ableiten.
+- Migration `0026_rust_product_security_evidence_packages` fuer versionierte Release-/PSIRT-Pakete und eingefrorene Nachweispositionen.
+- Web-/API-Workflow fuer Release- und PSIRT-Evidence-Pakete mit Readiness, Blockern, Warnungen und Reviewentscheidung.
+- Blocker-Gate fuer vorbehaltlose Freigaben sowie dokumentierte bedingte Freigaben.
+- Paketversionierung mit Vorgaengerbezug und Export als Markdown, HTML, PDF und JSON.
+- Betriebs- und Prometheus-Signal fuer offene Paketreviews und Blocker.
 
 Noch ausbaufähig:
 
@@ -195,12 +200,11 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben.
-2. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln.
-3. Benachrichtigungen auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern.
-4. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
-5. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
-6. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
+1. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln.
+2. Benachrichtigungen auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern.
+3. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
+4. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
+5. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
 
 ## Verbleibende Roadmap
 
@@ -208,8 +212,8 @@ Erfolgskriterium:
 | --- | --- | --- |
 | Erledigt | Agent-State, Secret-Rotation, Offline-Queue und OS-Service-Beispiele | Agenten behalten ihre Identitaet, puffern Ausfaelle und koennen auf Linux, NixOS, Windows und macOS periodisch betrieben werden. |
 | Erledigt | Agent-Policy, erwartete Coverage und Policy-Webhooks | Flottenabweichungen werden gegen einen Sollbestand bewertet, aktiv zugestellt und auditierbar protokolliert. |
-| Jetzt | Product-Security-Evidence-Pakete und Produkt-Lifecycle | Release-/PSIRT-Freigaben enthalten SBOM, VEX, Advisories, Support-Ende, offene Risiken und Evidence. |
-| Danach | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
+| Erledigt | Product-Security-Evidence-Pakete und Produkt-Lifecycle | Versionierte Release-/PSIRT-Freigaben enthalten SBOM, VEX, Advisories, Support-Ende, offene Risiken, Roadmap und Evidence; Blocker-Gates und Exporte sind umgesetzt. |
+| Jetzt | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
 | Danach | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
 | Danach | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen und Exit-Test-Nachweise. |
 | Danach | Management-/Regulatory-Templates | Wiederholbare Quartals-, Audit-, NIS2-, DORA- und DSGVO-Pakete werden kontextsensitiv erzeugt. |

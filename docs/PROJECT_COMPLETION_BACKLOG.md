@@ -11,6 +11,7 @@
 - Management-Review-Pakete koennen als Markdown, HTML, PDF und JSON exportiert werden und enthalten Ruecklinks zu Risiko, Control, Evidence, Incident und Roadmap.
 - Third-Party-/Supplier-Risk ist als Rust-Web-/API-Modul umgesetzt und bewertet Lieferanten aus Kritikalitaet, Vertrags-/Security-Annex-Bezug, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischem Scope, Review-Faelligkeit, Evidence, Produktkomponenten, offenen Schwachstellen und dokumentierten Risiken.
 - Agent Fleet Governance bewertet Sollbestand, Heartbeat-Freshness, Mindestscore und Finding-Grenzwerte je Tenant-, OS-, Asset-, Business-Unit- oder Deployment-Scope. Sichere Policy-Webhooks besitzen Cooldown, transiente Retries und Delivery-Audit.
+- Product-Security-Evidence-Pakete frieren Release-/PSIRT-Nachweise versioniert ein, bewerten Readiness und Blocker, erzwingen dokumentierte Reviewentscheidungen und exportieren Markdown, HTML, PDF sowie JSON.
 - Der Rust-only-Betrieb liefert Statusseite, JSON-Drilldown, Prometheus-Metriken, Alertmanager-Webhook mit optionaler Incident-/Evidence-Persistenz, AI-Governance-Signale, Grafana-Dashboard inklusive Product-Security-Panels, Compose-Beispiel und NixOS-Modul samt Beispielhost.
 
 ## Prioritaet P0 (vor breitem Produktivrollout)
@@ -43,7 +44,6 @@ Die technische Rust-Migration ist abgeschlossen. Die fachliche Weiterentwicklung
 
 Die dort priorisierten naechsten Produktbereiche sind:
 
-1. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
-2. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
-3. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
-4. Supplier-Review-Workflow mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
+1. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
+2. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
+3. Supplier-Review-Workflow mit Freigabehistorie, Unterauftragnehmern und Exit-Tests

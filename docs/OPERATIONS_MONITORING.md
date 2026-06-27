@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.25 / Rust 0.3.21
+Stand: ISCY V23.7.26 / Rust 0.3.22
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 
@@ -30,6 +30,10 @@ Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/opera
 - `GET /api/v1/status/metrics`: API-Alias fuer Prometheus-kompatible Textausgabe.
 - `POST /api/v1/operations/alertmanager`: Alertmanager-Webhook, der Alerts validiert, normalisiert und bei schreibendem Tenant-Kontext als Incident/Evidence persistieren kann.
 - `GET /api/v1/product-security/trends`: Product-Security-Trends zu CVE-Reviews, Evidence-Luecken, Importvalidierung, Coverage und Snapshots.
+- `GET|POST /api/v1/product-security/evidence-packages`: versionierte Release-/PSIRT-Pakete auflisten oder erzeugen.
+- `GET|PATCH /api/v1/product-security/evidence-packages/{id}`: eingefrorene Positionen lesen oder Reviewentscheidung speichern.
+- `POST /api/v1/product-security/evidence-packages/{id}/refresh`: neue Paketversion aus dem aktuellen Nachweisstand erzeugen.
+- `GET /api/v1/product-security/evidence-packages/{id}/export/{markdown|html|pdf|json}`: Paketversion exportieren.
 
 Mit Tenant-Kontext liefern die Operations-Endpunkte zusaetzlich fachliche Signale zu ISCY-27, Supplier-Risk, Product Security, AI Governance, Agent-Policy-Konformitaet, Sollabdeckung, Notification-Kanaelen, CVE-Reviews, Evidence-Luecken und Roadmap-Gaps:
 
@@ -68,6 +72,7 @@ Wichtige Metriken:
 - `iscy_operations_alertmanager_incident_info`: Detailmetrik fuer Grafana-Drilldowns mit Labels `incident_id`, `title`, `severity`, `status`, `state`, `review_required` und `href`.
 - `iscy_operations_signal` enthaelt bei Tenant-Kontext auch AI-Governance-Signale fuer nicht bewertete AI-Systeme, faellige Reviews, fehlende Evidence und offene Governance-Gaps.
 - `iscy_operations_signal` enthaelt fuer die Agent-Flotte `Agent-Policy-Konformitaet`, `Agent-Sollabdeckung` und `Notification-Kanaele`. Kritische Policy-Verletzungen, verfehlte Coverage oder aktivierte Kanaele ohne verfuegbares Secret werden damit zentral sichtbar.
+- `iscy_operations_signal` enthaelt fuer Product Security `Evidence-Paket-Freigaben`; Pakete mit Blockern sind kritisch, offene Entwuerfe/Reviews oder noch fehlende Pakete werden als Warnung sichtbar.
 - `iscy_product_security_coverage_percent`: SBOM-, CSAF- und Threat-/TARA-Coverage in Prozent.
 - `iscy_product_security_import_validation_total`: Product-Security-Importe nach Validierungsstatus.
 - `iscy_product_security_trend_signal`: aktuelle Trend-Signale wie offene CVE-Reviews, fehlende Evidence oder Importvalidierungsprobleme.

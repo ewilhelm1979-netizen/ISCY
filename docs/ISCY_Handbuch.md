@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.25 / Rust 0.3.21)
+Version: Arbeitsstand Juni 2026 (ISCY V23.7.26 / Rust 0.3.22)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -550,6 +550,7 @@ Typische Objekte:
 - CVE-Asset-Korrelation
 - CVE-Risiko-Review-Queue
 - CRA-Readiness
+- versioniertes Release-/PSIRT-Evidence-Paket
 
 Fachlicher Nutzen:
 
@@ -562,6 +563,7 @@ Fachlicher Nutzen:
 - CRA-Readiness je Produkt aus SBOM, VEX/CVE-Triage, PSIRT/Advisories, Threat/TARA und Lifecycle
 - automatische Ableitung von Risiko- und Roadmap-Arbeit aus akzeptierten CVE-Korrelationen
 - Nachweissteuerung ueber Evidence-Keys fuer CVE, Import, Risiko und Roadmap
+- dokumentierte Release-/PSIRT-Entscheidungen mit eingefrorenem Nachweisstand und Blocker-Gates
 
 Fuer Nicht-Sicherheitsleute:
 Dieser Bereich ist fuer Unternehmen wichtig, die Software, digitale Produkte oder vernetzte Systeme bereitstellen.
@@ -580,6 +582,12 @@ Aktueller Rust-Funktionsumfang:
 - Bulk-Aktionen fuer ausgewaehlte CVE-Reviews: Risiko/Roadmap erzeugen, Behandlung freigeben, Restrisiko akzeptieren oder als mitigiert markieren
 - Einzelaktionen fuer Behandeln, Akzeptieren und Mitigiert markieren
 - Evidence-Vorbefuellung und Ruecksprung zur Ausgangsseite nach Upload
+- Paketregister unter `/product-security/evidence-packages/` fuer Release- und PSIRT-Scope
+- versionierte Snapshots aus Lifecycle, SBOM, VEX, Advisories, Risiko-/Roadmap-Stand und Evidence
+- Review-Workflow mit Entwurf, Review, Aenderungsanforderung, Freigabe und Archivierung
+- vorbehaltlose Freigabe nur ohne Blocker; bedingte Freigabe nur mit dokumentierter Review-Notiz
+- Markdown-, HTML-, PDF- und JSON-Export je Paketversion
+- Betriebsstatus fuer Paket-Backlog und offene Blocker
 
 ### 5.16 AI Governance
 
@@ -1068,16 +1076,15 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an. Migration `0025_rust_agent_fleet_governance` persistiert Policies, Kanaele und Delivery-Audit. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0026_rust_product_security_evidence_packages` persistiert Paketkopf, Reviewentscheidung, Versionsbezug und eingefrorene Nachweispositionen. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Product-Security-Evidence-Pakete fuer Release-/PSIRT-Freigaben
-2. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
-3. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
-4. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
-5. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
-6. Performance-, HA- und visuelle Regressionstests
+1. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
+2. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
+3. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
+4. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
+5. Performance-, HA- und visuelle Regressionstests
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 

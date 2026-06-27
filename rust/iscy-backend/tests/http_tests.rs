@@ -236,7 +236,7 @@ async fn rust_status_metrics_exports_prometheus_text() {
         .contains("iscy_operations_signal{area=\"Health\",signal=\"Live Health\",level=\"ok\"} 0"));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"Product Security\""));
     assert!(metrics.contains("iscy_operations_module_configured{name=\"AI Governance\""));
-    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.21\""));
+    assert!(metrics.contains("iscy_operations_build_info{version=\"0.3.22\""));
 }
 
 #[tokio::test]
@@ -649,8 +649,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0025_rust_agent_fleet_governance"));
-    assert!(html.contains("25/25 angewendet"));
+    assert!(html.contains("0026_rust_product_security_evidence_packages"));
+    assert!(html.contains("26/26 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -3352,6 +3352,205 @@ async fn product_security_detail_blocks_foreign_tenant_product() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "product_not_found");
+}
+
+#[tokio::test]
+async fn product_security_evidence_packages_version_review_export_and_tenant_scope() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/evidence-packages")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "product_id":1100,
+                        "release_id":1200,
+                        "package_type":"RELEASE",
+                        "title":"Release 1.0 Decision Package"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let body = to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let package_id = created["package"]["id"].as_i64().unwrap();
+    assert_eq!(created["package"]["version_number"], 1);
+    assert!(created["package"]["blocker_count"].as_i64().unwrap() > 0);
+    assert!(created["items"].as_array().unwrap().len() >= 4);
+
+    let foreign = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/product-security/evidence-packages/{package_id}"
+                ))
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+
+    let unconditional = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/product-security/evidence-packages/{package_id}"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"status":"APPROVED","decision":"APPROVED","review_notes":"Reviewed"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unconditional.status(), StatusCode::BAD_REQUEST);
+
+    let conditional = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/product-security/evidence-packages/{package_id}"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"status":"APPROVED","decision":"CONDITIONAL","review_notes":"Freigabe nur mit dokumentierter Remediation der offenen Blocker."}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conditional.status(), StatusCode::OK);
+    let body = to_bytes(conditional.into_body(), usize::MAX).await.unwrap();
+    let reviewed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(reviewed["package"]["status"], "APPROVED");
+    assert_eq!(reviewed["package"]["decision"], "CONDITIONAL");
+
+    let refresh = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/product-security/evidence-packages/{package_id}/refresh"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(refresh.status(), StatusCode::CREATED);
+    let body = to_bytes(refresh.into_body(), usize::MAX).await.unwrap();
+    let refreshed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let refreshed_id = refreshed["package"]["id"].as_i64().unwrap();
+    assert_ne!(refreshed_id, package_id);
+    assert_eq!(refreshed["package"]["version_number"], 2);
+    assert_eq!(refreshed["package"]["supersedes_id"], package_id);
+
+    for (format, content_type) in [
+        ("markdown", "text/markdown"),
+        ("html", "text/html"),
+        ("pdf", "application/pdf"),
+        ("json", "application/json"),
+    ] {
+        let export = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/product-security/evidence-packages/{refreshed_id}/export/{format}"
+                    ))
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(export.status(), StatusCode::OK);
+        assert!(export
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with(content_type));
+    }
+
+    let page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/product-security/evidence-packages/?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = to_bytes(page.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Product-Security Evidence-Pakete"));
+    assert!(html.contains("Release 1.0 Decision Package"));
+    assert!(html.contains("Evidence-Paket erzeugen"));
+
+    let read_only_create = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/evidence-packages")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(
+                    r#"{"product_id":1100,"release_id":1200,"package_type":"RELEASE"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read_only_create.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -9818,7 +10017,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0022_rust_ai_governance_core",
             "0023_rust_security_runtime_state",
             "0024_rust_evidence_lifecycle",
-            "0025_rust_agent_fleet_governance"
+            "0025_rust_agent_fleet_governance",
+            "0026_rust_product_security_evidence_packages"
         ]
     );
     assert!(
@@ -9833,6 +10033,16 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     );
     assert!(
         db_admin::sqlite_table_exists(&pool, "product_security_product")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "product_security_evidencepackage")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "product_security_evidencepackageitem")
             .await
             .unwrap()
     );
