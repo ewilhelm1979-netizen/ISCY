@@ -22,7 +22,7 @@ services:
       - no-new-privileges:true
     volumes:
       - media_data:/app/media
-      - ${ISCY_SECRETS_DIR:-./secrets}:/run/secrets:ro
+      - ${ISCY_SECRETS_DIR:-./.runtime/secrets}:/run/secrets:ro
 
   reverse-proxy:
     image: nginx:1.27-alpine
