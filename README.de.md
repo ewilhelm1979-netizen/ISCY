@@ -45,6 +45,8 @@ ISCY befindet sich in einer frühen Community-Adoptionsphase und wurde bisher ni
 - [Operations Monitoring](docs/OPERATIONS_MONITORING.md)
 - [Release Notes](docs/releases/)
 
-## Lizenz
+## Lizenz und Urheberrecht
 
-ISCY steht unter der GNU Affero General Public License v3.0 only (`AGPL-3.0-only`).
+Copyright (C) 2026 Enrico Wilhelm.
+
+ISCY steht unter der GNU Affero General Public License v3.0 only (`AGPL-3.0-only`). Der vollständige Lizenztext befindet sich in [LICENSE](LICENSE). Hinweise zu Urheberrecht, Mitwirkenden, Drittkomponenten und KI-Unterstützung stehen in [NOTICE.md](NOTICE.md).

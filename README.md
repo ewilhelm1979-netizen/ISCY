@@ -104,6 +104,8 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md), [AGENTS.md](AGENTS.md), [CODE_OF
 
 OpenAI Codex has assisted implementation, migration, testing, and review. Human contributors remain responsible for correctness, security, licensing, provenance, and validation.
 
-## License
+## License and copyright
 
-ISCY is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`).
+Copyright (C) 2026 Enrico Wilhelm.
+
+ISCY is licensed under the GNU Affero General Public License v3.0 only (`AGPL-3.0-only`). See [LICENSE](LICENSE) for the license text and [NOTICE.md](NOTICE.md) for copyright, attribution, third-party, and AI-assistance information.
