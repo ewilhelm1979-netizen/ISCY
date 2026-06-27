@@ -18,7 +18,7 @@ pub async fn sanitize_legacy_identity_query(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    if config.app_mode == AppMode::Production {
+    if config.app_mode != AppMode::Development {
         match sanitized_uri(request.uri()) {
             Ok(Some(uri)) => *request.uri_mut() = uri,
             Ok(None) => {}
