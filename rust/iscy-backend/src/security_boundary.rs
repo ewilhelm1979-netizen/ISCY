@@ -140,9 +140,7 @@ mod tests {
 
     #[test]
     fn strips_percent_encoded_identity_key() {
-        let uri: Uri = "/risks/?tenant%5Fid=4&review_filter=open"
-            .parse()
-            .unwrap();
+        let uri: Uri = "/risks/?tenant%5Fid=4&review_filter=open".parse().unwrap();
 
         let sanitized = sanitized_uri(&uri).unwrap().unwrap();
 
