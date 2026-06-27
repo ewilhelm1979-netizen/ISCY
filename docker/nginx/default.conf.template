@@ -2,12 +2,14 @@ server {
     listen 80;
     server_name ${NGINX_HOST};
     client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};
+    server_tokens off;
 
-    location /media/ {
-        alias /var/www/media/;
+    # Uploaded evidence is private application data and must only be served
+    # through an authenticated, tenant-aware application endpoint.
+    location ^~ /media/ {
         access_log off;
-        expires 1h;
-        add_header Cache-Control "public, max-age=3600";
+        add_header Cache-Control "no-store" always;
+        return 404;
     }
 
     location /health/live/ {
