@@ -2128,7 +2128,8 @@ async fn alertmanager_hmac_valid(
         )
     })?;
     let max_age = alertmanager_hmac_max_age();
-    validate_alertmanager_timestamp(&timestamp, max_age)?;
+    validate_alertmanager_timestamp(&timestamp, max_age)
+        .map_err(|(error_code, message)| alertmanager_auth_response(error_code, message))?;
     let signature = header_string(headers, "x-iscy-alert-signature").ok_or_else(|| {
         alertmanager_auth_response(
             "missing_alertmanager_hmac_signature",
@@ -2165,16 +2166,19 @@ fn alertmanager_hmac_max_age() -> Duration {
         .unwrap_or_else(|| Duration::from_secs(300))
 }
 
-fn validate_alertmanager_timestamp(timestamp: &str, max_age: Duration) -> Result<(), Response> {
+fn validate_alertmanager_timestamp(
+    timestamp: &str,
+    max_age: Duration,
+) -> Result<(), (&'static str, &'static str)> {
     let parsed = timestamp.trim().parse::<i64>().map_err(|_| {
-        alertmanager_auth_response(
+        (
             "invalid_alertmanager_hmac_timestamp",
             "x-iscy-alert-timestamp muss Unix-Epoch-Sekunden enthalten.",
         )
     })?;
     let now = Utc::now().timestamp();
     if (now - parsed).unsigned_abs() > max_age.as_secs() {
-        return Err(alertmanager_auth_response(
+        return Err((
             "stale_alertmanager_hmac_timestamp",
             "Alertmanager-HMAC-Timestamp liegt ausserhalb des erlaubten Replay-Fensters.",
         ));
