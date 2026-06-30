@@ -1,34 +1,65 @@
-name: Dependency policy diagnostics
+name: Apply anyhow security remediation
 
 on:
-  pull_request:
+  push:
+    branches:
+      - "chore/expand-dependabot-coverage"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  cargo-deny:
+  remediate:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Install cargo-deny
+        with:
+          ref: "chore/expand-dependabot-coverage"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Update anyhow and dependency policy
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          cargo_toml = Path("rust/iscy-backend/Cargo.toml")
+          cargo_text = cargo_toml.read_text()
+          old = 'anyhow = "1"'
+          new = 'anyhow = "1.0.103"'
+          if old not in cargo_text and new not in cargo_text:
+              raise SystemExit("Expected anyhow dependency declaration was not found")
+          cargo_toml.write_text(cargo_text.replace(old, new, 1))
+
+          deny_toml = Path("deny.toml")
+          deny_text = deny_toml.read_text()
+          deny_text, replacements = re.subn(
+              r'ignore = \[\n\s*\{ id = "RUSTSEC-2023-0071".*?\n\]\n\n',
+              '',
+              deny_text,
+              count=1,
+              flags=re.DOTALL,
+          )
+          if replacements != 1 and "RUSTSEC-2023-0071" in deny_text:
+              raise SystemExit("Could not remove stale RUSTSEC-2023-0071 exception")
+          deny_toml.write_text(deny_text)
+          PY
+          cargo update --manifest-path rust/iscy-backend/Cargo.toml -p anyhow --precise 1.0.103
+      - name: Validate dependency policy
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
           fallback: none
-      - name: Run dependency policy checks
-        id: cargo-deny
+      - name: Run cargo-deny
+        run: cargo deny --manifest-path rust/iscy-backend/Cargo.toml check advisories licenses sources
+      - name: Commit remediation
         shell: bash
         run: |
-          set +e
-          cargo deny --manifest-path rust/iscy-backend/Cargo.toml check advisories licenses sources 2>&1 | tee cargo-deny.log
-          status=${PIPESTATUS[0]}
-          exit "$status"
-      - name: Upload cargo-deny diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-deny-diagnostics
-          path: cargo-deny.log
-          if-no-files-found: error
-          retention-days: 1
+          rm .github/workflows/dependency-policy-diagnostics.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add rust/iscy-backend/Cargo.toml rust/iscy-backend/Cargo.lock deny.toml .github/workflows/dependency-policy-diagnostics.yml
+          git commit -m "fix(security): update anyhow for RUSTSEC-2026-0190"
+          git push origin HEAD:chore/expand-dependabot-coverage
