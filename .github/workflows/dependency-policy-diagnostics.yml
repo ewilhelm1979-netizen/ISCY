@@ -1,0 +1,34 @@
+name: Dependency policy diagnostics
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+          fallback: none
+      - name: Run dependency policy checks
+        id: cargo-deny
+        shell: bash
+        run: |
+          set +e
+          cargo deny --manifest-path rust/iscy-backend/Cargo.toml check advisories licenses sources 2>&1 | tee cargo-deny.log
+          status=${PIPESTATUS[0]}
+          exit "$status"
+      - name: Upload cargo-deny diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-deny-diagnostics
+          path: cargo-deny.log
+          if-no-files-found: error
+          retention-days: 1
