@@ -4,6 +4,7 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+
 [licenses]
 version = 2
 confidence-threshold = 0.8
