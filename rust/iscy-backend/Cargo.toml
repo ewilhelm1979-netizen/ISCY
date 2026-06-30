@@ -5,7 +5,7 @@ edition = "2021"
 license = "AGPL-3.0-only"
 
 [dependencies]
-anyhow = "1"
+anyhow = "1.0.103"
 axum = "0.8"
 base64 = "0.22"
 calamine = "0.26"
