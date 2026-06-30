@@ -4,10 +4,6 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = [
-  { id = "RUSTSEC-2023-0071", reason = "rsa is present only through the disabled sqlx-mysql optional dependency path; cargo tree --target all confirms no reachable ISCY dependency path" },
-]
-
 [licenses]
 version = 2
 confidence-threshold = 0.8
