@@ -6,6 +6,11 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Security and supply chain
+
+- expand staggered weekly Dependabot coverage to Cargo, the backend Dockerfile, root and monitoring Compose stacks, Nix inputs, and GitHub Actions
+- update `chrono` from 0.4.44 to 0.4.45 after isolated review and a fully green CI run
+
 ## V23.7.27
 
 ### Security
