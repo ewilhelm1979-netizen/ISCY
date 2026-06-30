@@ -614,16 +614,33 @@ Aktueller Rust-Funktionsumfang:
 - Webansicht `/ai-governance/` mit AI-Systemregister, Kennzahlen, Review-Faelligkeit, Evidence-Stand und Governance-Gaps
 - API `GET` und `POST /api/v1/ai-governance/systems`
 - API `GET` und `PATCH /api/v1/ai-governance/systems/{id}`
+- API `GET /api/v1/ai-governance/systems/{id}/link-candidates`
+- API `POST` und `DELETE /api/v1/ai-governance/systems/{id}/links/{typ}/{objekt-id}` fuer Risiken, Roadmap-Tasks, Incidents und Changes
+- API `POST /api/v1/ai-governance/systems/{id}/gap-tasks` fuer die ausdruecklich ausgeloeste Task-Erzeugung
 - AI-Act-Klassen: nicht bewertet, High Risk, Limited Risk, Minimal Risk, nicht im Scope und verboten/nicht freigegeben
 - Anforderungen fuer Klassifizierung, Risikomanagement, Human Oversight, Logging, Transparenz, Cybersecurity/Robustheit sowie Monitoring/Evidence
 - Evidence-Vorbefuellung ueber stabile AI-Governance-Evidence-Keys
+- direkte, im SQL tenantgebundene Verknuepfungen mit bestehenden Risiken, Roadmap-Tasks und Incidents
+- kleines allgemeines Change-Register als kanonischer Plattformkern; es ist kein AI-spezifisches Ersatzmodell und noch kein vollstaendiger Change-Management-Workflow
+- Link-Audit fuer Anlegen und Entfernen mit Actor, Objekttyp, Objekt-ID und Zeitpunkt
+- Roadmap-Tasks aus offenen Governance-Gaps nur nach Nutzeraktion; `origin_key` und Unique-Index verhindern Duplikate auch bei Wiederholung
+- Management-Review-Snapshots und Exporte frieren AI-Systeme sowie Linkzaehler fuer Risiko, Roadmap, Incident und Change ein
 - Rust-only-Betriebssignale fuer nicht bewertete AI-Systeme, faellige Reviews, fehlende Evidence und offene Governance-Gaps
+
+Tenant- und Berechtigungsgrenzen:
+
+- Leser und Auditoren koennen die Verknuepfungen sehen, aber nicht aendern.
+- Schreibende Rollen duerfen Links und Gap-Tasks verwalten.
+- AI-System und Zielobjekt werden bereits in der Datenbankabfrage auf denselben Tenant eingeschraenkt. Manipulierte oder fremde IDs werden nicht verknuepft und nicht offengelegt.
+- Management-Review-Pakete enthalten einen unveraenderlichen Snapshot. Spaetere Linkaenderungen schreiben alte Pakete nicht um.
 
 Fachlicher Nutzen:
 
 - AI-Systeme werden nicht nur als Produktmerkmal, sondern als steuerbares Risiko- und Governance-Objekt sichtbar.
 - AI-Act-, ISMS-, Product-Security- und Evidence-Arbeit laufen ueber dasselbe Nachweis- und Review-Modell.
 - Fachliche Reviews koennen frueh erkennen, ob Einstufung, Oversight, Monitoring oder Evidence fehlen.
+
+Die technischen API-, Tenant- und Snapshot-Regeln sind in `docs/AI_GOVERNANCE.md` gebuendelt.
 
 Fuer Nicht-Sicherheitsleute:
 Dieser Bereich beantwortet: Welche KI wird genutzt, wofuer, mit welchen Risiken, wer kontrolliert sie und wo ist der Nachweis?
@@ -1076,11 +1093,11 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0026_rust_product_security_evidence_packages` persistiert Paketkopf, Reviewentscheidung, Versionsbezug und eingefrorene Nachweispositionen. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes und erweitert Management-Review-Snapshots. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
+1. Zero-Trust-Agent-Onboarding fuer Administratoren als gefuehrten, sicheren Workflow vereinfachen
 2. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
 3. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
 4. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend

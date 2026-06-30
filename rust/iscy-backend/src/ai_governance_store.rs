@@ -74,6 +74,125 @@ pub struct AiGovernanceSystemSummary {
 pub struct AiGovernanceSystemDetail {
     pub system: AiGovernanceSystemSummary,
     pub requirements: Vec<AiGovernanceRequirementSummary>,
+    pub risks: Vec<AiGovernanceRiskLink>,
+    pub roadmap_tasks: Vec<AiGovernanceRoadmapTaskLink>,
+    pub incidents: Vec<AiGovernanceIncidentLink>,
+    pub changes: Vec<AiGovernanceChangeLink>,
+    pub link_audit: Vec<AiGovernanceLinkAuditEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiGovernanceRiskLink {
+    pub id: i64,
+    pub title: String,
+    pub status: String,
+    pub owner_display: Option<String>,
+    pub score: i64,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiGovernanceRoadmapTaskLink {
+    pub id: i64,
+    pub title: String,
+    pub status: String,
+    pub status_label: String,
+    pub due_date: Option<String>,
+    pub phase_name: String,
+    pub plan_title: String,
+    pub origin_key: String,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiGovernanceIncidentLink {
+    pub id: i64,
+    pub title: String,
+    pub status: String,
+    pub severity: String,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiGovernanceChangeLink {
+    pub id: i64,
+    pub title: String,
+    pub status: String,
+    pub change_type: String,
+    pub planned_at: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiGovernanceLinkAuditEntry {
+    pub id: i64,
+    pub entity_type: String,
+    pub entity_id: i64,
+    pub action: String,
+    pub actor_id: i64,
+    pub detail: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiGovernanceLinkCandidates {
+    pub risks: Vec<AiGovernanceRiskLink>,
+    pub roadmap_tasks: Vec<AiGovernanceRoadmapTaskLink>,
+    pub incidents: Vec<AiGovernanceIncidentLink>,
+    pub changes: Vec<AiGovernanceChangeLink>,
+    pub roadmap_phases: Vec<AiGovernanceRoadmapPhaseCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiGovernanceRoadmapPhaseCandidate {
+    pub id: i64,
+    pub name: String,
+    pub plan_title: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiGovernanceLinkKind {
+    Risk,
+    RoadmapTask,
+    Incident,
+    Change,
+}
+
+impl AiGovernanceLinkKind {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "risk" | "risks" => Some(Self::Risk),
+            "roadmap-task" | "roadmap-tasks" | "task" | "tasks" => Some(Self::RoadmapTask),
+            "incident" | "incidents" => Some(Self::Incident),
+            "change" | "changes" => Some(Self::Change),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Risk => "risk",
+            Self::RoadmapTask => "roadmap_task",
+            Self::Incident => "incident",
+            Self::Change => "change",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiGovernanceLinkMutation {
+    Created,
+    Removed,
+    AlreadyExists,
+    NotFound,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiGovernanceGapTaskResult {
+    pub created: bool,
+    pub requirement_key: String,
+    pub task: AiGovernanceRoadmapTaskLink,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -207,9 +326,33 @@ impl AiGovernanceStore {
             Self::Postgres(pool) => system_detail_postgres(pool, tenant_id, system_id).await?,
             Self::Sqlite(pool) => system_detail_sqlite(pool, tenant_id, system_id).await?,
         };
-        Ok(system.map(|system| AiGovernanceSystemDetail {
+        let Some(system) = system else {
+            return Ok(None);
+        };
+        let (risks, roadmap_tasks, incidents, changes, link_audit) = match self {
+            Self::Postgres(pool) => (
+                linked_risks_postgres(pool, tenant_id, system_id).await?,
+                linked_roadmap_tasks_postgres(pool, tenant_id, system_id).await?,
+                linked_incidents_postgres(pool, tenant_id, system_id).await?,
+                linked_changes_postgres(pool, tenant_id, system_id).await?,
+                link_audit_postgres(pool, tenant_id, system_id).await?,
+            ),
+            Self::Sqlite(pool) => (
+                linked_risks_sqlite(pool, tenant_id, system_id).await?,
+                linked_roadmap_tasks_sqlite(pool, tenant_id, system_id).await?,
+                linked_incidents_sqlite(pool, tenant_id, system_id).await?,
+                linked_changes_sqlite(pool, tenant_id, system_id).await?,
+                link_audit_sqlite(pool, tenant_id, system_id).await?,
+            ),
+        };
+        Ok(Some(AiGovernanceSystemDetail {
             requirements: ai_governance_requirements(&system),
             system,
+            risks,
+            roadmap_tasks,
+            incidents,
+            changes,
+            link_audit,
         }))
     }
 
@@ -233,6 +376,26 @@ impl AiGovernanceStore {
             .map(clean_text)
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| format!("AI-GOV:SYSTEM:{}", slug_key(&name)));
+        match self {
+            Self::Postgres(pool) => {
+                validate_system_relations_postgres(
+                    pool,
+                    tenant_id,
+                    payload.product_id,
+                    payload.owner_id,
+                )
+                .await?;
+            }
+            Self::Sqlite(pool) => {
+                validate_system_relations_sqlite(
+                    pool,
+                    tenant_id,
+                    payload.product_id,
+                    payload.owner_id,
+                )
+                .await?;
+            }
+        }
         let system_id = match self {
             Self::Postgres(pool) => {
                 create_system_postgres(
@@ -285,8 +448,16 @@ impl AiGovernanceStore {
         };
         let next = merged_update(existing, payload)?;
         match self {
-            Self::Postgres(pool) => update_system_postgres(pool, &next).await?,
-            Self::Sqlite(pool) => update_system_sqlite(pool, &next).await?,
+            Self::Postgres(pool) => {
+                validate_system_relations_postgres(pool, tenant_id, next.product_id, next.owner_id)
+                    .await?;
+                update_system_postgres(pool, &next).await?;
+            }
+            Self::Sqlite(pool) => {
+                validate_system_relations_sqlite(pool, tenant_id, next.product_id, next.owner_id)
+                    .await?;
+                update_system_sqlite(pool, &next).await?;
+            }
         };
         Ok(self
             .detail(tenant_id, system_id)
@@ -295,6 +466,1275 @@ impl AiGovernanceStore {
                 system: detail.system,
                 requirements: detail.requirements,
             }))
+    }
+
+    pub async fn link_candidates(
+        &self,
+        tenant_id: i64,
+        system_id: i64,
+    ) -> anyhow::Result<Option<AiGovernanceLinkCandidates>> {
+        if self.detail(tenant_id, system_id).await?.is_none() {
+            return Ok(None);
+        }
+        let candidates = match self {
+            Self::Postgres(pool) => AiGovernanceLinkCandidates {
+                risks: candidate_risks_postgres(pool, tenant_id, system_id).await?,
+                roadmap_tasks: candidate_roadmap_tasks_postgres(pool, tenant_id, system_id).await?,
+                incidents: candidate_incidents_postgres(pool, tenant_id, system_id).await?,
+                changes: candidate_changes_postgres(pool, tenant_id, system_id).await?,
+                roadmap_phases: roadmap_phases_postgres(pool, tenant_id).await?,
+            },
+            Self::Sqlite(pool) => AiGovernanceLinkCandidates {
+                risks: candidate_risks_sqlite(pool, tenant_id, system_id).await?,
+                roadmap_tasks: candidate_roadmap_tasks_sqlite(pool, tenant_id, system_id).await?,
+                incidents: candidate_incidents_sqlite(pool, tenant_id, system_id).await?,
+                changes: candidate_changes_sqlite(pool, tenant_id, system_id).await?,
+                roadmap_phases: roadmap_phases_sqlite(pool, tenant_id).await?,
+            },
+        };
+        Ok(Some(candidates))
+    }
+
+    pub async fn add_link(
+        &self,
+        tenant_id: i64,
+        system_id: i64,
+        kind: AiGovernanceLinkKind,
+        entity_id: i64,
+        actor_id: i64,
+    ) -> anyhow::Result<AiGovernanceLinkMutation> {
+        match self {
+            Self::Postgres(pool) => {
+                add_link_postgres(pool, tenant_id, system_id, kind, entity_id, actor_id).await
+            }
+            Self::Sqlite(pool) => {
+                add_link_sqlite(pool, tenant_id, system_id, kind, entity_id, actor_id).await
+            }
+        }
+    }
+
+    pub async fn remove_link(
+        &self,
+        tenant_id: i64,
+        system_id: i64,
+        kind: AiGovernanceLinkKind,
+        entity_id: i64,
+        actor_id: i64,
+    ) -> anyhow::Result<AiGovernanceLinkMutation> {
+        match self {
+            Self::Postgres(pool) => {
+                remove_link_postgres(pool, tenant_id, system_id, kind, entity_id, actor_id).await
+            }
+            Self::Sqlite(pool) => {
+                remove_link_sqlite(pool, tenant_id, system_id, kind, entity_id, actor_id).await
+            }
+        }
+    }
+
+    pub async fn create_task_from_gap(
+        &self,
+        tenant_id: i64,
+        system_id: i64,
+        requirement_key: &str,
+        phase_id: i64,
+        actor_id: i64,
+    ) -> anyhow::Result<Option<AiGovernanceGapTaskResult>> {
+        let Some(detail) = self.detail(tenant_id, system_id).await? else {
+            return Ok(None);
+        };
+        let requirement_key = clean_text(requirement_key);
+        let requirement = detail
+            .requirements
+            .iter()
+            .find(|requirement| requirement.key == requirement_key && requirement.status == "GAP")
+            .context("Nur offene AI-Governance-Gaps koennen als Roadmap-Task erzeugt werden")?;
+        let origin_key = format!("AI-GOV:{tenant_id}:{system_id}:{}", requirement.key);
+        let task = match self {
+            Self::Postgres(pool) => {
+                create_gap_task_postgres(
+                    pool,
+                    tenant_id,
+                    phase_id,
+                    &detail.system,
+                    requirement,
+                    &origin_key,
+                )
+                .await?
+            }
+            Self::Sqlite(pool) => {
+                create_gap_task_sqlite(
+                    pool,
+                    tenant_id,
+                    phase_id,
+                    &detail.system,
+                    requirement,
+                    &origin_key,
+                )
+                .await?
+            }
+        };
+        let (task, created) =
+            task.context("Roadmap-Phase wurde fuer diesen Tenant nicht gefunden")?;
+        let mutation = self
+            .add_link(
+                tenant_id,
+                system_id,
+                AiGovernanceLinkKind::RoadmapTask,
+                task.id,
+                actor_id,
+            )
+            .await?;
+        if created {
+            match self {
+                Self::Postgres(pool) => {
+                    insert_audit_postgres(
+                        pool,
+                        tenant_id,
+                        system_id,
+                        AiGovernanceLinkKind::RoadmapTask,
+                        task.id,
+                        "TASK_CREATED",
+                        actor_id,
+                        &format!(
+                            "Roadmap-Task aus AI-Governance-Gap {} erzeugt.",
+                            requirement.key
+                        ),
+                    )
+                    .await?;
+                }
+                Self::Sqlite(pool) => {
+                    insert_audit_sqlite(
+                        pool,
+                        tenant_id,
+                        system_id,
+                        AiGovernanceLinkKind::RoadmapTask,
+                        task.id,
+                        "TASK_CREATED",
+                        actor_id,
+                        &format!(
+                            "Roadmap-Task aus AI-Governance-Gap {} erzeugt.",
+                            requirement.key
+                        ),
+                    )
+                    .await?;
+                }
+            }
+        } else if mutation == AiGovernanceLinkMutation::NotFound {
+            bail!("Vorhandener Roadmap-Task konnte nicht tenantgebunden verknuepft werden");
+        }
+        Ok(Some(AiGovernanceGapTaskResult {
+            created,
+            requirement_key,
+            task,
+        }))
+    }
+}
+
+fn link_table(kind: AiGovernanceLinkKind) -> (&'static str, &'static str) {
+    match kind {
+        AiGovernanceLinkKind::Risk => ("ai_governance_system_risk", "risk_id"),
+        AiGovernanceLinkKind::RoadmapTask => {
+            ("ai_governance_system_roadmap_task", "roadmap_task_id")
+        }
+        AiGovernanceLinkKind::Incident => ("ai_governance_system_incident", "incident_id"),
+        AiGovernanceLinkKind::Change => ("ai_governance_system_change", "change_id"),
+    }
+}
+
+async fn validate_system_relations_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    product_id: Option<i64>,
+    owner_id: Option<i64>,
+) -> anyhow::Result<()> {
+    if let Some(product_id) = product_id.filter(|id| *id > 0) {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM product_security_product WHERE tenant_id = $1 AND id = $2)",
+        )
+        .bind(tenant_id)
+        .bind(product_id)
+        .fetch_one(pool)
+        .await?;
+        if !exists {
+            bail!("AI-Governance-Produkt wurde fuer diesen Tenant nicht gefunden");
+        }
+    }
+    if let Some(owner_id) = owner_id.filter(|id| *id > 0) {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM accounts_user WHERE tenant_id = $1 AND id = $2)",
+        )
+        .bind(tenant_id)
+        .bind(owner_id)
+        .fetch_one(pool)
+        .await?;
+        if !exists {
+            bail!("AI-Governance-Owner wurde fuer diesen Tenant nicht gefunden");
+        }
+    }
+    Ok(())
+}
+
+async fn validate_system_relations_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    product_id: Option<i64>,
+    owner_id: Option<i64>,
+) -> anyhow::Result<()> {
+    if let Some(product_id) = product_id.filter(|id| *id > 0) {
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM product_security_product WHERE tenant_id = ? AND id = ?)",
+        )
+        .bind(tenant_id)
+        .bind(product_id)
+        .fetch_one(pool)
+        .await?;
+        if exists == 0 {
+            bail!("AI-Governance-Produkt wurde fuer diesen Tenant nicht gefunden");
+        }
+    }
+    if let Some(owner_id) = owner_id.filter(|id| *id > 0) {
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM accounts_user WHERE tenant_id = ? AND id = ?)",
+        )
+        .bind(tenant_id)
+        .bind(owner_id)
+        .fetch_one(pool)
+        .await?;
+        if exists == 0 {
+            bail!("AI-Governance-Owner wurde fuer diesen Tenant nicht gefunden");
+        }
+    }
+    Ok(())
+}
+
+async fn system_exists_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<bool> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ai_governance_system WHERE tenant_id = $1 AND id = $2)",
+    )
+    .bind(tenant_id)
+    .bind(system_id)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
+}
+
+async fn system_exists_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<bool> {
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ai_governance_system WHERE tenant_id = ? AND id = ?)",
+    )
+    .bind(tenant_id)
+    .bind(system_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists != 0)
+}
+
+async fn entity_exists_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    kind: AiGovernanceLinkKind,
+    entity_id: i64,
+) -> anyhow::Result<bool> {
+    let sql = match kind {
+        AiGovernanceLinkKind::Risk => {
+            "SELECT EXISTS(SELECT 1 FROM risks_risk WHERE tenant_id = $1 AND id = $2)"
+        }
+        AiGovernanceLinkKind::RoadmapTask => {
+            "SELECT EXISTS(SELECT 1 FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id WHERE plan.tenant_id = $1 AND task.id = $2)"
+        }
+        AiGovernanceLinkKind::Incident => {
+            "SELECT EXISTS(SELECT 1 FROM incidents_incident WHERE tenant_id = $1 AND id = $2)"
+        }
+        AiGovernanceLinkKind::Change => {
+            "SELECT EXISTS(SELECT 1 FROM changes_change WHERE tenant_id = $1 AND id = $2)"
+        }
+    };
+    sqlx::query_scalar(sql)
+        .bind(tenant_id)
+        .bind(entity_id)
+        .fetch_one(pool)
+        .await
+        .map_err(Into::into)
+}
+
+async fn entity_exists_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    kind: AiGovernanceLinkKind,
+    entity_id: i64,
+) -> anyhow::Result<bool> {
+    let sql = match kind {
+        AiGovernanceLinkKind::Risk => {
+            "SELECT EXISTS(SELECT 1 FROM risks_risk WHERE tenant_id = ? AND id = ?)"
+        }
+        AiGovernanceLinkKind::RoadmapTask => {
+            "SELECT EXISTS(SELECT 1 FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id WHERE plan.tenant_id = ? AND task.id = ?)"
+        }
+        AiGovernanceLinkKind::Incident => {
+            "SELECT EXISTS(SELECT 1 FROM incidents_incident WHERE tenant_id = ? AND id = ?)"
+        }
+        AiGovernanceLinkKind::Change => {
+            "SELECT EXISTS(SELECT 1 FROM changes_change WHERE tenant_id = ? AND id = ?)"
+        }
+    };
+    let exists: i64 = sqlx::query_scalar(sql)
+        .bind(tenant_id)
+        .bind(entity_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(exists != 0)
+}
+
+async fn add_link_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+    kind: AiGovernanceLinkKind,
+    entity_id: i64,
+    actor_id: i64,
+) -> anyhow::Result<AiGovernanceLinkMutation> {
+    if entity_id <= 0
+        || !system_exists_postgres(pool, tenant_id, system_id).await?
+        || !entity_exists_postgres(pool, tenant_id, kind, entity_id).await?
+    {
+        return Ok(AiGovernanceLinkMutation::NotFound);
+    }
+    let (table, column) = link_table(kind);
+    let result = sqlx::query(&format!(
+        "INSERT INTO {table} (tenant_id, system_id, {column}, created_by_id, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) ON CONFLICT DO NOTHING"
+    ))
+    .bind(tenant_id)
+    .bind(system_id)
+    .bind(entity_id)
+    .bind(actor_id)
+    .execute(pool)
+    .await
+    .context("PostgreSQL-AI-Governance-Verknuepfung konnte nicht angelegt werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(AiGovernanceLinkMutation::AlreadyExists);
+    }
+    insert_audit_postgres(
+        pool,
+        tenant_id,
+        system_id,
+        kind,
+        entity_id,
+        "LINKED",
+        actor_id,
+        "Governance-Objekt mit AI-System verknuepft.",
+    )
+    .await?;
+    Ok(AiGovernanceLinkMutation::Created)
+}
+
+async fn add_link_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+    kind: AiGovernanceLinkKind,
+    entity_id: i64,
+    actor_id: i64,
+) -> anyhow::Result<AiGovernanceLinkMutation> {
+    if entity_id <= 0
+        || !system_exists_sqlite(pool, tenant_id, system_id).await?
+        || !entity_exists_sqlite(pool, tenant_id, kind, entity_id).await?
+    {
+        return Ok(AiGovernanceLinkMutation::NotFound);
+    }
+    let (table, column) = link_table(kind);
+    let result = sqlx::query(&format!(
+        "INSERT INTO {table} (tenant_id, system_id, {column}, created_by_id, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT DO NOTHING"
+    ))
+    .bind(tenant_id)
+    .bind(system_id)
+    .bind(entity_id)
+    .bind(actor_id)
+    .execute(pool)
+    .await
+    .context("SQLite-AI-Governance-Verknuepfung konnte nicht angelegt werden")?;
+    if result.rows_affected() == 0 {
+        return Ok(AiGovernanceLinkMutation::AlreadyExists);
+    }
+    insert_audit_sqlite(
+        pool,
+        tenant_id,
+        system_id,
+        kind,
+        entity_id,
+        "LINKED",
+        actor_id,
+        "Governance-Objekt mit AI-System verknuepft.",
+    )
+    .await?;
+    Ok(AiGovernanceLinkMutation::Created)
+}
+
+async fn remove_link_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+    kind: AiGovernanceLinkKind,
+    entity_id: i64,
+    actor_id: i64,
+) -> anyhow::Result<AiGovernanceLinkMutation> {
+    if !system_exists_postgres(pool, tenant_id, system_id).await? {
+        return Ok(AiGovernanceLinkMutation::NotFound);
+    }
+    let (table, column) = link_table(kind);
+    let result = sqlx::query(&format!(
+        "DELETE FROM {table} WHERE tenant_id = $1 AND system_id = $2 AND {column} = $3"
+    ))
+    .bind(tenant_id)
+    .bind(system_id)
+    .bind(entity_id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Ok(AiGovernanceLinkMutation::NotFound);
+    }
+    insert_audit_postgres(
+        pool,
+        tenant_id,
+        system_id,
+        kind,
+        entity_id,
+        "UNLINKED",
+        actor_id,
+        "Governance-Objekt vom AI-System entfernt.",
+    )
+    .await?;
+    Ok(AiGovernanceLinkMutation::Removed)
+}
+
+async fn remove_link_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+    kind: AiGovernanceLinkKind,
+    entity_id: i64,
+    actor_id: i64,
+) -> anyhow::Result<AiGovernanceLinkMutation> {
+    if !system_exists_sqlite(pool, tenant_id, system_id).await? {
+        return Ok(AiGovernanceLinkMutation::NotFound);
+    }
+    let (table, column) = link_table(kind);
+    let result = sqlx::query(&format!(
+        "DELETE FROM {table} WHERE tenant_id = ? AND system_id = ? AND {column} = ?"
+    ))
+    .bind(tenant_id)
+    .bind(system_id)
+    .bind(entity_id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Ok(AiGovernanceLinkMutation::NotFound);
+    }
+    insert_audit_sqlite(
+        pool,
+        tenant_id,
+        system_id,
+        kind,
+        entity_id,
+        "UNLINKED",
+        actor_id,
+        "Governance-Objekt vom AI-System entfernt.",
+    )
+    .await?;
+    Ok(AiGovernanceLinkMutation::Removed)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_audit_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+    kind: AiGovernanceLinkKind,
+    entity_id: i64,
+    action: &str,
+    actor_id: i64,
+    detail: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO ai_governance_link_audit (
+            tenant_id, system_id, entity_type, entity_id, action, actor_id, detail, created_at
+        )
+        SELECT $1, system.id, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP
+        FROM ai_governance_system system
+        WHERE system.tenant_id = $1 AND system.id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(system_id)
+    .bind(kind.as_str())
+    .bind(entity_id)
+    .bind(action)
+    .bind(actor_id)
+    .bind(detail)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_audit_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+    kind: AiGovernanceLinkKind,
+    entity_id: i64,
+    action: &str,
+    actor_id: i64,
+    detail: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO ai_governance_link_audit (
+            tenant_id, system_id, entity_type, entity_id, action, actor_id, detail, created_at
+        )
+        SELECT ?, system.id, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+        FROM ai_governance_system system
+        WHERE system.tenant_id = ? AND system.id = ?
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(kind.as_str())
+    .bind(entity_id)
+    .bind(action)
+    .bind(actor_id)
+    .bind(detail)
+    .bind(tenant_id)
+    .bind(system_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn linked_risks_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceRiskLink>> {
+    risk_links_postgres(pool, tenant_id, system_id, true).await
+}
+
+async fn candidate_risks_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceRiskLink>> {
+    risk_links_postgres(pool, tenant_id, system_id, false).await
+}
+
+async fn risk_links_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+    linked: bool,
+) -> anyhow::Result<Vec<AiGovernanceRiskLink>> {
+    let relation = if linked {
+        "JOIN ai_governance_system_risk link ON link.risk_id = risk.id AND link.tenant_id = risk.tenant_id AND link.system_id = $2"
+    } else {
+        "LEFT JOIN ai_governance_system_risk link ON link.risk_id = risk.id AND link.tenant_id = risk.tenant_id AND link.system_id = $2"
+    };
+    let predicate = if linked {
+        "link.id IS NOT NULL"
+    } else {
+        "link.id IS NULL"
+    };
+    let rows = sqlx::query(&format!(
+        r#"SELECT risk.id, risk.title, risk.status,
+        COALESCE(NULLIF(BTRIM(CONCAT(COALESCE(owner.first_name, ''), ' ', COALESCE(owner.last_name, ''))), ''), owner.username) AS owner_display,
+        (risk.impact * risk.likelihood)::bigint AS score, link.created_at::text AS link_created_at
+        FROM risks_risk risk {relation}
+        LEFT JOIN accounts_user owner ON owner.id = risk.owner_id AND owner.tenant_id = risk.tenant_id
+        WHERE risk.tenant_id = $1 AND {predicate}
+        ORDER BY score DESC, risk.id DESC LIMIT 200"#
+    ))
+    .bind(tenant_id)
+    .bind(system_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(risk_link_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn linked_risks_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceRiskLink>> {
+    risk_links_sqlite(pool, tenant_id, system_id, true).await
+}
+
+async fn candidate_risks_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceRiskLink>> {
+    risk_links_sqlite(pool, tenant_id, system_id, false).await
+}
+
+async fn risk_links_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+    linked: bool,
+) -> anyhow::Result<Vec<AiGovernanceRiskLink>> {
+    let relation = if linked {
+        "JOIN ai_governance_system_risk link ON link.risk_id = risk.id AND link.tenant_id = risk.tenant_id AND link.system_id = ?"
+    } else {
+        "LEFT JOIN ai_governance_system_risk link ON link.risk_id = risk.id AND link.tenant_id = risk.tenant_id AND link.system_id = ?"
+    };
+    let predicate = if linked {
+        "link.id IS NOT NULL"
+    } else {
+        "link.id IS NULL"
+    };
+    let rows = sqlx::query(&format!(
+        r#"SELECT risk.id, risk.title, risk.status,
+        COALESCE(NULLIF(TRIM(COALESCE(owner.first_name, '') || ' ' || COALESCE(owner.last_name, '')), ''), owner.username) AS owner_display,
+        risk.impact * risk.likelihood AS score, CAST(link.created_at AS TEXT) AS link_created_at
+        FROM risks_risk risk {relation}
+        LEFT JOIN accounts_user owner ON owner.id = risk.owner_id AND owner.tenant_id = risk.tenant_id
+        WHERE risk.tenant_id = ? AND {predicate}
+        ORDER BY score DESC, risk.id DESC LIMIT 200"#
+    ))
+    .bind(system_id)
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(risk_link_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn risk_link_from_pg_row(row: PgRow) -> Result<AiGovernanceRiskLink, sqlx::Error> {
+    Ok(AiGovernanceRiskLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status: row.try_get("status")?,
+        owner_display: row.try_get("owner_display")?,
+        score: row.try_get("score")?,
+        created_at: row.try_get("link_created_at")?,
+    })
+}
+
+fn risk_link_from_sqlite_row(row: SqliteRow) -> Result<AiGovernanceRiskLink, sqlx::Error> {
+    Ok(AiGovernanceRiskLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status: row.try_get("status")?,
+        owner_display: row.try_get("owner_display")?,
+        score: row.try_get("score")?,
+        created_at: row.try_get("link_created_at")?,
+    })
+}
+
+async fn linked_roadmap_tasks_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceRoadmapTaskLink>> {
+    roadmap_task_links_postgres(pool, tenant_id, system_id, true).await
+}
+
+async fn candidate_roadmap_tasks_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceRoadmapTaskLink>> {
+    roadmap_task_links_postgres(pool, tenant_id, system_id, false).await
+}
+
+async fn roadmap_task_links_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+    linked: bool,
+) -> anyhow::Result<Vec<AiGovernanceRoadmapTaskLink>> {
+    let relation = if linked {
+        "JOIN ai_governance_system_roadmap_task link ON link.roadmap_task_id = task.id AND link.tenant_id = plan.tenant_id AND link.system_id = $2"
+    } else {
+        "LEFT JOIN ai_governance_system_roadmap_task link ON link.roadmap_task_id = task.id AND link.tenant_id = plan.tenant_id AND link.system_id = $2"
+    };
+    let predicate = if linked {
+        "link.id IS NOT NULL"
+    } else {
+        "link.id IS NULL"
+    };
+    let rows = sqlx::query(&format!(
+        r#"SELECT task.id, task.title, task.status, task.due_date::text AS due_date,
+        phase.name AS phase_name, plan.title AS plan_title, task.origin_key,
+        link.created_at::text AS link_created_at
+        FROM roadmap_roadmaptask task
+        JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id
+        JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id
+        {relation}
+        WHERE plan.tenant_id = $1 AND {predicate}
+        ORDER BY task.due_date ASC, task.id DESC LIMIT 200"#
+    ))
+    .bind(tenant_id)
+    .bind(system_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(roadmap_task_link_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn linked_roadmap_tasks_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceRoadmapTaskLink>> {
+    roadmap_task_links_sqlite(pool, tenant_id, system_id, true).await
+}
+
+async fn candidate_roadmap_tasks_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceRoadmapTaskLink>> {
+    roadmap_task_links_sqlite(pool, tenant_id, system_id, false).await
+}
+
+async fn roadmap_task_links_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+    linked: bool,
+) -> anyhow::Result<Vec<AiGovernanceRoadmapTaskLink>> {
+    let relation = if linked {
+        "JOIN ai_governance_system_roadmap_task link ON link.roadmap_task_id = task.id AND link.tenant_id = plan.tenant_id AND link.system_id = ?"
+    } else {
+        "LEFT JOIN ai_governance_system_roadmap_task link ON link.roadmap_task_id = task.id AND link.tenant_id = plan.tenant_id AND link.system_id = ?"
+    };
+    let predicate = if linked {
+        "link.id IS NOT NULL"
+    } else {
+        "link.id IS NULL"
+    };
+    let rows = sqlx::query(&format!(
+        r#"SELECT task.id, task.title, task.status, CAST(task.due_date AS TEXT) AS due_date,
+        phase.name AS phase_name, plan.title AS plan_title, task.origin_key,
+        CAST(link.created_at AS TEXT) AS link_created_at
+        FROM roadmap_roadmaptask task
+        JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id
+        JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id
+        {relation}
+        WHERE plan.tenant_id = ? AND {predicate}
+        ORDER BY task.due_date ASC, task.id DESC LIMIT 200"#
+    ))
+    .bind(system_id)
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(roadmap_task_link_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn roadmap_task_link_from_pg_row(row: PgRow) -> Result<AiGovernanceRoadmapTaskLink, sqlx::Error> {
+    let status: String = row.try_get("status")?;
+    Ok(AiGovernanceRoadmapTaskLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status_label: roadmap_status_label(&status).to_string(),
+        status,
+        due_date: row.try_get("due_date")?,
+        phase_name: row.try_get("phase_name")?,
+        plan_title: row.try_get("plan_title")?,
+        origin_key: row.try_get("origin_key")?,
+        created_at: row.try_get("link_created_at")?,
+    })
+}
+
+fn roadmap_task_link_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<AiGovernanceRoadmapTaskLink, sqlx::Error> {
+    let status: String = row.try_get("status")?;
+    Ok(AiGovernanceRoadmapTaskLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status_label: roadmap_status_label(&status).to_string(),
+        status,
+        due_date: row.try_get("due_date")?,
+        phase_name: row.try_get("phase_name")?,
+        plan_title: row.try_get("plan_title")?,
+        origin_key: row.try_get("origin_key")?,
+        created_at: row.try_get("link_created_at")?,
+    })
+}
+
+async fn linked_incidents_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceIncidentLink>> {
+    incident_links_postgres(pool, tenant_id, system_id, true).await
+}
+
+async fn candidate_incidents_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceIncidentLink>> {
+    incident_links_postgres(pool, tenant_id, system_id, false).await
+}
+
+async fn incident_links_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+    linked: bool,
+) -> anyhow::Result<Vec<AiGovernanceIncidentLink>> {
+    let relation = if linked {
+        "JOIN ai_governance_system_incident link ON link.incident_id = incident.id AND link.tenant_id = incident.tenant_id AND link.system_id = $2"
+    } else {
+        "LEFT JOIN ai_governance_system_incident link ON link.incident_id = incident.id AND link.tenant_id = incident.tenant_id AND link.system_id = $2"
+    };
+    let predicate = if linked {
+        "link.id IS NOT NULL"
+    } else {
+        "link.id IS NULL"
+    };
+    let rows = sqlx::query(&format!(
+        "SELECT incident.id, incident.title, incident.status, incident.severity, link.created_at::text AS link_created_at FROM incidents_incident incident {relation} WHERE incident.tenant_id = $1 AND {predicate} ORDER BY incident.updated_at DESC, incident.id DESC LIMIT 200"
+    ))
+    .bind(tenant_id).bind(system_id).fetch_all(pool).await?;
+    rows.into_iter()
+        .map(incident_link_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn linked_incidents_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceIncidentLink>> {
+    incident_links_sqlite(pool, tenant_id, system_id, true).await
+}
+
+async fn candidate_incidents_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceIncidentLink>> {
+    incident_links_sqlite(pool, tenant_id, system_id, false).await
+}
+
+async fn incident_links_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+    linked: bool,
+) -> anyhow::Result<Vec<AiGovernanceIncidentLink>> {
+    let relation = if linked {
+        "JOIN ai_governance_system_incident link ON link.incident_id = incident.id AND link.tenant_id = incident.tenant_id AND link.system_id = ?"
+    } else {
+        "LEFT JOIN ai_governance_system_incident link ON link.incident_id = incident.id AND link.tenant_id = incident.tenant_id AND link.system_id = ?"
+    };
+    let predicate = if linked {
+        "link.id IS NOT NULL"
+    } else {
+        "link.id IS NULL"
+    };
+    let rows = sqlx::query(&format!(
+        "SELECT incident.id, incident.title, incident.status, incident.severity, CAST(link.created_at AS TEXT) AS link_created_at FROM incidents_incident incident {relation} WHERE incident.tenant_id = ? AND {predicate} ORDER BY incident.updated_at DESC, incident.id DESC LIMIT 200"
+    ))
+    .bind(system_id).bind(tenant_id).fetch_all(pool).await?;
+    rows.into_iter()
+        .map(incident_link_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn incident_link_from_pg_row(row: PgRow) -> Result<AiGovernanceIncidentLink, sqlx::Error> {
+    Ok(AiGovernanceIncidentLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status: row.try_get("status")?,
+        severity: row.try_get("severity")?,
+        created_at: row.try_get("link_created_at")?,
+    })
+}
+
+fn incident_link_from_sqlite_row(row: SqliteRow) -> Result<AiGovernanceIncidentLink, sqlx::Error> {
+    Ok(AiGovernanceIncidentLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status: row.try_get("status")?,
+        severity: row.try_get("severity")?,
+        created_at: row.try_get("link_created_at")?,
+    })
+}
+
+async fn linked_changes_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceChangeLink>> {
+    change_links_postgres(pool, tenant_id, system_id, true).await
+}
+
+async fn candidate_changes_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceChangeLink>> {
+    change_links_postgres(pool, tenant_id, system_id, false).await
+}
+
+async fn change_links_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+    linked: bool,
+) -> anyhow::Result<Vec<AiGovernanceChangeLink>> {
+    let relation = if linked {
+        "JOIN ai_governance_system_change link ON link.change_id = change.id AND link.tenant_id = change.tenant_id AND link.system_id = $2"
+    } else {
+        "LEFT JOIN ai_governance_system_change link ON link.change_id = change.id AND link.tenant_id = change.tenant_id AND link.system_id = $2"
+    };
+    let predicate = if linked {
+        "link.id IS NOT NULL"
+    } else {
+        "link.id IS NULL"
+    };
+    let rows = sqlx::query(&format!(
+        "SELECT change.id, change.title, change.status, change.change_type, change.planned_at, link.created_at::text AS link_created_at FROM changes_change change {relation} WHERE change.tenant_id = $1 AND {predicate} ORDER BY change.updated_at DESC, change.id DESC LIMIT 200"
+    ))
+    .bind(tenant_id).bind(system_id).fetch_all(pool).await?;
+    rows.into_iter()
+        .map(change_link_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn linked_changes_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceChangeLink>> {
+    change_links_sqlite(pool, tenant_id, system_id, true).await
+}
+
+async fn candidate_changes_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceChangeLink>> {
+    change_links_sqlite(pool, tenant_id, system_id, false).await
+}
+
+async fn change_links_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+    linked: bool,
+) -> anyhow::Result<Vec<AiGovernanceChangeLink>> {
+    let relation = if linked {
+        "JOIN ai_governance_system_change link ON link.change_id = change.id AND link.tenant_id = change.tenant_id AND link.system_id = ?"
+    } else {
+        "LEFT JOIN ai_governance_system_change link ON link.change_id = change.id AND link.tenant_id = change.tenant_id AND link.system_id = ?"
+    };
+    let predicate = if linked {
+        "link.id IS NOT NULL"
+    } else {
+        "link.id IS NULL"
+    };
+    let rows = sqlx::query(&format!(
+        "SELECT change.id, change.title, change.status, change.change_type, CAST(change.planned_at AS TEXT) AS planned_at, CAST(link.created_at AS TEXT) AS link_created_at FROM changes_change change {relation} WHERE change.tenant_id = ? AND {predicate} ORDER BY change.updated_at DESC, change.id DESC LIMIT 200"
+    ))
+    .bind(system_id).bind(tenant_id).fetch_all(pool).await?;
+    rows.into_iter()
+        .map(change_link_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn change_link_from_pg_row(row: PgRow) -> Result<AiGovernanceChangeLink, sqlx::Error> {
+    Ok(AiGovernanceChangeLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status: row.try_get("status")?,
+        change_type: row.try_get("change_type")?,
+        planned_at: row.try_get("planned_at")?,
+        created_at: row.try_get("link_created_at")?,
+    })
+}
+
+fn change_link_from_sqlite_row(row: SqliteRow) -> Result<AiGovernanceChangeLink, sqlx::Error> {
+    Ok(AiGovernanceChangeLink {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        status: row.try_get("status")?,
+        change_type: row.try_get("change_type")?,
+        planned_at: row.try_get("planned_at")?,
+        created_at: row.try_get("link_created_at")?,
+    })
+}
+
+async fn link_audit_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceLinkAuditEntry>> {
+    let rows = sqlx::query(
+        "SELECT id, entity_type, entity_id, action, actor_id, detail, created_at::text AS created_at FROM ai_governance_link_audit WHERE tenant_id = $1 AND system_id = $2 ORDER BY created_at DESC, id DESC LIMIT 50",
+    ).bind(tenant_id).bind(system_id).fetch_all(pool).await?;
+    rows.into_iter()
+        .map(audit_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn link_audit_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    system_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceLinkAuditEntry>> {
+    let rows = sqlx::query(
+        "SELECT id, entity_type, entity_id, action, actor_id, detail, CAST(created_at AS TEXT) AS created_at FROM ai_governance_link_audit WHERE tenant_id = ? AND system_id = ? ORDER BY created_at DESC, id DESC LIMIT 50",
+    ).bind(tenant_id).bind(system_id).fetch_all(pool).await?;
+    rows.into_iter()
+        .map(audit_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn audit_from_pg_row(row: PgRow) -> Result<AiGovernanceLinkAuditEntry, sqlx::Error> {
+    Ok(AiGovernanceLinkAuditEntry {
+        id: row.try_get("id")?,
+        entity_type: row.try_get("entity_type")?,
+        entity_id: row.try_get("entity_id")?,
+        action: row.try_get("action")?,
+        actor_id: row.try_get("actor_id")?,
+        detail: row.try_get("detail")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn audit_from_sqlite_row(row: SqliteRow) -> Result<AiGovernanceLinkAuditEntry, sqlx::Error> {
+    Ok(AiGovernanceLinkAuditEntry {
+        id: row.try_get("id")?,
+        entity_type: row.try_get("entity_type")?,
+        entity_id: row.try_get("entity_id")?,
+        action: row.try_get("action")?,
+        actor_id: row.try_get("actor_id")?,
+        detail: row.try_get("detail")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+async fn roadmap_phases_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceRoadmapPhaseCandidate>> {
+    let rows = sqlx::query(
+        "SELECT phase.id, phase.name, plan.title AS plan_title FROM roadmap_roadmapphase phase JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id WHERE plan.tenant_id = $1 ORDER BY plan.updated_at DESC, phase.sort_order ASC LIMIT 200",
+    ).bind(tenant_id).fetch_all(pool).await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(AiGovernanceRoadmapPhaseCandidate {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                plan_title: row.try_get("plan_title")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(Into::into)
+}
+
+async fn roadmap_phases_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<Vec<AiGovernanceRoadmapPhaseCandidate>> {
+    let rows = sqlx::query(
+        "SELECT phase.id, phase.name, plan.title AS plan_title FROM roadmap_roadmapphase phase JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id WHERE plan.tenant_id = ? ORDER BY plan.updated_at DESC, phase.sort_order ASC LIMIT 200",
+    ).bind(tenant_id).fetch_all(pool).await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(AiGovernanceRoadmapPhaseCandidate {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                plan_title: row.try_get("plan_title")?,
+            })
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(Into::into)
+}
+
+async fn create_gap_task_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    phase_id: i64,
+    system: &AiGovernanceSystemSummary,
+    requirement: &AiGovernanceRequirementSummary,
+    origin_key: &str,
+) -> anyhow::Result<Option<(AiGovernanceRoadmapTaskLink, bool)>> {
+    let title = format!("AI Governance: {} - {}", system.name, requirement.label);
+    let priority = if matches!(system.criticality.as_str(), "CRITICAL" | "HIGH") {
+        "HIGH"
+    } else {
+        "MEDIUM"
+    };
+    let inserted_id: Option<i64> = sqlx::query_scalar(
+        r#"
+        INSERT INTO roadmap_roadmaptask (
+            phase_id, measure_id, title, description, priority, owner_role, due_in_days,
+            dependency_text, status, planned_start, due_date, notes, origin_key,
+            created_at, updated_at
+        )
+        SELECT phase.id, NULL, $3, $4, $5, 'AI Governance Owner', 30, '', 'OPEN',
+               CURRENT_DATE, (CURRENT_DATE + INTERVAL '30 days')::date,
+               $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        FROM roadmap_roadmapphase phase
+        JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id
+        WHERE phase.id = $1 AND plan.tenant_id = $2
+        ON CONFLICT DO NOTHING
+        RETURNING id
+        "#,
+    )
+    .bind(phase_id)
+    .bind(tenant_id)
+    .bind(&title)
+    .bind(&requirement.detail)
+    .bind(priority)
+    .bind(format!(
+        "Ursprung: AI-Governance-System {} / Gap {}.",
+        system.id, requirement.key
+    ))
+    .bind(origin_key)
+    .fetch_optional(pool)
+    .await?;
+    let created = inserted_id.is_some();
+    let task_id = match inserted_id {
+        Some(id) => id,
+        None => {
+            let phase_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roadmap_roadmapphase phase JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id WHERE phase.id = $1 AND plan.tenant_id = $2)")
+                .bind(phase_id).bind(tenant_id).fetch_one(pool).await?;
+            if !phase_exists {
+                return Ok(None);
+            }
+            sqlx::query_scalar("SELECT task.id FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id WHERE plan.tenant_id = $1 AND task.origin_key = $2")
+                .bind(tenant_id).bind(origin_key).fetch_one(pool).await?
+        }
+    };
+    let task = roadmap_task_by_id_postgres(pool, tenant_id, task_id)
+        .await?
+        .context("Roadmap-Task konnte nicht gelesen werden")?;
+    Ok(Some((task, created)))
+}
+
+async fn create_gap_task_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    phase_id: i64,
+    system: &AiGovernanceSystemSummary,
+    requirement: &AiGovernanceRequirementSummary,
+    origin_key: &str,
+) -> anyhow::Result<Option<(AiGovernanceRoadmapTaskLink, bool)>> {
+    let title = format!("AI Governance: {} - {}", system.name, requirement.label);
+    let priority = if matches!(system.criticality.as_str(), "CRITICAL" | "HIGH") {
+        "HIGH"
+    } else {
+        "MEDIUM"
+    };
+    let inserted_id: Option<i64> = sqlx::query_scalar(
+        r#"
+        INSERT INTO roadmap_roadmaptask (
+            phase_id, measure_id, title, description, priority, owner_role, due_in_days,
+            dependency_text, status, planned_start, due_date, notes, origin_key,
+            created_at, updated_at
+        )
+        SELECT phase.id, NULL, ?, ?, ?, 'AI Governance Owner', 30, '', 'OPEN',
+               DATE('now'), DATE('now', '+30 days'), ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        FROM roadmap_roadmapphase phase
+        JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id
+        WHERE phase.id = ? AND plan.tenant_id = ?
+        ON CONFLICT DO NOTHING
+        RETURNING id
+        "#,
+    )
+    .bind(&title)
+    .bind(&requirement.detail)
+    .bind(priority)
+    .bind(format!(
+        "Ursprung: AI-Governance-System {} / Gap {}.",
+        system.id, requirement.key
+    ))
+    .bind(origin_key)
+    .bind(phase_id)
+    .bind(tenant_id)
+    .fetch_optional(pool)
+    .await?;
+    let created = inserted_id.is_some();
+    let task_id = match inserted_id {
+        Some(id) => id,
+        None => {
+            let phase_exists: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roadmap_roadmapphase phase JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id WHERE phase.id = ? AND plan.tenant_id = ?)")
+                .bind(phase_id).bind(tenant_id).fetch_one(pool).await?;
+            if phase_exists == 0 {
+                return Ok(None);
+            }
+            sqlx::query_scalar("SELECT task.id FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id WHERE plan.tenant_id = ? AND task.origin_key = ?")
+                .bind(tenant_id).bind(origin_key).fetch_one(pool).await?
+        }
+    };
+    let task = roadmap_task_by_id_sqlite(pool, tenant_id, task_id)
+        .await?
+        .context("Roadmap-Task konnte nicht gelesen werden")?;
+    Ok(Some((task, created)))
+}
+
+async fn roadmap_task_by_id_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    task_id: i64,
+) -> anyhow::Result<Option<AiGovernanceRoadmapTaskLink>> {
+    let row = sqlx::query(
+        "SELECT task.id, task.title, task.status, task.due_date::text AS due_date, phase.name AS phase_name, plan.title AS plan_title, task.origin_key, NULL::text AS link_created_at FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id WHERE plan.tenant_id = $1 AND task.id = $2",
+    ).bind(tenant_id).bind(task_id).fetch_optional(pool).await?;
+    row.map(roadmap_task_link_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn roadmap_task_by_id_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    task_id: i64,
+) -> anyhow::Result<Option<AiGovernanceRoadmapTaskLink>> {
+    let row = sqlx::query(
+        "SELECT task.id, task.title, task.status, CAST(task.due_date AS TEXT) AS due_date, phase.name AS phase_name, plan.title AS plan_title, task.origin_key, NULL AS link_created_at FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON phase.id = task.phase_id JOIN roadmap_roadmapplan plan ON plan.id = phase.plan_id WHERE plan.tenant_id = ? AND task.id = ?",
+    ).bind(tenant_id).bind(task_id).fetch_optional(pool).await?;
+    row.map(roadmap_task_link_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+fn roadmap_status_label(value: &str) -> &'static str {
+    match value {
+        "IN_PROGRESS" => "In Arbeit",
+        "BLOCKED" => "Blockiert",
+        "DONE" => "Erledigt",
+        _ => "Offen",
     }
 }
 
@@ -428,8 +1868,8 @@ async fn create_system_postgres(
         "#,
     )
     .bind(tenant_id)
-    .bind(payload.product_id)
-    .bind(payload.owner_id)
+    .bind(payload.product_id.filter(|id| *id > 0))
+    .bind(payload.owner_id.filter(|id| *id > 0))
     .bind(name)
     .bind(clean_text(&payload.purpose))
     .bind(clean_text(&payload.model_provider))
@@ -482,8 +1922,8 @@ async fn create_system_sqlite(
         "#,
     )
     .bind(tenant_id)
-    .bind(payload.product_id)
-    .bind(payload.owner_id)
+    .bind(payload.product_id.filter(|id| *id > 0))
+    .bind(payload.owner_id.filter(|id| *id > 0))
     .bind(name)
     .bind(clean_text(&payload.purpose))
     .bind(clean_text(&payload.model_provider))
@@ -679,7 +2119,7 @@ FROM ai_governance_system system
 LEFT JOIN product_security_product product
     ON product.id = system.product_id AND product.tenant_id = system.tenant_id
 LEFT JOIN accounts_user owner
-    ON owner.id = system.owner_id
+    ON owner.id = system.owner_id AND owner.tenant_id = system.tenant_id
 LEFT JOIN (
     SELECT
         tenant_id,
@@ -732,7 +2172,7 @@ FROM ai_governance_system system
 LEFT JOIN product_security_product product
     ON product.id = system.product_id AND product.tenant_id = system.tenant_id
 LEFT JOIN accounts_user owner
-    ON owner.id = system.owner_id
+    ON owner.id = system.owner_id AND owner.tenant_id = system.tenant_id
 LEFT JOIN (
     SELECT
         tenant_id,

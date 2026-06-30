@@ -95,6 +95,7 @@ pub struct ManagementReviewPackageDetail {
     pub roadmap_json: Value,
     pub product_security_json: Value,
     pub agent_posture_json: Value,
+    pub ai_governance_json: Value,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -554,13 +555,13 @@ async fn generate_management_review_postgres(
             tenant_id, title, period_start, period_end, status, generated_by_id,
             executive_summary, decision_notes, next_actions, metrics_json, top_risks_json,
             control_gaps_json, evidence_gaps_json, incident_decisions_json, roadmap_json,
-            product_security_json, agent_posture_json, created_at, updated_at
+            product_security_json, agent_posture_json, ai_governance_json, created_at, updated_at
         )
         VALUES (
             $1, $2, $3, $4, 'DRAFT', $5,
             $6, '', '', $7, $8,
             $9, $10, $11, $12,
-            $13, $14, NOW()::text, NOW()::text
+            $13, $14, $15, NOW()::text, NOW()::text
         )
         RETURNING id
         "#,
@@ -579,6 +580,7 @@ async fn generate_management_review_postgres(
     .bind(snapshot.roadmap_json.to_string())
     .bind(snapshot.product_security_json.to_string())
     .bind(snapshot.agent_posture_json.to_string())
+    .bind(snapshot.ai_governance_json.to_string())
     .fetch_one(pool)
     .await
     .context("PostgreSQL-Management-Review konnte nicht erzeugt werden")?;
@@ -602,13 +604,13 @@ async fn generate_management_review_sqlite(
             tenant_id, title, period_start, period_end, status, generated_by_id,
             executive_summary, decision_notes, next_actions, metrics_json, top_risks_json,
             control_gaps_json, evidence_gaps_json, incident_decisions_json, roadmap_json,
-            product_security_json, agent_posture_json, created_at, updated_at
+            product_security_json, agent_posture_json, ai_governance_json, created_at, updated_at
         )
         VALUES (
             ?, ?, ?, ?, 'DRAFT', ?,
             ?, '', '', ?, ?,
             ?, ?, ?, ?,
-            ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         "#,
     )
@@ -626,6 +628,7 @@ async fn generate_management_review_sqlite(
     .bind(snapshot.roadmap_json.to_string())
     .bind(snapshot.product_security_json.to_string())
     .bind(snapshot.agent_posture_json.to_string())
+    .bind(snapshot.ai_governance_json.to_string())
     .execute(pool)
     .await
     .context("SQLite-Management-Review konnte nicht erzeugt werden")?;
@@ -724,6 +727,17 @@ struct ManagementReviewSnapshot {
     roadmap_json: Value,
     product_security_json: Value,
     agent_posture_json: Value,
+    ai_governance_json: Value,
+}
+
+#[derive(Clone, Copy)]
+struct ManagementReviewItemCounts {
+    top_risks: i64,
+    control_gaps: i64,
+    evidence_gaps: i64,
+    incidents: i64,
+    roadmap: i64,
+    ai_governance: i64,
 }
 
 async fn build_management_review_snapshot_postgres(
@@ -737,14 +751,18 @@ async fn build_management_review_snapshot_postgres(
     let roadmap_json = roadmap_items_postgres(pool, tenant_id).await?;
     let product_security_json = product_security_postgres(pool, tenant_id).await?;
     let agent_posture_json = agent_posture_postgres(pool, tenant_id).await?;
+    let ai_governance_json = ai_governance_postgres(pool, tenant_id).await?;
     let metrics_json = management_review_metrics_postgres(
         pool,
         tenant_id,
-        top_risks_json.as_array().map_or(0, Vec::len) as i64,
-        control_gaps_json.as_array().map_or(0, Vec::len) as i64,
-        evidence_gaps_json.as_array().map_or(0, Vec::len) as i64,
-        incident_decisions_json.as_array().map_or(0, Vec::len) as i64,
-        roadmap_json.as_array().map_or(0, Vec::len) as i64,
+        ManagementReviewItemCounts {
+            top_risks: top_risks_json.as_array().map_or(0, Vec::len) as i64,
+            control_gaps: control_gaps_json.as_array().map_or(0, Vec::len) as i64,
+            evidence_gaps: evidence_gaps_json.as_array().map_or(0, Vec::len) as i64,
+            incidents: incident_decisions_json.as_array().map_or(0, Vec::len) as i64,
+            roadmap: roadmap_json.as_array().map_or(0, Vec::len) as i64,
+            ai_governance: ai_governance_json["systems"].as_array().map_or(0, Vec::len) as i64,
+        },
     )
     .await?;
     Ok(ManagementReviewSnapshot {
@@ -756,6 +774,7 @@ async fn build_management_review_snapshot_postgres(
         roadmap_json,
         product_security_json,
         agent_posture_json,
+        ai_governance_json,
     })
 }
 
@@ -770,14 +789,18 @@ async fn build_management_review_snapshot_sqlite(
     let roadmap_json = roadmap_items_sqlite(pool, tenant_id).await?;
     let product_security_json = product_security_sqlite(pool, tenant_id).await?;
     let agent_posture_json = agent_posture_sqlite(pool, tenant_id).await?;
+    let ai_governance_json = ai_governance_sqlite(pool, tenant_id).await?;
     let metrics_json = management_review_metrics_sqlite(
         pool,
         tenant_id,
-        top_risks_json.as_array().map_or(0, Vec::len) as i64,
-        control_gaps_json.as_array().map_or(0, Vec::len) as i64,
-        evidence_gaps_json.as_array().map_or(0, Vec::len) as i64,
-        incident_decisions_json.as_array().map_or(0, Vec::len) as i64,
-        roadmap_json.as_array().map_or(0, Vec::len) as i64,
+        ManagementReviewItemCounts {
+            top_risks: top_risks_json.as_array().map_or(0, Vec::len) as i64,
+            control_gaps: control_gaps_json.as_array().map_or(0, Vec::len) as i64,
+            evidence_gaps: evidence_gaps_json.as_array().map_or(0, Vec::len) as i64,
+            incidents: incident_decisions_json.as_array().map_or(0, Vec::len) as i64,
+            roadmap: roadmap_json.as_array().map_or(0, Vec::len) as i64,
+            ai_governance: ai_governance_json["systems"].as_array().map_or(0, Vec::len) as i64,
+        },
     )
     .await?;
     Ok(ManagementReviewSnapshot {
@@ -789,17 +812,14 @@ async fn build_management_review_snapshot_sqlite(
         roadmap_json,
         product_security_json,
         agent_posture_json,
+        ai_governance_json,
     })
 }
 
 async fn management_review_metrics_postgres(
     pool: &PgPool,
     tenant_id: i64,
-    top_risk_items: i64,
-    control_gap_items: i64,
-    evidence_gap_items: i64,
-    incident_items: i64,
-    roadmap_items: i64,
+    counts: ManagementReviewItemCounts,
 ) -> anyhow::Result<Value> {
     Ok(serde_json::json!({
         "open_risks": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM risks_risk WHERE tenant_id = $1 AND status <> 'CLOSED'", tenant_id).await?,
@@ -811,12 +831,16 @@ async fn management_review_metrics_postgres(
         "open_incidents": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM incidents_incident WHERE tenant_id = $1 AND status NOT IN ('RESOLVED', 'CLOSED')", tenant_id).await?,
         "unassessed_incidents": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM incidents_incident WHERE tenant_id = $1 AND nis2_significance_status = 'NOT_ASSESSED' AND status NOT IN ('RESOLVED', 'CLOSED')", tenant_id).await?,
         "open_roadmap_tasks": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON task.phase_id = phase.id JOIN roadmap_roadmapplan plan ON phase.plan_id = plan.id WHERE plan.tenant_id = $1 AND task.status <> 'DONE'", tenant_id).await?,
+        "ai_governance_systems": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM ai_governance_system WHERE tenant_id = $1", tenant_id).await?,
+        "ai_systems_without_risk_links": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM ai_governance_system system WHERE system.tenant_id = $1 AND NOT EXISTS (SELECT 1 FROM ai_governance_system_risk link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
+        "ai_systems_without_roadmap_links": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM ai_governance_system system WHERE system.tenant_id = $1 AND NOT EXISTS (SELECT 1 FROM ai_governance_system_roadmap_task link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
         "snapshot_items": {
-            "top_risks": top_risk_items,
-            "control_gaps": control_gap_items,
-            "evidence_gaps": evidence_gap_items,
-            "incidents": incident_items,
-            "roadmap": roadmap_items
+            "top_risks": counts.top_risks,
+            "control_gaps": counts.control_gaps,
+            "evidence_gaps": counts.evidence_gaps,
+            "incidents": counts.incidents,
+            "roadmap": counts.roadmap,
+            "ai_governance": counts.ai_governance
         }
     }))
 }
@@ -824,11 +848,7 @@ async fn management_review_metrics_postgres(
 async fn management_review_metrics_sqlite(
     pool: &SqlitePool,
     tenant_id: i64,
-    top_risk_items: i64,
-    control_gap_items: i64,
-    evidence_gap_items: i64,
-    incident_items: i64,
-    roadmap_items: i64,
+    counts: ManagementReviewItemCounts,
 ) -> anyhow::Result<Value> {
     Ok(serde_json::json!({
         "open_risks": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM risks_risk WHERE tenant_id = ? AND status <> 'CLOSED'", tenant_id).await?,
@@ -840,12 +860,16 @@ async fn management_review_metrics_sqlite(
         "open_incidents": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM incidents_incident WHERE tenant_id = ? AND status NOT IN ('RESOLVED', 'CLOSED')", tenant_id).await?,
         "unassessed_incidents": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM incidents_incident WHERE tenant_id = ? AND nis2_significance_status = 'NOT_ASSESSED' AND status NOT IN ('RESOLVED', 'CLOSED')", tenant_id).await?,
         "open_roadmap_tasks": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON task.phase_id = phase.id JOIN roadmap_roadmapplan plan ON phase.plan_id = plan.id WHERE plan.tenant_id = ? AND task.status <> 'DONE'", tenant_id).await?,
+        "ai_governance_systems": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM ai_governance_system WHERE tenant_id = ?", tenant_id).await?,
+        "ai_systems_without_risk_links": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM ai_governance_system system WHERE system.tenant_id = ? AND NOT EXISTS (SELECT 1 FROM ai_governance_system_risk link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
+        "ai_systems_without_roadmap_links": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM ai_governance_system system WHERE system.tenant_id = ? AND NOT EXISTS (SELECT 1 FROM ai_governance_system_roadmap_task link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
         "snapshot_items": {
-            "top_risks": top_risk_items,
-            "control_gaps": control_gap_items,
-            "evidence_gaps": evidence_gap_items,
-            "incidents": incident_items,
-            "roadmap": roadmap_items
+            "top_risks": counts.top_risks,
+            "control_gaps": counts.control_gaps,
+            "evidence_gaps": counts.evidence_gaps,
+            "incidents": counts.incidents,
+            "roadmap": counts.roadmap,
+            "ai_governance": counts.ai_governance
         }
     }))
 }
@@ -969,6 +993,145 @@ async fn product_security_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::R
     }))
 }
 
+async fn ai_governance_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result<Value> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            system.id,
+            system.name,
+            system.ai_act_classification,
+            system.criticality,
+            system.status,
+            COALESCE(system.next_review_due_at, '') AS next_review_due_at,
+            CASE WHEN BTRIM(system.risk_summary) = '' THEN TRUE ELSE FALSE END AS risk_summary_missing,
+            (SELECT COUNT(*)::bigint FROM ai_governance_system_risk link
+             WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id) AS risk_links,
+            (SELECT COUNT(*)::bigint FROM ai_governance_system_roadmap_task link
+             WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id) AS roadmap_task_links,
+            (SELECT COUNT(*)::bigint FROM ai_governance_system_incident link
+             WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id) AS incident_links,
+            (SELECT COUNT(*)::bigint FROM ai_governance_system_change link
+             WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id) AS change_links,
+            (SELECT COUNT(*)::bigint FROM evidence_evidenceitem evidence
+             WHERE evidence.tenant_id = system.tenant_id
+               AND evidence.linked_requirement = system.evidence_key) AS evidence_count
+        FROM ai_governance_system system
+        WHERE system.tenant_id = $1
+        ORDER BY system.criticality DESC, system.updated_at DESC, system.id DESC
+        LIMIT 50
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+    let systems = rows
+        .into_iter()
+        .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
+            Ok(serde_json::json!({
+                "id": id,
+                "entity_type": "ai_governance_system",
+                "href": format!("/ai-governance/#ai-system-{id}"),
+                "name": row.try_get::<String, _>("name")?,
+                "ai_act_classification": row.try_get::<String, _>("ai_act_classification")?,
+                "criticality": row.try_get::<String, _>("criticality")?,
+                "status": row.try_get::<String, _>("status")?,
+                "next_review_due_at": row.try_get::<String, _>("next_review_due_at")?,
+                "risk_summary_missing": row.try_get::<bool, _>("risk_summary_missing")?,
+                "risk_links": row.try_get::<i64, _>("risk_links")?,
+                "roadmap_task_links": row.try_get::<i64, _>("roadmap_task_links")?,
+                "incident_links": row.try_get::<i64, _>("incident_links")?,
+                "change_links": row.try_get::<i64, _>("change_links")?,
+                "evidence_count": row.try_get::<i64, _>("evidence_count")?
+            }))
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    Ok(ai_governance_snapshot_json(systems))
+}
+
+async fn ai_governance_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Result<Value> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            system.id,
+            system.name,
+            system.ai_act_classification,
+            system.criticality,
+            system.status,
+            COALESCE(CAST(system.next_review_due_at AS TEXT), '') AS next_review_due_at,
+            CASE WHEN TRIM(system.risk_summary) = '' THEN 1 ELSE 0 END AS risk_summary_missing,
+            (SELECT COUNT(*) FROM ai_governance_system_risk link
+             WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id) AS risk_links,
+            (SELECT COUNT(*) FROM ai_governance_system_roadmap_task link
+             WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id) AS roadmap_task_links,
+            (SELECT COUNT(*) FROM ai_governance_system_incident link
+             WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id) AS incident_links,
+            (SELECT COUNT(*) FROM ai_governance_system_change link
+             WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id) AS change_links,
+            (SELECT COUNT(*) FROM evidence_evidenceitem evidence
+             WHERE evidence.tenant_id = system.tenant_id
+               AND evidence.linked_requirement = system.evidence_key) AS evidence_count
+        FROM ai_governance_system system
+        WHERE system.tenant_id = ?
+        ORDER BY system.criticality DESC, system.updated_at DESC, system.id DESC
+        LIMIT 50
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await?;
+    let systems = rows
+        .into_iter()
+        .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
+            Ok(serde_json::json!({
+                "id": id,
+                "entity_type": "ai_governance_system",
+                "href": format!("/ai-governance/#ai-system-{id}"),
+                "name": row.try_get::<String, _>("name")?,
+                "ai_act_classification": row.try_get::<String, _>("ai_act_classification")?,
+                "criticality": row.try_get::<String, _>("criticality")?,
+                "status": row.try_get::<String, _>("status")?,
+                "next_review_due_at": row.try_get::<String, _>("next_review_due_at")?,
+                "risk_summary_missing": row.try_get::<bool, _>("risk_summary_missing")?,
+                "risk_links": row.try_get::<i64, _>("risk_links")?,
+                "roadmap_task_links": row.try_get::<i64, _>("roadmap_task_links")?,
+                "incident_links": row.try_get::<i64, _>("incident_links")?,
+                "change_links": row.try_get::<i64, _>("change_links")?,
+                "evidence_count": row.try_get::<i64, _>("evidence_count")?
+            }))
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    Ok(ai_governance_snapshot_json(systems))
+}
+
+fn ai_governance_snapshot_json(systems: Vec<Value>) -> Value {
+    let linked_risks = systems
+        .iter()
+        .filter_map(|system| system["risk_links"].as_i64())
+        .sum::<i64>();
+    let linked_tasks = systems
+        .iter()
+        .filter_map(|system| system["roadmap_task_links"].as_i64())
+        .sum::<i64>();
+    let linked_incidents = systems
+        .iter()
+        .filter_map(|system| system["incident_links"].as_i64())
+        .sum::<i64>();
+    let linked_changes = systems
+        .iter()
+        .filter_map(|system| system["change_links"].as_i64())
+        .sum::<i64>();
+    serde_json::json!({
+        "system_count": systems.len(),
+        "linked_risks": linked_risks,
+        "linked_roadmap_tasks": linked_tasks,
+        "linked_incidents": linked_incidents,
+        "linked_changes": linked_changes,
+        "systems": systems
+    })
+}
+
 async fn agent_posture_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result<Value> {
     Ok(serde_json::json!({
         "devices": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_device WHERE tenant_id = $1", tenant_id).await?,
@@ -1038,6 +1201,7 @@ fn management_review_detail_postgres_sql() -> &'static str {
         COALESCE(roadmap_json::text, '[]') AS roadmap_json_text,
         COALESCE(product_security_json::text, '{}') AS product_security_json_text,
         COALESCE(agent_posture_json::text, '{}') AS agent_posture_json_text,
+        COALESCE(ai_governance_json::text, '{}') AS ai_governance_json_text,
         created_at::text AS created_at,
         updated_at::text AS updated_at
     FROM reports_managementreviewpackage
@@ -1059,6 +1223,7 @@ fn management_review_detail_sqlite_sql() -> &'static str {
         COALESCE(CAST(roadmap_json AS TEXT), '[]') AS roadmap_json_text,
         COALESCE(CAST(product_security_json AS TEXT), '{}') AS product_security_json_text,
         COALESCE(CAST(agent_posture_json AS TEXT), '{}') AS agent_posture_json_text,
+        COALESCE(CAST(ai_governance_json AS TEXT), '{}') AS ai_governance_json_text,
         CAST(created_at AS TEXT) AS created_at,
         CAST(updated_at AS TEXT) AS updated_at
     FROM reports_managementreviewpackage
@@ -1474,6 +1639,7 @@ fn management_review_detail_from_pg_row(
         roadmap_json: parse_json_array(row.try_get("roadmap_json_text")?),
         product_security_json: parse_json_object(row.try_get("product_security_json_text")?),
         agent_posture_json: parse_json_object(row.try_get("agent_posture_json_text")?),
+        ai_governance_json: parse_json_object(row.try_get("ai_governance_json_text")?),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -1505,6 +1671,7 @@ fn management_review_detail_from_sqlite_row(
         roadmap_json: parse_json_array(row.try_get("roadmap_json_text")?),
         product_security_json: parse_json_object(row.try_get("product_security_json_text")?),
         agent_posture_json: parse_json_object(row.try_get("agent_posture_json_text")?),
+        ai_governance_json: parse_json_object(row.try_get("ai_governance_json_text")?),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })

@@ -44,6 +44,6 @@ Die technische Rust-Migration ist abgeschlossen. Die fachliche Weiterentwicklung
 
 Die dort priorisierten naechsten Produktbereiche sind:
 
-1. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln
+1. Zero-Trust-Agent-Onboarding als gefuehrten, sicheren Admin-Workflow vereinfachen
 2. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
 3. Supplier-Review-Workflow mit Freigabehistorie, Unterauftragnehmern und Exit-Tests

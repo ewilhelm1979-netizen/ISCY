@@ -14,6 +14,7 @@ use iscy_backend::{
     asset_store::AssetStore,
     auth_store::AuthStore,
     catalog_store::CatalogStore,
+    change_store::ChangeStore,
     control_store::ControlStore,
     cve_store::CveStore,
     dashboard_store::DashboardStore,
@@ -92,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
         requirement_store,
         asset_store,
         catalog_store,
+        change_store,
         control_store,
         process_store,
         risk_store,
@@ -118,6 +120,7 @@ async fn main() -> anyhow::Result<()> {
             let requirement_store = RequirementStore::connect(database_url).await?;
             let asset_store = AssetStore::connect(database_url).await?;
             let catalog_store = CatalogStore::connect(database_url).await?;
+            let change_store = ChangeStore::connect(database_url).await?;
             let control_store = ControlStore::connect(database_url).await?;
             let process_store = ProcessStore::connect(database_url).await?;
             let risk_store = RiskStore::connect(database_url).await?;
@@ -143,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(requirement_store),
                 Some(asset_store),
                 Some(catalog_store),
+                Some(change_store),
                 Some(control_store),
                 Some(process_store),
                 Some(risk_store),
@@ -160,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => (
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None,
         ),
     };
     let notification_worker_store = agent_governance_store.clone();
@@ -174,6 +178,7 @@ async fn main() -> anyhow::Result<()> {
         .with_requirement_store(requirement_store)
         .with_asset_store(asset_store)
         .with_catalog_store(catalog_store)
+        .with_change_store(change_store)
         .with_control_store(control_store)
         .with_process_store(process_store)
         .with_risk_store(risk_store)

@@ -160,12 +160,10 @@ Umgesetzt:
 - Berechnete Governance-Anforderungen fuer Klassifizierung, Risikomanagement, Human Oversight, Logging, Transparenz, Cybersecurity/Robustheit sowie Monitoring/Evidence.
 - Evidence-Vorbefuellung ueber stabile AI-Governance-Evidence-Keys.
 - Rust-only-Betriebssignale fuer nicht bewertete AI-Systeme, faellige Reviews, fehlende Evidence und offene Governance-Gaps.
-
-Naechste Vertiefung:
-
-- Roadmap-Tasks automatisch aus AI-Governance-Gaps erzeugen.
-- Risiko-Register direkt an AI-Systeme koppeln.
-- AI-Incident-/Change-Verknuepfung fuer produktive AI-Systeme ausbauen.
+- Direkte tenantgebundene Links zu Risiken, Roadmap-Tasks, Incidents und kanonischen Changes.
+- Link-Verwaltung und offene Governance-Gaps in der AI-System-Detailansicht.
+- Explizite, durch `origin_key` duplikatgeschuetzte Roadmap-Task-Erzeugung aus offenen Gaps.
+- Persistente Link-Auditspur und eingefrorene AI-Linkdaten in Management-Review-Paketen und Exporten.
 
 Erfolgskriterium:
 
@@ -200,7 +198,7 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. AI-Governance vertiefen: Risiken, Roadmap-Tasks, Incidents und Changes direkt an AI-Systeme koppeln.
+1. Zero-Trust-Agent-Onboarding als gefuehrten Admin-Workflow vereinfachen.
 2. Benachrichtigungen auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern.
 3. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
 4. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
@@ -213,7 +211,8 @@ Erfolgskriterium:
 | Erledigt | Agent-State, Secret-Rotation, Offline-Queue und OS-Service-Beispiele | Agenten behalten ihre Identitaet, puffern Ausfaelle und koennen auf Linux, NixOS, Windows und macOS periodisch betrieben werden. |
 | Erledigt | Agent-Policy, erwartete Coverage und Policy-Webhooks | Flottenabweichungen werden gegen einen Sollbestand bewertet, aktiv zugestellt und auditierbar protokolliert. |
 | Erledigt | Product-Security-Evidence-Pakete und Produkt-Lifecycle | Versionierte Release-/PSIRT-Freigaben enthalten SBOM, VEX, Advisories, Support-Ende, offene Risiken, Roadmap und Evidence; Blocker-Gates und Exporte sind umgesetzt. |
-| Jetzt | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
+| Erledigt | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
+| Jetzt | Gefuehrtes Agent-Onboarding | Enrollment-Tokens, Deployment-Artefakte und Flottenstatus werden ueber einen sicheren Admin-Assistenten bedienbar. |
 | Danach | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
 | Danach | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen und Exit-Test-Nachweise. |
 | Danach | Management-/Regulatory-Templates | Wiederholbare Quartals-, Audit-, NIS2-, DORA- und DSGVO-Pakete werden kontextsensitiv erzeugt. |

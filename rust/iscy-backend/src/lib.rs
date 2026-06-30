@@ -36,6 +36,7 @@ pub mod assessment_store;
 pub mod asset_store;
 pub mod auth_store;
 pub mod catalog_store;
+pub mod change_store;
 pub mod control_store;
 pub mod cve_store;
 pub mod dashboard_store;
@@ -66,6 +67,7 @@ use assessment_store::AssessmentStore;
 use asset_store::AssetStore;
 use auth_store::AuthStore;
 use catalog_store::CatalogStore;
+use change_store::ChangeStore;
 use control_store::ControlStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
@@ -96,6 +98,7 @@ pub struct AppState {
     pub assessment_store: Option<AssessmentStore>,
     pub auth_store: Option<AuthStore>,
     pub catalog_store: Option<CatalogStore>,
+    pub change_store: Option<ChangeStore>,
     pub control_store: Option<ControlStore>,
     pub cve_store: Option<CveStore>,
     pub dashboard_store: Option<DashboardStore>,
@@ -137,6 +140,7 @@ impl AppState {
             assessment_store: None,
             auth_store: None,
             catalog_store: None,
+            change_store: None,
             control_store: None,
             cve_store,
             dashboard_store: None,
@@ -171,6 +175,7 @@ impl AppState {
             assessment_store: None,
             auth_store: None,
             catalog_store: None,
+            change_store: None,
             control_store: None,
             cve_store,
             dashboard_store: None,
@@ -197,6 +202,11 @@ impl AppState {
 
     pub fn with_dashboard_store(mut self, dashboard_store: Option<DashboardStore>) -> Self {
         self.dashboard_store = dashboard_store;
+        self
+    }
+
+    pub fn with_change_store(mut self, change_store: Option<ChangeStore>) -> Self {
+        self.change_store = change_store;
         self
     }
 
@@ -943,6 +953,26 @@ pub struct ProcessDetailResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ChangeRegisterResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub changes: Vec<change_store::ChangeSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangeDetailResponse {
+    pub api_version: &'static str,
+    pub change: change_store::ChangeSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangeWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub change: change_store::ChangeSummary,
+}
+
+#[derive(Debug, Serialize)]
 pub struct AiGovernanceOverviewResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
@@ -962,6 +992,32 @@ pub struct AiGovernanceSystemWriteResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
     pub result: ai_governance_store::AiGovernanceSystemWriteResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiGovernanceLinkCandidatesResponse {
+    pub api_version: &'static str,
+    pub candidates: ai_governance_store::AiGovernanceLinkCandidates,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiGovernanceLinkMutationResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub mutation: ai_governance_store::AiGovernanceLinkMutation,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AiGovernanceGapTaskRequest {
+    pub requirement_key: String,
+    pub phase_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AiGovernanceGapTaskResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub result: ai_governance_store::AiGovernanceGapTaskResult,
 }
 
 #[derive(Debug, Serialize)]
@@ -1357,6 +1413,18 @@ pub struct WebAiGovernanceUpdateForm {
     pub risk_summary: String,
     pub next_review_due_at: String,
     pub notes: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebAiGovernanceLinkForm {
+    pub link_kind: String,
+    pub entity_id: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebAiGovernanceGapTaskForm {
+    pub requirement_key: String,
+    pub phase_id: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2859,6 +2927,49 @@ fn required_context_error_response(err: RequiredTenantContextError) -> Response 
             api_version: "v1",
             error_code: err.error_code(),
             message: err.message().to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn api_context_error(err: RequiredTenantContextError) -> Response {
+    required_context_error_response(err)
+}
+
+fn api_database_not_configured(message: &str) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "database_not_configured",
+            message: message.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn api_database_error(message: String) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "database_error",
+            message,
+        }),
+    )
+        .into_response()
+}
+
+fn api_not_found(message: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "not_found",
+            message: message.to_string(),
         }),
     )
         .into_response()
@@ -5250,6 +5361,94 @@ async fn process_detail(
     }
 }
 
+async fn change_register(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let Some(store) = state.change_store else {
+        return api_database_not_configured("Rust-Change-Store ist nicht konfiguriert.");
+    };
+    match store.list_changes(context.tenant_id, 200).await {
+        Ok(changes) => (
+            StatusCode::OK,
+            Json(ChangeRegisterResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                changes,
+            }),
+        )
+            .into_response(),
+        Err(err) => api_database_error(format!(
+            "Change-Register konnte nicht gelesen werden: {err}"
+        )),
+    }
+}
+
+async fn change_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<change_store::ChangeWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.change_store else {
+        return api_database_not_configured("Rust-Change-Store ist nicht konfiguriert.");
+    };
+    match store.create_change(context.tenant_id, payload).await {
+        Ok(change) => (
+            StatusCode::CREATED,
+            Json(ChangeWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                change,
+            }),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_change_payload",
+                message: err.to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn change_detail(
+    Path(change_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let Some(store) = state.change_store else {
+        return api_database_not_configured("Rust-Change-Store ist nicht konfiguriert.");
+    };
+    match store.detail(context.tenant_id, change_id).await {
+        Ok(Some(change)) => (
+            StatusCode::OK,
+            Json(ChangeDetailResponse {
+                api_version: "v1",
+                change,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("Change wurde fuer diesen Tenant nicht gefunden."),
+        Err(err) => api_database_error(format!("Change konnte nicht gelesen werden: {err}")),
+    }
+}
+
 async fn ai_governance_overview(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
@@ -5494,6 +5693,187 @@ async fn ai_governance_update_system(
                 accepted: false,
                 api_version: "v1",
                 error_code: "invalid_ai_governance_payload",
+                message: err.to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn ai_governance_link_candidates(
+    Path(system_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let Some(store) = state.ai_governance_store else {
+        return api_database_not_configured("Rust-AI-Governance-Store ist nicht konfiguriert.");
+    };
+    match store.link_candidates(context.tenant_id, system_id).await {
+        Ok(Some(candidates)) => (
+            StatusCode::OK,
+            Json(AiGovernanceLinkCandidatesResponse {
+                api_version: "v1",
+                candidates,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("AI-Governance-System wurde fuer diesen Tenant nicht gefunden."),
+        Err(err) => api_database_error(format!(
+            "AI-Governance-Linkkandidaten konnten nicht gelesen werden: {err}"
+        )),
+    }
+}
+
+async fn ai_governance_add_link(
+    Path((system_id, link_kind, entity_id)): Path<(i64, String, i64)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    ai_governance_mutate_link(state, headers, system_id, &link_kind, entity_id, false).await
+}
+
+async fn ai_governance_remove_link(
+    Path((system_id, link_kind, entity_id)): Path<(i64, String, i64)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    ai_governance_mutate_link(state, headers, system_id, &link_kind, entity_id, true).await
+}
+
+async fn ai_governance_mutate_link(
+    state: AppState,
+    headers: HeaderMap,
+    system_id: i64,
+    link_kind: &str,
+    entity_id: i64,
+    remove: bool,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(kind) = ai_governance_store::AiGovernanceLinkKind::parse(link_kind) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_link_kind",
+                message: "Linktyp muss risk, roadmap-task, incident oder change sein.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    let Some(store) = state.ai_governance_store else {
+        return api_database_not_configured("Rust-AI-Governance-Store ist nicht konfiguriert.");
+    };
+    let result = if remove {
+        store
+            .remove_link(
+                context.tenant_id,
+                system_id,
+                kind,
+                entity_id,
+                context.user_id,
+            )
+            .await
+    } else {
+        store
+            .add_link(
+                context.tenant_id,
+                system_id,
+                kind,
+                entity_id,
+                context.user_id,
+            )
+            .await
+    };
+    match result {
+        Ok(ai_governance_store::AiGovernanceLinkMutation::NotFound) => api_not_found(
+            "AI-System oder Governance-Objekt wurde fuer diesen Tenant nicht gefunden.",
+        ),
+        Ok(ai_governance_store::AiGovernanceLinkMutation::AlreadyExists) => (
+            StatusCode::CONFLICT,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "link_already_exists",
+                message: "Diese tenantgebundene Verknuepfung besteht bereits.".to_string(),
+            }),
+        )
+            .into_response(),
+        Ok(mutation) => (
+            if remove {
+                StatusCode::OK
+            } else {
+                StatusCode::CREATED
+            },
+            Json(AiGovernanceLinkMutationResponse {
+                accepted: true,
+                api_version: "v1",
+                mutation,
+            }),
+        )
+            .into_response(),
+        Err(err) => api_database_error(format!(
+            "AI-Governance-Verknuepfung konnte nicht geaendert werden: {err}"
+        )),
+    }
+}
+
+async fn ai_governance_create_gap_task(
+    Path(system_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AiGovernanceGapTaskRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.ai_governance_store else {
+        return api_database_not_configured("Rust-AI-Governance-Store ist nicht konfiguriert.");
+    };
+    match store
+        .create_task_from_gap(
+            context.tenant_id,
+            system_id,
+            &payload.requirement_key,
+            payload.phase_id,
+            context.user_id,
+        )
+        .await
+    {
+        Ok(Some(result)) => (
+            if result.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(AiGovernanceGapTaskResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("AI-System wurde fuer diesen Tenant nicht gefunden."),
+        Err(err) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "invalid_ai_governance_gap_task",
                 message: err.to_string(),
             }),
         )
@@ -13030,6 +13410,7 @@ async fn web_management_review_detail(
                   {}
                   {}
                   {}
+                  {}
                 </section>
                 "#,
                 html_escape(&package.title),
@@ -13096,6 +13477,19 @@ async fn web_management_review_detail(
                 ),
                 management_review_object_panel("Product Security", &package.product_security_json),
                 management_review_object_panel("Agent Posture", &package.agent_posture_json),
+                management_review_array_panel(
+                    "AI Governance",
+                    &package.ai_governance_json["systems"],
+                    &[
+                        ("name", "AI-System"),
+                        ("ai_act_classification", "Klasse"),
+                        ("risk_links", "Risiken"),
+                        ("roadmap_task_links", "Roadmap"),
+                        ("incident_links", "Incidents"),
+                        ("change_links", "Changes"),
+                    ],
+                    &context,
+                ),
             );
             web_page(
                 "Management Review",
@@ -15880,12 +16274,42 @@ async fn web_ai_governance(
                 })
                 .collect::<Vec<_>>()
                 .join("");
-            let detail_panels = overview
-                .systems
-                .iter()
-                .map(|system| ai_governance_system_panel(&context, system, can_write))
-                .collect::<Vec<_>>()
-                .join("");
+            let mut detail_panels = String::new();
+            for system in &overview.systems {
+                let detail = match store.detail(context.tenant_id, system.id).await {
+                    Ok(Some(detail)) => detail,
+                    Ok(None) => continue,
+                    Err(err) => {
+                        return web_error_page(
+                            "AI Governance",
+                            "/ai-governance/",
+                            &context,
+                            &err.to_string(),
+                        );
+                    }
+                };
+                let candidates = if can_write {
+                    match store.link_candidates(context.tenant_id, system.id).await {
+                        Ok(candidates) => candidates,
+                        Err(err) => {
+                            return web_error_page(
+                                "AI Governance",
+                                "/ai-governance/",
+                                &context,
+                                &err.to_string(),
+                            );
+                        }
+                    }
+                } else {
+                    None
+                };
+                detail_panels.push_str(&ai_governance_system_panel(
+                    &context,
+                    &detail,
+                    candidates.as_ref(),
+                    can_write,
+                ));
+            }
             let create_panel = if can_write {
                 format!(
                     r#"<article class="panel wide">
@@ -16063,6 +16487,225 @@ async fn web_ai_governance_update_system(
             "/ai-governance/",
             &context,
             "AI-Governance-System wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_ai_governance_add_link(
+    Path(system_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAiGovernanceLinkForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("AI Governance", "/ai-governance/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(kind) = ai_governance_store::AiGovernanceLinkKind::parse(&form.link_kind) else {
+        return web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "Unbekannter Linktyp.",
+        )
+        .into_response();
+    };
+    let Some(store) = state.ai_governance_store else {
+        return web_store_missing(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "AI Governance",
+        )
+        .into_response();
+    };
+    match store
+        .add_link(
+            auth_context.tenant_id,
+            system_id,
+            kind,
+            form.entity_id,
+            auth_context.user_id,
+        )
+        .await
+    {
+        Ok(ai_governance_store::AiGovernanceLinkMutation::Created)
+        | Ok(ai_governance_store::AiGovernanceLinkMutation::AlreadyExists) => {
+            let target = format!(
+                "{}#ai-system-{system_id}",
+                web_path_with_context("/ai-governance/", Some(&context))
+            );
+            Redirect::to(&target).into_response()
+        }
+        Ok(_) => web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "AI-System oder Governance-Objekt wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_ai_governance_remove_link(
+    Path((system_id, link_kind, entity_id)): Path<(i64, String, i64)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("AI Governance", "/ai-governance/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(kind) = ai_governance_store::AiGovernanceLinkKind::parse(&link_kind) else {
+        return web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "Unbekannter Linktyp.",
+        )
+        .into_response();
+    };
+    let Some(store) = state.ai_governance_store else {
+        return web_store_missing(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "AI Governance",
+        )
+        .into_response();
+    };
+    match store
+        .remove_link(
+            auth_context.tenant_id,
+            system_id,
+            kind,
+            entity_id,
+            auth_context.user_id,
+        )
+        .await
+    {
+        Ok(ai_governance_store::AiGovernanceLinkMutation::Removed) => {
+            let target = format!(
+                "{}#ai-system-{system_id}",
+                web_path_with_context("/ai-governance/", Some(&context))
+            );
+            Redirect::to(&target).into_response()
+        }
+        Ok(_) => web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "Verknuepfung wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            &err.to_string(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_ai_governance_create_gap_task(
+    Path(system_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAiGovernanceGapTaskForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("AI Governance", "/ai-governance/").into_response(),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.ai_governance_store else {
+        return web_store_missing(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "AI Governance",
+        )
+        .into_response();
+    };
+    match store
+        .create_task_from_gap(
+            auth_context.tenant_id,
+            system_id,
+            &form.requirement_key,
+            form.phase_id,
+            auth_context.user_id,
+        )
+        .await
+    {
+        Ok(Some(_)) => {
+            let target = format!(
+                "{}#ai-system-{system_id}",
+                web_path_with_context("/ai-governance/", Some(&context))
+            );
+            Redirect::to(&target).into_response()
+        }
+        Ok(None) => web_error_page(
+            "AI Governance",
+            "/ai-governance/",
+            &context,
+            "AI-System wurde fuer diesen Tenant nicht gefunden.",
         )
         .into_response(),
         Err(err) => web_error_page(
@@ -19472,6 +20115,18 @@ fn management_review_markdown(package: &report_store::ManagementReviewPackageDet
     markdown.push_str(&management_review_object_markdown(
         &package.agent_posture_json,
     ));
+    markdown.push_str(&management_review_array_markdown(
+        "AI Governance",
+        &package.ai_governance_json["systems"],
+        &[
+            ("name", "AI-System"),
+            ("ai_act_classification", "Klasse"),
+            ("risk_links", "Risiken"),
+            ("roadmap_task_links", "Roadmap"),
+            ("incident_links", "Incidents"),
+            ("change_links", "Changes"),
+        ],
+    ));
     markdown
 }
 
@@ -19501,6 +20156,7 @@ fn management_review_html(package: &report_store::ManagementReviewPackageDetail)
 <h2>Product Security</h2>
 {}
 <h2>Agent Posture</h2>
+{}
 {}
 </body>
 </html>"#,
@@ -19566,6 +20222,18 @@ fn management_review_html(package: &report_store::ManagementReviewPackageDetail)
         ),
         management_review_object_html(&package.product_security_json),
         management_review_object_html(&package.agent_posture_json),
+        management_review_array_html(
+            "AI Governance",
+            &package.ai_governance_json["systems"],
+            &[
+                ("name", "AI-System"),
+                ("ai_act_classification", "Klasse"),
+                ("risk_links", "Risiken"),
+                ("roadmap_task_links", "Roadmap"),
+                ("incident_links", "Incidents"),
+                ("change_links", "Changes"),
+            ],
+        ),
     )
 }
 
@@ -19619,6 +20287,18 @@ fn management_review_pdf(package: &report_store::ManagementReviewPackageDetail) 
     lines.extend(management_review_array_pdf_lines(
         &package.incident_decisions_json,
         &["title", "severity", "nis2_significance_status"],
+    ));
+    lines.push("AI Governance:".to_string());
+    lines.extend(management_review_array_pdf_lines(
+        &package.ai_governance_json["systems"],
+        &[
+            "name",
+            "ai_act_classification",
+            "risk_links",
+            "roadmap_task_links",
+            "incident_links",
+            "change_links",
+        ],
     ));
     simple_pdf_document(&lines)
 }
@@ -22684,20 +23364,57 @@ async fn ai_governance_product_options(state: &AppState, tenant_id: i64) -> Stri
 
 fn ai_governance_system_panel(
     context: &WebContext,
-    system: &ai_governance_store::AiGovernanceSystemSummary,
+    detail: &ai_governance_store::AiGovernanceSystemDetail,
+    candidates: Option<&ai_governance_store::AiGovernanceLinkCandidates>,
     can_write: bool,
 ) -> String {
-    let requirement_rows = ai_governance_store::ai_governance_requirements(system)
+    let system = &detail.system;
+    let phase_options = candidates
+        .map(|candidates| {
+            candidates
+                .roadmap_phases
+                .iter()
+                .map(|phase| {
+                    format!(
+                        r#"<option value="{}">{} · {}</option>"#,
+                        phase.id,
+                        html_escape(&phase.plan_title),
+                        html_escape(&phase.name),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    let requirement_rows = detail
+        .requirements
         .iter()
         .map(|requirement| {
+            let task_action = if can_write
+                && requirement.status == "GAP"
+                && !phase_options.is_empty()
+            {
+                format!(
+                    r#"<form class="inline-form" method="post" action="{}"><input type="hidden" name="requirement_key" value="{}"><select name="phase_id" aria-label="Roadmap-Phase">{}</select><button type="submit">Task erzeugen</button></form>"#,
+                    web_path_with_context(
+                        &format!("/ai-governance/systems/{}/gap-tasks", system.id),
+                        Some(context),
+                    ),
+                    html_escape(&requirement.key),
+                    phase_options,
+                )
+            } else {
+                String::new()
+            };
             format!(
-                r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                 html_escape(&requirement.label),
                 web_badge(
                     &requirement.status_label,
                     ai_governance_requirement_class(&requirement.status),
                 ),
                 html_escape(&requirement.detail),
+                task_action,
             )
         })
         .collect::<Vec<_>>()
@@ -22748,6 +23465,154 @@ fn ai_governance_system_panel(
     } else {
         String::new()
     };
+    let risk_rows = detail
+        .risks
+        .iter()
+        .map(|risk| {
+            format!(
+                r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                web_path_with_context(&format!("/api/v1/risks/{}", risk.id), Some(context)),
+                html_escape(&risk.title),
+                risk.score,
+                html_escape(risk.owner_display.as_deref().unwrap_or("-")),
+                html_escape(&risk.status),
+                ai_governance_unlink_form(context, system.id, "risk", risk.id, can_write),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let roadmap_rows = detail
+        .roadmap_tasks
+        .iter()
+        .map(|task| {
+            format!(
+                r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                web_path_with_context("/roadmap/", Some(context)),
+                html_escape(&task.title),
+                html_escape(&task.status_label),
+                html_escape(task.due_date.as_deref().unwrap_or("-")),
+                html_escape(&format!("{} · {}", task.plan_title, task.phase_name)),
+                ai_governance_unlink_form(
+                    context,
+                    system.id,
+                    "roadmap-task",
+                    task.id,
+                    can_write,
+                ),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let incident_rows = detail
+        .incidents
+        .iter()
+        .map(|incident| {
+            format!(
+                r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                web_path_with_context(&format!("/incidents/{}/", incident.id), Some(context),),
+                html_escape(&incident.title),
+                html_escape(&incident.severity),
+                html_escape(&incident.status),
+                ai_governance_unlink_form(context, system.id, "incident", incident.id, can_write,),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let change_rows = detail
+        .changes
+        .iter()
+        .map(|change| {
+            format!(
+                r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                web_path_with_context(
+                    &format!("/api/v1/changes/{}", change.id),
+                    Some(context),
+                ),
+                html_escape(&change.title),
+                html_escape(&change.change_type),
+                html_escape(&change.status),
+                html_escape(change.planned_at.as_deref().unwrap_or("-")),
+                ai_governance_unlink_form(
+                    context,
+                    system.id,
+                    "change",
+                    change.id,
+                    can_write,
+                ),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let link_forms = if can_write {
+        candidates
+            .map(|candidates| {
+                [
+                    ai_governance_candidate_form(
+                        context,
+                        system.id,
+                        "risk",
+                        "Risiko",
+                        candidates
+                            .risks
+                            .iter()
+                            .map(|item| (item.id, item.title.as_str()))
+                            .collect(),
+                    ),
+                    ai_governance_candidate_form(
+                        context,
+                        system.id,
+                        "roadmap-task",
+                        "Roadmap-Task",
+                        candidates
+                            .roadmap_tasks
+                            .iter()
+                            .map(|item| (item.id, item.title.as_str()))
+                            .collect(),
+                    ),
+                    ai_governance_candidate_form(
+                        context,
+                        system.id,
+                        "incident",
+                        "Incident",
+                        candidates
+                            .incidents
+                            .iter()
+                            .map(|item| (item.id, item.title.as_str()))
+                            .collect(),
+                    ),
+                    ai_governance_candidate_form(
+                        context,
+                        system.id,
+                        "change",
+                        "Change",
+                        candidates
+                            .changes
+                            .iter()
+                            .map(|item| (item.id, item.title.as_str()))
+                            .collect(),
+                    ),
+                ]
+                .join("")
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let audit_rows = detail
+        .link_audit
+        .iter()
+        .take(10)
+        .map(|event| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&event.created_at),
+                html_escape(&event.action),
+                html_escape(&format!("{} #{}", event.entity_type, event.entity_id)),
+                html_escape(&event.detail),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
     format!(
         r#"<article id="ai-system-{}" class="panel wide">
           <h2>{}</h2>
@@ -22762,9 +23627,20 @@ fn ai_governance_system_panel(
           </table>
           <h3>Governance-Anforderungen</h3>
           <table>
-            <thead><tr><th>Anforderung</th><th>Status</th><th>Detail</th></tr></thead>
+            <thead><tr><th>Anforderung</th><th>Status</th><th>Detail</th><th>Maßnahme</th></tr></thead>
             <tbody>{}</tbody>
           </table>
+          <h3>Verknuepfte Risiken</h3>
+          <table><thead><tr><th>Risiko</th><th>Bewertung</th><th>Owner</th><th>Status</th><th></th></tr></thead><tbody>{}</tbody></table>
+          <h3>Verknuepfte Roadmap-Tasks</h3>
+          <table><thead><tr><th>Task</th><th>Status</th><th>Faellig</th><th>Roadmap</th><th></th></tr></thead><tbody>{}</tbody></table>
+          <h3>Verknuepfte Incidents</h3>
+          <table><thead><tr><th>Incident</th><th>Severity</th><th>Status</th><th></th></tr></thead><tbody>{}</tbody></table>
+          <h3>Verknuepfte Changes</h3>
+          <table><thead><tr><th>Change</th><th>Typ</th><th>Status</th><th>Geplant</th><th></th></tr></thead><tbody>{}</tbody></table>
+          {}
+          <h3>Link-Audit</h3>
+          <table><thead><tr><th>Zeit</th><th>Aktion</th><th>Objekt</th><th>Detail</th></tr></thead><tbody>{}</tbody></table>
           {}
         </article>"#,
         system.id,
@@ -22781,11 +23657,83 @@ fn ai_governance_system_panel(
         system.evidence_count,
         system.approved_evidence_count,
         if requirement_rows.is_empty() {
-            web_empty_row(3, "Keine Governance-Anforderungen berechnet.")
+            web_empty_row(4, "Keine Governance-Anforderungen berechnet.")
         } else {
             requirement_rows
         },
+        if risk_rows.is_empty() {
+            web_empty_row(5, "Keine Risiken verknuepft.")
+        } else {
+            risk_rows
+        },
+        if roadmap_rows.is_empty() {
+            web_empty_row(5, "Keine Roadmap-Tasks verknuepft.")
+        } else {
+            roadmap_rows
+        },
+        if incident_rows.is_empty() {
+            web_empty_row(4, "Keine Incidents verknuepft.")
+        } else {
+            incident_rows
+        },
+        if change_rows.is_empty() {
+            web_empty_row(5, "Keine Changes verknuepft.")
+        } else {
+            change_rows
+        },
+        link_forms,
+        if audit_rows.is_empty() {
+            web_empty_row(4, "Noch keine Link-Aktionen dokumentiert.")
+        } else {
+            audit_rows
+        },
         form,
+    )
+}
+
+fn ai_governance_candidate_form(
+    context: &WebContext,
+    system_id: i64,
+    kind: &str,
+    label: &str,
+    items: Vec<(i64, &str)>,
+) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    let options = items
+        .iter()
+        .map(|(id, title)| format!(r#"<option value="{}">{}</option>"#, id, html_escape(title)))
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        r#"<form class="inline-form" method="post" action="{}"><input type="hidden" name="link_kind" value="{}"><label>{}<select name="entity_id">{}</select></label><button type="submit">Verknuepfen</button></form>"#,
+        web_path_with_context(
+            &format!("/ai-governance/systems/{system_id}/links"),
+            Some(context),
+        ),
+        html_escape(kind),
+        html_escape(label),
+        options,
+    )
+}
+
+fn ai_governance_unlink_form(
+    context: &WebContext,
+    system_id: i64,
+    kind: &str,
+    entity_id: i64,
+    can_write: bool,
+) -> String {
+    if !can_write {
+        return String::new();
+    }
+    format!(
+        r#"<form class="inline-form" method="post" action="{}"><button type="submit">Entfernen</button></form>"#,
+        web_path_with_context(
+            &format!("/ai-governance/systems/{system_id}/links/{kind}/{entity_id}/remove"),
+            Some(context),
+        ),
     )
 }
 
@@ -23295,7 +24243,12 @@ fn status_store_statuses(state: &AppState) -> Vec<StatusStoreStatus> {
         StatusStoreStatus {
             name: "AI Governance",
             configured: state.ai_governance_store.is_some(),
-            scope: "AI-Systemregister, AI-Act-Einstufung, Evidence",
+            scope: "AI-Systemregister, Links, AI-Act-Einstufung, Evidence",
+        },
+        StatusStoreStatus {
+            name: "Changes",
+            configured: state.change_store.is_some(),
+            scope: "Kanonisches Change-Register fuer Governance-Bezuege",
         },
         StatusStoreStatus {
             name: "Risks",
@@ -27044,6 +27997,8 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/suppliers/{supplier_id}", get(supplier_risk_detail))
         .route("/api/v1/processes", get(process_register))
         .route("/api/v1/processes/{process_id}", get(process_detail))
+        .route("/api/v1/changes", get(change_register).post(change_create))
+        .route("/api/v1/changes/{change_id}", get(change_detail))
         .route(
             "/api/v1/ai-governance/systems",
             get(ai_governance_overview).post(ai_governance_create_system),
@@ -27051,6 +28006,18 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/ai-governance/systems/{system_id}",
             get(ai_governance_detail).patch(ai_governance_update_system),
+        )
+        .route(
+            "/api/v1/ai-governance/systems/{system_id}/link-candidates",
+            get(ai_governance_link_candidates),
+        )
+        .route(
+            "/api/v1/ai-governance/systems/{system_id}/links/{link_kind}/{entity_id}",
+            post(ai_governance_add_link).delete(ai_governance_remove_link),
+        )
+        .route(
+            "/api/v1/ai-governance/systems/{system_id}/gap-tasks",
+            post(ai_governance_create_gap_task),
         )
         .route(
             "/api/v1/product-security/overview",
@@ -27431,6 +28398,18 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/ai-governance/systems/{system_id}",
             post(web_ai_governance_update_system),
+        )
+        .route(
+            "/ai-governance/systems/{system_id}/links",
+            post(web_ai_governance_add_link),
+        )
+        .route(
+            "/ai-governance/systems/{system_id}/links/{link_kind}/{entity_id}/remove",
+            post(web_ai_governance_remove_link),
+        )
+        .route(
+            "/ai-governance/systems/{system_id}/gap-tasks",
+            post(web_ai_governance_create_gap_task),
         )
         .route("/product-security/", get(web_product_security))
         .route(

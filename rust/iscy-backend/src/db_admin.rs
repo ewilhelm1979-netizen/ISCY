@@ -192,6 +192,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_PRODUCT_SECURITY_EVIDENCE_PACKAGE_SCHEMA,
         postgres_sql: POSTGRES_PRODUCT_SECURITY_EVIDENCE_PACKAGE_SCHEMA,
     },
+    Migration {
+        version: "0027_rust_ai_governance_links",
+        sqlite_sql: SQLITE_AI_GOVERNANCE_LINK_SCHEMA,
+        postgres_sql: POSTGRES_AI_GOVERNANCE_LINK_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1176,6 +1181,184 @@ WHERE NOT EXISTS (
     WHERE existing.tenant_id = ai.tenant_id
       AND existing.name = ai.name
 );
+"#;
+
+const SQLITE_AI_GOVERNANCE_LINK_SCHEMA: &str = r#"
+ALTER TABLE roadmap_roadmaptask
+    ADD COLUMN origin_key varchar(255) NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roadmap_task_origin_unique
+    ON roadmap_roadmaptask(origin_key)
+    WHERE origin_key <> '';
+
+CREATE TABLE IF NOT EXISTS changes_change (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    owner_id INTEGER NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    change_type varchar(32) NOT NULL DEFAULT 'STANDARD',
+    status varchar(24) NOT NULL DEFAULT 'PLANNED',
+    planned_at TEXT NULL,
+    implemented_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_changes_change_tenant
+    ON changes_change(tenant_id, status, planned_at);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_risk (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    system_id INTEGER NOT NULL,
+    risk_id INTEGER NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, risk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_risk_tenant
+    ON ai_governance_system_risk(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_roadmap_task (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    system_id INTEGER NOT NULL,
+    roadmap_task_id INTEGER NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, roadmap_task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_roadmap_task_tenant
+    ON ai_governance_system_roadmap_task(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_incident (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    system_id INTEGER NOT NULL,
+    incident_id INTEGER NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, incident_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_incident_tenant
+    ON ai_governance_system_incident(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_change (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    system_id INTEGER NOT NULL,
+    change_id INTEGER NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, change_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_change_tenant
+    ON ai_governance_system_change(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_link_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    system_id INTEGER NOT NULL,
+    entity_type varchar(32) NOT NULL,
+    entity_id INTEGER NOT NULL,
+    action varchar(24) NOT NULL,
+    actor_id INTEGER NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_link_audit_tenant
+    ON ai_governance_link_audit(tenant_id, system_id, created_at);
+
+ALTER TABLE reports_managementreviewpackage
+    ADD COLUMN ai_governance_json TEXT NOT NULL DEFAULT '{}';
+"#;
+
+const POSTGRES_AI_GOVERNANCE_LINK_SCHEMA: &str = r#"
+ALTER TABLE roadmap_roadmaptask
+    ADD COLUMN IF NOT EXISTS origin_key varchar(255) NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roadmap_task_origin_unique
+    ON roadmap_roadmaptask(origin_key)
+    WHERE origin_key <> '';
+
+CREATE TABLE IF NOT EXISTS changes_change (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    owner_id BIGINT NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    change_type varchar(32) NOT NULL DEFAULT 'STANDARD',
+    status varchar(24) NOT NULL DEFAULT 'PLANNED',
+    planned_at TEXT NULL,
+    implemented_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_changes_change_tenant
+    ON changes_change(tenant_id, status, planned_at);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_risk (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    risk_id BIGINT NOT NULL,
+    created_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, risk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_risk_tenant
+    ON ai_governance_system_risk(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_roadmap_task (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    roadmap_task_id BIGINT NOT NULL,
+    created_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, roadmap_task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_roadmap_task_tenant
+    ON ai_governance_system_roadmap_task(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_incident (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    incident_id BIGINT NOT NULL,
+    created_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, incident_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_incident_tenant
+    ON ai_governance_system_incident(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_change (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    change_id BIGINT NOT NULL,
+    created_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, change_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_change_tenant
+    ON ai_governance_system_change(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_link_audit (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    entity_type varchar(32) NOT NULL,
+    entity_id BIGINT NOT NULL,
+    action varchar(24) NOT NULL,
+    actor_id BIGINT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_link_audit_tenant
+    ON ai_governance_link_audit(tenant_id, system_id, created_at);
+
+ALTER TABLE reports_managementreviewpackage
+    ADD COLUMN IF NOT EXISTS ai_governance_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 "#;
 
 const SQLITE_SECURITY_RUNTIME_STATE_SCHEMA: &str = r#"

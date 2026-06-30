@@ -63,6 +63,7 @@ pub struct RoadmapTaskSummary {
     pub planned_start: Option<String>,
     pub due_date: Option<String>,
     pub notes: String,
+    pub origin_key: String,
     pub incoming_dependency_count: i64,
     pub created_at: String,
     pub updated_at: String,
@@ -608,6 +609,7 @@ fn task_from_pg_row(row: PgRow) -> Result<RoadmapTaskSummary, sqlx::Error> {
         planned_start: row.try_get("planned_start")?,
         due_date: row.try_get("due_date")?,
         notes: row.try_get("notes")?,
+        origin_key: row.try_get("origin_key")?,
         incoming_dependency_count: row.try_get("incoming_dependency_count")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -632,6 +634,7 @@ fn task_from_sqlite_row(row: SqliteRow) -> Result<RoadmapTaskSummary, sqlx::Erro
         planned_start: row.try_get("planned_start")?,
         due_date: row.try_get("due_date")?,
         notes: row.try_get("notes")?,
+        origin_key: row.try_get("origin_key")?,
         incoming_dependency_count: row.try_get("incoming_dependency_count")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -895,6 +898,7 @@ fn tasks_postgres_sql() -> &'static str {
         task.planned_start::text AS planned_start,
         task.due_date::text AS due_date,
         task.notes,
+        task.origin_key,
         (
             SELECT COUNT(*)::bigint
             FROM roadmap_roadmaptaskdependency dep
@@ -926,6 +930,7 @@ fn tasks_sqlite_sql() -> &'static str {
         CAST(task.planned_start AS TEXT) AS planned_start,
         CAST(task.due_date AS TEXT) AS due_date,
         task.notes,
+        task.origin_key,
         (
             SELECT COUNT(*)
             FROM roadmap_roadmaptaskdependency dep
@@ -989,6 +994,7 @@ fn task_by_id_postgres_sql() -> &'static str {
         task.planned_start::text AS planned_start,
         task.due_date::text AS due_date,
         task.notes,
+        task.origin_key,
         (
             SELECT COUNT(*)::bigint
             FROM roadmap_roadmaptaskdependency dep
@@ -1020,6 +1026,7 @@ fn task_by_id_sqlite_sql() -> &'static str {
         CAST(task.planned_start AS TEXT) AS planned_start,
         CAST(task.due_date AS TEXT) AS due_date,
         task.notes,
+        task.origin_key,
         (
             SELECT COUNT(*)
             FROM roadmap_roadmaptaskdependency dep

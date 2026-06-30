@@ -6,6 +6,18 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Added
+
+- connect tenant-scoped AI Governance systems to existing risks, roadmap tasks, incidents, and canonical change records
+- add explicit, duplicate-safe roadmap task creation from open AI Governance gaps with a stable origin key
+- include frozen AI Governance link summaries in management review UI and Markdown, HTML, PDF, and JSON exports
+- add authenticated APIs and Web UI actions to list, create, and remove AI Governance links
+
+### Security
+
+- enforce tenant predicates while resolving every AI Governance system and linked target
+- persist link and unlink audit events and reject foreign-tenant, manipulated, and duplicate relationships
+
 ### Security and supply chain
 
 - expand staggered weekly Dependabot coverage to Cargo, the backend Dockerfile, root and monitoring Compose stacks, Nix inputs, and GitHub Actions

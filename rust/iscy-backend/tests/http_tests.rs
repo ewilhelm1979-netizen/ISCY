@@ -15,6 +15,7 @@ use iscy_backend::{
     asset_store::AssetStore,
     auth_store::AuthStore,
     catalog_store::CatalogStore,
+    change_store::ChangeStore,
     control_store::ControlStore,
     cve_store::CveStore,
     dashboard_store::DashboardStore,
@@ -649,8 +650,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0026_rust_product_security_evidence_packages"));
-    assert!(html.contains("26/26 angewendet"));
+    assert!(html.contains("0027_rust_ai_governance_links"));
+    assert!(html.contains("27/27 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -3042,6 +3043,12 @@ async fn rust_web_ai_governance_renders_and_updates_system_review() {
     assert!(html.contains("AI Governance"));
     assert!(html.contains("Rust Gateway Assistant"));
     assert!(html.contains("Governance-Anforderungen"));
+    assert!(html.contains("Verknuepfte Risiken"));
+    assert!(html.contains("Verknuepfte Roadmap-Tasks"));
+    assert!(html.contains("Verknuepfte Incidents"));
+    assert!(html.contains("Verknuepfte Changes"));
+    assert!(html.contains("Link-Audit"));
+    assert!(html.contains("Verknuepfen"));
 
     let update = app
         .oneshot(
@@ -3073,6 +3080,323 @@ async fn rust_web_ai_governance_renders_and_updates_system_review() {
     assert_eq!(status, "APPROVED");
     assert_eq!(oversight, "Review Board");
     assert_eq!(risk_summary, "Reviewed");
+}
+
+#[tokio::test]
+async fn ai_governance_links_existing_objects_and_records_unlink_audit() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    seed_ai_governance_link_fixtures(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_ai_governance_store(Some(AiGovernanceStore::from_sqlite_pool(pool.clone())))
+            .with_change_store(Some(ChangeStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let create_change = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/changes")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"title":"Deploy reviewed AI model","change_type":"NORMAL","status":"APPROVED"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create_change.status(), StatusCode::CREATED);
+    let body = to_bytes(create_change.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let change_id = payload["change"]["id"].as_i64().unwrap();
+
+    for (kind, entity_id) in [
+        ("risk", 4201_i64),
+        ("roadmap-task", 4204_i64),
+        ("incident", 4205_i64),
+        ("change", change_id),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/ai-governance/systems/4200/links/{kind}/{entity_id}"
+                    ))
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED, "kind={kind}");
+    }
+
+    let duplicate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ai-governance/systems/4200/links/risk/4201")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/ai-governance/systems/4200")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["risks"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["roadmap_tasks"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["incidents"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["changes"].as_array().unwrap().len(), 1);
+
+    let remove = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/ai-governance/systems/4200/links/risk/4201")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(remove.status(), StatusCode::OK);
+
+    let detail = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/ai-governance/systems/4200")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["risks"].as_array().unwrap().is_empty());
+    let actions = payload["link_audit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["action"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(actions.contains(&"LINKED"));
+    assert!(actions.contains(&"UNLINKED"));
+}
+
+#[tokio::test]
+async fn ai_governance_link_writes_enforce_auth_roles_and_tenant_boundaries() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    seed_ai_governance_link_fixtures(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_ai_governance_store(Some(AiGovernanceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let missing_auth = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ai-governance/systems/4200/links/risk/4201")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_auth.status(), StatusCode::UNAUTHORIZED);
+
+    let insufficient_role = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ai-governance/systems/4200/links/risk/4201")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(insufficient_role.status(), StatusCode::FORBIDDEN);
+
+    for uri in [
+        "/api/v1/ai-governance/systems/4300/links/risk/4201",
+        "/api/v1/ai-governance/systems/4200/links/risk/4301",
+        "/api/v1/ai-governance/systems/4200/links/roadmap-task/4304",
+        "/api/v1/ai-governance/systems/4200/links/incident/4305",
+        "/api/v1/ai-governance/systems/4200/links/change/4306",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "uri={uri}");
+    }
+
+    let foreign_detail = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/ai-governance/systems/4300")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_detail.status(), StatusCode::NOT_FOUND);
+
+    let link_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM ai_governance_system_risk WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(link_count, 0);
+}
+
+#[tokio::test]
+async fn ai_governance_gap_task_generation_is_explicit_tenant_bound_and_idempotent() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    seed_ai_governance_link_fixtures(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_ai_governance_store(Some(AiGovernanceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    for (expected, phase_id) in [(StatusCode::CREATED, 4203_i64), (StatusCode::OK, 4203_i64)] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/ai-governance/systems/4200/gap-tasks")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::from(format!(
+                        r#"{{"requirement_key":"risk_management","phase_id":{phase_id}}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+
+    let duplicate_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM roadmap_roadmaptask WHERE origin_key = 'AI-GOV:42:4200:risk_management'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(duplicate_count, 1);
+    let link_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM ai_governance_system_roadmap_task WHERE tenant_id = 42 AND system_id = 4200",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(link_count, 1);
+
+    let foreign_phase = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ai-governance/systems/4200/gap-tasks")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"requirement_key":"monitoring","phase_id":4303}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_phase.status(), StatusCode::BAD_REQUEST);
+
+    let read_only = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ai-governance/systems/4200/gap-tasks")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(
+                    r#"{"requirement_key":"monitoring","phase_id":4203}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read_only.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -8049,6 +8373,17 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
             .unwrap()
             >= 1
     );
+    assert!(
+        payload["package"]["ai_governance_json"]["system_count"]
+            .as_i64()
+            .unwrap()
+            >= 1
+    );
+    assert_eq!(
+        payload["package"]["ai_governance_json"]["systems"][0]["entity_type"],
+        "ai_governance_system"
+    );
+    assert!(payload["package"]["ai_governance_json"]["systems"][0]["risk_links"].is_number());
 }
 
 #[tokio::test]
@@ -10018,7 +10353,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0023_rust_security_runtime_state",
             "0024_rust_evidence_lifecycle",
             "0025_rust_agent_fleet_governance",
-            "0026_rust_product_security_evidence_packages"
+            "0026_rust_product_security_evidence_packages",
+            "0027_rust_ai_governance_links"
         ]
     );
     assert!(
@@ -10156,6 +10492,34 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     assert!(db_admin::sqlite_table_exists(&pool, "ai_governance_system")
         .await
         .unwrap());
+    for table in [
+        "changes_change",
+        "ai_governance_system_risk",
+        "ai_governance_system_roadmap_task",
+        "ai_governance_system_incident",
+        "ai_governance_system_change",
+        "ai_governance_link_audit",
+    ] {
+        assert!(db_admin::sqlite_table_exists(&pool, table).await.unwrap());
+    }
+    let roadmap_columns = sqlx::query("PRAGMA table_info(roadmap_roadmaptask)")
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<_>>();
+    assert!(roadmap_columns.iter().any(|name| name == "origin_key"));
+    let review_columns = sqlx::query("PRAGMA table_info(reports_managementreviewpackage)")
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<_>>();
+    assert!(review_columns
+        .iter()
+        .any(|name| name == "ai_governance_json"));
     assert!(
         db_admin::sqlite_table_exists(&pool, "zero_trust_agent_policy_profile")
             .await
@@ -15229,7 +15593,8 @@ async fn create_roadmap_tables(pool: &SqlitePool) {
             status varchar(16) NOT NULL,
             planned_start date NULL,
             due_date date NULL,
-            notes TEXT NOT NULL
+            notes TEXT NOT NULL,
+            origin_key varchar(255) NOT NULL DEFAULT ''
         )
         "#,
     )
@@ -15747,7 +16112,8 @@ async fn create_wizard_tables(pool: &SqlitePool) {
             status varchar(16) NOT NULL,
             planned_start date NULL,
             due_date date NULL,
-            notes TEXT NOT NULL
+            notes TEXT NOT NULL,
+            origin_key varchar(255) NOT NULL DEFAULT ''
         )
         "#,
     )
@@ -16199,6 +16565,45 @@ async fn create_report_table(pool: &SqlitePool) {
     .unwrap();
 }
 
+async fn seed_ai_governance_link_fixtures(pool: &SqlitePool) {
+    sqlx::raw_sql(
+        r#"
+        INSERT INTO ai_governance_system (
+            id, tenant_id, name, ai_act_classification, criticality, status,
+            evidence_key, risk_summary, monitoring_plan
+        ) VALUES
+            (4200, 42, 'Tenant 42 AI', 'HIGH_RISK', 'HIGH', 'IN_REVIEW', 'AI-GOV:42:4200', '', ''),
+            (4300, 43, 'Tenant 43 AI', 'HIGH_RISK', 'HIGH', 'IN_REVIEW', 'AI-GOV:43:4300', '', '');
+
+        INSERT INTO risks_risk (id, tenant_id, title, impact, likelihood, status) VALUES
+            (4201, 42, 'Tenant 42 AI Risk', 4, 4, 'IDENTIFIED'),
+            (4301, 43, 'Tenant 43 AI Risk', 5, 5, 'IDENTIFIED');
+
+        INSERT INTO roadmap_roadmapplan (id, tenant_id, session_id, title) VALUES
+            (4202, 42, 1, 'Tenant 42 Roadmap'),
+            (4302, 43, 1, 'Tenant 43 Roadmap');
+        INSERT INTO roadmap_roadmapphase (id, plan_id, name, sort_order) VALUES
+            (4203, 4202, 'Tenant 42 Phase', 1),
+            (4303, 4302, 'Tenant 43 Phase', 1);
+        INSERT INTO roadmap_roadmaptask (id, phase_id, title, status, origin_key) VALUES
+            (4204, 4203, 'Tenant 42 Existing Task', 'OPEN', ''),
+            (4304, 4303, 'Tenant 43 Existing Task', 'OPEN', '');
+
+        INSERT INTO incidents_incident (id, tenant_id, title, summary, severity, status) VALUES
+            (4205, 42, 'Tenant 42 AI Incident', '', 'HIGH', 'TRIAGE'),
+            (4305, 43, 'Tenant 43 AI Incident', '', 'HIGH', 'TRIAGE');
+
+        INSERT INTO changes_change (
+            id, tenant_id, title, description, change_type, status
+        ) VALUES
+            (4306, 43, 'Tenant 43 AI Change', '', 'NORMAL', 'PLANNED');
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 async fn create_management_review_table(pool: &SqlitePool) {
     sqlx::query(
         r#"
@@ -16223,6 +16628,7 @@ async fn create_management_review_table(pool: &SqlitePool) {
             roadmap_json TEXT NOT NULL DEFAULT '[]',
             product_security_json TEXT NOT NULL DEFAULT '{}',
             agent_posture_json TEXT NOT NULL DEFAULT '{}',
+            ai_governance_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
