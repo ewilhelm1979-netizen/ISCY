@@ -1,5 +1,5 @@
 use anyhow::{bail, Context};
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{
@@ -549,6 +549,8 @@ async fn generate_management_review_postgres(
     let snapshot = build_management_review_snapshot_postgres(pool, tenant_id).await?;
     let title = review_title(request.title);
     let executive_summary = review_executive_summary(request.executive_summary, &snapshot);
+    let period_start = management_review_date(request.period_start, "Zeitraum-Start")?;
+    let period_end = management_review_date(request.period_end, "Zeitraum-Ende")?;
     let id: i64 = sqlx::query_scalar(
         r#"
         INSERT INTO reports_managementreviewpackage (
@@ -562,6 +564,55 @@ async fn generate_management_review_postgres(
             $6, '', '', $7, $8,
             $9, $10, $11, $12,
             $13, $14, $15, NOW()::text, NOW()::text
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(&title)
+    .bind(period_start)
+    .bind(period_end)
+    .bind(user_id)
+    .bind(&executive_summary)
+    .bind(snapshot.metrics_json.to_string())
+    .bind(snapshot.top_risks_json.to_string())
+    .bind(snapshot.control_gaps_json.to_string())
+    .bind(snapshot.evidence_gaps_json.to_string())
+    .bind(snapshot.incident_decisions_json.to_string())
+    .bind(snapshot.roadmap_json.to_string())
+    .bind(snapshot.product_security_json.to_string())
+    .bind(snapshot.agent_posture_json.to_string())
+    .bind(sqlx::types::Json(snapshot.ai_governance_json.clone()))
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL-Management-Review konnte nicht erzeugt werden")?;
+    management_review_detail_postgres(pool, tenant_id, id)
+        .await?
+        .context("Neu erzeugtes Management-Review wurde nicht gefunden")
+}
+
+async fn generate_management_review_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    user_id: i64,
+    request: ManagementReviewGenerateRequest,
+) -> anyhow::Result<ManagementReviewPackageDetail> {
+    let snapshot = build_management_review_snapshot_sqlite(pool, tenant_id).await?;
+    let title = review_title(request.title);
+    let executive_summary = review_executive_summary(request.executive_summary, &snapshot);
+    let id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO reports_managementreviewpackage (
+            tenant_id, title, period_start, period_end, status, generated_by_id,
+            executive_summary, decision_notes, next_actions, metrics_json, top_risks_json,
+            control_gaps_json, evidence_gaps_json, incident_decisions_json, roadmap_json,
+            product_security_json, agent_posture_json, ai_governance_json, created_at, updated_at
+        )
+        VALUES (
+            ?, ?, ?, ?, 'DRAFT', ?,
+            ?, '', '', ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         RETURNING id
         "#,
@@ -583,58 +634,7 @@ async fn generate_management_review_postgres(
     .bind(snapshot.ai_governance_json.to_string())
     .fetch_one(pool)
     .await
-    .context("PostgreSQL-Management-Review konnte nicht erzeugt werden")?;
-    management_review_detail_postgres(pool, tenant_id, id)
-        .await?
-        .context("Neu erzeugtes Management-Review wurde nicht gefunden")
-}
-
-async fn generate_management_review_sqlite(
-    pool: &SqlitePool,
-    tenant_id: i64,
-    user_id: i64,
-    request: ManagementReviewGenerateRequest,
-) -> anyhow::Result<ManagementReviewPackageDetail> {
-    let snapshot = build_management_review_snapshot_sqlite(pool, tenant_id).await?;
-    let title = review_title(request.title);
-    let executive_summary = review_executive_summary(request.executive_summary, &snapshot);
-    sqlx::query(
-        r#"
-        INSERT INTO reports_managementreviewpackage (
-            tenant_id, title, period_start, period_end, status, generated_by_id,
-            executive_summary, decision_notes, next_actions, metrics_json, top_risks_json,
-            control_gaps_json, evidence_gaps_json, incident_decisions_json, roadmap_json,
-            product_security_json, agent_posture_json, ai_governance_json, created_at, updated_at
-        )
-        VALUES (
-            ?, ?, ?, ?, 'DRAFT', ?,
-            ?, '', '', ?, ?,
-            ?, ?, ?, ?,
-            ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-        )
-        "#,
-    )
-    .bind(tenant_id)
-    .bind(&title)
-    .bind(clean_optional_text(request.period_start))
-    .bind(clean_optional_text(request.period_end))
-    .bind(user_id)
-    .bind(&executive_summary)
-    .bind(snapshot.metrics_json.to_string())
-    .bind(snapshot.top_risks_json.to_string())
-    .bind(snapshot.control_gaps_json.to_string())
-    .bind(snapshot.evidence_gaps_json.to_string())
-    .bind(snapshot.incident_decisions_json.to_string())
-    .bind(snapshot.roadmap_json.to_string())
-    .bind(snapshot.product_security_json.to_string())
-    .bind(snapshot.agent_posture_json.to_string())
-    .bind(snapshot.ai_governance_json.to_string())
-    .execute(pool)
-    .await
     .context("SQLite-Management-Review konnte nicht erzeugt werden")?;
-    let id: i64 = sqlx::query_scalar("SELECT last_insert_rowid()")
-        .fetch_one(pool)
-        .await?;
     management_review_detail_sqlite(pool, tenant_id, id)
         .await?
         .context("Neu erzeugtes Management-Review wurde nicht gefunden")
@@ -1707,6 +1707,15 @@ fn review_executive_summary(
 
 fn clean_optional_text(value: Option<String>) -> Option<String> {
     clean_text(value, 255).filter(|value| !value.is_empty())
+}
+
+fn management_review_date(value: Option<String>, label: &str) -> anyhow::Result<Option<NaiveDate>> {
+    let Some(value) = clean_optional_text(value) else {
+        return Ok(None);
+    };
+    NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+        .map(Some)
+        .with_context(|| format!("{label} muss YYYY-MM-DD entsprechen"))
 }
 
 fn clean_text(value: Option<String>, max_len: usize) -> Option<String> {

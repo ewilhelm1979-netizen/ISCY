@@ -16566,11 +16566,11 @@ async fn web_ai_governance_add_link(
             "AI-System oder Governance-Objekt wurde fuer diesen Tenant nicht gefunden.",
         )
         .into_response(),
-        Err(err) => web_error_page(
+        Err(_) => web_error_page(
             "AI Governance",
             "/ai-governance/",
             &context,
-            &err.to_string(),
+            "Verknuepfung konnte nicht angelegt werden. Bitte Eingaben und Berechtigungen pruefen und den Vorgang erneut versuchen.",
         )
         .into_response(),
     }
@@ -16641,11 +16641,11 @@ async fn web_ai_governance_remove_link(
             "Verknuepfung wurde fuer diesen Tenant nicht gefunden.",
         )
         .into_response(),
-        Err(err) => web_error_page(
+        Err(_) => web_error_page(
             "AI Governance",
             "/ai-governance/",
             &context,
-            &err.to_string(),
+            "Verknuepfung konnte nicht entfernt werden. Es wurden keine unvollstaendigen Aenderungen gespeichert.",
         )
         .into_response(),
     }
@@ -23729,7 +23729,7 @@ fn ai_governance_unlink_form(
         return String::new();
     }
     format!(
-        r#"<form class="inline-form" method="post" action="{}"><button type="submit">Entfernen</button></form>"#,
+        r#"<details class="inline-confirm"><summary>Entfernen</summary><form class="inline-form" method="post" action="{}"><button type="submit">Verknuepfung entfernen</button></form></details>"#,
         web_path_with_context(
             &format!("/ai-governance/systems/{system_id}/links/{kind}/{entity_id}/remove"),
             Some(context),

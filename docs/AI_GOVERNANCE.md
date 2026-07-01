@@ -15,6 +15,8 @@ Ein AI-System kann mit den kanonischen ISCY-Objekten fuer Risiken, Roadmap-Tasks
 
 Risiken, Roadmap-Tasks und Incidents verwenden die bestehenden Plattformtabellen. Migration `0027_rust_ai_governance_links` ergaenzt ein kleines allgemeines `changes_change`-Register, weil vor diesem Block kein kanonisches Change-Objekt existierte. Es ist kein AI-spezifisches Parallelmodell und bildet noch keinen vollstaendigen Change-Management-Prozess ab.
 
+Der Change-Kern ist bewusst auf Liste, Anlage und Detailansicht begrenzt. Er akzeptiert die Typen `STANDARD`, `NORMAL` und `EMERGENCY`, die Status `PLANNED`, `IN_REVIEW`, `APPROVED`, `IMPLEMENTED`, `FAILED`, `ROLLED_BACK` und `CANCELLED` sowie Datumswerte als `YYYY-MM-DD` oder RFC-3339-Zeitpunkt. Owner werden tenantgebunden validiert. Freigabegates, CAB-Workflow, Rollback-Ausfuehrung und Change-Kalender bleiben ausserhalb dieses Blocks.
+
 ## API
 
 - `GET /api/v1/ai-governance/systems/{id}` liefert Anforderungen und aktuelle Verknuepfungen.
@@ -38,8 +40,12 @@ Nur Anforderungen mit Status `GAP` koennen als Task erzeugt werden. Der Nutzer w
 - AI-System und Zielobjekt werden mit `tenant_id` bereits in der SQL-Abfrage eingeschraenkt.
 - Fremde oder manipulierte IDs werden nicht verknuepft und liefern keine fremden Objektdaten.
 - Eindeutige Linkindizes verhindern doppelte Beziehungen.
-- Link und Unlink werden mit Actor, Objekttyp, Objekt-ID, Aktion und Zeitpunkt auditierbar persistiert.
+- Link beziehungsweise Unlink und zugehoeriger Audit-Eintrag werden atomar mit Actor, Objekttyp, Objekt-ID, Aktion und Zeitpunkt persistiert.
+
+Die Rust-Schemata folgen beim Verzicht auf nachtraegliche Foreign Keys dem bestehenden ISCY-Datenbankstil. Neue Links koennen ausschliesslich nach tenantgebundener Existenzpruefung angelegt werden; ISCY bietet fuer die verknuepften Zielobjekte in diesem Stand keine loeschenden API-Routen an. Direkte, ausserhalb von ISCY ausgefuehrte Datenbankloeschungen sind kein unterstuetzter Integrationspfad und muessen betrieblich verhindert werden.
 
 ## Management Review und Export
 
 Neue Management-Review-Pakete frieren fuer jedes AI-System Klasse, Kritikalitaet, Status, Review-Termin, Evidence-Zahl und die Anzahl verknuepfter Risiken, Roadmap-Tasks, Incidents und Changes ein. Webansicht sowie Markdown-, HTML-, PDF- und JSON-Export verwenden diesen Snapshot. Spaetere Linkaenderungen veraendern bereits erzeugte Pakete nicht.
+
+Migration `0027_rust_ai_governance_links` ist additiv. Bereits migrierte Datenbanken ueberspringen sie anhand von `iscy_schema_migrations`; SQLite prueft die beiden neuen Spalten vor dem Anlegen, damit auch ein Wiederanlauf nach einer unvollstaendigen Strukturvorbereitung keine vorhandenen Daten oder Spalten ueberschreibt.

@@ -1,4 +1,5 @@
 use anyhow::{bail, Context};
+use chrono::{DateTime, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
@@ -100,9 +101,13 @@ impl ChangeStore {
     ) -> anyhow::Result<ChangeSummary> {
         let title = clean_required(&payload.title, "Change-Titel")?;
         let change_type =
-            normalize_change_type(payload.change_type.as_deref().unwrap_or("STANDARD"));
-        let status = normalize_status(payload.status.as_deref().unwrap_or("PLANNED"));
+            normalize_change_type(payload.change_type.as_deref().unwrap_or("STANDARD"))?;
+        let status = normalize_status(payload.status.as_deref().unwrap_or("PLANNED"))?;
         let owner_id = payload.owner_id.filter(|id| *id > 0);
+        let description = clean_text(&payload.description);
+        let planned_at = normalize_change_datetime(payload.planned_at, "Geplanter Zeitpunkt")?;
+        let implemented_at =
+            normalize_change_datetime(payload.implemented_at, "Umsetzungszeitpunkt")?;
         let change_id = match self {
             Self::Postgres(pool) => {
                 ensure_owner_postgres(pool, tenant_id, owner_id).await?;
@@ -119,11 +124,11 @@ impl ChangeStore {
                 .bind(tenant_id)
                 .bind(owner_id)
                 .bind(&title)
-                .bind(clean_text(&payload.description))
+                .bind(&description)
                 .bind(&change_type)
                 .bind(&status)
-                .bind(clean_optional(payload.planned_at))
-                .bind(clean_optional(payload.implemented_at))
+                .bind(&planned_at)
+                .bind(&implemented_at)
                 .fetch_one(pool)
                 .await
                 .context("PostgreSQL-Change konnte nicht angelegt werden")?
@@ -142,11 +147,11 @@ impl ChangeStore {
                 .bind(tenant_id)
                 .bind(owner_id)
                 .bind(&title)
-                .bind(clean_text(&payload.description))
+                .bind(&description)
                 .bind(&change_type)
                 .bind(&status)
-                .bind(clean_optional(payload.planned_at))
-                .bind(clean_optional(payload.implemented_at))
+                .bind(&planned_at)
+                .bind(&implemented_at)
                 .execute(pool)
                 .await
                 .context("SQLite-Change konnte nicht angelegt werden")?;
@@ -364,6 +369,9 @@ fn clean_required(value: &str, label: &str) -> anyhow::Result<String> {
     if value.is_empty() {
         bail!("{label} darf nicht leer sein");
     }
+    if value.chars().count() > 255 {
+        bail!("{label} darf hoechstens 255 Zeichen enthalten");
+    }
     Ok(value)
 }
 
@@ -371,32 +379,38 @@ fn clean_text(value: &str) -> String {
     value.trim().to_string()
 }
 
-fn clean_optional(value: Option<String>) -> Option<String> {
-    value
+fn normalize_change_datetime(value: Option<String>, label: &str) -> anyhow::Result<Option<String>> {
+    let Some(value) = value
         .map(|value| clean_text(&value))
         .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    if NaiveDate::parse_from_str(&value, "%Y-%m-%d").is_ok()
+        || DateTime::parse_from_rfc3339(&value).is_ok()
+    {
+        return Ok(Some(value));
+    }
+    bail!("{label} muss YYYY-MM-DD oder ein RFC-3339-Zeitpunkt sein")
 }
 
-fn normalize_change_type(value: &str) -> String {
-    match value.trim().to_ascii_uppercase().replace('-', "_").as_str() {
-        "EMERGENCY" => "EMERGENCY",
-        "NORMAL" => "NORMAL",
-        _ => "STANDARD",
+fn normalize_change_type(value: &str) -> anyhow::Result<String> {
+    let normalized = value.trim().to_ascii_uppercase().replace('-', "_");
+    match normalized.as_str() {
+        "STANDARD" | "NORMAL" | "EMERGENCY" => Ok(normalized),
+        _ => bail!("Change-Typ muss STANDARD, NORMAL oder EMERGENCY sein"),
     }
-    .to_string()
 }
 
-fn normalize_status(value: &str) -> String {
-    match value.trim().to_ascii_uppercase().replace('-', "_").as_str() {
-        "IN_REVIEW" => "IN_REVIEW",
-        "APPROVED" => "APPROVED",
-        "IMPLEMENTED" => "IMPLEMENTED",
-        "FAILED" => "FAILED",
-        "ROLLED_BACK" => "ROLLED_BACK",
-        "CANCELLED" => "CANCELLED",
-        _ => "PLANNED",
+fn normalize_status(value: &str) -> anyhow::Result<String> {
+    let normalized = value.trim().to_ascii_uppercase().replace('-', "_");
+    match normalized.as_str() {
+        "PLANNED" | "IN_REVIEW" | "APPROVED" | "IMPLEMENTED" | "FAILED"
+        | "ROLLED_BACK" | "CANCELLED" => Ok(normalized),
+        _ => bail!(
+            "Change-Status muss PLANNED, IN_REVIEW, APPROVED, IMPLEMENTED, FAILED, ROLLED_BACK oder CANCELLED sein"
+        ),
     }
-    .to_string()
 }
 
 fn change_type_label(value: &str) -> &'static str {

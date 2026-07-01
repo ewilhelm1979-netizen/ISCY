@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
-    Row,
+    Postgres, Row, Sqlite, Transaction,
 };
 
 use crate::cve_store::normalize_database_url;
@@ -808,6 +808,7 @@ async fn add_link_postgres(
         return Ok(AiGovernanceLinkMutation::NotFound);
     }
     let (table, column) = link_table(kind);
+    let mut tx = pool.begin().await?;
     let result = sqlx::query(&format!(
         "INSERT INTO {table} (tenant_id, system_id, {column}, created_by_id, created_at) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) ON CONFLICT DO NOTHING"
     ))
@@ -815,14 +816,14 @@ async fn add_link_postgres(
     .bind(system_id)
     .bind(entity_id)
     .bind(actor_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("PostgreSQL-AI-Governance-Verknuepfung konnte nicht angelegt werden")?;
     if result.rows_affected() == 0 {
         return Ok(AiGovernanceLinkMutation::AlreadyExists);
     }
-    insert_audit_postgres(
-        pool,
+    insert_audit_postgres_tx(
+        &mut tx,
         tenant_id,
         system_id,
         kind,
@@ -832,6 +833,7 @@ async fn add_link_postgres(
         "Governance-Objekt mit AI-System verknuepft.",
     )
     .await?;
+    tx.commit().await?;
     Ok(AiGovernanceLinkMutation::Created)
 }
 
@@ -850,6 +852,7 @@ async fn add_link_sqlite(
         return Ok(AiGovernanceLinkMutation::NotFound);
     }
     let (table, column) = link_table(kind);
+    let mut tx = pool.begin().await?;
     let result = sqlx::query(&format!(
         "INSERT INTO {table} (tenant_id, system_id, {column}, created_by_id, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT DO NOTHING"
     ))
@@ -857,14 +860,14 @@ async fn add_link_sqlite(
     .bind(system_id)
     .bind(entity_id)
     .bind(actor_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("SQLite-AI-Governance-Verknuepfung konnte nicht angelegt werden")?;
     if result.rows_affected() == 0 {
         return Ok(AiGovernanceLinkMutation::AlreadyExists);
     }
-    insert_audit_sqlite(
-        pool,
+    insert_audit_sqlite_tx(
+        &mut tx,
         tenant_id,
         system_id,
         kind,
@@ -874,6 +877,7 @@ async fn add_link_sqlite(
         "Governance-Objekt mit AI-System verknuepft.",
     )
     .await?;
+    tx.commit().await?;
     Ok(AiGovernanceLinkMutation::Created)
 }
 
@@ -889,19 +893,20 @@ async fn remove_link_postgres(
         return Ok(AiGovernanceLinkMutation::NotFound);
     }
     let (table, column) = link_table(kind);
+    let mut tx = pool.begin().await?;
     let result = sqlx::query(&format!(
         "DELETE FROM {table} WHERE tenant_id = $1 AND system_id = $2 AND {column} = $3"
     ))
     .bind(tenant_id)
     .bind(system_id)
     .bind(entity_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if result.rows_affected() == 0 {
         return Ok(AiGovernanceLinkMutation::NotFound);
     }
-    insert_audit_postgres(
-        pool,
+    insert_audit_postgres_tx(
+        &mut tx,
         tenant_id,
         system_id,
         kind,
@@ -911,6 +916,7 @@ async fn remove_link_postgres(
         "Governance-Objekt vom AI-System entfernt.",
     )
     .await?;
+    tx.commit().await?;
     Ok(AiGovernanceLinkMutation::Removed)
 }
 
@@ -926,19 +932,20 @@ async fn remove_link_sqlite(
         return Ok(AiGovernanceLinkMutation::NotFound);
     }
     let (table, column) = link_table(kind);
+    let mut tx = pool.begin().await?;
     let result = sqlx::query(&format!(
         "DELETE FROM {table} WHERE tenant_id = ? AND system_id = ? AND {column} = ?"
     ))
     .bind(tenant_id)
     .bind(system_id)
     .bind(entity_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if result.rows_affected() == 0 {
         return Ok(AiGovernanceLinkMutation::NotFound);
     }
-    insert_audit_sqlite(
-        pool,
+    insert_audit_sqlite_tx(
+        &mut tx,
         tenant_id,
         system_id,
         kind,
@@ -948,7 +955,81 @@ async fn remove_link_sqlite(
         "Governance-Objekt vom AI-System entfernt.",
     )
     .await?;
+    tx.commit().await?;
     Ok(AiGovernanceLinkMutation::Removed)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_audit_postgres_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: i64,
+    system_id: i64,
+    kind: AiGovernanceLinkKind,
+    entity_id: i64,
+    action: &str,
+    actor_id: i64,
+    detail: &str,
+) -> anyhow::Result<()> {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO ai_governance_link_audit (
+            tenant_id, system_id, entity_type, entity_id, action, actor_id, detail, created_at
+        )
+        SELECT $1, system.id, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP
+        FROM ai_governance_system system
+        WHERE system.tenant_id = $1 AND system.id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(system_id)
+    .bind(kind.as_str())
+    .bind(entity_id)
+    .bind(action)
+    .bind(actor_id)
+    .bind(detail)
+    .execute(&mut **tx)
+    .await?;
+    if result.rows_affected() != 1 {
+        bail!("AI-Governance-Audit konnte nicht tenantgebunden angelegt werden");
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_audit_sqlite_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    tenant_id: i64,
+    system_id: i64,
+    kind: AiGovernanceLinkKind,
+    entity_id: i64,
+    action: &str,
+    actor_id: i64,
+    detail: &str,
+) -> anyhow::Result<()> {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO ai_governance_link_audit (
+            tenant_id, system_id, entity_type, entity_id, action, actor_id, detail, created_at
+        )
+        SELECT ?, system.id, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+        FROM ai_governance_system system
+        WHERE system.tenant_id = ? AND system.id = ?
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(kind.as_str())
+    .bind(entity_id)
+    .bind(action)
+    .bind(actor_id)
+    .bind(detail)
+    .bind(tenant_id)
+    .bind(system_id)
+    .execute(&mut **tx)
+    .await?;
+    if result.rows_affected() != 1 {
+        bail!("AI-Governance-Audit konnte nicht tenantgebunden angelegt werden");
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
