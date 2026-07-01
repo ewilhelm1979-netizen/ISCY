@@ -192,6 +192,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_PRODUCT_SECURITY_EVIDENCE_PACKAGE_SCHEMA,
         postgres_sql: POSTGRES_PRODUCT_SECURITY_EVIDENCE_PACKAGE_SCHEMA,
     },
+    Migration {
+        version: "0027_rust_ai_governance_links",
+        sqlite_sql: SQLITE_AI_GOVERNANCE_LINK_SCHEMA,
+        postgres_sql: POSTGRES_AI_GOVERNANCE_LINK_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1176,6 +1181,180 @@ WHERE NOT EXISTS (
     WHERE existing.tenant_id = ai.tenant_id
       AND existing.name = ai.name
 );
+"#;
+
+const SQLITE_AI_GOVERNANCE_LINK_SCHEMA: &str = r#"
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roadmap_task_origin_unique
+    ON roadmap_roadmaptask(origin_key)
+    WHERE origin_key <> '';
+
+CREATE TABLE IF NOT EXISTS changes_change (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    owner_id INTEGER NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    change_type varchar(32) NOT NULL DEFAULT 'STANDARD',
+    status varchar(24) NOT NULL DEFAULT 'PLANNED',
+    planned_at TEXT NULL,
+    implemented_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_changes_change_tenant
+    ON changes_change(tenant_id, status, planned_at);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_risk (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    system_id INTEGER NOT NULL,
+    risk_id INTEGER NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, risk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_risk_tenant
+    ON ai_governance_system_risk(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_roadmap_task (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    system_id INTEGER NOT NULL,
+    roadmap_task_id INTEGER NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, roadmap_task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_roadmap_task_tenant
+    ON ai_governance_system_roadmap_task(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_incident (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    system_id INTEGER NOT NULL,
+    incident_id INTEGER NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, incident_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_incident_tenant
+    ON ai_governance_system_incident(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_change (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    system_id INTEGER NOT NULL,
+    change_id INTEGER NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, change_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_change_tenant
+    ON ai_governance_system_change(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_link_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    system_id INTEGER NOT NULL,
+    entity_type varchar(32) NOT NULL,
+    entity_id INTEGER NOT NULL,
+    action varchar(24) NOT NULL,
+    actor_id INTEGER NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_link_audit_tenant
+    ON ai_governance_link_audit(tenant_id, system_id, created_at);
+
+"#;
+
+const POSTGRES_AI_GOVERNANCE_LINK_SCHEMA: &str = r#"
+ALTER TABLE roadmap_roadmaptask
+    ADD COLUMN IF NOT EXISTS origin_key varchar(255) NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_roadmap_task_origin_unique
+    ON roadmap_roadmaptask(origin_key)
+    WHERE origin_key <> '';
+
+CREATE TABLE IF NOT EXISTS changes_change (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    owner_id BIGINT NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    change_type varchar(32) NOT NULL DEFAULT 'STANDARD',
+    status varchar(24) NOT NULL DEFAULT 'PLANNED',
+    planned_at TEXT NULL,
+    implemented_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_changes_change_tenant
+    ON changes_change(tenant_id, status, planned_at);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_risk (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    risk_id BIGINT NOT NULL,
+    created_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, risk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_risk_tenant
+    ON ai_governance_system_risk(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_roadmap_task (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    roadmap_task_id BIGINT NOT NULL,
+    created_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, roadmap_task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_roadmap_task_tenant
+    ON ai_governance_system_roadmap_task(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_incident (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    incident_id BIGINT NOT NULL,
+    created_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, incident_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_incident_tenant
+    ON ai_governance_system_incident(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_system_change (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    change_id BIGINT NOT NULL,
+    created_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, system_id, change_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_system_change_tenant
+    ON ai_governance_system_change(tenant_id, system_id);
+
+CREATE TABLE IF NOT EXISTS ai_governance_link_audit (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    system_id BIGINT NOT NULL,
+    entity_type varchar(32) NOT NULL,
+    entity_id BIGINT NOT NULL,
+    action varchar(24) NOT NULL,
+    actor_id BIGINT NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_ai_governance_link_audit_tenant
+    ON ai_governance_link_audit(tenant_id, system_id, created_at);
+
+ALTER TABLE reports_managementreviewpackage
+    ADD COLUMN IF NOT EXISTS ai_governance_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 "#;
 
 const SQLITE_SECURITY_RUNTIME_STATE_SCHEMA: &str = r#"
@@ -2592,6 +2771,22 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'st
         if sqlite_migration_applied(pool, migration.version).await? {
             continue;
         }
+        if migration.version == "0027_rust_ai_governance_links" {
+            ensure_sqlite_column(
+                pool,
+                "roadmap_roadmaptask",
+                "origin_key",
+                "varchar(255) NOT NULL DEFAULT ''",
+            )
+            .await?;
+            ensure_sqlite_column(
+                pool,
+                "reports_managementreviewpackage",
+                "ai_governance_json",
+                "TEXT NOT NULL DEFAULT '{}'",
+            )
+            .await?;
+        }
         execute_sqlite_script(pool, migration.sqlite_sql)
             .await
             .with_context(|| format!("SQLite-Migration {} fehlgeschlagen", migration.version))?;
@@ -2676,6 +2871,30 @@ async fn sqlite_migration_applied(pool: &SqlitePool, version: &str) -> anyhow::R
             .await
             .context("SQLite-Migrationsstatus konnte nicht gelesen werden")?;
     Ok(count > 0)
+}
+
+async fn ensure_sqlite_column(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> anyhow::Result<()> {
+    let exists: i64 = sqlx::query_scalar(&format!(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?)"
+    ))
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("SQLite-Spalte {table}.{column} konnte nicht geprueft werden"))?;
+    if exists == 0 {
+        sqlx::query(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        ))
+        .execute(pool)
+        .await
+        .with_context(|| format!("SQLite-Spalte {table}.{column} konnte nicht angelegt werden"))?;
+    }
+    Ok(())
 }
 
 async fn postgres_migration_applied(pool: &PgPool, version: &str) -> anyhow::Result<bool> {
@@ -4829,6 +5048,11 @@ INSERT INTO reports_managementreviewpackage (
     '{"devices":0,"active_devices":0,"open_findings":0,"critical_findings":0}',
     '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'
 ) ON CONFLICT (id) DO NOTHING;
+SELECT setval(
+    pg_get_serial_sequence('reports_managementreviewpackage', 'id'),
+    COALESCE((SELECT MAX(id) FROM reports_managementreviewpackage), 1),
+    TRUE
+);
 INSERT INTO roadmap_roadmapplan (
     id, tenant_id, session_id, title, summary, overall_priority, planned_start, created_at, updated_at
 ) VALUES (
@@ -4981,7 +5205,9 @@ ON CONFLICT (id) DO NOTHING;
 
 #[cfg(test)]
 mod tests {
-    use super::split_sql_script;
+    use sqlx::{sqlite::SqlitePoolOptions, Row};
+
+    use super::{run_sqlite_migrations, split_sql_script};
 
     #[test]
     fn split_sql_script_keeps_semicolons_inside_strings() {
@@ -4999,5 +5225,54 @@ mod tests {
             statements[1],
             "INSERT INTO example (text) VALUES ('it''s ok')"
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_0027_is_restartable_with_existing_structures_and_data() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO roadmap_roadmaptask (id, phase_id, title, status, origin_key) VALUES (9901, 1, 'Existing task', 'OPEN', 'AI-GOV:99:1:risk_management')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO reports_managementreviewpackage (id, tenant_id, title, ai_governance_json) VALUES (9901, 99, 'Existing review', '{\"system_count\":1}')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0027_rust_ai_governance_links'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0027_rust_ai_governance_links"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let task = sqlx::query("SELECT title, origin_key FROM roadmap_roadmaptask WHERE id = 9901")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(task.get::<String, _>("title"), "Existing task");
+        assert_eq!(
+            task.get::<String, _>("origin_key"),
+            "AI-GOV:99:1:risk_management"
+        );
+        let snapshot: String = sqlx::query_scalar(
+            "SELECT ai_governance_json FROM reports_managementreviewpackage WHERE id = 9901",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(snapshot, "{\"system_count\":1}");
     }
 }

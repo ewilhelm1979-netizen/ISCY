@@ -36,7 +36,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Assets
 - Imports inklusive CSV/XLSX/XLSM-Preview
 - Processes
-- AI Governance inklusive AI-Systemregister, AI-Act-Klassifizierung, Human Oversight, Monitoringplan, Evidence-Key, Governance-Gap-Berechnung, Review-Faelligkeit und Rust-only-Betriebssignalen
+- AI Governance inklusive AI-Systemregister, AI-Act-Klassifizierung, Human Oversight, Monitoringplan, Evidence-Key, Governance-Gap-Berechnung, tenantgebundenen Risiko-/Roadmap-/Incident-/Change-Links, Management-Review-Snapshots und Rust-only-Betriebssignalen
 - Product Security inklusive CSAF-/CycloneDX-/SPDX-Importhistorie, Import-Detailseiten, VEX-Status je Schwachstelle, SBOM-Diff, CRA-Readiness, CVE-Asset-Korrelation, automatischer Risiko-/Roadmap-Ableitung, CVE-Risiko-Review-Queue, Review-Filtern, Bulk-Aktionen, Evidence-Lueckenmetriken, Trend-Dashboard, Prometheus-Trendmetriken und Grafana-Panels fuer Alert-Incidents mit konkretem Incident-Drilldown, Coverage, Review-Trend und Importvalidierung
 - Zero Trust inklusive read-only Rust-Agent, Enrollment/Secret-Rotation, Offline-Queue, Policy-Profilen, erwarteter Flottenabdeckung, sicheren Policy-Webhooks, Cooldown/Retry und Delivery-Audit
 - CVE Feed, CVE Assessments und NVD-Import
