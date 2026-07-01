@@ -197,6 +197,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AI_GOVERNANCE_LINK_SCHEMA,
         postgres_sql: POSTGRES_AI_GOVERNANCE_LINK_SCHEMA,
     },
+    Migration {
+        version: "0028_rust_guided_agent_onboarding",
+        sqlite_sql: SQLITE_GUIDED_AGENT_ONBOARDING_SCHEMA,
+        postgres_sql: POSTGRES_GUIDED_AGENT_ONBOARDING_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1355,6 +1360,93 @@ CREATE INDEX IF NOT EXISTS idx_ai_governance_link_audit_tenant
 
 ALTER TABLE reports_managementreviewpackage
     ADD COLUMN IF NOT EXISTS ai_governance_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+"#;
+
+const SQLITE_GUIDED_AGENT_ONBOARDING_SCHEMA: &str = r#"
+UPDATE zero_trust_agent_enrollment_token
+SET uses_remaining = COALESCE(uses_remaining, 1),
+    max_uses = CASE
+        WHEN uses_remaining IS NULL OR uses_remaining < 1 THEN 1
+        ELSE uses_remaining
+    END,
+    status = CASE
+        WHEN LOWER(status) IN ('revoked', 'expired', 'consumed') THEN LOWER(status)
+        WHEN COALESCE(uses_remaining, 1) <= 0 THEN 'consumed'
+        WHEN last_used_at IS NOT NULL THEN 'partially_used'
+        ELSE 'pending'
+    END;
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_enrollment_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    token_id INTEGER NULL,
+    device_id INTEGER NULL,
+    event_type varchar(48) NOT NULL,
+    actor_id INTEGER NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_enrollment_audit_tenant
+    ON zero_trust_agent_enrollment_audit(tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_enrollment_audit_token
+    ON zero_trust_agent_enrollment_audit(tenant_id, token_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_token_lifecycle
+    ON zero_trust_agent_enrollment_token(tenant_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_device_policy
+    ON zero_trust_agent_device(tenant_id, policy_profile_id);
+"#;
+
+const POSTGRES_GUIDED_AGENT_ONBOARDING_SCHEMA: &str = r#"
+ALTER TABLE zero_trust_agent_enrollment_token
+    ADD COLUMN IF NOT EXISTS rollout_os_family varchar(32) NOT NULL DEFAULT '';
+ALTER TABLE zero_trust_agent_enrollment_token
+    ADD COLUMN IF NOT EXISTS allowed_deployment_channel varchar(32) NOT NULL DEFAULT '';
+ALTER TABLE zero_trust_agent_enrollment_token
+    ADD COLUMN IF NOT EXISTS policy_profile_id BIGINT NULL;
+ALTER TABLE zero_trust_agent_enrollment_token
+    ADD COLUMN IF NOT EXISTS max_uses BIGINT NOT NULL DEFAULT 1;
+ALTER TABLE zero_trust_agent_enrollment_token
+    ADD COLUMN IF NOT EXISTS uses_count BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE zero_trust_agent_enrollment_token
+    ADD COLUMN IF NOT EXISTS last_attempt_at TEXT NULL;
+ALTER TABLE zero_trust_agent_device
+    ADD COLUMN IF NOT EXISTS policy_profile_id BIGINT NULL;
+ALTER TABLE zero_trust_agent_device
+    ADD COLUMN IF NOT EXISTS enrollment_token_id BIGINT NULL;
+ALTER TABLE zero_trust_agent_device
+    ADD COLUMN IF NOT EXISTS last_enrolled_at TEXT NULL;
+
+UPDATE zero_trust_agent_enrollment_token
+SET uses_remaining = COALESCE(uses_remaining, 1),
+    max_uses = CASE
+        WHEN uses_remaining IS NULL OR uses_remaining < 1 THEN 1
+        ELSE uses_remaining
+    END,
+    status = CASE
+        WHEN LOWER(status) IN ('revoked', 'expired', 'consumed') THEN LOWER(status)
+        WHEN COALESCE(uses_remaining, 1) <= 0 THEN 'consumed'
+        WHEN last_used_at IS NOT NULL THEN 'partially_used'
+        ELSE 'pending'
+    END;
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_enrollment_audit (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    token_id BIGINT NULL,
+    device_id BIGINT NULL,
+    event_type varchar(48) NOT NULL,
+    actor_id BIGINT NULL,
+    detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_enrollment_audit_tenant
+    ON zero_trust_agent_enrollment_audit(tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_enrollment_audit_token
+    ON zero_trust_agent_enrollment_audit(tenant_id, token_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_token_lifecycle
+    ON zero_trust_agent_enrollment_token(tenant_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_device_policy
+    ON zero_trust_agent_device(tenant_id, policy_profile_id);
 "#;
 
 const SQLITE_SECURITY_RUNTIME_STATE_SCHEMA: &str = r#"
@@ -2786,6 +2878,53 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'st
                 "TEXT NOT NULL DEFAULT '{}'",
             )
             .await?;
+        }
+        if migration.version == "0028_rust_guided_agent_onboarding" {
+            for (table, column, definition) in [
+                (
+                    "zero_trust_agent_enrollment_token",
+                    "rollout_os_family",
+                    "varchar(32) NOT NULL DEFAULT ''",
+                ),
+                (
+                    "zero_trust_agent_enrollment_token",
+                    "allowed_deployment_channel",
+                    "varchar(32) NOT NULL DEFAULT ''",
+                ),
+                (
+                    "zero_trust_agent_enrollment_token",
+                    "policy_profile_id",
+                    "INTEGER NULL",
+                ),
+                (
+                    "zero_trust_agent_enrollment_token",
+                    "max_uses",
+                    "INTEGER NOT NULL DEFAULT 1",
+                ),
+                (
+                    "zero_trust_agent_enrollment_token",
+                    "uses_count",
+                    "INTEGER NOT NULL DEFAULT 0",
+                ),
+                (
+                    "zero_trust_agent_enrollment_token",
+                    "last_attempt_at",
+                    "TEXT NULL",
+                ),
+                (
+                    "zero_trust_agent_device",
+                    "policy_profile_id",
+                    "INTEGER NULL",
+                ),
+                (
+                    "zero_trust_agent_device",
+                    "enrollment_token_id",
+                    "INTEGER NULL",
+                ),
+                ("zero_trust_agent_device", "last_enrolled_at", "TEXT NULL"),
+            ] {
+                ensure_sqlite_column(pool, table, column, definition).await?;
+            }
         }
         execute_sqlite_script(pool, migration.sqlite_sql)
             .await
@@ -5274,5 +5413,92 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(snapshot, "{\"system_count\":1}");
+    }
+
+    #[tokio::test]
+    async fn sqlite_0028_is_restartable_and_preserves_existing_agent_data() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO zero_trust_agent_enrollment_token (
+                id, tenant_id, label, token_hash, token_hint, status,
+                allowed_os_families, expires_at, uses_remaining,
+                rollout_os_family, allowed_deployment_channel,
+                max_uses, uses_count, created_at, updated_at
+            ) VALUES (
+                9901, 99, 'Existing rollout', 'existing-token-hash', 'existing...', 'ACTIVE',
+                '["LINUX"]', '2099-01-01T00:00:00Z', 3,
+                'LINUX', 'systemd', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO zero_trust_agent_device (
+                id, tenant_id, stable_device_id, hostname, os_family,
+                deployment_channel, enrollment_status, policy_profile_id,
+                enrollment_token_id, created_at, updated_at
+            ) VALUES (
+                9901, 99, 'existing-device', 'existing-device', 'LINUX',
+                'systemd', 'ACTIVE', NULL, 9901, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0028_rust_guided_agent_onboarding'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DROP TABLE zero_trust_agent_enrollment_audit")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0028_rust_guided_agent_onboarding"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let token = sqlx::query(
+            "SELECT label, token_hash, status, max_uses, uses_count, uses_remaining FROM zero_trust_agent_enrollment_token WHERE id = 9901",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(token.get::<String, _>("label"), "Existing rollout");
+        assert_eq!(token.get::<String, _>("token_hash"), "existing-token-hash");
+        assert_eq!(token.get::<String, _>("status"), "pending");
+        assert_eq!(token.get::<i64, _>("max_uses"), 3);
+        assert_eq!(token.get::<i64, _>("uses_count"), 0);
+        assert_eq!(token.get::<i64, _>("uses_remaining"), 3);
+        let device = sqlx::query(
+            "SELECT stable_device_id, enrollment_token_id FROM zero_trust_agent_device WHERE id = 9901",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            device.get::<String, _>("stable_device_id"),
+            "existing-device"
+        );
+        assert_eq!(device.get::<i64, _>("enrollment_token_id"), 9901);
+        let audit_exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'zero_trust_agent_enrollment_audit'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(audit_exists, 1);
     }
 }

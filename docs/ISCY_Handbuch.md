@@ -298,6 +298,8 @@ Typische Inhalte:
 - letzter Heartbeat
 - Zero-Trust-Score
 - Policy-Profile mit Sollbestand nach Tenant, OS, Asset-Typ, Business Unit oder Deployment-Channel
+- gefuehrtes Agent-Onboarding fuer Windows, Linux, macOS und NixOS
+- Enrollment-Token mit Ablauf, begrenzter Verwendung, Widerruf und Auditspur
 - Soll-/Ist-Coverage, Heartbeat-Freshness und Finding-Grenzwerte je Policy
 - naechster fachlicher Fokus aus Score, Severity und Agent-Freshness
 - offene Findings nach Pillar und Severity
@@ -337,6 +339,22 @@ uebertragen. Admins koennen das Secret ueber
 `POST /api/v1/agents/devices/{device_id}/rotate-secret` rotieren; das neue Secret
 wird nur einmal ausgegeben und muss ueber den sicheren Deployment-Kanal zum
 Endpoint gelangen.
+
+Administratoren koennen in `/zero-trust/` ueber `Agent hinzufuegen` einen
+dreistufigen Assistenten starten. Zuerst werden Betriebssystem, Deployment-Kanal,
+optionale Rollout-Bezeichnung, Policy-Profil, Nutzungsgrenze, Ablaufzeit und
+optionale mTLS-Bindung ausgewaehlt. Danach zeigt ISCY eine Zusammenfassung. Erst
+nach der Bestaetigung wird das Token erzeugt und genau einmal zusammen mit einer
+Anweisung fuer die vorhandenen Windows-, systemd-, macOS- oder NixOS-Artefakte
+angezeigt.
+
+Token-Klartexte werden nicht gespeichert. Die Metadatenansicht zeigt nur Hint,
+Status, Grenzen, Policy, Zaehler und Zeitpunkte. Die Zustaende sind `pending`,
+`partially_used`, `consumed`, `expired` und `revoked`. Token-Verbrauch,
+Device-Aufnahme, Policy-Zuordnung, Secret-Hash und Auditereignis werden gemeinsam
+in einer Transaktion gespeichert. Read-only-Rollen duerfen sichere Metadaten
+sehen; Erstellen, Widerrufen und die einmalige Installationsansicht bleiben
+Administratoren vorbehalten.
 
 Policy-Profile legen den erwarteten Device-Bestand, das maximale Heartbeat-Alter,
 den Mindestscore und tolerierte High-/Critical-Findings fest. Administratoren
@@ -908,6 +926,12 @@ Agent-Payload lokal testen:
 nix run .#iscy-agent -- --self-test
 ```
 
+Im Browser kann ein Administrator danach `/zero-trust/` oeffnen und
+`Agent hinzufuegen` waehlen. Der Assistent erzeugt das Token erst nach der
+Zusammenfassung und zeigt es genau einmal in einer nicht cachebaren
+Installationsansicht. Unter `/zero-trust/` bleiben anschliessend nur sichere
+Metadaten, Lifecycle, Policy-Zuordnung, letzter Versuch und Flottenstatus sichtbar.
+
 Agent an eine lokale ISCY-Instanz melden lassen:
 
 ```bash
@@ -1022,6 +1046,8 @@ Was aktuell belastbar vorhanden ist:
 - Rust-only Backend mit Zero-Trust-Webansicht unter `/zero-trust/`
 - read-only Agent fuer Windows, macOS und Linux
 - Enrollment-Token, Agent-Secret und optionale mTLS-Fingerprint-Bindung
+- gefuehrter Admin-Assistent mit einmaliger, nicht cachebarer Installationsansicht
+- auditierbarer Token-Lifecycle mit begrenzter Parallelverwendung und Widerruf
 - persistenter Agent-State und begrenzte Offline-Queue
 - administrative Agent-Secret-Rotation
 - systemd-, NixOS-, Windows- und macOS-Betriebsbeispiele
@@ -1043,15 +1069,15 @@ Was als naechstes fachlich am meisten bringt:
    Agent- oder MDM-Inventar sollte mit dem CVE-Bereich verbunden werden, damit betroffene Systeme schneller sichtbar sind.
 4. Ausnahme- und Ablaufdatum erzwingen
    Akzeptierte Abweichungen sollten Owner, Begruendung, Laufzeit und Wiedervorlage haben.
-5. Enrollment-Token-Lifecycle vervollstaendigen
-   Token sollten im Web aufgelistet, widerrufen und mit Ablauf-/Nutzungsstatus auditierbar verwaltet werden.
-6. Signierte Agent-Pakete bauen  
+5. Signierte Agent-Pakete bauen
    Die Service-Beispiele sind vorhanden; als naechster Schritt folgen Windows MSI/Intune-Paket, macOS PKG/Jamf-Profil und signierte Linux-Pakete.
+6. CA-/PKI-Anbindung separat planen
+   Private Schluessel und CSR sollen lokal auf dem Agent entstehen; Ausstellung, Rotation und Widerruf gehoeren in einen eigenen, providerunabhaengigen Meilenstein.
 7. Remediation getrennt halten  
    Automatische Aenderungen am Endgeraet sollten erst spaeter als signierter, auditierbarer Policy-Schritt kommen.
 
 Fachliches Kurzurteil:
-ISCY ist fuer Zero Trust jetzt gut positioniert. Sollabdeckung und aktive Policy-Benachrichtigungen sind vorhanden; die naechste Reife entsteht durch Nachweisverknuepfung, Connectoren, Token-Lifecycle und saubere Deployment-Pakete.
+ISCY ist fuer Zero Trust jetzt gut positioniert. Sollabdeckung, aktive Policy-Benachrichtigungen und gefuehrtes Onboarding sind vorhanden; die naechste Reife entsteht durch Nachweisverknuepfung, Connectoren und sauber signierte Deployment-Pakete.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
@@ -1093,14 +1119,14 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes und erweitert Management-Review-Snapshots. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Zero-Trust-Agent-Onboarding fuer Administratoren als gefuehrten, sicheren Workflow vereinfachen
-2. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
-3. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
-4. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
+1. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
+2. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
+3. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
+4. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe
 5. Performance-, HA- und visuelle Regressionstests
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
