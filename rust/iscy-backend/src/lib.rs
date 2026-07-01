@@ -5,7 +5,7 @@ use axum::{
     http::{
         header::{
             AUTHORIZATION, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_TYPE, COOKIE, LOCATION,
-            SET_COOKIE,
+            REFERRER_POLICY, SET_COOKIE,
         },
         HeaderMap, HeaderValue, StatusCode,
     },
@@ -15,7 +15,7 @@ use axum::{
     Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use chrono::{Datelike, Utc};
+use chrono::{Datelike, Duration as ChronoDuration, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -479,6 +479,21 @@ pub struct AgentEnrollmentTokenCreateResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct AgentEnrollmentTokensResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub tokens: Vec<agent_store::AgentEnrollmentTokenSummary>,
+    pub audit: Vec<agent_store::AgentEnrollmentAuditEvent>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentEnrollmentTokenUpdateResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub enrollment: agent_store::AgentEnrollmentTokenSummary,
+}
+
+#[derive(Debug, Serialize)]
 pub struct AgentSecretRotationResponse {
     pub accepted: bool,
     pub api_version: &'static str,
@@ -597,6 +612,19 @@ struct WebAgentNotificationChannelForm {
     secret_env_name: String,
     cooldown_minutes: i64,
     enabled: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WebAgentOnboardingForm {
+    os_family: String,
+    deployment_channel: String,
+    label: Option<String>,
+    policy_profile_id: Option<i64>,
+    max_uses: i64,
+    expires_in_hours: i64,
+    restrict_os_family: Option<String>,
+    restrict_deployment_channel: Option<String>,
+    mtls_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3046,7 +3074,7 @@ fn agent_store_error_response(err: anyhow::Error, action: &'static str) -> Respo
         .map(|cause| cause.to_string())
         .collect::<Vec<_>>()
         .join(": ");
-    let payload_error = details.contains("Agent-");
+    let payload_error = is_agent_payload_error(&details);
     (
         if payload_error {
             StatusCode::BAD_REQUEST
@@ -3061,10 +3089,32 @@ fn agent_store_error_response(err: anyhow::Error, action: &'static str) -> Respo
             } else {
                 "database_error"
             },
-            message: format!("{action}: {details}"),
+            message: if payload_error {
+                format!("{action}: {details}")
+            } else {
+                format!("{action}.")
+            },
         }),
     )
         .into_response()
+}
+
+fn is_agent_payload_error(details: &str) -> bool {
+    [
+        "Agent-Finding-Payload darf",
+        "Agent-Finding-Feld '",
+        "Agent-Enrollment-Feld '",
+        "Agent-Enrollment-Token uses_remaining",
+        "Agent-Enrollment-Token expires_at",
+        "Agent-Enrollment-Token darf maximal",
+        "Agent-Enrollment-Token enthaelt",
+        "Agent-Policy-Profil wurde im aktiven Tenant nicht gefunden",
+        "Agent-Policy-Profil-ID muss positiv sein",
+        "Agent-Onboarding OS-Familie ist nicht unterstuetzt",
+        "Agent-Deployment-Kanal ist nicht unterstuetzt",
+    ]
+    .iter()
+    .any(|message| details.contains(message))
 }
 
 fn agent_governance_store_missing_response() -> Response {
@@ -3142,10 +3192,21 @@ fn agent_secret_from_headers(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "x-iscy-agent-secret")
 }
 
-fn agent_mtls_fingerprint_from_headers(headers: &HeaderMap) -> Option<String> {
-    header_string(headers, "x-iscy-agent-mtls-fingerprint")
+fn agent_mtls_fingerprint_from_headers(
+    security_config: &CommunitySecurityConfig,
+    headers: &HeaderMap,
+) -> Result<Option<String>, Response> {
+    let fingerprint = header_string(headers, "x-iscy-agent-mtls-fingerprint")
         .or_else(|| header_string(headers, "x-ssl-client-fingerprint"))
-        .or_else(|| header_string(headers, "ssl-client-fingerprint"))
+        .or_else(|| header_string(headers, "ssl-client-fingerprint"));
+    if fingerprint.is_some() && !security_config.trusted_proxy_configured {
+        return Err(agent_auth_error_response(
+            StatusCode::UNAUTHORIZED,
+            "untrusted_agent_mtls_header",
+            "Agent-mTLS-Fingerprint wird nur an einer explizit konfigurierten Proxy-Vertrauensgrenze akzeptiert.",
+        ));
+    }
+    Ok(fingerprint)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -4427,6 +4488,45 @@ async fn agent_device_findings(
     }
 }
 
+async fn agent_enrollment_tokens(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_store else {
+        return api_database_not_configured("Rust-Agent-Store ist nicht konfiguriert.");
+    };
+    let tokens = match store.list_enrollment_tokens(context.tenant_id, 200).await {
+        Ok(tokens) => tokens,
+        Err(err) => {
+            return agent_store_error_response(
+                err,
+                "Agent-Enrollment-Tokens konnten nicht gelesen werden",
+            );
+        }
+    };
+    let audit = match store.list_enrollment_audit(context.tenant_id, 200).await {
+        Ok(audit) => audit,
+        Err(err) => {
+            return agent_store_error_response(
+                err,
+                "Agent-Enrollment-Audit konnte nicht gelesen werden",
+            );
+        }
+    };
+    (
+        StatusCode::OK,
+        [(CACHE_CONTROL, HeaderValue::from_static("private, no-store"))],
+        Json(AgentEnrollmentTokensResponse {
+            api_version: "v1",
+            tenant_id: context.tenant_id,
+            tokens,
+            audit,
+        }),
+    )
+        .into_response()
+}
+
 async fn agent_enrollment_token_create(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4469,6 +4569,7 @@ async fn agent_enrollment_token_create(
     {
         Ok(result) => (
             StatusCode::CREATED,
+            [(CACHE_CONTROL, HeaderValue::from_static("private, no-store"))],
             Json(AgentEnrollmentTokenCreateResponse {
                 accepted: true,
                 api_version: "v1",
@@ -4479,6 +4580,42 @@ async fn agent_enrollment_token_create(
             .into_response(),
         Err(err) => {
             agent_store_error_response(err, "Agent-Enrollment-Token konnte nicht erstellt werden")
+        }
+    }
+}
+
+async fn agent_enrollment_token_revoke(
+    Path(token_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = admin_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_store else {
+        return api_database_not_configured("Rust-Agent-Store ist nicht konfiguriert.");
+    };
+    match store
+        .revoke_enrollment_token(context.tenant_id, token_id, context.user_id)
+        .await
+    {
+        Ok(Some(enrollment)) => (
+            StatusCode::OK,
+            [(CACHE_CONTROL, HeaderValue::from_static("private, no-store"))],
+            Json(AgentEnrollmentTokenUpdateResponse {
+                accepted: true,
+                api_version: "v1",
+                enrollment,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("Agent-Enrollment-Token wurde nicht gefunden."),
+        Err(err) => {
+            agent_store_error_response(err, "Agent-Enrollment-Token konnte nicht widerrufen werden")
         }
     }
 }
@@ -4506,7 +4643,11 @@ async fn agent_enroll(
             Ok(tenant_id) => tenant_id,
             Err(err) => return err.into_response(),
         };
-        let mtls_fingerprint = agent_mtls_fingerprint_from_headers(&headers);
+        let mtls_fingerprint =
+            match agent_mtls_fingerprint_from_headers(&state.security_config, &headers) {
+                Ok(fingerprint) => fingerprint,
+                Err(response) => return response,
+            };
         return match store
             .enroll_device_with_token(
                 tenant_id,
@@ -4518,6 +4659,7 @@ async fn agent_enroll(
         {
             Ok(Some(result)) => (
                 StatusCode::CREATED,
+                [(CACHE_CONTROL, HeaderValue::from_static("private, no-store"))],
                 Json(AgentEnrollResponse {
                     accepted: true,
                     api_version: "v1",
@@ -4661,7 +4803,11 @@ async fn agent_heartbeat(
             Ok(tenant_id) => tenant_id,
             Err(err) => return err.into_response(),
         };
-        let mtls_fingerprint = agent_mtls_fingerprint_from_headers(&headers);
+        let mtls_fingerprint =
+            match agent_mtls_fingerprint_from_headers(&state.security_config, &headers) {
+                Ok(fingerprint) => fingerprint,
+                Err(response) => return response,
+            };
         match store
             .verify_agent_secret(
                 tenant_id,
@@ -4756,7 +4902,11 @@ async fn agent_findings(
             Ok(tenant_id) => tenant_id,
             Err(err) => return err.into_response(),
         };
-        let mtls_fingerprint = agent_mtls_fingerprint_from_headers(&headers);
+        let mtls_fingerprint =
+            match agent_mtls_fingerprint_from_headers(&state.security_config, &headers) {
+                Ok(fingerprint) => fingerprint,
+                Err(response) => return response,
+            };
         match store
             .verify_agent_secret(
                 tenant_id,
@@ -10249,6 +10399,15 @@ async fn web_zero_trust(
     let Some(store) = state.agent_store.clone() else {
         return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent");
     };
+    let onboarding_section = match (
+        store.list_enrollment_tokens(context.tenant_id, 100).await,
+        store.list_enrollment_audit(context.tenant_id, 20).await,
+    ) {
+        (Ok(tokens), Ok(audit)) => {
+            agent_onboarding_status_section(&context, &tokens, &audit, can_admin)
+        }
+        _ => r#"<section class="panel wide"><h2>Agent-Onboarding</h2><p>Onboarding-Status ist derzeit nicht verfuegbar.</p></section>"#.to_string(),
+    };
     let governance_section = match state.agent_governance_store.as_ref() {
         Some(governance_store) => match governance_store
             .fleet_governance_overview(context.tenant_id, can_admin)
@@ -10291,10 +10450,13 @@ async fn web_zero_trust(
                 .iter()
                 .map(|device| {
                     format!(
-                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                         html_escape(&device.hostname),
                         html_escape(&device.os_family),
                         html_escape(&device.agent_version),
+                        html_escape(&device.deployment_channel),
+                        html_escape(device.policy_name.as_deref().unwrap_or("-")),
+                        yes_no_badge(device.mtls_bound),
                         score_badge(device.zero_trust_score),
                         device.open_finding_count,
                         html_escape(device.last_seen_at.as_deref().unwrap_or("-")),
@@ -10334,9 +10496,10 @@ async fn web_zero_trust(
                 .join("");
             let priority_title = zero_trust_priority_title(&posture);
             let priority_detail = zero_trust_priority_detail(&posture);
+            let onboarding_href = web_path_with_context("/zero-trust/onboarding/", Some(&context));
             let body = format!(
                 r#"
-                <section class="hero compact"><h1>Zero Trust</h1><p>Tenant {}</p></section>
+                <section class="hero compact"><h1>Zero Trust</h1><p>Tenant {}</p><a class="button" href="{}">Agent hinzufuegen</a></section>
                 <section class="zt-focus">
                   <article class="panel zt-score">
                     <span class="eyebrow">Zero-Trust-Reife</span>
@@ -10349,6 +10512,7 @@ async fn web_zero_trust(
                     <p>{}</p>
                   </article>
                 </section>
+                {}
                 {}
                 <section class="metrics">
                   {}
@@ -10368,7 +10532,7 @@ async fn web_zero_trust(
                   <article class="panel wide">
                     <h2>Devices</h2>
                     <table>
-                      <thead><tr><th>Hostname</th><th>OS</th><th>Agent</th><th>Score</th><th>Offen</th><th>Last seen</th></tr></thead>
+                      <thead><tr><th>Hostname</th><th>OS</th><th>Agent</th><th>Kanal</th><th>Policy</th><th>mTLS</th><th>Score</th><th>Offen</th><th>Last seen</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                   </article>
@@ -10389,12 +10553,14 @@ async fn web_zero_trust(
                 </section>
                 "#,
                 context.tenant_id,
+                html_escape(&onboarding_href),
                 score_text_class(posture.average_zero_trust_score),
                 posture.average_zero_trust_score,
                 score_band_badge(posture.average_zero_trust_score),
                 html_escape(&priority_title),
                 html_escape(&priority_detail),
                 governance_section,
+                onboarding_section,
                 metric_card("ZT Score", posture.average_zero_trust_score),
                 metric_card("Devices", posture.device_count),
                 metric_card("Aktiv", posture.active_device_count),
@@ -10409,7 +10575,7 @@ async fn web_zero_trust(
                     pillar_rows
                 },
                 if device_rows.is_empty() {
-                    web_empty_row(6, "Keine Agent-Devices vorhanden.")
+                    web_empty_row(9, "Keine Agent-Devices vorhanden.")
                 } else {
                     device_rows
                 },
@@ -10428,6 +10594,640 @@ async fn web_zero_trust(
         }
         Err(err) => web_error_page("Zero Trust", "/zero-trust/", &context, &err.to_string()),
     }
+}
+
+fn agent_onboarding_status_section(
+    context: &WebContext,
+    tokens: &[agent_store::AgentEnrollmentTokenSummary],
+    audit: &[agent_store::AgentEnrollmentAuditEvent],
+    can_admin: bool,
+) -> String {
+    let token_rows = tokens
+        .iter()
+        .map(|token| {
+            let restrictions = if token.allowed_os_families.is_empty() {
+                "Alle unterstuetzten OS".to_string()
+            } else {
+                token.allowed_os_families.join(", ")
+            };
+            let revoke_action = web_path_with_context(
+                &format!(
+                    "/zero-trust/enrollment-tokens/{}/revoke",
+                    token.id
+                ),
+                Some(context),
+            );
+            let revoke = if can_admin
+                && matches!(token.status.as_str(), "pending" | "partially_used" | "ACTIVE")
+            {
+                format!(
+                    r#"<details><summary>Widerrufen</summary><form method="post" action="{}"><button type="submit" class="danger">Widerruf bestaetigen</button></form></details>"#,
+                    html_escape(&revoke_action)
+                )
+            } else {
+                "-".to_string()
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}/{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&token.label),
+                html_escape(&token.token_hint),
+                web_badge(&token.status, "muted-badge"),
+                html_escape(&format!(
+                    "{} · {}",
+                    restrictions,
+                    if token.allowed_deployment_channel.is_empty() {
+                        "alle Kanaele"
+                    } else {
+                        token.allowed_deployment_channel.as_str()
+                    }
+                )),
+                token.uses_count,
+                token.max_uses,
+                html_escape(token.policy_name.as_deref().unwrap_or("-")),
+                yes_no_badge(!token.mtls_fingerprint.is_empty()),
+                html_escape(token.expires_at.as_deref().unwrap_or("-")),
+                revoke,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let audit_rows = audit
+        .iter()
+        .map(|event| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&event.event_type),
+                html_escape(&event.created_at),
+                event.device_id.map(|_| "Device zugeordnet").unwrap_or("-")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        r#"
+        <section class="panel wide">
+          <div class="section-heading"><h2>Agent-Onboarding</h2><span class="muted">Token-Klartexte werden nicht gespeichert.</span></div>
+          <table>
+            <thead><tr><th>Rollout</th><th>Hinweis</th><th>Status</th><th>Grenzen</th><th>Verwendet</th><th>Policy</th><th>mTLS</th><th>Ablauf</th><th>Aktion</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </section>
+        <section class="panel wide">
+          <h2>Letzte Enrollment-Ereignisse</h2>
+          <table><thead><tr><th>Ereignis</th><th>Zeitpunkt</th><th>Ergebnis</th></tr></thead><tbody>{}</tbody></table>
+        </section>
+        "#,
+        if token_rows.is_empty() {
+            web_empty_row(9, "Keine Enrollment-Tokens vorhanden.")
+        } else {
+            token_rows
+        },
+        if audit_rows.is_empty() {
+            web_empty_row(3, "Keine Enrollment-Ereignisse vorhanden.")
+        } else {
+            audit_rows
+        },
+    )
+}
+
+async fn web_agent_onboarding(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent hinzufuegen", "/zero-trust/onboarding/");
+    };
+    let Ok(auth_context) = authenticated_tenant_context(&state, &headers).await else {
+        return web_error_page(
+            "Agent hinzufuegen",
+            "/zero-trust/onboarding/",
+            &context,
+            "Anmeldung erforderlich.",
+        );
+    };
+    if !context_is_admin(&auth_context) {
+        return web_error_page(
+            "Agent hinzufuegen",
+            "/zero-trust/onboarding/",
+            &context,
+            "Diese Aktion benoetigt eine Admin-Rolle.",
+        );
+    }
+    let policies = match state.agent_governance_store.as_ref() {
+        Some(store) => store
+            .list_policies(context.tenant_id)
+            .await
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let policy_options = policies
+        .iter()
+        .filter(|policy| policy.enabled)
+        .map(|policy| {
+            format!(
+                r#"<option value="{}">{}</option>"#,
+                policy.id,
+                html_escape(&policy.name)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let action = web_path_with_context("/zero-trust/onboarding/preview", Some(&context));
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>Agent hinzufuegen</h1><p>Schritt 1 von 3 · Rollout vorbereiten</p></section>
+        <section class="panel wide">
+          <form method="post" action="{}" class="form-grid">
+            <label>Betriebssystem
+              <select name="os_family" required>
+                <option value="WINDOWS">Windows</option>
+                <option value="LINUX">Linux</option>
+                <option value="MACOS">macOS</option>
+                <option value="NIXOS">NixOS</option>
+              </select>
+            </label>
+            <label>Deployment-Kanal
+              <select name="deployment_channel" required>
+                <option value="manual">Manual</option>
+                <option value="systemd">systemd</option>
+                <option value="nixos">NixOS</option>
+                <option value="intune">Intune</option>
+                <option value="jamf">Jamf</option>
+                <option value="other">Other</option>
+              </select>
+            </label>
+            <label>Rollout-Bezeichnung<input name="label" maxlength="128" placeholder="Endpoint rollout"></label>
+            <label>Policy-Profil<select name="policy_profile_id"><option value="">Keine feste Zuordnung</option>{}</select></label>
+            <label>Erlaubte Enrollments<input type="number" name="max_uses" min="1" max="10000" value="1" required></label>
+            <label>Gueltigkeit in Stunden<input type="number" name="expires_in_hours" min="1" max="8760" value="24" required></label>
+            <label><input type="checkbox" name="restrict_os_family" value="on" checked> Token auf ausgewaehltes OS begrenzen</label>
+            <label><input type="checkbox" name="restrict_deployment_channel" value="on" checked> Token auf Deployment-Kanal begrenzen</label>
+            <label>mTLS-Fingerprint<input name="mtls_fingerprint" maxlength="255" placeholder="sha256:..."></label>
+            <button type="submit">Zusammenfassung pruefen</button>
+          </form>
+        </section>
+        "#,
+        html_escape(&action),
+        policy_options,
+    );
+    web_page(
+        "Agent hinzufuegen",
+        "/zero-trust/onboarding/",
+        Some(&context),
+        &body,
+    )
+}
+
+async fn web_agent_onboarding_preview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebAgentOnboardingForm>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent hinzufuegen", "/zero-trust/onboarding/").into_response();
+    };
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_error_page(
+                "Agent hinzufuegen",
+                "/zero-trust/onboarding/",
+                &context,
+                "Anmeldung erforderlich.",
+            )
+            .into_response();
+        }
+    };
+    if !context_is_admin(&auth_context) {
+        return web_error_page(
+            "Agent hinzufuegen",
+            "/zero-trust/onboarding/",
+            &context,
+            "Diese Aktion benoetigt eine Admin-Rolle.",
+        )
+        .into_response();
+    }
+    if let Err(message) = validate_agent_onboarding_form(&form) {
+        return web_error_page(
+            "Agent hinzufuegen",
+            "/zero-trust/onboarding/",
+            &context,
+            message,
+        )
+        .into_response();
+    }
+    let policy_name =
+        onboarding_policy_name(&state, context.tenant_id, form.policy_profile_id).await;
+    if form.policy_profile_id.is_some() && policy_name.is_none() {
+        return web_error_page(
+            "Agent hinzufuegen",
+            "/zero-trust/onboarding/",
+            &context,
+            "Das ausgewaehlte Policy-Profil ist im aktiven Tenant nicht verfuegbar.",
+        )
+        .into_response();
+    }
+    let create_action = web_path_with_context("/zero-trust/onboarding/create", Some(&context));
+    let cancel_href = web_path_with_context("/zero-trust/onboarding/", Some(&context));
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>Agent hinzufuegen</h1><p>Schritt 2 von 3 · Zusammenfassung</p></section>
+        <section class="panel wide">
+          <dl class="detail-list">
+            <dt>Betriebssystem</dt><dd>{}</dd>
+            <dt>Deployment-Kanal</dt><dd>{}</dd>
+            <dt>Rollout</dt><dd>{}</dd>
+            <dt>Policy</dt><dd>{}</dd>
+            <dt>Enrollments</dt><dd>{}</dd>
+            <dt>Gueltigkeit</dt><dd>{} Stunden</dd>
+            <dt>OS-Begrenzung</dt><dd>{}</dd>
+            <dt>Kanal-Begrenzung</dt><dd>{}</dd>
+            <dt>mTLS-Bindung</dt><dd>{}</dd>
+          </dl>
+          <form method="post" action="{}">
+            {}
+            <button type="submit">Token einmalig erzeugen</button>
+            <a class="button secondary" href="{}">Abbrechen</a>
+          </form>
+        </section>
+        "#,
+        html_escape(&form.os_family),
+        html_escape(&form.deployment_channel),
+        html_escape(form.label.as_deref().unwrap_or("Agent enrollment")),
+        html_escape(policy_name.as_deref().unwrap_or("Keine feste Zuordnung")),
+        form.max_uses,
+        form.expires_in_hours,
+        yes_no_badge(form.restrict_os_family.is_some()),
+        yes_no_badge(form.restrict_deployment_channel.is_some()),
+        yes_no_badge(
+            form.mtls_fingerprint
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        ),
+        html_escape(&create_action),
+        agent_onboarding_hidden_fields(&form),
+        html_escape(&cancel_href),
+    );
+    (
+        StatusCode::OK,
+        [
+            (CACHE_CONTROL, HeaderValue::from_static("private, no-store")),
+            (REFERRER_POLICY, HeaderValue::from_static("no-referrer")),
+        ],
+        web_page(
+            "Agent hinzufuegen",
+            "/zero-trust/onboarding/",
+            Some(&context),
+            &body,
+        ),
+    )
+        .into_response()
+}
+
+async fn web_agent_onboarding_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebAgentOnboardingForm>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent hinzufuegen", "/zero-trust/onboarding/").into_response();
+    };
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_error_page(
+                "Agent hinzufuegen",
+                "/zero-trust/onboarding/",
+                &context,
+                "Anmeldung erforderlich.",
+            )
+            .into_response();
+        }
+    };
+    if !context_is_admin(&auth_context) {
+        return web_error_page(
+            "Agent hinzufuegen",
+            "/zero-trust/onboarding/",
+            &context,
+            "Diese Aktion benoetigt eine Admin-Rolle.",
+        )
+        .into_response();
+    }
+    if let Err(message) = validate_agent_onboarding_form(&form) {
+        return web_error_page(
+            "Agent hinzufuegen",
+            "/zero-trust/onboarding/",
+            &context,
+            message,
+        )
+        .into_response();
+    }
+    let Some(store) = state.agent_store else {
+        return web_error_page(
+            "Agent hinzufuegen",
+            "/zero-trust/onboarding/",
+            &context,
+            "Agent-Store ist nicht verfuegbar.",
+        )
+        .into_response();
+    };
+    let payload = agent_onboarding_token_payload(&form);
+    let result = match store
+        .create_enrollment_token(context.tenant_id, Some(auth_context.user_id), payload)
+        .await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            return web_error_page(
+                "Agent hinzufuegen",
+                "/zero-trust/onboarding/",
+                &context,
+                "Enrollment-Token konnte nicht erstellt werden. Eingaben und Policy-Zuordnung pruefen.",
+            )
+            .into_response();
+        }
+    };
+    let command = agent_installation_command(
+        &form.os_family,
+        &form.deployment_channel,
+        context.tenant_id,
+        &result.token,
+        form.mtls_fingerprint.as_deref(),
+    );
+    let status_href = web_path_with_context("/zero-trust/", Some(&context));
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>Agent hinzufuegen</h1><p>Schritt 3 von 3 · Installation</p></section>
+        <section class="panel wide">
+          <h2>{}</h2>
+          <p>Das Enrollment-Token wird ausschliesslich in dieser Antwort angezeigt. Die Plattform speichert nur den Hash.</p>
+          <textarea readonly rows="12" spellcheck="false">{}</textarea>
+          <ol>
+            <li>Agent-Binary fuer die Zielplattform bereitstellen.</li>
+            <li>Anweisung einmalig mit administrativen Rechten ausfuehren.</li>
+            <li>Lokalen State mit restriktiven Rechten behalten und das Token aus temporären Umgebungen entfernen.</li>
+            <li>Enrollment und ersten Heartbeat in der Flottenansicht kontrollieren.</li>
+          </ol>
+          <p>Erwarteter Status: <strong>pending</strong> bis zum ersten erfolgreichen Enrollment; danach {}.</p>
+          <a class="button" href="{}">Flottenstatus pruefen</a>
+        </section>
+        "#,
+        html_escape(&result.enrollment.label),
+        html_escape(&command),
+        if result.enrollment.max_uses == 1 {
+            "consumed"
+        } else {
+            "partially_used beziehungsweise consumed"
+        },
+        html_escape(&status_href),
+    );
+    (
+        StatusCode::CREATED,
+        [
+            (CACHE_CONTROL, HeaderValue::from_static("private, no-store")),
+            (REFERRER_POLICY, HeaderValue::from_static("no-referrer")),
+        ],
+        web_page(
+            "Agent hinzufuegen",
+            "/zero-trust/onboarding/",
+            Some(&context),
+            &body,
+        ),
+    )
+        .into_response()
+}
+
+async fn web_agent_enrollment_token_revoke(
+    Path(token_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Zero Trust", "/zero-trust/").into_response();
+    };
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_error_page(
+                "Zero Trust",
+                "/zero-trust/",
+                &context,
+                "Anmeldung erforderlich.",
+            )
+            .into_response();
+        }
+    };
+    if !context_is_admin(&auth_context) {
+        return web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Diese Aktion benoetigt eine Admin-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.agent_store else {
+        return web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Agent-Store ist nicht verfuegbar.",
+        )
+        .into_response();
+    };
+    match store
+        .revoke_enrollment_token(context.tenant_id, token_id, auth_context.user_id)
+        .await
+    {
+        Ok(Some(_)) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Ok(None) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Enrollment-Token wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Enrollment-Token konnte nicht widerrufen werden.",
+        )
+        .into_response(),
+    }
+}
+
+fn validate_agent_onboarding_form(form: &WebAgentOnboardingForm) -> Result<(), &'static str> {
+    if !matches!(
+        form.os_family.as_str(),
+        "WINDOWS" | "LINUX" | "MACOS" | "NIXOS"
+    ) {
+        return Err("Betriebssystemfamilie ist nicht unterstuetzt.");
+    }
+    if !matches!(
+        form.deployment_channel.as_str(),
+        "manual" | "systemd" | "nixos" | "intune" | "jamf" | "other"
+    ) {
+        return Err("Deployment-Kanal ist nicht unterstuetzt.");
+    }
+    if !(1..=10_000).contains(&form.max_uses) {
+        return Err("Erlaubte Enrollments muessen zwischen 1 und 10000 liegen.");
+    }
+    if !(1..=8_760).contains(&form.expires_in_hours) {
+        return Err("Gueltigkeit muss zwischen 1 und 8760 Stunden liegen.");
+    }
+    if form
+        .policy_profile_id
+        .is_some_and(|policy_id| policy_id <= 0)
+    {
+        return Err("Policy-Profil ist ungueltig.");
+    }
+    Ok(())
+}
+
+async fn onboarding_policy_name(
+    state: &AppState,
+    tenant_id: i64,
+    policy_profile_id: Option<i64>,
+) -> Option<String> {
+    let policy_profile_id = policy_profile_id?;
+    let store = state.agent_governance_store.as_ref()?;
+    store
+        .list_policies(tenant_id)
+        .await
+        .ok()?
+        .into_iter()
+        .find(|policy| policy.id == policy_profile_id && policy.enabled)
+        .map(|policy| policy.name)
+}
+
+fn agent_onboarding_token_payload(
+    form: &WebAgentOnboardingForm,
+) -> agent_store::AgentEnrollmentTokenCreateRequest {
+    let allowed_os_families = form.restrict_os_family.as_ref().map(|_| {
+        vec![if form.os_family == "NIXOS" {
+            "LINUX".to_string()
+        } else {
+            form.os_family.clone()
+        }]
+    });
+    agent_store::AgentEnrollmentTokenCreateRequest {
+        label: form.label.clone(),
+        rollout_os_family: Some(form.os_family.clone()),
+        allowed_os_families,
+        allowed_deployment_channel: form
+            .restrict_deployment_channel
+            .as_ref()
+            .map(|_| form.deployment_channel.clone()),
+        policy_profile_id: form.policy_profile_id,
+        mtls_fingerprint: form.mtls_fingerprint.clone(),
+        expires_at: Some((Utc::now() + ChronoDuration::hours(form.expires_in_hours)).to_rfc3339()),
+        uses_remaining: Some(form.max_uses),
+    }
+}
+
+fn agent_onboarding_hidden_fields(form: &WebAgentOnboardingForm) -> String {
+    let mut fields = vec![
+        ("os_family", form.os_family.clone()),
+        ("deployment_channel", form.deployment_channel.clone()),
+        ("label", form.label.clone().unwrap_or_default()),
+        ("max_uses", form.max_uses.to_string()),
+        ("expires_in_hours", form.expires_in_hours.to_string()),
+        (
+            "mtls_fingerprint",
+            form.mtls_fingerprint.clone().unwrap_or_default(),
+        ),
+    ];
+    if let Some(policy_profile_id) = form.policy_profile_id {
+        fields.push(("policy_profile_id", policy_profile_id.to_string()));
+    }
+    if form.restrict_os_family.is_some() {
+        fields.push(("restrict_os_family", "on".to_string()));
+    }
+    if form.restrict_deployment_channel.is_some() {
+        fields.push(("restrict_deployment_channel", "on".to_string()));
+    }
+    fields
+        .into_iter()
+        .map(|(name, value)| {
+            format!(
+                r#"<input type="hidden" name="{}" value="{}">"#,
+                name,
+                html_escape(&value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn agent_installation_command(
+    os_family: &str,
+    deployment_channel: &str,
+    tenant_id: i64,
+    token: &str,
+    mtls_fingerprint: Option<&str>,
+) -> String {
+    let backend_url = "https://iscy.example.org";
+    if os_family == "WINDOWS" {
+        let mtls = mtls_fingerprint
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!(" -MtlsFingerprint {}", powershell_quote(value)))
+            .unwrap_or_default();
+        return format!(
+            "& '.\\deploy\\agent\\windows\\install-iscy-agent-task.ps1' -BackendUrl {} -TenantId {} -EnrollmentToken {}{}",
+            powershell_quote(backend_url),
+            tenant_id,
+            powershell_quote(token),
+            mtls,
+        );
+    }
+    let mtls = mtls_fingerprint
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!(" ISCY_AGENT_MTLS_FINGERPRINT={}", shell_quote(value)))
+        .unwrap_or_default();
+    let binary = if os_family == "MACOS" {
+        "/usr/local/libexec/iscy-agent"
+    } else {
+        "/usr/local/bin/iscy-agent"
+    };
+    let initial = format!(
+        "sudo env ISCY_BACKEND_URL={} ISCY_TENANT_ID={} ISCY_AGENT_ENROLLMENT_TOKEN={} ISCY_AGENT_CHANNEL={}{} {}",
+        shell_quote(backend_url),
+        tenant_id,
+        shell_quote(token),
+        shell_quote(deployment_channel),
+        mtls,
+        binary,
+    );
+    match os_family {
+        "MACOS" => format!(
+            "{}\nsudo install -m 644 deploy/agent/macos/com.iscy.agent.plist /Library/LaunchDaemons/com.iscy.agent.plist\nsudo launchctl bootstrap system /Library/LaunchDaemons/com.iscy.agent.plist",
+            initial
+        ),
+        "NIXOS" => format!(
+            "{}\n# Danach deploy/agent/nixos/iscy-agent.nix importieren und services.iscy-agent.enable = true setzen.",
+            initial
+        ),
+        "LINUX" if deployment_channel == "systemd" => format!(
+            "{}\nsudo install -Dm644 deploy/agent/systemd/iscy-agent.service /etc/systemd/system/iscy-agent.service\nsudo install -Dm644 deploy/agent/systemd/iscy-agent.timer /etc/systemd/system/iscy-agent.timer\nsudo systemctl daemon-reload\nsudo systemctl enable --now iscy-agent.timer",
+            initial
+        ),
+        _ => initial,
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn powershell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 fn agent_governance_web_sections(
@@ -27977,7 +28777,11 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/agents/devices", get(agent_devices))
         .route(
             "/api/v1/agents/enrollment-tokens",
-            post(agent_enrollment_token_create),
+            get(agent_enrollment_tokens).post(agent_enrollment_token_create),
+        )
+        .route(
+            "/api/v1/agents/enrollment-tokens/{token_id}/revoke",
+            post(agent_enrollment_token_revoke),
         )
         .route("/api/v1/agents/enroll", post(agent_enroll))
         .route(
@@ -28245,6 +29049,19 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/operations/incidents/", get(web_operations_incidents))
         .route("/zero-trust/", get(web_zero_trust))
+        .route("/zero-trust/onboarding/", get(web_agent_onboarding))
+        .route(
+            "/zero-trust/onboarding/preview",
+            post(web_agent_onboarding_preview),
+        )
+        .route(
+            "/zero-trust/onboarding/create",
+            post(web_agent_onboarding_create),
+        )
+        .route(
+            "/zero-trust/enrollment-tokens/{token_id}/revoke",
+            post(web_agent_enrollment_token_revoke),
+        )
         .route("/zero-trust/policies/", post(web_agent_policy_submit))
         .route(
             "/zero-trust/notification-channels/",
@@ -28507,8 +29324,9 @@ mod tests {
     use hmac::Mac;
 
     use super::{
-        alertmanager_hmac_message, alertmanager_hmac_secret_matches, hex_encode_bytes,
-        normalize_cve_id, simple_pdf_document, AlertmanagerHmacSha256,
+        agent_installation_command, alertmanager_hmac_message, alertmanager_hmac_secret_matches,
+        hex_encode_bytes, is_agent_payload_error, normalize_cve_id, powershell_quote, shell_quote,
+        simple_pdf_document, AlertmanagerHmacSha256,
     };
 
     #[test]
@@ -28545,5 +29363,53 @@ mod tests {
         assert!(pdf.contains("/Count 2"));
         assert!(pdf.contains("Evidence line 0"));
         assert!(pdf.contains("Evidence line 76"));
+    }
+
+    #[test]
+    fn agent_installation_commands_quote_untrusted_values_and_reuse_deploy_assets() {
+        let shell_attack = "sha256:test'; touch /tmp/pwn; echo '";
+        let shell = agent_installation_command(
+            "LINUX",
+            "systemd",
+            1,
+            "iscy_enroll_safe",
+            Some(shell_attack),
+        );
+        assert!(shell.contains("deploy/agent/systemd/iscy-agent.service"));
+        assert!(shell.contains(&shell_quote(shell_attack)));
+        assert!(!shell.contains("ISCY_AGENT_MTLS_FINGERPRINT='sha256:test'; touch"));
+
+        let powershell_attack = "sha256:test'; Start-Process calc; '";
+        let powershell = agent_installation_command(
+            "WINDOWS",
+            "intune",
+            1,
+            "iscy_enroll_safe",
+            Some(powershell_attack),
+        );
+        assert!(powershell.contains("deploy\\agent\\windows\\install-iscy-agent-task.ps1"));
+        assert!(powershell.contains(&powershell_quote(powershell_attack)));
+        assert!(!powershell.contains("-MtlsFingerprint 'sha256:test'; Start-Process"));
+
+        let macos = agent_installation_command("MACOS", "jamf", 1, "iscy_enroll_safe", None);
+        assert!(macos.contains("deploy/agent/macos/com.iscy.agent.plist"));
+        let nixos = agent_installation_command("NIXOS", "nixos", 1, "iscy_enroll_safe", None);
+        assert!(nixos.contains("deploy/agent/nixos/iscy-agent.nix"));
+    }
+
+    #[test]
+    fn agent_error_classification_does_not_expose_internal_store_context() {
+        assert!(is_agent_payload_error(
+            "Agent-Enrollment-Feld 'os_family' ist nicht unterstuetzt"
+        ));
+        assert!(is_agent_payload_error(
+            "Agent-Policy-Profil wurde im aktiven Tenant nicht gefunden"
+        ));
+        assert!(!is_agent_payload_error(
+            "PostgreSQL-Agent-Enrollment-Token konnte nicht gelesen werden: relation does not exist"
+        ));
+        assert!(!is_agent_payload_error(
+            "Agent-Enrollment-Token OS-Familien konnten nicht serialisiert werden"
+        ));
     }
 }
