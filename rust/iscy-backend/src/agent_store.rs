@@ -1,15 +1,20 @@
 use anyhow::{bail, Context};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
-    Row,
+    Postgres, Row, Sqlite, Transaction,
 };
 
 use crate::cve_store::normalize_database_url;
+
+const AGENT_OS_FAMILIES: &[&str] = &["WINDOWS", "LINUX", "MACOS"];
+const ONBOARDING_OS_FAMILIES: &[&str] = &["WINDOWS", "LINUX", "MACOS", "NIXOS"];
+const AGENT_DEPLOYMENT_CHANNELS: &[&str] =
+    &["manual", "systemd", "nixos", "intune", "jamf", "other"];
 
 #[derive(Clone)]
 pub enum AgentStore {
@@ -32,7 +37,10 @@ pub struct AgentEnrollRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AgentEnrollmentTokenCreateRequest {
     pub label: Option<String>,
+    pub rollout_os_family: Option<String>,
     pub allowed_os_families: Option<Vec<String>>,
+    pub allowed_deployment_channel: Option<String>,
+    pub policy_profile_id: Option<i64>,
     pub mtls_fingerprint: Option<String>,
     pub expires_at: Option<String>,
     pub uses_remaining: Option<i64>,
@@ -51,11 +59,18 @@ pub struct AgentEnrollmentTokenSummary {
     pub label: String,
     pub token_hint: String,
     pub status: String,
+    pub rollout_os_family: String,
     pub allowed_os_families: Vec<String>,
+    pub allowed_deployment_channel: String,
+    pub policy_profile_id: Option<i64>,
+    pub policy_name: Option<String>,
     pub mtls_fingerprint: String,
     pub expires_at: Option<String>,
+    pub max_uses: i64,
+    pub uses_count: i64,
     pub uses_remaining: Option<i64>,
     pub created_by_id: Option<i64>,
+    pub last_attempt_at: Option<String>,
     pub last_used_at: Option<String>,
     pub revoked_at: Option<String>,
     pub created_at: String,
@@ -77,10 +92,21 @@ pub struct AgentSecretRotationResult {
 #[derive(Debug, Clone)]
 struct EnrollmentTokenGrant {
     id: i64,
-    allowed_os_families: Vec<String>,
+    policy_profile_id: Option<i64>,
     mtls_fingerprint: String,
-    expires_at: Option<String>,
-    uses_remaining: Option<i64>,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentEnrollmentAuditEvent {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub token_id: Option<i64>,
+    pub device_id: Option<i64>,
+    pub event_type: String,
+    pub actor_id: Option<i64>,
+    pub detail: Value,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -122,6 +148,11 @@ pub struct AgentDeviceSummary {
     pub agent_version: String,
     pub deployment_channel: String,
     pub enrollment_status: String,
+    pub policy_profile_id: Option<i64>,
+    pub policy_name: Option<String>,
+    pub enrollment_token_id: Option<i64>,
+    pub last_enrolled_at: Option<String>,
+    pub mtls_bound: bool,
     pub zero_trust_score: i64,
     pub last_seen_at: Option<String>,
     pub open_finding_count: i64,
@@ -243,13 +274,19 @@ impl AgentStore {
         let token_hash = sha256_hex(&token);
         let token_hint = secret_hint(&token);
         let label = normalized_or_default(payload.label.as_deref(), "Agent enrollment");
+        let rollout_os_family = normalized_onboarding_os_family(
+            payload.rollout_os_family.as_deref().unwrap_or("LINUX"),
+        )?;
         let allowed_os_families =
             normalized_allowed_os_families(payload.allowed_os_families.unwrap_or_default());
         let allowed_os_families_json = serde_json::to_string(&allowed_os_families)
             .context("Agent-Enrollment-Token OS-Familien konnten nicht serialisiert werden")?;
+        let allowed_deployment_channel =
+            normalize_optional_deployment_channel(payload.allowed_deployment_channel.as_deref())?;
         let mtls_fingerprint =
             normalize_optional_fingerprint(payload.mtls_fingerprint.as_deref()).unwrap_or_default();
         let expires_at = normalize_optional_rfc3339(payload.expires_at.as_deref())?;
+        let max_uses = payload.uses_remaining.unwrap_or(1);
 
         match self {
             Self::Postgres(pool) => {
@@ -260,10 +297,13 @@ impl AgentStore {
                     &label,
                     &token_hash,
                     &token_hint,
+                    &rollout_os_family,
                     &allowed_os_families_json,
+                    &allowed_deployment_channel,
+                    payload.policy_profile_id,
                     &mtls_fingerprint,
                     expires_at.as_deref(),
-                    payload.uses_remaining,
+                    max_uses,
                 )
                 .await
             }
@@ -275,15 +315,56 @@ impl AgentStore {
                     &label,
                     &token_hash,
                     &token_hint,
+                    &rollout_os_family,
                     &allowed_os_families_json,
+                    &allowed_deployment_channel,
+                    payload.policy_profile_id,
                     &mtls_fingerprint,
                     expires_at.as_deref(),
-                    payload.uses_remaining,
+                    max_uses,
                 )
                 .await
             }
         }
         .map(|enrollment| AgentEnrollmentTokenCreateResult { token, enrollment })
+    }
+
+    pub async fn list_enrollment_tokens(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<AgentEnrollmentTokenSummary>> {
+        match self {
+            Self::Postgres(pool) => list_enrollment_tokens_postgres(pool, tenant_id, limit).await,
+            Self::Sqlite(pool) => list_enrollment_tokens_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
+    pub async fn list_enrollment_audit(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<AgentEnrollmentAuditEvent>> {
+        match self {
+            Self::Postgres(pool) => list_enrollment_audit_postgres(pool, tenant_id, limit).await,
+            Self::Sqlite(pool) => list_enrollment_audit_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
+    pub async fn revoke_enrollment_token(
+        &self,
+        tenant_id: i64,
+        token_id: i64,
+        actor_id: i64,
+    ) -> anyhow::Result<Option<AgentEnrollmentTokenSummary>> {
+        match self {
+            Self::Postgres(pool) => {
+                revoke_enrollment_token_postgres(pool, tenant_id, token_id, actor_id).await
+            }
+            Self::Sqlite(pool) => {
+                revoke_enrollment_token_sqlite(pool, tenant_id, token_id, actor_id).await
+            }
+        }
     }
 
     pub async fn enroll_device(
@@ -312,59 +393,34 @@ impl AgentStore {
         }
         let token_hash = sha256_hex(normalized_token);
         let supplied_mtls = normalize_optional_fingerprint(mtls_fingerprint);
-        let os_family = normalized_upper(&payload.os_family);
-        let grant = match self {
-            Self::Postgres(pool) => {
-                enrollment_token_grant_postgres(pool, tenant_id, &token_hash).await?
-            }
-            Self::Sqlite(pool) => {
-                enrollment_token_grant_sqlite(pool, tenant_id, &token_hash).await?
-            }
-        };
-        let Some(grant) =
-            grant.and_then(|grant| grant_if_valid(grant, &os_family, supplied_mtls.as_deref()))
-        else {
-            return Ok(None);
-        };
         let agent_secret = random_secret("iscy_agent")?;
         let agent_secret_hash = sha256_hex(&agent_secret);
-        let bound_mtls = supplied_mtls
-            .as_deref()
-            .filter(|value| !value.is_empty())
-            .unwrap_or(grant.mtls_fingerprint.as_str())
-            .to_string();
-
         let device = match self {
             Self::Postgres(pool) => {
-                let device = enroll_device_postgres(pool, tenant_id, payload).await?;
-                update_device_agent_auth_postgres(
+                enroll_device_with_token_postgres(
                     pool,
                     tenant_id,
-                    device.id,
+                    payload,
+                    &token_hash,
                     &agent_secret_hash,
-                    &bound_mtls,
+                    supplied_mtls.as_deref(),
                 )
-                .await?;
-                consume_enrollment_token_postgres(pool, tenant_id, grant.id).await?;
-                device_detail_postgres(pool, tenant_id, device.id)
-                    .await?
-                    .context("PostgreSQL-Agent-Device nach Token-Enrollment nicht gefunden")?
+                .await?
             }
             Self::Sqlite(pool) => {
-                let device = enroll_device_sqlite(pool, tenant_id, payload).await?;
-                update_device_agent_auth_sqlite(
+                enroll_device_with_token_sqlite(
                     pool,
                     tenant_id,
-                    device.id,
+                    payload,
+                    &token_hash,
                     &agent_secret_hash,
-                    &bound_mtls,
+                    supplied_mtls.as_deref(),
                 )
-                .await?;
-                consume_enrollment_token_sqlite(pool, tenant_id, grant.id).await?;
-                device_detail_sqlite(pool, tenant_id, device.id)
-                    .await?
-                    .context("SQLite-Agent-Device nach Token-Enrollment nicht gefunden")?
+                .await?
             }
+        };
+        let Some(device) = device else {
+            return Ok(None);
         };
 
         Ok(Some(AgentEnrollWithSecret {
@@ -510,22 +566,30 @@ async fn create_enrollment_token_postgres(
     label: &str,
     token_hash: &str,
     token_hint: &str,
+    rollout_os_family: &str,
     allowed_os_families_json: &str,
+    allowed_deployment_channel: &str,
+    policy_profile_id: Option<i64>,
     mtls_fingerprint: &str,
     expires_at: Option<&str>,
-    uses_remaining: Option<i64>,
+    max_uses: i64,
 ) -> anyhow::Result<AgentEnrollmentTokenSummary> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("PostgreSQL-Agent-Enrollment-Token-Transaktion konnte nicht gestartet werden")?;
+    ensure_policy_for_tenant_postgres(&mut transaction, tenant_id, policy_profile_id).await?;
     let row = sqlx::query(
         r#"
         INSERT INTO zero_trust_agent_enrollment_token (
             tenant_id, label, token_hash, token_hint, status, allowed_os_families,
             mtls_fingerprint, expires_at, uses_remaining, created_by_id,
-            created_at, updated_at
+            rollout_os_family, allowed_deployment_channel, policy_profile_id,
+            max_uses, uses_count, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, $7, $8, $9, CURRENT_TIMESTAMP::text, CURRENT_TIMESTAMP::text)
-        RETURNING id, tenant_id, label, token_hint, status, allowed_os_families,
-            mtls_fingerprint, expires_at, uses_remaining, created_by_id,
-            last_used_at, revoked_at, created_at, updated_at
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9,
+            $10, $11, $12, $13, 0, CURRENT_TIMESTAMP::text, CURRENT_TIMESTAMP::text)
+        RETURNING id
         "#,
     )
     .bind(tenant_id)
@@ -535,12 +599,45 @@ async fn create_enrollment_token_postgres(
     .bind(allowed_os_families_json)
     .bind(mtls_fingerprint)
     .bind(expires_at)
-    .bind(uses_remaining)
+    .bind(max_uses)
     .bind(created_by_id)
-    .fetch_one(pool)
+    .bind(rollout_os_family)
+    .bind(allowed_deployment_channel)
+    .bind(policy_profile_id)
+    .bind(max_uses)
+    .fetch_one(&mut *transaction)
     .await
     .context("PostgreSQL-Agent-Enrollment-Token konnte nicht erstellt werden")?;
-    enrollment_token_from_pg_row(row).map_err(Into::into)
+    let token_id: i64 = row.try_get("id")?;
+    insert_enrollment_audit_postgres(
+        &mut transaction,
+        tenant_id,
+        Some(token_id),
+        None,
+        "token_created",
+        created_by_id,
+        json!({
+            "max_uses": max_uses,
+            "rollout_os_family": rollout_os_family,
+            "allowed_os_families": parse_allowed_os_families(allowed_os_families_json),
+            "allowed_deployment_channel": allowed_deployment_channel,
+            "policy_profile_id": policy_profile_id,
+            "mtls_bound": !mtls_fingerprint.is_empty()
+        }),
+    )
+    .await?;
+    let row = sqlx::query(enrollment_token_detail_postgres_sql())
+        .bind(tenant_id)
+        .bind(token_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("PostgreSQL-Agent-Enrollment-Token konnte nicht gelesen werden")?;
+    let enrollment = enrollment_token_from_pg_row(row)?;
+    transaction
+        .commit()
+        .await
+        .context("PostgreSQL-Agent-Enrollment-Token konnte nicht gespeichert werden")?;
+    Ok(enrollment)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -551,22 +648,30 @@ async fn create_enrollment_token_sqlite(
     label: &str,
     token_hash: &str,
     token_hint: &str,
+    rollout_os_family: &str,
     allowed_os_families_json: &str,
+    allowed_deployment_channel: &str,
+    policy_profile_id: Option<i64>,
     mtls_fingerprint: &str,
     expires_at: Option<&str>,
-    uses_remaining: Option<i64>,
+    max_uses: i64,
 ) -> anyhow::Result<AgentEnrollmentTokenSummary> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("SQLite-Agent-Enrollment-Token-Transaktion konnte nicht gestartet werden")?;
+    ensure_policy_for_tenant_sqlite(&mut transaction, tenant_id, policy_profile_id).await?;
     let row = sqlx::query(
         r#"
         INSERT INTO zero_trust_agent_enrollment_token (
             tenant_id, label, token_hash, token_hint, status, allowed_os_families,
             mtls_fingerprint, expires_at, uses_remaining, created_by_id,
-            created_at, updated_at
+            rollout_os_family, allowed_deployment_channel, policy_profile_id,
+            max_uses, uses_count, created_at, updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, 'ACTIVE', ?5, ?6, ?7, ?8, ?9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        RETURNING id, tenant_id, label, token_hint, status, allowed_os_families,
-            mtls_fingerprint, expires_at, uses_remaining, created_by_id,
-            last_used_at, revoked_at, created_at, updated_at
+        VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, ?7, ?8, ?9,
+            ?10, ?11, ?12, ?13, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        RETURNING id
         "#,
     )
     .bind(tenant_id)
@@ -576,118 +681,894 @@ async fn create_enrollment_token_sqlite(
     .bind(allowed_os_families_json)
     .bind(mtls_fingerprint)
     .bind(expires_at)
-    .bind(uses_remaining)
+    .bind(max_uses)
     .bind(created_by_id)
-    .fetch_one(pool)
+    .bind(rollout_os_family)
+    .bind(allowed_deployment_channel)
+    .bind(policy_profile_id)
+    .bind(max_uses)
+    .fetch_one(&mut *transaction)
     .await
     .context("SQLite-Agent-Enrollment-Token konnte nicht erstellt werden")?;
-    enrollment_token_from_sqlite_row(row).map_err(Into::into)
+    let token_id: i64 = row.try_get("id")?;
+    insert_enrollment_audit_sqlite(
+        &mut transaction,
+        tenant_id,
+        Some(token_id),
+        None,
+        "token_created",
+        created_by_id,
+        json!({
+            "max_uses": max_uses,
+            "rollout_os_family": rollout_os_family,
+            "allowed_os_families": parse_allowed_os_families(allowed_os_families_json),
+            "allowed_deployment_channel": allowed_deployment_channel,
+            "policy_profile_id": policy_profile_id,
+            "mtls_bound": !mtls_fingerprint.is_empty()
+        }),
+    )
+    .await?;
+    let row = sqlx::query(enrollment_token_detail_sqlite_sql())
+        .bind(tenant_id)
+        .bind(token_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("SQLite-Agent-Enrollment-Token konnte nicht gelesen werden")?;
+    let enrollment = enrollment_token_from_sqlite_row(row)?;
+    transaction
+        .commit()
+        .await
+        .context("SQLite-Agent-Enrollment-Token konnte nicht gespeichert werden")?;
+    Ok(enrollment)
 }
 
-async fn enrollment_token_grant_postgres(
+async fn enroll_device_with_token_postgres(
     pool: &PgPool,
     tenant_id: i64,
+    payload: AgentEnrollRequest,
     token_hash: &str,
-) -> anyhow::Result<Option<EnrollmentTokenGrant>> {
+    agent_secret_hash: &str,
+    supplied_mtls: Option<&str>,
+) -> anyhow::Result<Option<AgentDeviceSummary>> {
+    let os_family = normalized_upper(&payload.os_family);
+    let deployment_channel =
+        normalized_or_default(payload.deployment_channel.as_deref(), "manual").to_ascii_lowercase();
+    let supplied_mtls = supplied_mtls.unwrap_or("");
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("PostgreSQL-Agent-Enrollment-Transaktion konnte nicht gestartet werden")?;
     let row = sqlx::query(
         r#"
-        SELECT id, allowed_os_families, mtls_fingerprint, expires_at, uses_remaining
-        FROM zero_trust_agent_enrollment_token
-        WHERE tenant_id = $1
-          AND token_hash = $2
-          AND status = 'ACTIVE'
-          AND revoked_at IS NULL
+        UPDATE zero_trust_agent_enrollment_token token
+        SET uses_remaining = token.uses_remaining - 1,
+            uses_count = token.uses_count + 1,
+            status = CASE WHEN token.uses_remaining - 1 <= 0 THEN 'consumed' ELSE 'partially_used' END,
+            last_attempt_at = CURRENT_TIMESTAMP::text,
+            last_used_at = CURRENT_TIMESTAMP::text,
+            updated_at = CURRENT_TIMESTAMP::text
+        WHERE token.tenant_id = $1
+          AND token.token_hash = $2
+          AND token.status IN ('pending', 'partially_used', 'ACTIVE')
+          AND token.revoked_at IS NULL
+          AND COALESCE(token.uses_remaining, 0) > 0
+          AND (token.expires_at IS NULL OR token.expires_at = '' OR token.expires_at::timestamptz > CURRENT_TIMESTAMP)
+          AND (
+              token.allowed_os_families = '[]'
+              OR EXISTS (
+                  SELECT 1 FROM jsonb_array_elements_text(token.allowed_os_families::jsonb) allowed(value)
+                  WHERE UPPER(allowed.value) = $3
+              )
+          )
+          AND (token.allowed_deployment_channel = '' OR token.allowed_deployment_channel = $4)
+          AND (token.mtls_fingerprint = '' OR token.mtls_fingerprint = $5)
+          AND (
+              token.policy_profile_id IS NULL
+              OR EXISTS (
+                  SELECT 1 FROM zero_trust_agent_policy_profile policy
+                  WHERE policy.tenant_id = token.tenant_id AND policy.id = token.policy_profile_id
+              )
+          )
+        RETURNING token.id, token.policy_profile_id, token.allowed_os_families,
+            token.allowed_deployment_channel, token.mtls_fingerprint, token.status
         "#,
     )
     .bind(tenant_id)
     .bind(token_hash)
-    .fetch_optional(pool)
+    .bind(&os_family)
+    .bind(&deployment_channel)
+    .bind(supplied_mtls)
+    .fetch_optional(&mut *transaction)
     .await
-    .context("PostgreSQL-Agent-Enrollment-Token konnte nicht geprueft werden")?;
-    row.map(enrollment_token_grant_from_pg_row)
-        .transpose()
-        .map_err(Into::into)
+    .context("PostgreSQL-Agent-Enrollment-Token konnte nicht atomar verwendet werden")?;
+    let Some(row) = row else {
+        audit_failed_enrollment_postgres(&mut transaction, tenant_id, token_hash).await?;
+        transaction.commit().await.context(
+            "PostgreSQL-fehlgeschlagenes Agent-Enrollment konnte nicht auditiert werden",
+        )?;
+        return Ok(None);
+    };
+    let grant = enrollment_token_grant_from_pg_row(row)?;
+    let bound_mtls = if supplied_mtls.is_empty() {
+        grant.mtls_fingerprint.as_str()
+    } else {
+        supplied_mtls
+    };
+    let device_id = upsert_enrolled_device_postgres(
+        &mut transaction,
+        tenant_id,
+        &payload,
+        &deployment_channel,
+        grant.policy_profile_id,
+        grant.id,
+        agent_secret_hash,
+        bound_mtls,
+    )
+    .await?;
+    insert_enrollment_audit_postgres(
+        &mut transaction,
+        tenant_id,
+        Some(grant.id),
+        Some(device_id),
+        "token_used",
+        None,
+        json!({"status": grant.status, "os_family": os_family, "deployment_channel": deployment_channel}),
+    )
+    .await?;
+    let lifecycle_event = if grant.status == "consumed" {
+        "token_consumed"
+    } else {
+        "token_partially_used"
+    };
+    insert_enrollment_audit_postgres(
+        &mut transaction,
+        tenant_id,
+        Some(grant.id),
+        Some(device_id),
+        lifecycle_event,
+        None,
+        json!({}),
+    )
+    .await?;
+    let row = sqlx::query(device_detail_postgres_sql())
+        .bind(tenant_id)
+        .bind(device_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("PostgreSQL-Agent-Device nach Enrollment nicht gefunden")?;
+    let device = device_from_pg_row(row)?;
+    transaction
+        .commit()
+        .await
+        .context("PostgreSQL-Agent-Enrollment konnte nicht gespeichert werden")?;
+    Ok(Some(device))
 }
 
-async fn enrollment_token_grant_sqlite(
+async fn enroll_device_with_token_sqlite(
     pool: &SqlitePool,
     tenant_id: i64,
+    payload: AgentEnrollRequest,
     token_hash: &str,
-) -> anyhow::Result<Option<EnrollmentTokenGrant>> {
+    agent_secret_hash: &str,
+    supplied_mtls: Option<&str>,
+) -> anyhow::Result<Option<AgentDeviceSummary>> {
+    let os_family = normalized_upper(&payload.os_family);
+    let deployment_channel =
+        normalized_or_default(payload.deployment_channel.as_deref(), "manual").to_ascii_lowercase();
+    let supplied_mtls = supplied_mtls.unwrap_or("");
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("SQLite-Agent-Enrollment-Transaktion konnte nicht gestartet werden")?;
     let row = sqlx::query(
         r#"
-        SELECT id, allowed_os_families, mtls_fingerprint, expires_at, uses_remaining
-        FROM zero_trust_agent_enrollment_token
+        UPDATE zero_trust_agent_enrollment_token
+        SET uses_remaining = uses_remaining - 1,
+            uses_count = uses_count + 1,
+            status = CASE WHEN uses_remaining - 1 <= 0 THEN 'consumed' ELSE 'partially_used' END,
+            last_attempt_at = CURRENT_TIMESTAMP,
+            last_used_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
         WHERE tenant_id = ?1
           AND token_hash = ?2
-          AND status = 'ACTIVE'
+          AND status IN ('pending', 'partially_used', 'ACTIVE')
           AND revoked_at IS NULL
+          AND COALESCE(uses_remaining, 0) > 0
+          AND (expires_at IS NULL OR expires_at = '' OR julianday(expires_at) > julianday('now'))
+          AND (
+              allowed_os_families = '[]'
+              OR EXISTS (
+                  SELECT 1 FROM json_each(allowed_os_families) allowed
+                  WHERE UPPER(allowed.value) = ?3
+              )
+          )
+          AND (allowed_deployment_channel = '' OR allowed_deployment_channel = ?4)
+          AND (mtls_fingerprint = '' OR mtls_fingerprint = ?5)
+          AND (
+              policy_profile_id IS NULL
+              OR EXISTS (
+                  SELECT 1 FROM zero_trust_agent_policy_profile policy
+                  WHERE policy.tenant_id = zero_trust_agent_enrollment_token.tenant_id
+                    AND policy.id = zero_trust_agent_enrollment_token.policy_profile_id
+              )
+          )
+        RETURNING id, policy_profile_id, allowed_os_families,
+            allowed_deployment_channel, mtls_fingerprint, status
         "#,
     )
     .bind(tenant_id)
     .bind(token_hash)
-    .fetch_optional(pool)
+    .bind(&os_family)
+    .bind(&deployment_channel)
+    .bind(supplied_mtls)
+    .fetch_optional(&mut *transaction)
     .await
-    .context("SQLite-Agent-Enrollment-Token konnte nicht geprueft werden")?;
-    row.map(enrollment_token_grant_from_sqlite_row)
-        .transpose()
+    .context("SQLite-Agent-Enrollment-Token konnte nicht atomar verwendet werden")?;
+    let Some(row) = row else {
+        audit_failed_enrollment_sqlite(&mut transaction, tenant_id, token_hash).await?;
+        transaction
+            .commit()
+            .await
+            .context("SQLite-fehlgeschlagenes Agent-Enrollment konnte nicht auditiert werden")?;
+        return Ok(None);
+    };
+    let grant = enrollment_token_grant_from_sqlite_row(row)?;
+    let bound_mtls = if supplied_mtls.is_empty() {
+        grant.mtls_fingerprint.as_str()
+    } else {
+        supplied_mtls
+    };
+    let device_id = upsert_enrolled_device_sqlite(
+        &mut transaction,
+        tenant_id,
+        &payload,
+        &deployment_channel,
+        grant.policy_profile_id,
+        grant.id,
+        agent_secret_hash,
+        bound_mtls,
+    )
+    .await?;
+    insert_enrollment_audit_sqlite(
+        &mut transaction,
+        tenant_id,
+        Some(grant.id),
+        Some(device_id),
+        "token_used",
+        None,
+        json!({"status": grant.status, "os_family": os_family, "deployment_channel": deployment_channel}),
+    )
+    .await?;
+    let lifecycle_event = if grant.status == "consumed" {
+        "token_consumed"
+    } else {
+        "token_partially_used"
+    };
+    insert_enrollment_audit_sqlite(
+        &mut transaction,
+        tenant_id,
+        Some(grant.id),
+        Some(device_id),
+        lifecycle_event,
+        None,
+        json!({}),
+    )
+    .await?;
+    let row = sqlx::query(device_detail_sqlite_sql())
+        .bind(tenant_id)
+        .bind(device_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .context("SQLite-Agent-Device nach Enrollment nicht gefunden")?;
+    let device = device_from_sqlite_row(row)?;
+    transaction
+        .commit()
+        .await
+        .context("SQLite-Agent-Enrollment konnte nicht gespeichert werden")?;
+    Ok(Some(device))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn upsert_enrolled_device_postgres(
+    transaction: &mut Transaction<'_, Postgres>,
+    tenant_id: i64,
+    payload: &AgentEnrollRequest,
+    deployment_channel: &str,
+    policy_profile_id: Option<i64>,
+    token_id: i64,
+    agent_secret_hash: &str,
+    mtls_fingerprint: &str,
+) -> anyhow::Result<i64> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_device (
+            tenant_id, asset_id, stable_device_id, hostname, os_family, os_version,
+            architecture, agent_version, deployment_channel, enrollment_status,
+            agent_secret_hash, mtls_fingerprint, auth_model, last_auth_at,
+            policy_profile_id, enrollment_token_id, last_enrolled_at,
+            last_seen_at, created_at, updated_at
+        ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, 'ACTIVE',
+            $10, $11, 'enrollment_token', CURRENT_TIMESTAMP::text,
+            $12, $13, CURRENT_TIMESTAMP::text,
+            CURRENT_TIMESTAMP::text, CURRENT_TIMESTAMP::text, CURRENT_TIMESTAMP::text
+        )
+        ON CONFLICT (tenant_id, stable_device_id) DO UPDATE SET
+            asset_id = EXCLUDED.asset_id,
+            hostname = EXCLUDED.hostname,
+            os_family = EXCLUDED.os_family,
+            os_version = EXCLUDED.os_version,
+            architecture = EXCLUDED.architecture,
+            agent_version = EXCLUDED.agent_version,
+            deployment_channel = EXCLUDED.deployment_channel,
+            enrollment_status = 'ACTIVE',
+            agent_secret_hash = EXCLUDED.agent_secret_hash,
+            mtls_fingerprint = EXCLUDED.mtls_fingerprint,
+            auth_model = 'enrollment_token',
+            last_auth_at = CURRENT_TIMESTAMP::text,
+            policy_profile_id = EXCLUDED.policy_profile_id,
+            enrollment_token_id = EXCLUDED.enrollment_token_id,
+            last_enrolled_at = CURRENT_TIMESTAMP::text,
+            last_seen_at = CURRENT_TIMESTAMP::text,
+            updated_at = CURRENT_TIMESTAMP::text
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(payload.asset_id)
+    .bind(normalized(&payload.stable_device_id))
+    .bind(normalized(&payload.hostname))
+    .bind(normalized_upper(&payload.os_family))
+    .bind(normalized(&payload.os_version))
+    .bind(normalized(&payload.architecture))
+    .bind(normalized(&payload.agent_version))
+    .bind(deployment_channel)
+    .bind(agent_secret_hash)
+    .bind(mtls_fingerprint)
+    .bind(policy_profile_id)
+    .bind(token_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .context("PostgreSQL-Agent-Device konnte nicht atomar enrollt werden")?;
+    row.try_get("id").map_err(Into::into)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn upsert_enrolled_device_sqlite(
+    transaction: &mut Transaction<'_, Sqlite>,
+    tenant_id: i64,
+    payload: &AgentEnrollRequest,
+    deployment_channel: &str,
+    policy_profile_id: Option<i64>,
+    token_id: i64,
+    agent_secret_hash: &str,
+    mtls_fingerprint: &str,
+) -> anyhow::Result<i64> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_device (
+            tenant_id, asset_id, stable_device_id, hostname, os_family, os_version,
+            architecture, agent_version, deployment_channel, enrollment_status,
+            agent_secret_hash, mtls_fingerprint, auth_model, last_auth_at,
+            policy_profile_id, enrollment_token_id, last_enrolled_at,
+            last_seen_at, created_at, updated_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'ACTIVE',
+            ?10, ?11, 'enrollment_token', CURRENT_TIMESTAMP,
+            ?12, ?13, CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (tenant_id, stable_device_id) DO UPDATE SET
+            asset_id = excluded.asset_id,
+            hostname = excluded.hostname,
+            os_family = excluded.os_family,
+            os_version = excluded.os_version,
+            architecture = excluded.architecture,
+            agent_version = excluded.agent_version,
+            deployment_channel = excluded.deployment_channel,
+            enrollment_status = 'ACTIVE',
+            agent_secret_hash = excluded.agent_secret_hash,
+            mtls_fingerprint = excluded.mtls_fingerprint,
+            auth_model = 'enrollment_token',
+            last_auth_at = CURRENT_TIMESTAMP,
+            policy_profile_id = excluded.policy_profile_id,
+            enrollment_token_id = excluded.enrollment_token_id,
+            last_enrolled_at = CURRENT_TIMESTAMP,
+            last_seen_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(payload.asset_id)
+    .bind(normalized(&payload.stable_device_id))
+    .bind(normalized(&payload.hostname))
+    .bind(normalized_upper(&payload.os_family))
+    .bind(normalized(&payload.os_version))
+    .bind(normalized(&payload.architecture))
+    .bind(normalized(&payload.agent_version))
+    .bind(deployment_channel)
+    .bind(agent_secret_hash)
+    .bind(mtls_fingerprint)
+    .bind(policy_profile_id)
+    .bind(token_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .context("SQLite-Agent-Device konnte nicht atomar enrollt werden")?;
+    row.try_get("id").map_err(Into::into)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_enrollment_audit_postgres(
+    transaction: &mut Transaction<'_, Postgres>,
+    tenant_id: i64,
+    token_id: Option<i64>,
+    device_id: Option<i64>,
+    event_type: &str,
+    actor_id: Option<i64>,
+    detail: Value,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_enrollment_audit
+            (tenant_id, token_id, device_id, event_type, actor_id, detail_json, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP::text)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(token_id)
+    .bind(device_id)
+    .bind(event_type)
+    .bind(actor_id)
+    .bind(sqlx::types::Json(detail))
+    .execute(&mut **transaction)
+    .await
+    .context("PostgreSQL-Agent-Enrollment-Audit konnte nicht gespeichert werden")?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn insert_enrollment_audit_sqlite(
+    transaction: &mut Transaction<'_, Sqlite>,
+    tenant_id: i64,
+    token_id: Option<i64>,
+    device_id: Option<i64>,
+    event_type: &str,
+    actor_id: Option<i64>,
+    detail: Value,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_enrollment_audit
+            (tenant_id, token_id, device_id, event_type, actor_id, detail_json, created_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, CURRENT_TIMESTAMP)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(token_id)
+    .bind(device_id)
+    .bind(event_type)
+    .bind(actor_id)
+    .bind(detail.to_string())
+    .execute(&mut **transaction)
+    .await
+    .context("SQLite-Agent-Enrollment-Audit konnte nicht gespeichert werden")?;
+    Ok(())
+}
+
+async fn ensure_policy_for_tenant_postgres(
+    transaction: &mut Transaction<'_, Postgres>,
+    tenant_id: i64,
+    policy_profile_id: Option<i64>,
+) -> anyhow::Result<()> {
+    let Some(policy_profile_id) = policy_profile_id else {
+        return Ok(());
+    };
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM zero_trust_agent_policy_profile WHERE tenant_id = $1 AND id = $2)",
+    )
+    .bind(tenant_id)
+    .bind(policy_profile_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .context("PostgreSQL-Agent-Policy konnte nicht geprueft werden")?;
+    if !exists {
+        bail!("Agent-Policy-Profil wurde im aktiven Tenant nicht gefunden");
+    }
+    Ok(())
+}
+
+async fn ensure_policy_for_tenant_sqlite(
+    transaction: &mut Transaction<'_, Sqlite>,
+    tenant_id: i64,
+    policy_profile_id: Option<i64>,
+) -> anyhow::Result<()> {
+    let Some(policy_profile_id) = policy_profile_id else {
+        return Ok(());
+    };
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM zero_trust_agent_policy_profile WHERE tenant_id = ?1 AND id = ?2",
+    )
+    .bind(tenant_id)
+    .bind(policy_profile_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .context("SQLite-Agent-Policy konnte nicht geprueft werden")?;
+    if exists == 0 {
+        bail!("Agent-Policy-Profil wurde im aktiven Tenant nicht gefunden");
+    }
+    Ok(())
+}
+
+async fn audit_failed_enrollment_postgres(
+    transaction: &mut Transaction<'_, Postgres>,
+    tenant_id: i64,
+    token_hash: &str,
+) -> anyhow::Result<()> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, status, expires_at
+        FROM zero_trust_agent_enrollment_token
+        WHERE tenant_id = $1 AND token_hash = $2
+        FOR UPDATE
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(token_hash)
+    .fetch_optional(&mut **transaction)
+    .await
+    .context("PostgreSQL-fehlgeschlagenes Agent-Enrollment konnte nicht geprueft werden")?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+    let token_id: i64 = row.try_get("id")?;
+    let status: String = row.try_get("status")?;
+    let expires_at: Option<String> = row.try_get("expires_at")?;
+    let expired = expires_at.as_deref().is_some_and(timestamp_is_expired);
+    if expired && !matches!(status.as_str(), "expired" | "revoked" | "consumed") {
+        sqlx::query(
+            "UPDATE zero_trust_agent_enrollment_token SET status = 'expired', last_attempt_at = CURRENT_TIMESTAMP::text, updated_at = CURRENT_TIMESTAMP::text WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(token_id)
+        .execute(&mut **transaction)
+        .await?;
+        insert_enrollment_audit_postgres(
+            transaction,
+            tenant_id,
+            Some(token_id),
+            None,
+            "token_expired",
+            None,
+            json!({}),
+        )
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE zero_trust_agent_enrollment_token SET last_attempt_at = CURRENT_TIMESTAMP::text, updated_at = CURRENT_TIMESTAMP::text WHERE tenant_id = $1 AND id = $2",
+        )
+        .bind(tenant_id)
+        .bind(token_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    insert_enrollment_audit_postgres(
+        transaction,
+        tenant_id,
+        Some(token_id),
+        None,
+        "enrollment_failed",
+        None,
+        json!({"reason": "token_constraint_or_lifecycle"}),
+    )
+    .await
+}
+
+async fn audit_failed_enrollment_sqlite(
+    transaction: &mut Transaction<'_, Sqlite>,
+    tenant_id: i64,
+    token_hash: &str,
+) -> anyhow::Result<()> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, status, expires_at
+        FROM zero_trust_agent_enrollment_token
+        WHERE tenant_id = ?1 AND token_hash = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(token_hash)
+    .fetch_optional(&mut **transaction)
+    .await
+    .context("SQLite-fehlgeschlagenes Agent-Enrollment konnte nicht geprueft werden")?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+    let token_id: i64 = row.try_get("id")?;
+    let status: String = row.try_get("status")?;
+    let expires_at: Option<String> = row.try_get("expires_at")?;
+    let expired = expires_at.as_deref().is_some_and(timestamp_is_expired);
+    if expired && !matches!(status.as_str(), "expired" | "revoked" | "consumed") {
+        sqlx::query(
+            "UPDATE zero_trust_agent_enrollment_token SET status = 'expired', last_attempt_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?1 AND id = ?2",
+        )
+        .bind(tenant_id)
+        .bind(token_id)
+        .execute(&mut **transaction)
+        .await?;
+        insert_enrollment_audit_sqlite(
+            transaction,
+            tenant_id,
+            Some(token_id),
+            None,
+            "token_expired",
+            None,
+            json!({}),
+        )
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE zero_trust_agent_enrollment_token SET last_attempt_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?1 AND id = ?2",
+        )
+        .bind(tenant_id)
+        .bind(token_id)
+        .execute(&mut **transaction)
+        .await?;
+    }
+    insert_enrollment_audit_sqlite(
+        transaction,
+        tenant_id,
+        Some(token_id),
+        None,
+        "enrollment_failed",
+        None,
+        json!({"reason": "token_constraint_or_lifecycle"}),
+    )
+    .await
+}
+
+async fn list_enrollment_tokens_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<AgentEnrollmentTokenSummary>> {
+    refresh_expired_tokens_postgres(pool, tenant_id).await?;
+    let rows = sqlx::query(enrollment_token_list_postgres_sql())
+        .bind(tenant_id)
+        .bind(limit.clamp(1, 500))
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-Agent-Enrollment-Tokens konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(enrollment_token_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
         .map_err(Into::into)
 }
 
-async fn update_device_agent_auth_postgres(
-    pool: &PgPool,
-    tenant_id: i64,
-    device_id: i64,
-    agent_secret_hash: &str,
-    mtls_fingerprint: &str,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        r#"
-        UPDATE zero_trust_agent_device
-        SET agent_secret_hash = $1,
-            mtls_fingerprint = $2,
-            auth_model = 'enrollment_token',
-            last_auth_at = CURRENT_TIMESTAMP::text,
-            updated_at = CURRENT_TIMESTAMP::text
-        WHERE tenant_id = $3 AND id = $4
-        "#,
-    )
-    .bind(agent_secret_hash)
-    .bind(mtls_fingerprint)
-    .bind(tenant_id)
-    .bind(device_id)
-    .execute(pool)
-    .await
-    .context("PostgreSQL-Agent-Device-Auth konnte nicht aktualisiert werden")?;
-    Ok(())
-}
-
-async fn update_device_agent_auth_sqlite(
+async fn list_enrollment_tokens_sqlite(
     pool: &SqlitePool,
     tenant_id: i64,
-    device_id: i64,
-    agent_secret_hash: &str,
-    mtls_fingerprint: &str,
-) -> anyhow::Result<()> {
-    sqlx::query(
+    limit: i64,
+) -> anyhow::Result<Vec<AgentEnrollmentTokenSummary>> {
+    refresh_expired_tokens_sqlite(pool, tenant_id).await?;
+    let rows = sqlx::query(enrollment_token_list_sqlite_sql())
+        .bind(tenant_id)
+        .bind(limit.clamp(1, 500))
+        .fetch_all(pool)
+        .await
+        .context("SQLite-Agent-Enrollment-Tokens konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(enrollment_token_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn revoke_enrollment_token_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    token_id: i64,
+    actor_id: i64,
+) -> anyhow::Result<Option<AgentEnrollmentTokenSummary>> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("PostgreSQL-Token-Widerruf konnte nicht gestartet werden")?;
+    let row = sqlx::query(
         r#"
-        UPDATE zero_trust_agent_device
-        SET agent_secret_hash = ?1,
-            mtls_fingerprint = ?2,
-            auth_model = 'enrollment_token',
-            last_auth_at = CURRENT_TIMESTAMP,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE tenant_id = ?3 AND id = ?4
+        UPDATE zero_trust_agent_enrollment_token
+        SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP::text, updated_at = CURRENT_TIMESTAMP::text
+        WHERE tenant_id = $1 AND id = $2 AND status IN ('pending', 'partially_used', 'ACTIVE')
+        RETURNING id
         "#,
     )
-    .bind(agent_secret_hash)
-    .bind(mtls_fingerprint)
     .bind(tenant_id)
-    .bind(device_id)
-    .execute(pool)
+    .bind(token_id)
+    .fetch_optional(&mut *transaction)
     .await
-    .context("SQLite-Agent-Device-Auth konnte nicht aktualisiert werden")?;
-    Ok(())
+    .context("PostgreSQL-Agent-Enrollment-Token konnte nicht widerrufen werden")?;
+    if row.is_some() {
+        insert_enrollment_audit_postgres(
+            &mut transaction,
+            tenant_id,
+            Some(token_id),
+            None,
+            "token_revoked",
+            Some(actor_id),
+            json!({}),
+        )
+        .await?;
+    }
+    let row = sqlx::query(enrollment_token_detail_postgres_sql())
+        .bind(tenant_id)
+        .bind(token_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("PostgreSQL-Agent-Enrollment-Token konnte nach Widerruf nicht gelesen werden")?;
+    let token = row.map(enrollment_token_from_pg_row).transpose()?;
+    transaction
+        .commit()
+        .await
+        .context("PostgreSQL-Token-Widerruf konnte nicht gespeichert werden")?;
+    Ok(token)
+}
+
+async fn revoke_enrollment_token_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    token_id: i64,
+    actor_id: i64,
+) -> anyhow::Result<Option<AgentEnrollmentTokenSummary>> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("SQLite-Token-Widerruf konnte nicht gestartet werden")?;
+    let row = sqlx::query(
+        r#"
+        UPDATE zero_trust_agent_enrollment_token
+        SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = ?1 AND id = ?2 AND status IN ('pending', 'partially_used', 'ACTIVE')
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(token_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .context("SQLite-Agent-Enrollment-Token konnte nicht widerrufen werden")?;
+    if row.is_some() {
+        insert_enrollment_audit_sqlite(
+            &mut transaction,
+            tenant_id,
+            Some(token_id),
+            None,
+            "token_revoked",
+            Some(actor_id),
+            json!({}),
+        )
+        .await?;
+    }
+    let row = sqlx::query(enrollment_token_detail_sqlite_sql())
+        .bind(tenant_id)
+        .bind(token_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("SQLite-Agent-Enrollment-Token konnte nach Widerruf nicht gelesen werden")?;
+    let token = row.map(enrollment_token_from_sqlite_row).transpose()?;
+    transaction
+        .commit()
+        .await
+        .context("SQLite-Token-Widerruf konnte nicht gespeichert werden")?;
+    Ok(token)
+}
+
+async fn refresh_expired_tokens_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result<()> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("PostgreSQL-Token-Ablaufpruefung konnte nicht gestartet werden")?;
+    let rows = sqlx::query(
+        r#"
+        UPDATE zero_trust_agent_enrollment_token
+        SET status = 'expired', updated_at = CURRENT_TIMESTAMP::text
+        WHERE tenant_id = $1
+          AND status IN ('pending', 'partially_used', 'ACTIVE')
+          AND expires_at IS NOT NULL AND expires_at <> ''
+          AND expires_at::timestamptz <= CURRENT_TIMESTAMP
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(&mut *transaction)
+    .await
+    .context("PostgreSQL-abgelaufene Agent-Tokens konnten nicht aktualisiert werden")?;
+    for row in rows {
+        insert_enrollment_audit_postgres(
+            &mut transaction,
+            tenant_id,
+            Some(row.try_get("id")?),
+            None,
+            "token_expired",
+            None,
+            json!({}),
+        )
+        .await?;
+    }
+    transaction
+        .commit()
+        .await
+        .context("PostgreSQL-Token-Ablaufpruefung konnte nicht gespeichert werden")
+}
+
+async fn refresh_expired_tokens_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Result<()> {
+    let mut transaction = pool
+        .begin()
+        .await
+        .context("SQLite-Token-Ablaufpruefung konnte nicht gestartet werden")?;
+    let rows = sqlx::query(
+        r#"
+        UPDATE zero_trust_agent_enrollment_token
+        SET status = 'expired', updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = ?1
+          AND status IN ('pending', 'partially_used', 'ACTIVE')
+          AND expires_at IS NOT NULL AND expires_at <> ''
+          AND julianday(expires_at) <= julianday('now')
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_all(&mut *transaction)
+    .await
+    .context("SQLite-abgelaufene Agent-Tokens konnten nicht aktualisiert werden")?;
+    for row in rows {
+        insert_enrollment_audit_sqlite(
+            &mut transaction,
+            tenant_id,
+            Some(row.try_get("id")?),
+            None,
+            "token_expired",
+            None,
+            json!({}),
+        )
+        .await?;
+    }
+    transaction
+        .commit()
+        .await
+        .context("SQLite-Token-Ablaufpruefung konnte nicht gespeichert werden")
+}
+
+async fn list_enrollment_audit_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<AgentEnrollmentAuditEvent>> {
+    let rows = sqlx::query(enrollment_audit_postgres_sql())
+        .bind(tenant_id)
+        .bind(limit.clamp(1, 500))
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-Agent-Enrollment-Audit konnte nicht gelesen werden")?;
+    rows.into_iter()
+        .map(enrollment_audit_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn list_enrollment_audit_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<AgentEnrollmentAuditEvent>> {
+    let rows = sqlx::query(enrollment_audit_sqlite_sql())
+        .bind(tenant_id)
+        .bind(limit.clamp(1, 500))
+        .fetch_all(pool)
+        .await
+        .context("SQLite-Agent-Enrollment-Audit konnte nicht gelesen werden")?;
+    rows.into_iter()
+        .map(enrollment_audit_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
 }
 
 async fn rotate_agent_secret_postgres(
@@ -780,57 +1661,6 @@ async fn rotate_agent_secret_sqlite(
         .await
         .context("SQLite-Agent-Secret-Rotation konnte nicht gespeichert werden")?;
     Ok(Some(device))
-}
-
-async fn consume_enrollment_token_postgres(
-    pool: &PgPool,
-    tenant_id: i64,
-    token_id: i64,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        r#"
-        UPDATE zero_trust_agent_enrollment_token
-        SET uses_remaining = CASE
-                WHEN uses_remaining IS NULL THEN NULL
-                ELSE GREATEST(uses_remaining - 1, 0)
-            END,
-            last_used_at = CURRENT_TIMESTAMP::text,
-            updated_at = CURRENT_TIMESTAMP::text
-        WHERE tenant_id = $1 AND id = $2
-        "#,
-    )
-    .bind(tenant_id)
-    .bind(token_id)
-    .execute(pool)
-    .await
-    .context("PostgreSQL-Agent-Enrollment-Token konnte nicht verbraucht werden")?;
-    Ok(())
-}
-
-async fn consume_enrollment_token_sqlite(
-    pool: &SqlitePool,
-    tenant_id: i64,
-    token_id: i64,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        r#"
-        UPDATE zero_trust_agent_enrollment_token
-        SET uses_remaining = CASE
-                WHEN uses_remaining IS NULL THEN NULL
-                WHEN uses_remaining > 0 THEN uses_remaining - 1
-                ELSE 0
-            END,
-            last_used_at = CURRENT_TIMESTAMP,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE tenant_id = ?1 AND id = ?2
-        "#,
-    )
-    .bind(tenant_id)
-    .bind(token_id)
-    .execute(pool)
-    .await
-    .context("SQLite-Agent-Enrollment-Token konnte nicht verbraucht werden")?;
-    Ok(())
 }
 
 async fn verify_agent_secret_postgres(
@@ -1614,12 +2444,18 @@ fn device_list_postgres_sql() -> &'static str {
         device.id, device.tenant_id, device.asset_id, device.stable_device_id,
         device.hostname, device.os_family, device.os_version, device.architecture,
         device.agent_version, device.deployment_channel, device.enrollment_status,
-        device.zero_trust_score, device.last_seen_at, device.created_at, device.updated_at,
+        device.policy_profile_id, policy.name AS policy_name,
+        device.enrollment_token_id, device.last_enrolled_at,
+        (device.mtls_fingerprint <> '') AS mtls_bound,
+        device.zero_trust_score::bigint AS zero_trust_score,
+        device.last_seen_at, device.created_at, device.updated_at,
         (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id)::bigint AS finding_count,
         (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED'))::bigint AS open_finding_count,
         (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED') AND finding.severity = 'CRITICAL')::bigint AS critical_finding_count,
         (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED') AND finding.severity = 'HIGH')::bigint AS high_finding_count
     FROM zero_trust_agent_device device
+    LEFT JOIN zero_trust_agent_policy_profile policy
+      ON policy.tenant_id = device.tenant_id AND policy.id = device.policy_profile_id
     WHERE device.tenant_id = $1
     ORDER BY COALESCE(device.last_seen_at, device.created_at) DESC, device.id DESC
     LIMIT $2
@@ -1632,12 +2468,17 @@ fn device_list_sqlite_sql() -> &'static str {
         device.id, device.tenant_id, device.asset_id, device.stable_device_id,
         device.hostname, device.os_family, device.os_version, device.architecture,
         device.agent_version, device.deployment_channel, device.enrollment_status,
+        device.policy_profile_id, policy.name AS policy_name,
+        device.enrollment_token_id, device.last_enrolled_at,
+        CASE WHEN device.mtls_fingerprint <> '' THEN 1 ELSE 0 END AS mtls_bound,
         device.zero_trust_score, device.last_seen_at, device.created_at, device.updated_at,
         (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id) AS finding_count,
         (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED')) AS open_finding_count,
         (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED') AND finding.severity = 'CRITICAL') AS critical_finding_count,
         (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED') AND finding.severity = 'HIGH') AS high_finding_count
     FROM zero_trust_agent_device device
+    LEFT JOIN zero_trust_agent_policy_profile policy
+      ON policy.tenant_id = device.tenant_id AND policy.id = device.policy_profile_id
     WHERE device.tenant_id = ?1
     ORDER BY COALESCE(device.last_seen_at, device.created_at) DESC, device.id DESC
     LIMIT ?2
@@ -1651,12 +2492,18 @@ fn device_detail_postgres_sql() -> &'static str {
             device.id, device.tenant_id, device.asset_id, device.stable_device_id,
             device.hostname, device.os_family, device.os_version, device.architecture,
             device.agent_version, device.deployment_channel, device.enrollment_status,
-            device.zero_trust_score, device.last_seen_at, device.created_at, device.updated_at,
+            device.policy_profile_id, policy.name AS policy_name,
+            device.enrollment_token_id, device.last_enrolled_at,
+            (device.mtls_fingerprint <> '') AS mtls_bound,
+            device.zero_trust_score::bigint AS zero_trust_score,
+            device.last_seen_at, device.created_at, device.updated_at,
             (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id)::bigint AS finding_count,
             (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED'))::bigint AS open_finding_count,
             (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED') AND finding.severity = 'CRITICAL')::bigint AS critical_finding_count,
             (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED') AND finding.severity = 'HIGH')::bigint AS high_finding_count
         FROM zero_trust_agent_device device
+        LEFT JOIN zero_trust_agent_policy_profile policy
+          ON policy.tenant_id = device.tenant_id AND policy.id = device.policy_profile_id
         WHERE device.tenant_id = $1 AND device.id = $2
     ) device_detail
     "#
@@ -1669,12 +2516,17 @@ fn device_detail_sqlite_sql() -> &'static str {
             device.id, device.tenant_id, device.asset_id, device.stable_device_id,
             device.hostname, device.os_family, device.os_version, device.architecture,
             device.agent_version, device.deployment_channel, device.enrollment_status,
+            device.policy_profile_id, policy.name AS policy_name,
+            device.enrollment_token_id, device.last_enrolled_at,
+            CASE WHEN device.mtls_fingerprint <> '' THEN 1 ELSE 0 END AS mtls_bound,
             device.zero_trust_score, device.last_seen_at, device.created_at, device.updated_at,
             (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id) AS finding_count,
             (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED')) AS open_finding_count,
             (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED') AND finding.severity = 'CRITICAL') AS critical_finding_count,
             (SELECT COUNT(*) FROM zero_trust_agent_finding finding WHERE finding.device_id = device.id AND finding.status NOT IN ('RESOLVED', 'ACCEPTED', 'OBSERVED') AND finding.severity = 'HIGH') AS high_finding_count
         FROM zero_trust_agent_device device
+        LEFT JOIN zero_trust_agent_policy_profile policy
+          ON policy.tenant_id = device.tenant_id AND policy.id = device.policy_profile_id
         WHERE device.tenant_id = ?1 AND device.id = ?2
     ) device_detail
     "#
@@ -1801,6 +2653,11 @@ fn device_from_pg_row(row: PgRow) -> Result<AgentDeviceSummary, sqlx::Error> {
         agent_version: row.try_get("agent_version")?,
         deployment_channel: row.try_get("deployment_channel")?,
         enrollment_status: row.try_get("enrollment_status")?,
+        policy_profile_id: row.try_get("policy_profile_id")?,
+        policy_name: row.try_get("policy_name")?,
+        enrollment_token_id: row.try_get("enrollment_token_id")?,
+        last_enrolled_at: row.try_get("last_enrolled_at")?,
+        mtls_bound: row.try_get("mtls_bound")?,
         zero_trust_score: row.try_get("zero_trust_score")?,
         last_seen_at: row.try_get("last_seen_at")?,
         open_finding_count: row.try_get("open_finding_count")?,
@@ -1825,6 +2682,11 @@ fn device_from_sqlite_row(row: SqliteRow) -> Result<AgentDeviceSummary, sqlx::Er
         agent_version: row.try_get("agent_version")?,
         deployment_channel: row.try_get("deployment_channel")?,
         enrollment_status: row.try_get("enrollment_status")?,
+        policy_profile_id: row.try_get("policy_profile_id")?,
+        policy_name: row.try_get("policy_name")?,
+        enrollment_token_id: row.try_get("enrollment_token_id")?,
+        last_enrolled_at: row.try_get("last_enrolled_at")?,
+        mtls_bound: row.try_get::<i64, _>("mtls_bound")? != 0,
         zero_trust_score: row.try_get("zero_trust_score")?,
         last_seen_at: row.try_get("last_seen_at")?,
         open_finding_count: row.try_get("open_finding_count")?,
@@ -1963,6 +2825,94 @@ fn check_catalog_from_sqlite_row(row: SqliteRow) -> Result<AgentCheckCatalogItem
     })
 }
 
+fn enrollment_token_list_postgres_sql() -> &'static str {
+    r#"
+    SELECT token.id, token.tenant_id, token.label, token.token_hint, token.status,
+        token.rollout_os_family, token.allowed_os_families,
+        token.allowed_deployment_channel, token.policy_profile_id,
+        policy.name AS policy_name, token.mtls_fingerprint, token.expires_at,
+        token.max_uses, token.uses_count, token.uses_remaining, token.created_by_id,
+        token.last_attempt_at, token.last_used_at, token.revoked_at,
+        token.created_at, token.updated_at
+    FROM zero_trust_agent_enrollment_token token
+    LEFT JOIN zero_trust_agent_policy_profile policy
+      ON policy.tenant_id = token.tenant_id AND policy.id = token.policy_profile_id
+    WHERE token.tenant_id = $1
+    ORDER BY token.created_at DESC, token.id DESC
+    LIMIT $2
+    "#
+}
+
+fn enrollment_token_list_sqlite_sql() -> &'static str {
+    r#"
+    SELECT token.id, token.tenant_id, token.label, token.token_hint, token.status,
+        token.rollout_os_family, token.allowed_os_families,
+        token.allowed_deployment_channel, token.policy_profile_id,
+        policy.name AS policy_name, token.mtls_fingerprint, token.expires_at,
+        token.max_uses, token.uses_count, token.uses_remaining, token.created_by_id,
+        token.last_attempt_at, token.last_used_at, token.revoked_at,
+        token.created_at, token.updated_at
+    FROM zero_trust_agent_enrollment_token token
+    LEFT JOIN zero_trust_agent_policy_profile policy
+      ON policy.tenant_id = token.tenant_id AND policy.id = token.policy_profile_id
+    WHERE token.tenant_id = ?1
+    ORDER BY token.created_at DESC, token.id DESC
+    LIMIT ?2
+    "#
+}
+
+fn enrollment_token_detail_postgres_sql() -> &'static str {
+    r#"
+    SELECT token.id, token.tenant_id, token.label, token.token_hint, token.status,
+        token.rollout_os_family, token.allowed_os_families,
+        token.allowed_deployment_channel, token.policy_profile_id,
+        policy.name AS policy_name, token.mtls_fingerprint, token.expires_at,
+        token.max_uses, token.uses_count, token.uses_remaining, token.created_by_id,
+        token.last_attempt_at, token.last_used_at, token.revoked_at,
+        token.created_at, token.updated_at
+    FROM zero_trust_agent_enrollment_token token
+    LEFT JOIN zero_trust_agent_policy_profile policy
+      ON policy.tenant_id = token.tenant_id AND policy.id = token.policy_profile_id
+    WHERE token.tenant_id = $1 AND token.id = $2
+    "#
+}
+
+fn enrollment_token_detail_sqlite_sql() -> &'static str {
+    r#"
+    SELECT token.id, token.tenant_id, token.label, token.token_hint, token.status,
+        token.rollout_os_family, token.allowed_os_families,
+        token.allowed_deployment_channel, token.policy_profile_id,
+        policy.name AS policy_name, token.mtls_fingerprint, token.expires_at,
+        token.max_uses, token.uses_count, token.uses_remaining, token.created_by_id,
+        token.last_attempt_at, token.last_used_at, token.revoked_at,
+        token.created_at, token.updated_at
+    FROM zero_trust_agent_enrollment_token token
+    LEFT JOIN zero_trust_agent_policy_profile policy
+      ON policy.tenant_id = token.tenant_id AND policy.id = token.policy_profile_id
+    WHERE token.tenant_id = ?1 AND token.id = ?2
+    "#
+}
+
+fn enrollment_audit_postgres_sql() -> &'static str {
+    r#"
+    SELECT id, tenant_id, token_id, device_id, event_type, actor_id, detail_json, created_at
+    FROM zero_trust_agent_enrollment_audit
+    WHERE tenant_id = $1
+    ORDER BY created_at DESC, id DESC
+    LIMIT $2
+    "#
+}
+
+fn enrollment_audit_sqlite_sql() -> &'static str {
+    r#"
+    SELECT id, tenant_id, token_id, device_id, event_type, actor_id, detail_json, created_at
+    FROM zero_trust_agent_enrollment_audit
+    WHERE tenant_id = ?1
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?2
+    "#
+}
+
 fn enrollment_token_from_pg_row(row: PgRow) -> Result<AgentEnrollmentTokenSummary, sqlx::Error> {
     let allowed_raw: String = row.try_get("allowed_os_families")?;
     Ok(AgentEnrollmentTokenSummary {
@@ -1971,11 +2921,18 @@ fn enrollment_token_from_pg_row(row: PgRow) -> Result<AgentEnrollmentTokenSummar
         label: row.try_get("label")?,
         token_hint: row.try_get("token_hint")?,
         status: row.try_get("status")?,
+        rollout_os_family: row.try_get("rollout_os_family")?,
         allowed_os_families: parse_allowed_os_families(&allowed_raw),
+        allowed_deployment_channel: row.try_get("allowed_deployment_channel")?,
+        policy_profile_id: row.try_get("policy_profile_id")?,
+        policy_name: row.try_get("policy_name")?,
         mtls_fingerprint: row.try_get("mtls_fingerprint")?,
         expires_at: row.try_get("expires_at")?,
+        max_uses: row.try_get("max_uses")?,
+        uses_count: row.try_get("uses_count")?,
         uses_remaining: row.try_get("uses_remaining")?,
         created_by_id: row.try_get("created_by_id")?,
+        last_attempt_at: row.try_get("last_attempt_at")?,
         last_used_at: row.try_get("last_used_at")?,
         revoked_at: row.try_get("revoked_at")?,
         created_at: row.try_get("created_at")?,
@@ -1993,11 +2950,18 @@ fn enrollment_token_from_sqlite_row(
         label: row.try_get("label")?,
         token_hint: row.try_get("token_hint")?,
         status: row.try_get("status")?,
+        rollout_os_family: row.try_get("rollout_os_family")?,
         allowed_os_families: parse_allowed_os_families(&allowed_raw),
+        allowed_deployment_channel: row.try_get("allowed_deployment_channel")?,
+        policy_profile_id: row.try_get("policy_profile_id")?,
+        policy_name: row.try_get("policy_name")?,
         mtls_fingerprint: row.try_get("mtls_fingerprint")?,
         expires_at: row.try_get("expires_at")?,
+        max_uses: row.try_get("max_uses")?,
+        uses_count: row.try_get("uses_count")?,
         uses_remaining: row.try_get("uses_remaining")?,
         created_by_id: row.try_get("created_by_id")?,
+        last_attempt_at: row.try_get("last_attempt_at")?,
         last_used_at: row.try_get("last_used_at")?,
         revoked_at: row.try_get("revoked_at")?,
         created_at: row.try_get("created_at")?,
@@ -2006,59 +2970,53 @@ fn enrollment_token_from_sqlite_row(
 }
 
 fn enrollment_token_grant_from_pg_row(row: PgRow) -> Result<EnrollmentTokenGrant, sqlx::Error> {
-    let allowed_raw: String = row.try_get("allowed_os_families")?;
     Ok(EnrollmentTokenGrant {
         id: row.try_get("id")?,
-        allowed_os_families: parse_allowed_os_families(&allowed_raw),
+        policy_profile_id: row.try_get("policy_profile_id")?,
         mtls_fingerprint: row.try_get("mtls_fingerprint")?,
-        expires_at: row.try_get("expires_at")?,
-        uses_remaining: row.try_get("uses_remaining")?,
+        status: row.try_get("status")?,
     })
 }
 
 fn enrollment_token_grant_from_sqlite_row(
     row: SqliteRow,
 ) -> Result<EnrollmentTokenGrant, sqlx::Error> {
-    let allowed_raw: String = row.try_get("allowed_os_families")?;
     Ok(EnrollmentTokenGrant {
         id: row.try_get("id")?,
-        allowed_os_families: parse_allowed_os_families(&allowed_raw),
+        policy_profile_id: row.try_get("policy_profile_id")?,
         mtls_fingerprint: row.try_get("mtls_fingerprint")?,
-        expires_at: row.try_get("expires_at")?,
-        uses_remaining: row.try_get("uses_remaining")?,
+        status: row.try_get("status")?,
     })
 }
 
-fn grant_if_valid(
-    grant: EnrollmentTokenGrant,
-    os_family: &str,
-    supplied_mtls: Option<&str>,
-) -> Option<EnrollmentTokenGrant> {
-    if let Some(uses_remaining) = grant.uses_remaining {
-        if uses_remaining <= 0 {
-            return None;
-        }
-    }
-    if let Some(expires_at) = grant.expires_at.as_deref() {
-        let expires_at = DateTime::parse_from_rfc3339(expires_at).ok()?;
-        if expires_at.with_timezone(&Utc) <= Utc::now() {
-            return None;
-        }
-    }
-    if !grant.allowed_os_families.is_empty()
-        && !grant
-            .allowed_os_families
-            .iter()
-            .any(|allowed| allowed == os_family)
-    {
-        return None;
-    }
-    if !grant.mtls_fingerprint.trim().is_empty()
-        && Some(grant.mtls_fingerprint.as_str()) != supplied_mtls
-    {
-        return None;
-    }
-    Some(grant)
+fn enrollment_audit_from_pg_row(row: PgRow) -> Result<AgentEnrollmentAuditEvent, sqlx::Error> {
+    let detail: sqlx::types::Json<Value> = row.try_get("detail_json")?;
+    Ok(AgentEnrollmentAuditEvent {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        token_id: row.try_get("token_id")?,
+        device_id: row.try_get("device_id")?,
+        event_type: row.try_get("event_type")?,
+        actor_id: row.try_get("actor_id")?,
+        detail: detail.0,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn enrollment_audit_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<AgentEnrollmentAuditEvent, sqlx::Error> {
+    let detail_raw: String = row.try_get("detail_json")?;
+    Ok(AgentEnrollmentAuditEvent {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        token_id: row.try_get("token_id")?,
+        device_id: row.try_get("device_id")?,
+        event_type: row.try_get("event_type")?,
+        actor_id: row.try_get("actor_id")?,
+        detail: json_from_row_text(detail_raw),
+        created_at: row.try_get("created_at")?,
+    })
 }
 
 fn validate_enroll_payload(payload: &AgentEnrollRequest) -> anyhow::Result<()> {
@@ -2076,6 +3034,15 @@ fn validate_enroll_payload(payload: &AgentEnrollRequest) -> anyhow::Result<()> {
     if payload.stable_device_id.len() > 128 {
         bail!("Agent-Enrollment-Feld 'stable_device_id' darf maximal 128 Zeichen enthalten");
     }
+    let os_family = normalized_upper(&payload.os_family);
+    if !AGENT_OS_FAMILIES.contains(&os_family.as_str()) {
+        bail!("Agent-Enrollment-Feld 'os_family' ist nicht unterstuetzt");
+    }
+    let deployment_channel =
+        normalized_or_default(payload.deployment_channel.as_deref(), "manual").to_ascii_lowercase();
+    if !AGENT_DEPLOYMENT_CHANNELS.contains(&deployment_channel.as_str()) {
+        bail!("Agent-Enrollment-Feld 'deployment_channel' ist nicht unterstuetzt");
+    }
     Ok(())
 }
 
@@ -2083,17 +3050,39 @@ fn validate_enrollment_token_payload(
     payload: &AgentEnrollmentTokenCreateRequest,
 ) -> anyhow::Result<()> {
     if let Some(uses_remaining) = payload.uses_remaining {
-        if uses_remaining < 1 {
-            bail!("Agent-Enrollment-Token uses_remaining muss groesser 0 sein");
+        if !(1..=10_000).contains(&uses_remaining) {
+            bail!("Agent-Enrollment-Token uses_remaining muss zwischen 1 und 10000 liegen");
         }
     }
     if let Some(expires_at) = payload.expires_at.as_deref() {
-        normalize_optional_rfc3339(Some(expires_at))?;
+        let expires_at = normalize_optional_rfc3339(Some(expires_at))?
+            .context("Agent-Enrollment-Token expires_at fehlt")?;
+        if timestamp_is_expired(&expires_at) {
+            bail!("Agent-Enrollment-Token expires_at muss in der Zukunft liegen");
+        }
     }
     if let Some(allowed_os_families) = payload.allowed_os_families.as_ref() {
         if allowed_os_families.len() > 20 {
             bail!("Agent-Enrollment-Token darf maximal 20 OS-Familien einschraenken");
         }
+        for os_family in allowed_os_families {
+            let os_family = normalized_upper(os_family);
+            if !ONBOARDING_OS_FAMILIES.contains(&os_family.as_str()) {
+                bail!("Agent-Enrollment-Token enthaelt eine nicht unterstuetzte OS-Familie");
+            }
+        }
+    }
+    if let Some(rollout_os_family) = payload.rollout_os_family.as_deref() {
+        normalized_onboarding_os_family(rollout_os_family)?;
+    }
+    if let Some(deployment_channel) = payload.allowed_deployment_channel.as_deref() {
+        normalize_optional_deployment_channel(Some(deployment_channel))?;
+    }
+    if payload
+        .policy_profile_id
+        .is_some_and(|policy_id| policy_id <= 0)
+    {
+        bail!("Agent-Policy-Profil-ID muss positiv sein");
     }
     Ok(())
 }
@@ -2123,7 +3112,10 @@ fn normalized_upper(value: &str) -> String {
 fn normalized_allowed_os_families(values: Vec<String>) -> Vec<String> {
     let mut normalized_values = Vec::new();
     for value in values {
-        let value = normalized_upper(&value);
+        let value = match normalized_upper(&value).as_str() {
+            "NIXOS" => "LINUX".to_string(),
+            other => other.to_string(),
+        };
         if !value.is_empty() && !normalized_values.contains(&value) {
             normalized_values.push(value);
         }
@@ -2148,6 +3140,25 @@ fn normalize_optional_fingerprint(value: Option<&str>) -> Option<String> {
         .map(|value| value.to_ascii_lowercase().chars().take(255).collect())
 }
 
+fn normalized_onboarding_os_family(value: &str) -> anyhow::Result<String> {
+    let value = normalized_upper(value);
+    if !ONBOARDING_OS_FAMILIES.contains(&value.as_str()) {
+        bail!("Agent-Onboarding OS-Familie ist nicht unterstuetzt");
+    }
+    Ok(value)
+}
+
+fn normalize_optional_deployment_channel(value: Option<&str>) -> anyhow::Result<String> {
+    let value = value.unwrap_or("").trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    if !AGENT_DEPLOYMENT_CHANNELS.contains(&value.as_str()) {
+        bail!("Agent-Deployment-Kanal ist nicht unterstuetzt");
+    }
+    Ok(value)
+}
+
 fn normalize_optional_rfc3339(value: Option<&str>) -> anyhow::Result<Option<String>> {
     let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(None);
@@ -2155,6 +3166,12 @@ fn normalize_optional_rfc3339(value: Option<&str>) -> anyhow::Result<Option<Stri
     DateTime::parse_from_rfc3339(value)
         .with_context(|| "Agent-Enrollment-Token expires_at muss RFC3339 sein")?;
     Ok(Some(value.to_string()))
+}
+
+fn timestamp_is_expired(value: &str) -> bool {
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&Utc) <= Utc::now())
+        .unwrap_or(true)
 }
 
 fn normalized_pillar(value: &str) -> String {

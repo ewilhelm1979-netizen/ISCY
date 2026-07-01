@@ -8,6 +8,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- add a guided, three-step Zero-Trust Agent onboarding workflow for Windows, Linux, macOS, and NixOS using the existing deployment artifacts
+- add tenant-scoped enrollment-token metadata, revocation, policy assignment, fleet status, and lifecycle audit views
+- add enrollment-token lifecycle states for pending, partial, consumed, expired, and revoked rollouts with bounded multi-use support
 - connect tenant-scoped AI Governance systems to existing risks, roadmap tasks, incidents, and canonical change records
 - add explicit, duplicate-safe roadmap task creation from open AI Governance gaps with a stable origin key
 - include frozen AI Governance link summaries in management review UI and Markdown, HTML, PDF, and JSON exports
@@ -15,6 +18,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- make token consumption, device enrollment, policy assignment, secret-hash persistence, and lifecycle audit events transactional on SQLite and PostgreSQL
+- return enrollment tokens and agent secrets only in no-store responses, retain hashes instead of plaintext, and reject untrusted client-supplied mTLS fingerprint headers
+- enforce administrator-only token creation and revocation while allowing authenticated read-only roles to inspect safe tenant-scoped metadata
 - enforce tenant predicates while resolving every AI Governance system and linked target
 - persist link and unlink audit events and reject foreign-tenant, manipulated, and duplicate relationships
 

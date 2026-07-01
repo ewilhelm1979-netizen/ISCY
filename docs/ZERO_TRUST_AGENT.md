@@ -41,7 +41,9 @@ Der Agent liefert sichere Baseline-Telemetrie und lokale read-only Posture-Signa
 Die Admin- und Lesepfade nutzen den bestehenden ISCY Tenant/User-Kontext. Produktive Agenten nutzen Enrollment-Token und danach Agent-Secrets.
 
 ```text
+GET  /api/v1/agents/enrollment-tokens
 POST /api/v1/agents/enrollment-tokens
+POST /api/v1/agents/enrollment-tokens/{token_id}/revoke
 POST /api/v1/agents/enroll
 GET  /api/v1/agents/posture
 GET  /api/v1/agents/devices
@@ -76,7 +78,7 @@ x-iscy-agent-secret: <secret>
 x-iscy-agent-mtls-fingerprint: sha256:<fingerprint>
 ```
 
-`x-iscy-agent-mtls-fingerprint` ist optional, aber sobald ein Token oder Device daran gebunden wurde, muss der Fingerprint bei Heartbeat und Findings passen. Der Header darf nur von einem TLS terminierenden Proxy gesetzt werden, der Client-Zertifikate wirklich validiert und eingehende gleichnamige Client-Header verwirft.
+`x-iscy-agent-mtls-fingerprint` ist optional, aber sobald ein Token oder Device daran gebunden wurde, muss der Fingerprint bei Enrollment, Heartbeat und Findings passen. ISCY akzeptiert den Header nur mit `ISCY_TRUSTED_PROXY_CONFIGURED=1`. Der TLS terminierende Proxy muss das Client-Zertifikat tatsaechlich validieren, eingehende gleichnamige Header entfernen und den validierten Fingerprint neu setzen. Direkt vom Client gesetzte Fingerprint-Header werden ohne diese explizite Vertrauensgrenze abgelehnt.
 
 Token erstellen:
 
@@ -88,6 +90,51 @@ curl -fsS -X POST http://127.0.0.1:9000/api/v1/agents/enrollment-tokens \
   -H 'x-iscy-roles: ADMIN' \
   -d '{"label":"lab rollout","allowed_os_families":["WINDOWS","MACOS","LINUX"],"uses_remaining":10}'
 ```
+
+## Gefuehrtes Agent-Onboarding
+
+Administratoren starten den Assistenten unter `/zero-trust/onboarding/` oder ueber
+`Agent hinzufuegen` in der Flottenansicht. Der Workflow besteht aus drei Schritten:
+
+1. Betriebssystem, Deployment-Kanal, Rollout-Bezeichnung, optionales Policy-Profil,
+   maximale Verwendungen, Ablaufzeit, optionale OS-/Kanalbegrenzung und optionale
+   mTLS-Bindung auswaehlen.
+2. Tenantgebundene Zusammenfassung pruefen. Fremde oder nicht vorhandene
+   Policy-Profile werden serverseitig abgelehnt.
+3. Token genau einmal erzeugen und die plattformspezifische Anweisung verwenden.
+
+Unterstuetzte Plattformen sind Windows, Linux, macOS und NixOS. Unterstuetzte
+Deployment-Kanaele sind `manual`, `systemd`, `nixos`, `intune`, `jamf` und
+`other`. NixOS-Agenten melden technisch die OS-Familie Linux und werden durch
+den Deployment-Kanal `nixos` unterschieden.
+
+Die Installationshilfe verwendet ausschliesslich die vorhandenen Dateien unter
+`deploy/agent/`. ISCY erzeugt bewusst keinen Bootstrap-Download: Die einmalige,
+mit `Cache-Control: no-store` und `Referrer-Policy: no-referrer` ausgelieferte
+Anweisung vermeidet einen weiteren sensitiven Download-Endpunkt. Das Token steht
+nicht in einer URL und wird nicht dauerhaft im HTML oder in der Datenbank
+gespeichert.
+
+### Token-Lifecycle
+
+Neue Tokens sind immer begrenzt und beginnen in `pending`. Nach einer von mehreren
+erlaubten Verwendungen wechseln sie zu `partially_used`, nach der letzten zu
+`consumed`. Ablauf und administrativer Widerruf setzen `expired` beziehungsweise
+`revoked`. Der Klartext wird nur in der Erstellungsantwort ausgegeben; spaetere
+Listen enthalten ausschliesslich Hint, Grenzen, Zaehler, Policy, mTLS-Status und
+Zeitpunkte.
+
+Token-Claim, Nutzungszaehler, Device-Upsert, Policy-Zuordnung, Agent-Secret-Hash
+und Audit-Ereignisse werden in einer gemeinsamen Datenbanktransaktion gespeichert.
+Parallele Single-Use-Versuche koennen das Limit deshalb nicht ueberschreiten.
+Audit-Ereignisse sind `token_created`, `token_used`, `token_partially_used`,
+`token_consumed`, `token_expired`, `token_revoked` und `enrollment_failed`.
+Token-Klartext, Agent-Secret, Secret-Hash, Authorization-Header und Installations-
+anweisung werden nicht in den Auditdetails gespeichert.
+
+Authentifizierte Read-only-Rollen duerfen sichere Token-Metadaten und Auditdaten
+ihres Tenants lesen. Nur Administratoren duerfen Tokens erstellen, widerrufen,
+Policy-Profile zuordnen oder die einmalige Installationsansicht erzeugen.
 
 ## Lokaler Agent-Test
 
@@ -322,7 +369,7 @@ Remediation sollte erst als eigener, policy-signierter und auditierbarer Schritt
 
 ## Plattform-Integration
 
-Die Migrationen `0007_rust_zero_trust_agent_core`, `0008_rust_agent_enrollment_hardening` und `0025_rust_agent_fleet_governance` fuegen hinzu:
+Die Migrationen `0007_rust_zero_trust_agent_core`, `0008_rust_agent_enrollment_hardening`, `0025_rust_agent_fleet_governance` und `0028_rust_guided_agent_onboarding` fuegen hinzu:
 
 - `zero_trust_agent_device`
 - `zero_trust_agent_heartbeat`
@@ -332,6 +379,7 @@ Die Migrationen `0007_rust_zero_trust_agent_core`, `0008_rust_agent_enrollment_h
 - `zero_trust_agent_policy_profile`
 - `zero_trust_agent_notification_channel`
 - `zero_trust_agent_notification_delivery`
+- `zero_trust_agent_enrollment_audit`
 
 Die Webansicht ist unter `/zero-trust/` verfuegbar.
 
@@ -343,3 +391,11 @@ zusaetzlich:
 - kritische und hohe offene Agent-Findings
 - Policy-Konformitaet und erwartete Coverage ueber alle konfigurierten Scopes
 - aktivierte Notification-Kanaele und fehlende Secret-Konfiguration
+
+## Spaetere CA-/PKI-Stufe
+
+Dieser Meilenstein implementiert keine CA oder Zertifikatsausstellung. Eine
+spaetere, eigene Ausbaustufe kann lokale Schluessel- und CSR-Erzeugung auf dem
+Agent, eine providerunabhaengige CA-Schnittstelle sowie Ausstellung, Rotation,
+Widerruf und Ablaufueberwachung ergaenzen. Der private Agent-Schluessel darf das
+Geraet dabei niemals verlassen.

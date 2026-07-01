@@ -37,10 +37,14 @@ use iscy_backend::{
     AppState,
 };
 use sha2::{Digest, Sha256};
-use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
+    Row, SqlitePool,
+};
 use std::{
     fs,
     path::PathBuf,
+    str::FromStr,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -650,8 +654,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0027_rust_ai_governance_links"));
-    assert!(html.contains("27/27 angewendet"));
+    assert!(html.contains("0028_rust_guided_agent_onboarding"));
+    assert!(html.contains("28/28 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -1301,7 +1305,7 @@ async fn zero_trust_agent_flow_records_posture() {
                         "os_version":"NixOS",
                         "architecture":"x86_64",
                         "agent_version":"0.2.0",
-                        "deployment_channel":"test"
+                        "deployment_channel":"other"
                     }"#,
                 ))
                 .unwrap(),
@@ -1409,7 +1413,12 @@ async fn zero_trust_agent_token_enrollment_allows_secret_based_intake() {
         .unwrap();
     db_admin::run_sqlite_migrations(&pool).await.unwrap();
     let app = app_router_with_state(
-        AppState::default().with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
+        AppState::default()
+            .with_security_config(CommunitySecurityConfig {
+                trusted_proxy_configured: true,
+                ..CommunitySecurityConfig::default()
+            })
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
     );
 
     let response = app
@@ -1624,6 +1633,801 @@ async fn zero_trust_agent_token_enrollment_allows_secret_based_intake() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn guided_agent_token_lifecycle_enforces_roles_tenants_and_safe_metadata() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_governance_store(Some(AgentGovernanceStore::from_sqlite_pool(
+                pool.clone(),
+            ))),
+    );
+
+    let token_payload = r#"{
+        "label":"guided rollout",
+        "rollout_os_family":"WINDOWS",
+        "allowed_os_families":["WINDOWS"],
+        "allowed_deployment_channel":"intune",
+        "uses_remaining":2,
+        "expires_at":"2099-01-01T00:00:00Z"
+    }"#;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enrollment-tokens")
+                .header("content-type", "application/json")
+                .body(Body::from(token_payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enrollment-tokens")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(token_payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/policies")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"name":"Windows rollout","description":"Guided onboarding","scope_type":"OS_FAMILY","scope_value":"windows","expected_device_count":2,"heartbeat_max_age_hours":24,"minimum_zero_trust_score":80,"max_critical_findings":0,"max_high_findings":0,"enabled":true}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let policy_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let policy_id = policy_payload["policy"]["id"].as_i64().unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enrollment-tokens")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    serde_json::json!({
+                        "label": "guided rollout",
+                        "rollout_os_family": "WINDOWS",
+                        "allowed_os_families": ["WINDOWS"],
+                        "allowed_deployment_channel": "intune",
+                        "policy_profile_id": policy_id,
+                        "uses_remaining": 2,
+                        "expires_at": "2099-01-01T00:00:00Z"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(response
+        .headers()
+        .get("cache-control")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("no-store"));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let token = created["token"].as_str().unwrap().to_string();
+    let token_id = created["enrollment"]["id"].as_i64().unwrap();
+    assert_eq!(created["enrollment"]["status"], "pending");
+    assert_eq!(created["enrollment"]["max_uses"], 2);
+    assert_eq!(created["enrollment"]["policy_profile_id"], policy_id);
+
+    let stored: (String, String) = sqlx::query_as(
+        "SELECT token_hash, token_hint FROM zero_trust_agent_enrollment_token WHERE id = ?1",
+    )
+    .bind(token_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_ne!(stored.0, token);
+    assert!(!stored.0.contains(&token));
+    assert!(!stored.1.contains(&token));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/enrollment-tokens")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "3")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let metadata_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!metadata_text.contains(&token));
+    assert!(!metadata_text.contains(&stored.0));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/enrollment-tokens")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "4")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let foreign: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(foreign["tokens"].as_array().unwrap().is_empty());
+
+    let invalid_enrollment = serde_json::json!({
+        "stable_device_id": "guided-invalid",
+        "hostname": "guided-invalid",
+        "os_family": "windows",
+        "os_version": "Windows 11",
+        "architecture": "x86_64",
+        "agent_version": "0.3.22",
+        "deployment_channel": "manual"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enroll")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-agent-enrollment-token", &token)
+                .body(Body::from(invalid_enrollment.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let mut agent_secrets = Vec::new();
+    for index in 1..=2 {
+        let enrollment = serde_json::json!({
+            "stable_device_id": format!("guided-win-{index}"),
+            "hostname": format!("guided-win-{index}"),
+            "os_family": "windows",
+            "os_version": "Windows 11",
+            "architecture": "x86_64",
+            "agent_version": "0.3.22",
+            "deployment_channel": "intune"
+        });
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agents/enroll")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-agent-enrollment-token", &token)
+                    .body(Body::from(enrollment.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let enrolled: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(enrolled["device"]["policy_profile_id"], policy_id);
+        agent_secrets.push(enrolled["agent_secret"].as_str().unwrap().to_string());
+    }
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enroll")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-agent-enrollment-token", &token)
+                .body(Body::from(
+                    serde_json::json!({
+                        "stable_device_id":"guided-win-3","hostname":"guided-win-3",
+                        "os_family":"windows","os_version":"Windows 11","architecture":"x86_64",
+                        "agent_version":"0.3.22","deployment_channel":"intune"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let lifecycle: (String, i64, i64) = sqlx::query_as(
+        "SELECT status, uses_count, uses_remaining FROM zero_trust_agent_enrollment_token WHERE id = ?1",
+    )
+    .bind(token_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(lifecycle, ("consumed".to_string(), 2, 0));
+
+    let audit: Vec<String> = sqlx::query_scalar(
+        "SELECT detail_json FROM zero_trust_agent_enrollment_audit WHERE tenant_id = 1",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let audit_text = audit.join("\n");
+    assert!(!audit_text.contains(&token));
+    for secret in agent_secrets {
+        assert!(!audit_text.contains(&secret));
+    }
+    let events: Vec<String> = sqlx::query_scalar(
+        "SELECT event_type FROM zero_trust_agent_enrollment_audit WHERE token_id = ?1 ORDER BY id",
+    )
+    .bind(token_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(events.contains(&"token_created".to_string()));
+    assert!(events.contains(&"enrollment_failed".to_string()));
+    assert!(events.contains(&"token_partially_used".to_string()));
+    assert!(events.contains(&"token_consumed".to_string()));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/enrollment-tokens/{token_id}/revoke"
+                ))
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "4")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn guided_agent_rejects_revoked_expired_untrusted_and_manipulated_inputs() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
+    );
+    let create_token = |label: &str, mtls: Option<&str>| {
+        let mut payload = serde_json::json!({
+            "label": label,
+            "rollout_os_family": "LINUX",
+            "allowed_os_families": ["LINUX"],
+            "allowed_deployment_channel": "systemd",
+            "uses_remaining": 1,
+            "expires_at": "2099-01-01T00:00:00Z"
+        });
+        if let Some(mtls) = mtls {
+            payload["mtls_fingerprint"] = serde_json::json!(mtls);
+        }
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/agents/enrollment-tokens")
+            .header("content-type", "application/json")
+            .header("x-iscy-tenant-id", "1")
+            .header("x-iscy-user-id", "1")
+            .header("x-iscy-roles", "ADMIN")
+            .body(Body::from(payload.to_string()))
+            .unwrap()
+    };
+    let enrollment = |stable_id: &str, os_family: &str, channel: &str, token: &str| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/agents/enroll")
+            .header("content-type", "application/json")
+            .header("x-iscy-tenant-id", "1")
+            .header("x-iscy-agent-enrollment-token", token)
+            .body(Body::from(
+                serde_json::json!({
+                    "stable_device_id": stable_id,
+                    "hostname": stable_id,
+                    "os_family": os_family,
+                    "os_version": "Linux",
+                    "architecture": "x86_64",
+                    "agent_version": "0.3.22",
+                    "deployment_channel": channel
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    };
+
+    let response = app
+        .clone()
+        .oneshot(create_token("revoked", None))
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let revoked_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let revoked_token = revoked_payload["token"].as_str().unwrap().to_string();
+    let revoked_id = revoked_payload["enrollment"]["id"].as_i64().unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/enrollment-tokens/{revoked_id}/revoke"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/enrollment-tokens/{revoked_id}/revoke"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(enrollment(
+            "revoked-device",
+            "linux",
+            "systemd",
+            &revoked_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .clone()
+        .oneshot(create_token("expired", None))
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let expired_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let expired_token = expired_payload["token"].as_str().unwrap().to_string();
+    let expired_id = expired_payload["enrollment"]["id"].as_i64().unwrap();
+    sqlx::query(
+        "UPDATE zero_trust_agent_enrollment_token SET expires_at = '2000-01-01T00:00:00Z' WHERE id = ?1",
+    )
+    .bind(expired_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(enrollment(
+            "expired-device",
+            "linux",
+            "systemd",
+            &expired_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM zero_trust_agent_enrollment_token WHERE id = ?1")
+            .bind(expired_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "expired");
+
+    let response = app
+        .clone()
+        .oneshot(create_token("mtls-bound", Some("sha256:proxy-client")))
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let mtls_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let mtls_token = mtls_payload["token"].as_str().unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enroll")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-agent-enrollment-token", mtls_token)
+                .header("x-iscy-agent-mtls-fingerprint", "sha256:proxy-client")
+                .body(Body::from(
+                    serde_json::json!({
+                        "stable_device_id":"mtls-device","hostname":"mtls-device",
+                        "os_family":"linux","os_version":"Linux","architecture":"x86_64",
+                        "agent_version":"0.3.22","deployment_channel":"systemd"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(error["error_code"], "untrusted_agent_mtls_header");
+
+    let response = app
+        .clone()
+        .oneshot(create_token("validation", None))
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let validation_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let validation_token = validation_payload["token"].as_str().unwrap();
+    let response = app
+        .clone()
+        .oneshot(enrollment(
+            "invalid-os",
+            "solaris",
+            "systemd",
+            validation_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = app
+        .clone()
+        .oneshot(enrollment(
+            "invalid-channel",
+            "linux",
+            "rogue",
+            validation_token,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let foreign_policy_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO zero_trust_agent_policy_profile (
+            tenant_id, name, description, scope_type, scope_value,
+            expected_device_count, heartbeat_max_age_hours, minimum_zero_trust_score,
+            max_critical_findings, max_high_findings, enabled, created_at, updated_at
+        ) VALUES (2, 'Foreign policy', '', 'TENANT', '', 1, 24, 80, 0, 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        RETURNING id
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enrollment-tokens")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    serde_json::json!({
+                        "label":"foreign policy","rollout_os_family":"LINUX",
+                        "allowed_os_families":["LINUX"],"allowed_deployment_channel":"systemd",
+                        "policy_profile_id":foreign_policy_id,"uses_remaining":1,
+                        "expires_at":"2099-01-01T00:00:00Z"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn guided_agent_single_use_token_is_atomic_under_parallel_enrollment() {
+    let database_path = std::env::temp_dir().join(format!(
+        "iscy-agent-parallel-{}.sqlite3",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let database_url = format!("sqlite://{}", database_path.display());
+    let options = SqliteConnectOptions::from_str(&database_url)
+        .unwrap()
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(5));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/enrollment-tokens")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"label":"parallel","rollout_os_family":"LINUX","allowed_os_families":["LINUX"],"allowed_deployment_channel":"systemd","uses_remaining":1,"expires_at":"2099-01-01T00:00:00Z"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let token = created["token"].as_str().unwrap().to_string();
+    let request = |stable_device_id: &str| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/agents/enroll")
+            .header("content-type", "application/json")
+            .header("x-iscy-tenant-id", "1")
+            .header("x-iscy-agent-enrollment-token", &token)
+            .body(Body::from(
+                serde_json::json!({
+                    "stable_device_id": stable_device_id,
+                    "hostname": stable_device_id,
+                    "os_family": "linux",
+                    "os_version": "Linux",
+                    "architecture": "x86_64",
+                    "agent_version": "0.3.22",
+                    "deployment_channel": "systemd"
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    };
+    let (first, second) = tokio::join!(
+        app.clone().oneshot(request("parallel-1")),
+        app.clone().oneshot(request("parallel-2"))
+    );
+    let statuses = [first.unwrap().status(), second.unwrap().status()];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::CREATED)
+            .count(),
+        1
+    );
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == StatusCode::UNAUTHORIZED)
+            .count(),
+        1
+    );
+    let device_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM zero_trust_agent_device WHERE tenant_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(device_count, 1);
+    let lifecycle: (String, i64, i64) = sqlx::query_as(
+        "SELECT status, uses_count, uses_remaining FROM zero_trust_agent_enrollment_token WHERE tenant_id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(lifecycle, ("consumed".to_string(), 1, 0));
+    pool.close().await;
+    fs::remove_file(database_path).unwrap();
+}
+
+#[tokio::test]
+async fn guided_agent_web_onboarding_renders_one_time_platform_instructions() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/zero-trust/onboarding/")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Schritt 1 von 3"));
+    assert!(html.contains("Token auf ausgewaehltes OS begrenzen"));
+
+    let form = "os_family=LINUX&deployment_channel=systemd&label=Preview&max_uses=1&expires_in_hours=24&restrict_os_family=on&restrict_deployment_channel=on&mtls_fingerprint=";
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/zero-trust/onboarding/preview")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let preview = String::from_utf8(body.to_vec()).unwrap();
+    assert!(preview.contains("Schritt 2 von 3"));
+    assert!(!preview.contains("iscy_enroll_"));
+
+    let platforms = [
+        (
+            "WINDOWS",
+            "intune",
+            "deploy\\agent\\windows\\install-iscy-agent-task.ps1",
+        ),
+        (
+            "LINUX",
+            "systemd",
+            "deploy/agent/systemd/iscy-agent.service",
+        ),
+        ("MACOS", "jamf", "deploy/agent/macos/com.iscy.agent.plist"),
+        ("NIXOS", "nixos", "deploy/agent/nixos/iscy-agent.nix"),
+    ];
+    let mut first_token = None;
+    for (index, (os_family, deployment_channel, expected_artifact)) in
+        platforms.into_iter().enumerate()
+    {
+        let form = format!(
+            "os_family={os_family}&deployment_channel={deployment_channel}&label=Rollout-{index}&max_uses=1&expires_in_hours=24&restrict_os_family=on&restrict_deployment_channel=on&mtls_fingerprint="
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/zero-trust/onboarding/create")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::from(form))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert!(response
+            .headers()
+            .get("cache-control")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .contains("no-store"));
+        assert_eq!(
+            response.headers().get("referrer-policy").unwrap(),
+            "no-referrer"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Schritt 3 von 3"));
+        assert!(html.contains(expected_artifact));
+        let start = html.find("iscy_enroll_").unwrap();
+        let token = html[start..]
+            .chars()
+            .take_while(|character| character.is_ascii_alphanumeric() || *character == '_')
+            .collect::<String>();
+        assert!(token.len() > "iscy_enroll_".len());
+        if first_token.is_none() {
+            first_token = Some(token);
+        }
+    }
+
+    let first_token = first_token.unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/zero-trust/")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "3")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let metadata_page = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!metadata_page.contains(&first_token));
+    assert!(metadata_page.contains("Token-Klartexte werden nicht gespeichert"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/zero-trust/onboarding/create")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "3")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(form))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let denied = String::from_utf8(body.to_vec()).unwrap();
+    assert!(denied.contains("Admin-Rolle"));
+    assert!(!denied.contains("iscy_enroll_"));
 }
 
 #[tokio::test]
@@ -10831,7 +11635,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0024_rust_evidence_lifecycle",
             "0025_rust_agent_fleet_governance",
             "0026_rust_product_security_evidence_packages",
-            "0027_rust_ai_governance_links"
+            "0027_rust_ai_governance_links",
+            "0028_rust_guided_agent_onboarding"
         ]
     );
     assert!(
