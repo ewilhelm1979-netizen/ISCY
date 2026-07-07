@@ -607,7 +607,11 @@ struct WebAgentNotificationChannelForm {
     name: String,
     endpoint_url: String,
     minimum_level: String,
-    event_types: String,
+    event_agent_policy: Option<String>,
+    event_evidence: Option<String>,
+    event_product_security: Option<String>,
+    event_incident: Option<String>,
+    event_roadmap: Option<String>,
     auth_type: String,
     secret_env_name: String,
     cooldown_minutes: i64,
@@ -3147,14 +3151,26 @@ fn agent_governance_not_found_response(
 }
 
 fn agent_governance_store_error_response(err: anyhow::Error, action: &'static str) -> Response {
-    let details = err
-        .chain()
-        .map(|cause| cause.to_string())
-        .collect::<Vec<_>>()
-        .join(": ");
-    let payload_error = details.contains("Agent-")
-        || details.contains("Notification-")
-        || details.contains("Webhook");
+    let public_error = err.to_string();
+    let payload_error = [
+        "Agent-Policy-Name",
+        "Unbekannter Agent-Policy-Scope",
+        "Der gewaehlte Agent-Policy-Scope",
+        "Agent-Policy expected_device_count",
+        "Agent-Policy heartbeat_max_age_hours",
+        "Agent-Policy minimum_zero_trust_score",
+        "Agent-Policy Finding-Grenzwerte",
+        "Notification-Kanalname",
+        "Notification-Webhook",
+        "Produktive Notification-Webhooks",
+        "Notification minimum_level",
+        "Notification event_types",
+        "Notification auth_type",
+        "Notification-Secret",
+        "Notification-Cooldown",
+    ]
+    .iter()
+    .any(|prefix| public_error.starts_with(prefix));
     (
         if payload_error {
             StatusCode::BAD_REQUEST
@@ -3169,7 +3185,11 @@ fn agent_governance_store_error_response(err: anyhow::Error, action: &'static st
             } else {
                 "database_error"
             },
-            message: format!("{action}: {details}"),
+            message: if payload_error {
+                format!("{action}: {public_error}")
+            } else {
+                format!("{action}.")
+            },
         }),
     )
         .into_response()
@@ -4352,9 +4372,6 @@ async fn agent_notification_deliveries(
         Ok(context) => context,
         Err(err) => return required_context_error_response(err),
     };
-    if let Some(response) = admin_permission_error(&context) {
-        return response;
-    }
     let Some(store) = state.agent_governance_store else {
         return agent_governance_store_missing_response();
     };
@@ -4392,7 +4409,7 @@ async fn agent_notifications_evaluate(
     let Some(store) = state.agent_governance_store else {
         return agent_governance_store_missing_response();
     };
-    match store.dispatch_policy_notifications(context.tenant_id).await {
+    match store.dispatch_notifications(context.tenant_id).await {
         Ok(result) => (
             StatusCode::OK,
             Json(AgentNotificationDispatchResponse {
@@ -4404,7 +4421,7 @@ async fn agent_notifications_evaluate(
             .into_response(),
         Err(err) => agent_governance_store_error_response(
             err,
-            "Agent-Notifications konnten nicht ausgewertet werden",
+            "Notifications konnten nicht ausgewertet werden",
         ),
     }
 }
@@ -11306,11 +11323,8 @@ fn agent_governance_web_sections(
     } else {
         String::new()
     };
-    let admin_sections = if can_admin {
-        agent_notification_web_sections(context, governance, selected_channel_id)
-    } else {
-        String::new()
-    };
+    let notification_sections =
+        agent_notification_web_sections(context, governance, selected_channel_id, can_admin);
     format!(
         r#"
         <section class="metrics">
@@ -11342,7 +11356,7 @@ fn agent_governance_web_sections(
             policy_rows
         },
         policy_form,
-        admin_sections,
+        notification_sections,
     )
 }
 
@@ -11422,6 +11436,7 @@ fn agent_notification_web_sections(
     context: &WebContext,
     governance: &agent_governance_store::AgentFleetGovernanceOverview,
     selected_channel_id: Option<i64>,
+    can_admin: bool,
 ) -> String {
     let channel_rows = governance
         .notification_channels
@@ -11432,9 +11447,10 @@ fn agent_notification_web_sections(
                 Some(context),
             );
             format!(
-                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Bearbeiten</a></td></tr>"#,
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Bearbeiten</a></td></tr>"#,
                 html_escape(&channel.name),
                 html_escape(&channel.minimum_level),
+                html_escape(&channel.event_types.join(", ")),
                 html_escape(&channel.auth_type),
                 yes_no_badge(channel.secret_available),
                 channel.cooldown_minutes,
@@ -11449,17 +11465,39 @@ fn agent_notification_web_sections(
         .recent_deliveries
         .iter()
         .map(|delivery| {
+            let object_reference = delivery
+                .object_id
+                .map(|object_id| {
+                    let href = notification_object_href(
+                        &delivery.domain,
+                        &delivery.object_type,
+                        object_id,
+                        context,
+                    );
+                    format!(
+                        r#"<a href="{}">{} #{}</a>"#,
+                        html_escape(&href),
+                        html_escape(&delivery.object_type),
+                        object_id,
+                    )
+                })
+                .unwrap_or_else(|| "-".to_string());
             format!(
-                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
-                delivery.id,
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&delivery.domain),
+                object_reference,
+                html_escape(&delivery.signal_type),
                 delivery.channel_id,
                 html_escape(&delivery.level),
                 html_escape(&delivery.status),
-                delivery
-                    .response_status
-                    .map(|status| status.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
-                html_escape(&delivery.created_at),
+                html_escape(delivery.last_attempt_at.as_deref().unwrap_or("-")),
+                html_escape(delivery.next_eligible_at.as_deref().unwrap_or("-")),
+                html_escape(if delivery.error_class.is_empty() {
+                    "-"
+                } else {
+                    &delivery.error_class
+                }),
+                html_escape(&delivery.created_at)
             )
         })
         .collect::<Vec<_>>()
@@ -11470,36 +11508,66 @@ fn agent_notification_web_sections(
             .iter()
             .find(|channel| channel.id == channel_id)
     });
-    format!(
-        r#"
+    let configuration = if can_admin {
+        format!(
+            r#"
         <section class="panel wide">
           <div class="section-heading"><h2>Notification-Kanaele</h2><form method="post" action="/zero-trust/notifications/evaluate"><button type="submit">Jetzt auswerten</button></form></div>
           <table>
-            <thead><tr><th>Kanal</th><th>Minimum</th><th>Auth</th><th>Secret bereit</th><th>Cooldown</th><th>Aktiv</th><th>Letzter Erfolg</th><th>Aktion</th></tr></thead>
+            <thead><tr><th>Kanal</th><th>Minimum</th><th>Bereiche</th><th>Auth</th><th>Secret bereit</th><th>Cooldown</th><th>Aktiv</th><th>Letzter Erfolg</th><th>Aktion</th></tr></thead>
             <tbody>{}</tbody>
           </table>
         </section>
         {}
+        "#,
+            if channel_rows.is_empty() {
+                web_empty_row(9, "Keine Notification-Kanaele vorhanden.")
+            } else {
+                channel_rows
+            },
+            agent_notification_channel_web_form(selected_channel),
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        r#"
+        {}
         <section class="panel wide">
-          <h2>Notification Delivery Audit</h2>
+          <h2>Domain Notification Delivery Audit</h2>
           <table>
-            <thead><tr><th>ID</th><th>Kanal</th><th>Level</th><th>Status</th><th>HTTP</th><th>Zeit</th></tr></thead>
+            <thead><tr><th>Domäne</th><th>Objekt</th><th>Signal</th><th>Kanal</th><th>Schweregrad</th><th>Status</th><th>Letzter Versuch</th><th>Naechster Versuch</th><th>Fehlerklasse</th><th>Erzeugt</th></tr></thead>
             <tbody>{}</tbody>
           </table>
         </section>
         "#,
-        if channel_rows.is_empty() {
-            web_empty_row(8, "Keine Notification-Kanaele vorhanden.")
-        } else {
-            channel_rows
-        },
-        agent_notification_channel_web_form(selected_channel),
+        configuration,
         if delivery_rows.is_empty() {
-            web_empty_row(6, "Keine Notification-Deliveries vorhanden.")
+            web_empty_row(10, "Keine Notification-Deliveries vorhanden.")
         } else {
             delivery_rows
         },
     )
+}
+
+fn notification_object_href(
+    domain: &str,
+    object_type: &str,
+    object_id: i64,
+    context: &WebContext,
+) -> String {
+    let path = match (domain, object_type) {
+        ("AGENT", "POLICY") => format!("/zero-trust/?policy_id={object_id}"),
+        ("EVIDENCE", "EVIDENCE_ITEM") => format!("/evidence/?evidence_id={object_id}"),
+        ("PRODUCT_SECURITY", "CVE_ASSESSMENT") => {
+            format!("/cves/assessments/{object_id}")
+        }
+        ("PRODUCT_SECURITY", "CVE_CORRELATION") => "/product-security/".to_string(),
+        ("INCIDENT", "INCIDENT") => format!("/incidents/{object_id}"),
+        ("ROADMAP", "ROADMAP_TASK") => "/roadmap/".to_string(),
+        _ => "/status/".to_string(),
+    };
+    web_path_with_context(&path, Some(context))
 }
 
 fn agent_notification_channel_web_form(
@@ -11530,6 +11598,16 @@ fn agent_notification_channel_web_form(
         .map(|channel| channel.cooldown_minutes)
         .unwrap_or(60);
     let enabled = channel.map(|channel| channel.enabled).unwrap_or(true);
+    let event_enabled = |event_type: &str| {
+        channel
+            .map(|channel| {
+                channel
+                    .event_types
+                    .iter()
+                    .any(|configured| configured == event_type)
+            })
+            .unwrap_or(event_type == "AGENT_POLICY")
+    };
     format!(
         r#"
         <section class="panel wide">
@@ -11542,7 +11620,13 @@ fn agent_notification_channel_web_form(
             <label>Auth<select name="auth_type">{}{}{}</select></label>
             <label>Secret Environment<input name="secret_env_name" maxlength="128" value="{}"></label>
             <label>Cooldown Minuten<input type="number" name="cooldown_minutes" min="1" max="10080" required value="{}"></label>
-            <input type="hidden" name="event_types" value="AGENT_POLICY">
+            <fieldset class="wide"><legend>Signalbereiche</legend>
+              <label class="check"><input type="checkbox" name="event_agent_policy"{}> Agent / Fleet</label>
+              <label class="check"><input type="checkbox" name="event_evidence"{}> Evidence</label>
+              <label class="check"><input type="checkbox" name="event_product_security"{}> Product Security / CVE</label>
+              <label class="check"><input type="checkbox" name="event_incident"{}> Incidents</label>
+              <label class="check"><input type="checkbox" name="event_roadmap"{}> Roadmap</label>
+            </fieldset>
             <label class="check"><input type="checkbox" name="enabled"{}> Aktiv</label>
             <div class="actions"><button type="submit">Kanal speichern</button></div>
           </form>
@@ -11563,6 +11647,11 @@ fn agent_notification_channel_web_form(
         option_tag("HMAC_SHA256", "HMAC SHA-256", auth_type),
         html_escape(secret_env),
         cooldown,
+        checked_attr(event_enabled("AGENT_POLICY")),
+        checked_attr(event_enabled("EVIDENCE")),
+        checked_attr(event_enabled("PRODUCT_SECURITY")),
+        checked_attr(event_enabled("INCIDENT")),
+        checked_attr(event_enabled("ROADMAP")),
         checked_attr(enabled),
     )
 }
@@ -11714,10 +11803,7 @@ async fn web_agent_notifications_evaluate(
         return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent Governance")
             .into_response();
     };
-    match store
-        .dispatch_policy_notifications(auth_context.tenant_id)
-        .await
-    {
+    match store.dispatch_notifications(auth_context.tenant_id).await {
         Ok(_) => {
             Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
         }
@@ -11747,17 +11833,23 @@ fn agent_policy_payload_from_web(
 fn agent_notification_channel_payload_from_web(
     form: WebAgentNotificationChannelForm,
 ) -> agent_governance_store::AgentNotificationChannelWriteRequest {
+    let mut event_types = Vec::new();
+    for (enabled, event_type) in [
+        (form.event_agent_policy.is_some(), "AGENT_POLICY"),
+        (form.event_evidence.is_some(), "EVIDENCE"),
+        (form.event_product_security.is_some(), "PRODUCT_SECURITY"),
+        (form.event_incident.is_some(), "INCIDENT"),
+        (form.event_roadmap.is_some(), "ROADMAP"),
+    ] {
+        if enabled {
+            event_types.push(event_type.to_string());
+        }
+    }
     agent_governance_store::AgentNotificationChannelWriteRequest {
         name: form.name,
         endpoint_url: form.endpoint_url,
         minimum_level: form.minimum_level,
-        event_types: form
-            .event_types
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-            .collect(),
+        event_types,
         auth_type: form.auth_type,
         secret_env_name: form.secret_env_name,
         cooldown_minutes: form.cooldown_minutes,
@@ -25420,6 +25512,18 @@ async fn agent_governance_operation_signals(
         .iter()
         .filter(|channel| channel.enabled && !channel.secret_available)
         .count() as i64;
+    let failed_deliveries = governance
+        .recent_deliveries
+        .iter()
+        .filter(|delivery| delivery.status == "FAILED")
+        .count() as i64;
+    let mut delivery_domains = governance
+        .recent_deliveries
+        .iter()
+        .map(|delivery| delivery.domain.as_str())
+        .collect::<Vec<_>>();
+    delivery_domains.sort_unstable();
+    delivery_domains.dedup();
     let summary = &governance.summary;
     vec![
         StatusSignal::new(
@@ -25467,6 +25571,20 @@ async fn agent_governance_operation_signals(
             },
             format!(
                 "{enabled_channels} Kanaele aktiv, {missing_secrets} Secret-Referenzen nicht verfuegbar."
+            ),
+            href.clone(),
+        ),
+        StatusSignal::new(
+            "Notifications",
+            "Domain-Zustellung",
+            if failed_deliveries > 0 {
+                StatusSignalLevel::Warn
+            } else {
+                StatusSignalLevel::Ok
+            },
+            format!(
+                "{} Domaenen in der Delivery-Historie, {failed_deliveries} fehlgeschlagene Zustellungen.",
+                delivery_domains.len()
             ),
             href,
         ),

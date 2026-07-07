@@ -1058,6 +1058,7 @@ Was aktuell belastbar vorhanden ist:
 - Flottensignale in Statusseite, JSON und Prometheus
 - editierbare Agent-Policy-Profile und erwartete Coverage nach fachlichem Scope
 - sichere Notification-Kanaele mit Cooldown, Delivery-Audit und periodischem Worker
+- gemeinsame fachuebergreifende Notifications fuer Agent/Fleet, Evidence, Product Security/CVE, Incidents und Roadmap
 
 Was als naechstes fachlich am meisten bringt:
 
@@ -1078,6 +1079,45 @@ Was als naechstes fachlich am meisten bringt:
 
 Fachliches Kurzurteil:
 ISCY ist fuer Zero Trust jetzt gut positioniert. Sollabdeckung, aktive Policy-Benachrichtigungen und gefuehrtes Onboarding sind vorhanden; die naechste Reife entsteht durch Nachweisverknuepfung, Connectoren und sauber signierte Deployment-Pakete.
+
+### 6.11 Fachuebergreifende Notifications
+
+ISCY erweitert den vorhandenen Agent-Notification-Kanalbetrieb, statt eine
+zweite Notification-Engine einzufuehren. Dieselben Webhook-Kanaele,
+Production-Allowlist, Redirect-Sperre, Bearer-/HMAC-Secret-Referenzen,
+Retry-Grenzen, Cooldowns, der periodische Worker und die manuelle Auswertung
+verarbeiten jetzt auch:
+
+- abgelaufene und innerhalb von 30 Tagen ablaufende Evidence
+- Evidence ohne Review, Retention oder SHA-256 bei vorhandenem Dateiobjekt
+- offene und ueberfaellige CVE-Reviews, kritische offene CVEs sowie offene CVE-Korrelationsreviews
+- offene Nicht-Meldeentscheidungen und fehlende Begruendungen bei Incidents
+- heute faellige, ueberfaellige, blockierte oder kritische offene Roadmap-Tasks
+
+Die Auswertung nutzt ausschliesslich vorhandene fachliche Status-, Review-,
+Severity- und Faelligkeitsfelder. Eine ueberfaellige Incident-Review-Frist wird
+nicht erfunden, weil dafuer derzeit kein eigenes fachliches Fristfeld existiert.
+
+Ein stabiler Signal-Key kombiniert Tenant, Domaene, Objekttyp, Objekt-ID,
+Signaltyp und Zustands- oder Faelligkeitskontext. Nach einem Zustellversuch gilt
+der Cooldown des Kanals auch bei einem Fehler; interne Retry-Versuche bleiben
+auf den bestehenden kleinen Satz transienter Netzwerk- und HTTP-Fehler
+begrenzt. Migration `0029_rust_cross_domain_notifications` ergaenzt bestehende
+Delivery-Zeilen additiv um Domaene, Objektbezug, Signaltyp, sichere Fehlerklasse,
+letzten Versuch und naechsten moeglichen Zustellzeitpunkt.
+
+Webhook-Payloads enthalten nur Tenant, Domaene, Objekttyp/-ID, Signaltyp,
+Schweregrad, Status und optionalen Faelligkeitskontext. Token, Bearer-/HMAC-
+Secrets, Authorization Header, personenbezogene Details, vertrauliche
+Objekttexte, vollstaendige Fachpayloads und interne Fehler werden weder in
+Responses noch in der Read-only-Ansicht ausgegeben. Administratoren duerfen
+Kanaele und Signalbereiche aendern; authentifizierte Read-only-Rollen sehen nur
+sichere tenantgebundene Delivery-Metadaten.
+
+Bewusst nicht umgesetzt sind Supplier-Review-Ausbau, Management-/Regulatory-
+Templates, Evidence-Legal-Hold und -Disposition, kontrollierte Loeschung,
+Re-Hash-Worker, Objektspeicher, CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete,
+Release-Provenance sowie Performance-, HA- und visuelle Regressionserweiterungen.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
@@ -1119,12 +1159,12 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
-2. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
+1. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
+2. Management-/Regulatory-Templates fuer wiederholbare Pruefpakete
 3. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
 4. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe
 5. Performance-, HA- und visuelle Regressionstests

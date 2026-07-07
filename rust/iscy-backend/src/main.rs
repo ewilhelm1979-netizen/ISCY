@@ -244,14 +244,14 @@ fn start_agent_notification_worker(store: Option<AgentGovernanceStore>) {
                 }
             };
             for tenant_id in tenant_ids {
-                match store.dispatch_policy_notifications(tenant_id).await {
+                match store.dispatch_notifications(tenant_id).await {
                     Ok(result) if result.sent > 0 || result.failed > 0 => println!(
-                        "ISCY Agent-Notifications tenant={tenant_id} sent={} failed={} suppressed={}",
+                        "ISCY Notifications tenant={tenant_id} sent={} failed={} suppressed={}",
                         result.sent, result.failed, result.suppressed
                     ),
                     Ok(_) => {}
                     Err(err) => eprintln!(
-                        "ISCY Agent-Notification-Worker tenant={tenant_id} fehlgeschlagen: {err}"
+                        "ISCY Notification-Worker tenant={tenant_id} fehlgeschlagen: {err}"
                     ),
                 }
             }

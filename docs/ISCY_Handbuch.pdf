@@ -3,7 +3,7 @@
 << /Type /Catalog /Pages 2 0 R >>
 endobj
 2 0 obj
-<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R 40 0 R] /Count 19 >>
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R 40 0 R 42 0 R] /Count 20 >>
 endobj
 3 0 obj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
@@ -2681,7 +2681,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 39 0 R >>
 endobj
 39 0 obj
-<< /Length 4084 >>
+<< /Length 4583 >>
 stream
 BT
 /F1 9 Tf
@@ -2710,6 +2710,10 @@ T*
 (- editierbare Agent-Policy-Profile und erwartete Coverage nach fachlichem Scope) Tj
 T*
 (- sichere Notification-Kanaele mit Cooldown, Delivery-Audit und periodischem Worker) Tj
+T*
+(- gemeinsame fachuebergreifende Notifications fuer Agent/Fleet, Evidence, Product) Tj
+T*
+(Security/CVE, Incidents und Roadmap) Tj
 T*
 () Tj
 T*
@@ -2766,6 +2770,99 @@ T*
 (Policy-Benachrichtigungen und gefuehrtes Onboarding sind vorhanden; die naechste Reife) Tj
 T*
 (entsteht durch Nachweisverknuepfung, Connectoren und sauber signierte Deployment-Pakete.) Tj
+T*
+() Tj
+T*
+(6.11 Fachuebergreifende Notifications:) Tj
+T*
+() Tj
+T*
+(ISCY erweitert den vorhandenen Agent-Notification-Kanalbetrieb, statt eine) Tj
+T*
+(zweite Notification-Engine einzufuehren. Dieselben Webhook-Kanaele,) Tj
+T*
+(Production-Allowlist, Redirect-Sperre, Bearer-/HMAC-Secret-Referenzen,) Tj
+T*
+(Retry-Grenzen, Cooldowns, der periodische Worker und die manuelle Auswertung) Tj
+T*
+(verarbeiten jetzt auch:) Tj
+T*
+() Tj
+T*
+(- abgelaufene und innerhalb von 30 Tagen ablaufende Evidence) Tj
+T*
+(- Evidence ohne Review, Retention oder SHA-256 bei vorhandenem Dateiobjekt) Tj
+T*
+(- offene und ueberfaellige CVE-Reviews, kritische offene CVEs sowie offene) Tj
+T*
+(CVE-Korrelationsreviews) Tj
+T*
+(- offene Nicht-Meldeentscheidungen und fehlende Begruendungen bei Incidents) Tj
+T*
+(- heute faellige, ueberfaellige, blockierte oder kritische offene Roadmap-Tasks) Tj
+T*
+() Tj
+T*
+(Die Auswertung nutzt ausschliesslich vorhandene fachliche Status-, Review-,) Tj
+T*
+(Severity- und Faelligkeitsfelder. Eine ueberfaellige Incident-Review-Frist wird) Tj
+T*
+(nicht erfunden, weil dafuer derzeit kein eigenes fachliches Fristfeld existiert.) Tj
+T*
+() Tj
+T*
+(Ein stabiler Signal-Key kombiniert Tenant, Domaene, Objekttyp, Objekt-ID,) Tj
+T*
+(Signaltyp und Zustands- oder Faelligkeitskontext. Nach einem Zustellversuch gilt) Tj
+T*
+(der Cooldown des Kanals auch bei einem Fehler; interne Retry-Versuche bleiben) Tj
+T*
+(auf den bestehenden kleinen Satz transienter Netzwerk- und HTTP-Fehler) Tj
+T*
+(begrenzt. Migration 0029rustcrossdomainnotifications ergaenzt bestehende) Tj
+T*
+(Delivery-Zeilen additiv um Domaene, Objektbezug, Signaltyp, sichere Fehlerklasse,) Tj
+T*
+(letzten Versuch und naechsten moeglichen Zustellzeitpunkt.) Tj
+T*
+() Tj
+T*
+(Webhook-Payloads enthalten nur Tenant, Domaene, Objekttyp/-ID, Signaltyp,) Tj
+T*
+(Schweregrad, Status und optionalen Faelligkeitskontext. Token, Bearer-/HMAC-) Tj
+T*
+ET
+endstream
+endobj
+40 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 41 0 R >>
+endobj
+41 0 obj
+<< /Length 4392 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
+(Secrets, Authorization Header, personenbezogene Details, vertrauliche) Tj
+T*
+(Objekttexte, vollstaendige Fachpayloads und interne Fehler werden weder in) Tj
+T*
+(Responses noch in der Read-only-Ansicht ausgegeben. Administratoren duerfen) Tj
+T*
+(Kanaele und Signalbereiche aendern; authentifizierte Read-only-Rollen sehen nur) Tj
+T*
+(sichere tenantgebundene Delivery-Metadaten.) Tj
+T*
+() Tj
+T*
+(Bewusst nicht umgesetzt sind Supplier-Review-Ausbau, Management-/Regulatory-) Tj
+T*
+(Templates, Evidence-Legal-Hold und -Disposition, kontrollierte Loeschung,) Tj
+T*
+(Re-Hash-Worker, Objektspeicher, CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete,) Tj
+T*
+(Release-Provenance sowie Performance-, HA- und visuelle Regressionserweiterungen.) Tj
 T*
 () Tj
 T*
@@ -2831,19 +2928,6 @@ T*
 T*
 (9. Empfehlungen fuer die Einfuehrung:) Tj
 T*
-ET
-endstream
-endobj
-40 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 41 0 R >>
-endobj
-41 0 obj
-<< /Length 2865 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (- mit einem Tenant und einem realen Scope starten) Tj
@@ -2884,11 +2968,13 @@ T*
 T*
 (0028rustguidedagentonboarding ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit) Tj
 T*
-(Token-Lifecycle, Policy-Zuordnung und Auditspur. Die weitere ISCY-Agenda konzentriert sich) Tj
+(Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration 0029rustcrossdomainnotifications) Tj
 T*
-(deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche) Tj
+(fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Die) Tj
 T*
-(Produktreife.) Tj
+(weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter) Tj
+T*
+(Python-/Django-Pfade, sondern auf fachliche Produktreife.) Tj
 T*
 () Tj
 T*
@@ -2896,12 +2982,25 @@ T*
 T*
 () Tj
 T*
-(1. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern) Tj
+(1. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests) Tj
 T*
-(2. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests) Tj
+(2. Management-/Regulatory-Templates fuer wiederholbare Pruefpakete) Tj
 T*
 (3. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend) Tj
 T*
+ET
+endstream
+endobj
+42 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 43 0 R >>
+endobj
+43 0 obj
+<< /Length 894 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (4. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe) Tj
 T*
 (5. Performance-, HA- und visuelle Regressionstests) Tj
@@ -2944,51 +3043,53 @@ ET
 endstream
 endobj
 xref
-0 42
+0 44
 0000000000 65535 f
 0000000009 00000 n
 0000000058 00000 n
-0000000240 00000 n
-0000000310 00000 n
-0000000436 00000 n
-0000003894 00000 n
-0000004020 00000 n
-0000006783 00000 n
-0000006909 00000 n
-0000009588 00000 n
-0000009716 00000 n
-0000011622 00000 n
-0000011750 00000 n
-0000014776 00000 n
-0000014904 00000 n
-0000019091 00000 n
-0000019219 00000 n
-0000022388 00000 n
-0000022516 00000 n
-0000024995 00000 n
-0000025123 00000 n
-0000028107 00000 n
-0000028235 00000 n
-0000032314 00000 n
-0000032442 00000 n
-0000036199 00000 n
-0000036327 00000 n
-0000039911 00000 n
-0000040039 00000 n
-0000045194 00000 n
-0000045322 00000 n
-0000049110 00000 n
-0000049238 00000 n
-0000054272 00000 n
-0000054400 00000 n
-0000057696 00000 n
-0000057824 00000 n
-0000061310 00000 n
-0000061438 00000 n
-0000065574 00000 n
-0000065702 00000 n
+0000000247 00000 n
+0000000317 00000 n
+0000000443 00000 n
+0000003901 00000 n
+0000004027 00000 n
+0000006790 00000 n
+0000006916 00000 n
+0000009595 00000 n
+0000009723 00000 n
+0000011629 00000 n
+0000011757 00000 n
+0000014783 00000 n
+0000014911 00000 n
+0000019098 00000 n
+0000019226 00000 n
+0000022395 00000 n
+0000022523 00000 n
+0000025002 00000 n
+0000025130 00000 n
+0000028114 00000 n
+0000028242 00000 n
+0000032321 00000 n
+0000032449 00000 n
+0000036206 00000 n
+0000036334 00000 n
+0000039918 00000 n
+0000040046 00000 n
+0000045201 00000 n
+0000045329 00000 n
+0000049117 00000 n
+0000049245 00000 n
+0000054279 00000 n
+0000054407 00000 n
+0000057703 00000 n
+0000057831 00000 n
+0000061317 00000 n
+0000061445 00000 n
+0000066080 00000 n
+0000066208 00000 n
+0000070652 00000 n
+0000070780 00000 n
 trailer
-<< /Size 42 /Root 1 0 R >>
+<< /Size 44 /Root 1 0 R >>
 startxref
-68619
+71725
 %%EOF
