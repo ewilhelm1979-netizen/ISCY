@@ -7512,6 +7512,72 @@ async fn import_center_preview_reads_xlsx_upload_and_builds_mapping() {
 }
 
 #[tokio::test]
+async fn import_center_preview_rejects_malformed_xlsx_and_read_only_access() {
+    let app = app_router();
+    let request = |roles: Option<&str>, file: &[u8]| {
+        let boundary = "iscy-import-preview-invalid-xlsx-boundary";
+        let body = multipart_body(
+            boundary,
+            &[("import_type", "processes"), ("replace_existing", "0")],
+            Some((
+                "file",
+                "processes.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file,
+            )),
+        );
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/import-center/preview")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            );
+        if let Some(roles) = roles {
+            request = request
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", roles);
+        }
+        request.body(Body::from(body)).unwrap()
+    };
+
+    let response = app
+        .clone()
+        .oneshot(request(None, b"not-an-xlsx"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .clone()
+        .oneshot(request(Some("AUDITOR"), b"not-an-xlsx"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let valid_xlsx = import_preview_xlsx_fixture();
+    let malformed_files = [
+        b"not-an-xlsx".as_slice(),
+        &valid_xlsx[..valid_xlsx.len() / 2],
+    ];
+    for malformed in malformed_files {
+        let response = app
+            .clone()
+            .oneshot(request(Some("ADMIN"), malformed))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error["error_code"], "invalid_import_upload");
+        assert!(error["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("XLSX-Datei konnte nicht gelesen werden")));
+    }
+}
+
+#[tokio::test]
 async fn rust_web_imports_preview_renders_mapping_for_uploaded_file() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
