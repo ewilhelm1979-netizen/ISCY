@@ -3192,19 +3192,32 @@ fn agent_secret_from_headers(headers: &HeaderMap) -> Option<String> {
     header_string(headers, "x-iscy-agent-secret")
 }
 
+#[derive(Debug, Clone, Copy)]
+enum AgentMtlsFingerprintHeaderError {
+    UntrustedProxyBoundary,
+}
+
+impl AgentMtlsFingerprintHeaderError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::UntrustedProxyBoundary => agent_auth_error_response(
+                StatusCode::UNAUTHORIZED,
+                "untrusted_agent_mtls_header",
+                "Agent-mTLS-Fingerprint wird nur an einer explizit konfigurierten Proxy-Vertrauensgrenze akzeptiert.",
+            ),
+        }
+    }
+}
+
 fn agent_mtls_fingerprint_from_headers(
     security_config: &CommunitySecurityConfig,
     headers: &HeaderMap,
-) -> Result<Option<String>, Response> {
+) -> Result<Option<String>, AgentMtlsFingerprintHeaderError> {
     let fingerprint = header_string(headers, "x-iscy-agent-mtls-fingerprint")
         .or_else(|| header_string(headers, "x-ssl-client-fingerprint"))
         .or_else(|| header_string(headers, "ssl-client-fingerprint"));
     if fingerprint.is_some() && !security_config.trusted_proxy_configured {
-        return Err(agent_auth_error_response(
-            StatusCode::UNAUTHORIZED,
-            "untrusted_agent_mtls_header",
-            "Agent-mTLS-Fingerprint wird nur an einer explizit konfigurierten Proxy-Vertrauensgrenze akzeptiert.",
-        ));
+        return Err(AgentMtlsFingerprintHeaderError::UntrustedProxyBoundary);
     }
     Ok(fingerprint)
 }
@@ -4646,7 +4659,7 @@ async fn agent_enroll(
         let mtls_fingerprint =
             match agent_mtls_fingerprint_from_headers(&state.security_config, &headers) {
                 Ok(fingerprint) => fingerprint,
-                Err(response) => return response,
+                Err(error) => return error.into_response(),
             };
         return match store
             .enroll_device_with_token(
@@ -4806,7 +4819,7 @@ async fn agent_heartbeat(
         let mtls_fingerprint =
             match agent_mtls_fingerprint_from_headers(&state.security_config, &headers) {
                 Ok(fingerprint) => fingerprint,
-                Err(response) => return response,
+                Err(error) => return error.into_response(),
             };
         match store
             .verify_agent_secret(
@@ -4905,7 +4918,7 @@ async fn agent_findings(
         let mtls_fingerprint =
             match agent_mtls_fingerprint_from_headers(&state.security_config, &headers) {
                 Ok(fingerprint) => fingerprint,
-                Err(response) => return response,
+                Err(error) => return error.into_response(),
             };
         match store
             .verify_agent_secret(
