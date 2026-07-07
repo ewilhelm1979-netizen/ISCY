@@ -185,12 +185,16 @@ Umgesetzt:
 - Soll-/Ist-Coverage, Heartbeat-Freshness, Mindestscore und Finding-Grenzwerte je Policy
 - sichere Webhook-Kanaele mit Production-Allowlist, Bearer-/HMAC-Secret-Referenz, Redirect-Sperre und Cooldown
 - periodischer Worker, manuelle Auswertung, Delivery-Historie sowie Operations-/Prometheus-Signale
+- gefuehrter Drei-Schritt-Assistent fuer Windows, Linux, macOS und NixOS auf Basis der vorhandenen Deployment-Artefakte
+- begrenzter Enrollment-Token-Lifecycle mit sicheren Metadaten, Widerruf, Ablauf, partieller Verwendung und Auditspur
+- transaktionssichere Token-Nutzung mit Policy-Zuordnung und Schutz gegen parallele Limitueberschreitung
+- Flottenansicht mit Rollout-, Policy-, Token- und mTLS-Bindungsstatus
 
 Offen:
 
-- Enrollment-Token widerrufen und deren Lifecycle im Web verwalten.
 - Das Notification-Modell auf ablaufende Evidence, offene CVE-Reviews, offene Nicht-Meldeentscheidungen und Roadmap-Tasks erweitern.
 - signierte MSI-/PKG-/deb-/rpm-Pakete und Release-Provenance bereitstellen.
+- lokale CSR-Erzeugung und providerunabhaengige CA-Anbindung als eigener spaeterer Meilenstein untersuchen.
 
 Erfolgskriterium:
 
@@ -198,11 +202,10 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Zero-Trust-Agent-Onboarding als gefuehrten Admin-Workflow vereinfachen.
-2. Benachrichtigungen auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern.
-3. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
-4. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
-5. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
+1. Benachrichtigungen auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern.
+2. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
+3. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
+4. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
 
 ## Verbleibende Roadmap
 
@@ -212,8 +215,8 @@ Erfolgskriterium:
 | Erledigt | Agent-Policy, erwartete Coverage und Policy-Webhooks | Flottenabweichungen werden gegen einen Sollbestand bewertet, aktiv zugestellt und auditierbar protokolliert. |
 | Erledigt | Product-Security-Evidence-Pakete und Produkt-Lifecycle | Versionierte Release-/PSIRT-Freigaben enthalten SBOM, VEX, Advisories, Support-Ende, offene Risiken, Roadmap und Evidence; Blocker-Gates und Exporte sind umgesetzt. |
 | Erledigt | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
-| Jetzt | Gefuehrtes Agent-Onboarding | Enrollment-Tokens, Deployment-Artefakte und Flottenstatus werden ueber einen sicheren Admin-Assistenten bedienbar. |
-| Danach | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
+| Erledigt | Gefuehrtes Agent-Onboarding | Enrollment-Tokens, Deployment-Artefakte und Flottenstatus sind ueber einen sicheren Admin-Assistenten bedienbar. |
+| Jetzt | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
 | Danach | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen und Exit-Test-Nachweise. |
 | Danach | Management-/Regulatory-Templates | Wiederholbare Quartals-, Audit-, NIS2-, DORA- und DSGVO-Pakete werden kontextsensitiv erzeugt. |
 | Reifegrad | Evidence-Disposition und Objektspeicher | Legal Hold, kontrollierte Loeschung, periodische Integritaetspruefung und Storage-Restore sind auditierbar. |
