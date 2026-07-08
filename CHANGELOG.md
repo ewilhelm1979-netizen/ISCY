@@ -21,6 +21,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- reserve tenant- and channel-scoped notification dispatch claims atomically before webhook delivery through additive migration `0030_rust_notification_dispatch_claim`, preventing duplicate sends from overlapping manual and periodic evaluations
+- correct PostgreSQL integer decoding in the Agent Governance notification path so policy, channel, CVE, device, and delivery metadata use the existing Rust API types consistently
+- redact internal Agent Governance store and SQL errors from HTML responses while preserving safe API validation behavior
 - keep cross-domain webhook payloads intentionally minimal and exclude stored payloads, internal errors, credentials, authorization headers, and secret references from delivery APIs and read-only views
 - preserve production host allow-listing, disabled redirects, bounded retries, stable signal-key deduplication, and per-channel cooldown for every notification domain
 - make token consumption, device enrollment, policy assignment, secret-hash persistence, and lifecycle audit events transactional on SQLite and PostgreSQL

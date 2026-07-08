@@ -505,6 +505,18 @@ impl AgentGovernanceStore {
                     result.suppressed += 1;
                     continue;
                 }
+                if !self
+                    .reserve_dispatch_claim(
+                        tenant_id,
+                        channel.id,
+                        &signal.event_key,
+                        channel.cooldown_minutes,
+                    )
+                    .await?
+                {
+                    result.suppressed += 1;
+                    continue;
+                }
                 let payload = notification_payload(signal);
                 let payload_json = serde_json::to_string(&payload)?;
                 let attempt =
@@ -556,6 +568,37 @@ impl AgentGovernanceStore {
             }
             Self::Sqlite(pool) => {
                 record_delivery_sqlite(pool, tenant_id, channel, signal, payload, attempt).await
+            }
+        }
+    }
+
+    async fn reserve_dispatch_claim(
+        &self,
+        tenant_id: i64,
+        channel_id: i64,
+        event_key: &str,
+        cooldown_minutes: i64,
+    ) -> anyhow::Result<bool> {
+        match self {
+            Self::Postgres(pool) => {
+                reserve_dispatch_claim_postgres(
+                    pool,
+                    tenant_id,
+                    channel_id,
+                    event_key,
+                    cooldown_minutes,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                reserve_dispatch_claim_sqlite(
+                    pool,
+                    tenant_id,
+                    channel_id,
+                    event_key,
+                    cooldown_minutes,
+                )
+                .await
             }
         }
     }
@@ -1398,7 +1441,7 @@ async fn cross_domain_signals_postgres(
         id: row.get("id"),
         severity: row.get("severity"),
         deterministic_priority: row.get("deterministic_priority"),
-        deterministic_due_days: row.get("deterministic_due_days"),
+        deterministic_due_days: i64::from(row.get::<i32, _>("deterministic_due_days")),
         reviewed_at: row.get("reviewed_at"),
         created_at: row.get("created_at"),
     })
@@ -2016,6 +2059,72 @@ async fn recent_delivery_sqlite(
     Ok(count > 0)
 }
 
+async fn reserve_dispatch_claim_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    channel_id: i64,
+    event_key: &str,
+    cooldown_minutes: i64,
+) -> anyhow::Result<bool> {
+    let claimed = sqlx::query_scalar::<_, i64>(
+        r#"
+        INSERT INTO zero_trust_agent_notification_dispatch_claim (
+            tenant_id, channel_id, event_key, claimed_at, claimed_until_epoch
+        ) VALUES (
+            $1, $2, $3, CURRENT_TIMESTAMP::text,
+            EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::BIGINT + ($4 * 60)
+        )
+        ON CONFLICT (tenant_id, channel_id, event_key) DO UPDATE SET
+            claimed_at = EXCLUDED.claimed_at,
+            claimed_until_epoch = EXCLUDED.claimed_until_epoch
+        WHERE zero_trust_agent_notification_dispatch_claim.claimed_until_epoch
+              <= EXTRACT(EPOCH FROM CURRENT_TIMESTAMP)::BIGINT
+        RETURNING 1::BIGINT
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(channel_id)
+    .bind(event_key)
+    .bind(cooldown_minutes)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Notification-Dispatch-Claim konnte nicht reserviert werden")?;
+    Ok(claimed.is_some())
+}
+
+async fn reserve_dispatch_claim_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    channel_id: i64,
+    event_key: &str,
+    cooldown_minutes: i64,
+) -> anyhow::Result<bool> {
+    let claimed = sqlx::query_scalar::<_, i64>(
+        r#"
+        INSERT INTO zero_trust_agent_notification_dispatch_claim (
+            tenant_id, channel_id, event_key, claimed_at, claimed_until_epoch
+        ) VALUES (
+            ?1, ?2, ?3, CURRENT_TIMESTAMP,
+            CAST(strftime('%s', 'now') AS INTEGER) + (?4 * 60)
+        )
+        ON CONFLICT (tenant_id, channel_id, event_key) DO UPDATE SET
+            claimed_at = excluded.claimed_at,
+            claimed_until_epoch = excluded.claimed_until_epoch
+        WHERE zero_trust_agent_notification_dispatch_claim.claimed_until_epoch
+              <= CAST(strftime('%s', 'now') AS INTEGER)
+        RETURNING 1
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(channel_id)
+    .bind(event_key)
+    .bind(cooldown_minutes)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Notification-Dispatch-Claim konnte nicht reserviert werden")?;
+    Ok(claimed.is_some())
+}
+
 async fn record_delivery_postgres(
     pool: &PgPool,
     tenant_id: i64,
@@ -2140,11 +2249,11 @@ fn policy_from_pg_row(row: PgRow) -> Result<AgentPolicyProfile, sqlx::Error> {
         description: row.try_get("description")?,
         scope_type: row.try_get("scope_type")?,
         scope_value: row.try_get("scope_value")?,
-        expected_device_count: row.try_get("expected_device_count")?,
-        heartbeat_max_age_hours: row.try_get("heartbeat_max_age_hours")?,
-        minimum_zero_trust_score: row.try_get("minimum_zero_trust_score")?,
-        max_critical_findings: row.try_get("max_critical_findings")?,
-        max_high_findings: row.try_get("max_high_findings")?,
+        expected_device_count: i64::from(row.try_get::<i32, _>("expected_device_count")?),
+        heartbeat_max_age_hours: i64::from(row.try_get::<i32, _>("heartbeat_max_age_hours")?),
+        minimum_zero_trust_score: i64::from(row.try_get::<i32, _>("minimum_zero_trust_score")?),
+        max_critical_findings: i64::from(row.try_get::<i32, _>("max_critical_findings")?),
+        max_high_findings: i64::from(row.try_get::<i32, _>("max_high_findings")?),
         enabled: row.try_get("enabled")?,
         created_by_id: row.try_get("created_by_id")?,
         created_at: row.try_get("created_at")?,
@@ -2186,7 +2295,7 @@ fn channel_from_pg_row(row: PgRow) -> Result<AgentNotificationChannel, sqlx::Err
         auth_type: auth_type.clone(),
         secret_env_name: secret_env_name.clone(),
         secret_available: secret_available(&auth_type, &secret_env_name),
-        cooldown_minutes: row.try_get("cooldown_minutes")?,
+        cooldown_minutes: i64::from(row.try_get::<i32, _>("cooldown_minutes")?),
         enabled: row.try_get("enabled")?,
         created_by_id: row.try_get("created_by_id")?,
         last_success_at: row.try_get("last_success_at")?,
@@ -2236,7 +2345,9 @@ fn delivery_from_pg_row(row: PgRow) -> Result<AgentNotificationDelivery, sqlx::E
         event_type: row.try_get("event_type")?,
         level: row.try_get("level")?,
         status: row.try_get("status")?,
-        response_status: row.try_get("response_status")?,
+        response_status: row
+            .try_get::<Option<i32>, _>("response_status")?
+            .map(i64::from),
         error_message: row.try_get("error_message")?,
         error_class: row.try_get("error_class")?,
         payload: serde_json::from_str(&row.try_get::<String, _>("payload_json")?)
@@ -2279,7 +2390,7 @@ fn device_signal_from_pg_row(row: PgRow) -> Result<AgentPolicyDeviceSignal, sqlx
         os_family: row.try_get("os_family")?,
         deployment_channel: row.try_get("deployment_channel")?,
         enrollment_status: row.try_get("enrollment_status")?,
-        zero_trust_score: row.try_get("zero_trust_score")?,
+        zero_trust_score: i64::from(row.try_get::<i32, _>("zero_trust_score")?),
         last_seen_at: row.try_get("last_seen_at")?,
         critical_finding_count: row.try_get("critical_finding_count")?,
         high_finding_count: row.try_get("high_finding_count")?,

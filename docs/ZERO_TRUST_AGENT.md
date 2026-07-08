@@ -241,6 +241,14 @@ fehlgeschlagenen Zustellungen. Transiente Verbindungs-/Timeoutfehler sowie HTTP
 429, 500, 502, 503 und 504 werden innerhalb eines Zustellversuchs begrenzt
 wiederholt; permanente Clientfehler werden nicht wiederholt.
 
+Vor der externen Zustellung reserviert Migration
+`0030_rust_notification_dispatch_claim` den unveraenderten Event-Key atomar je
+Tenant und Kanal. Parallele manuelle Auswertungen sowie ein gleichzeitiger
+Hintergrundworker koennen denselben Key dadurch nicht doppelt senden. Der Claim
+enthaelt weder Payload noch Secret und bleibt nach erfolgreichen wie
+fehlgeschlagenen Versuchen bis zum Ende des Kanal-Cooldowns aktiv. Ein neuer
+Zustand oder Faelligkeitskontext erzeugt einen neuen Key und bleibt zustellbar.
+
 Die Delivery-Historie speichert nur sichere Betriebsmetadaten: Tenant, Domaene,
 Objektbezug, Signaltyp, Schweregrad, Status, Kanal, Zeitpunkt, letzter Versuch,
 sichere Fehlerklasse und naechsten Cooldown-Zeitpunkt. Vollstaendige Payloads,
@@ -248,6 +256,10 @@ interne Fehlerdetails, Bearer-/HMAC-Secrets und Authorization Header werden
 weder ueber die API noch in der Read-only-Webansicht ausgegeben. Administratoren
 duerfen Kanaele und Signalbereiche konfigurieren; authentifizierte Read-only-
 Rollen sehen nur diese sicheren Delivery-Metadaten.
+
+HTML-Fehlerseiten zeigen fuer interne Store-, Query- oder Datenbankfehler nur
+generische Meldungen. Interne Fehlerdetails werden nicht an Browser oder API-
+Clients durchgereicht.
 
 Unterstuetzte Authentisierung:
 

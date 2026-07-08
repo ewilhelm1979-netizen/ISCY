@@ -207,6 +207,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_CROSS_DOMAIN_NOTIFICATION_SCHEMA,
         postgres_sql: POSTGRES_CROSS_DOMAIN_NOTIFICATION_SCHEMA,
     },
+    Migration {
+        version: "0030_rust_notification_dispatch_claim",
+        sqlite_sql: SQLITE_NOTIFICATION_DISPATCH_CLAIM_SCHEMA,
+        postgres_sql: POSTGRES_NOTIFICATION_DISPATCH_CLAIM_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1492,6 +1497,32 @@ CREATE INDEX IF NOT EXISTS idx_notification_delivery_domain
     ON zero_trust_agent_notification_delivery(tenant_id, domain, signal_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_notification_delivery_object
     ON zero_trust_agent_notification_delivery(tenant_id, domain, object_type, object_id);
+"#;
+
+const SQLITE_NOTIFICATION_DISPATCH_CLAIM_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS zero_trust_agent_notification_dispatch_claim (
+    tenant_id INTEGER NOT NULL,
+    channel_id INTEGER NOT NULL,
+    event_key varchar(255) NOT NULL,
+    claimed_at TEXT NOT NULL,
+    claimed_until_epoch INTEGER NOT NULL,
+    PRIMARY KEY (tenant_id, channel_id, event_key)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_dispatch_claim_expiry
+    ON zero_trust_agent_notification_dispatch_claim(tenant_id, claimed_until_epoch);
+"#;
+
+const POSTGRES_NOTIFICATION_DISPATCH_CLAIM_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS zero_trust_agent_notification_dispatch_claim (
+    tenant_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    event_key varchar(255) NOT NULL,
+    claimed_at TEXT NOT NULL,
+    claimed_until_epoch BIGINT NOT NULL,
+    PRIMARY KEY (tenant_id, channel_id, event_key)
+);
+CREATE INDEX IF NOT EXISTS idx_notification_dispatch_claim_expiry
+    ON zero_trust_agent_notification_dispatch_claim(tenant_id, claimed_until_epoch);
 "#;
 
 const SQLITE_SECURITY_RUNTIME_STATE_SCHEMA: &str = r#"
@@ -5623,7 +5654,13 @@ mod tests {
         .await
         .unwrap();
         let applied = run_sqlite_migrations(&pool).await.unwrap();
-        assert_eq!(applied, vec!["0029_rust_cross_domain_notifications"]);
+        assert_eq!(
+            applied,
+            vec![
+                "0029_rust_cross_domain_notifications",
+                "0030_rust_notification_dispatch_claim"
+            ]
+        );
         assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
 
         let delivery = sqlx::query(
@@ -5646,5 +5683,66 @@ mod tests {
             delivery.get::<String, _>("last_attempt_at"),
             "2026-01-01T00:00:00Z"
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_0030_is_restartable_and_preserves_existing_dispatch_claims() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        execute_sqlite_script(
+            &pool,
+            r#"
+            CREATE TABLE iscy_schema_migrations (
+                version TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            CREATE TABLE zero_trust_agent_notification_dispatch_claim (
+                tenant_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                event_key varchar(255) NOT NULL,
+                claimed_at TEXT NOT NULL,
+                claimed_until_epoch INTEGER NOT NULL,
+                PRIMARY KEY (tenant_id, channel_id, event_key)
+            );
+            INSERT INTO zero_trust_agent_notification_dispatch_claim (
+                tenant_id, channel_id, event_key, claimed_at, claimed_until_epoch
+            ) VALUES (99, 7, 'T99:EVIDENCE:EVIDENCE_ITEM:42:EVIDENCE_EXPIRED:EXPIRED',
+                      '2026-01-01T00:00:00Z', 1767229200);
+            "#,
+        )
+        .await
+        .unwrap();
+        for migration in MIGRATIONS.iter().take(29) {
+            sqlx::query(
+                "INSERT INTO iscy_schema_migrations (version, applied_at) VALUES (?1, '2026-01-01T00:00:00Z')",
+            )
+            .bind(migration.version)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0030_rust_notification_dispatch_claim"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let claim = sqlx::query(
+            "SELECT claimed_at, claimed_until_epoch FROM zero_trust_agent_notification_dispatch_claim WHERE tenant_id=99 AND channel_id=7",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(claim.get::<String, _>("claimed_at"), "2026-01-01T00:00:00Z");
+        assert_eq!(claim.get::<i64, _>("claimed_until_epoch"), 1767229200);
+        let index_exists: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_notification_dispatch_claim_expiry'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(index_exists, 1);
     }
 }
