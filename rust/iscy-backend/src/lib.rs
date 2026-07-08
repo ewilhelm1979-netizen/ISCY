@@ -10451,10 +10451,7 @@ async fn web_zero_trust(
                 query.policy_id,
                 query.channel_id,
             ),
-            Err(err) => format!(
-                r#"<section class="panel wide"><h2>Agent Governance</h2><p>{}</p></section>"#,
-                html_escape(&err.to_string())
-            ),
+            Err(_) => r#"<section class="panel wide"><h2>Agent Governance</h2><p>Agent-Governance-Daten sind derzeit nicht verfuegbar.</p></section>"#.to_string(),
         },
         None => r#"<section class="panel wide"><h2>Agent Governance</h2><p>Agent-Governance-Store ist nicht konfiguriert.</p></section>"#.to_string(),
     };
@@ -11730,9 +11727,13 @@ async fn web_agent_policy_submit(
             "Agent-Policy wurde nicht gefunden.",
         )
         .into_response(),
-        Err(err) => {
-            web_error_page("Zero Trust", "/zero-trust/", &context, &err.to_string()).into_response()
-        }
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Agent-Policy konnte nicht gespeichert werden.",
+        )
+        .into_response(),
     }
 }
 
@@ -11781,9 +11782,13 @@ async fn web_agent_notification_channel_submit(
             "Notification-Kanal wurde nicht gefunden.",
         )
         .into_response(),
-        Err(err) => {
-            web_error_page("Zero Trust", "/zero-trust/", &context, &err.to_string()).into_response()
-        }
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Notification-Kanal konnte nicht gespeichert werden.",
+        )
+        .into_response(),
     }
 }
 
@@ -11807,9 +11812,13 @@ async fn web_agent_notifications_evaluate(
         Ok(_) => {
             Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
         }
-        Err(err) => {
-            web_error_page("Zero Trust", "/zero-trust/", &context, &err.to_string()).into_response()
-        }
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Notification-Auswertung konnte nicht abgeschlossen werden.",
+        )
+        .into_response(),
     }
 }
 

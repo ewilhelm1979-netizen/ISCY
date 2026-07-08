@@ -655,8 +655,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0029_rust_cross_domain_notifications"));
-    assert!(html.contains("29/29 angewendet"));
+    assert!(html.contains("0030_rust_notification_dispatch_claim"));
+    assert!(html.contains("30/30 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -2919,6 +2919,285 @@ async fn agent_notification_webhook_delivers_once_and_audits_cooldown() {
     assert!(!html.contains("Secret Environment"));
 
     receiver_task.abort();
+}
+
+#[tokio::test]
+async fn notification_dispatch_claim_prevents_parallel_manual_and_worker_duplicates() {
+    let root = test_media_root("notification-dispatch-claim");
+    let database_path = root.join("notification-claim.sqlite3");
+    fs::File::create(&database_path).unwrap();
+    let database_url = format!("sqlite://{}", database_path.display());
+    let options = SqliteConnectOptions::from_str(&database_url)
+        .unwrap()
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(5));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem
+            (id, tenant_id, title, file, file_sha256, valid_until, retention_until, reviewed_at)
+        VALUES
+            (701, 1, 'Parallel dispatch', 'parallel.pdf', 'abc', date('now', '-1 day'), date('now', '+1 year'), CURRENT_TIMESTAMP)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let receiver_attempts = Arc::new(AtomicUsize::new(0));
+    let route_attempts = Arc::clone(&receiver_attempts);
+    let receiver = Router::new().route(
+        "/hook",
+        post(move || {
+            let route_attempts = Arc::clone(&route_attempts);
+            async move {
+                route_attempts.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let receiver_url = format!("http://{}/hook", listener.local_addr().unwrap());
+    let receiver_task = tokio::spawn(async move {
+        axum::serve(listener, receiver).await.unwrap();
+    });
+    tokio::task::yield_now().await;
+
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_notification_channel
+            (tenant_id, name, endpoint_url, minimum_level, event_types_json,
+             auth_type, secret_env_name, cooldown_minutes, enabled)
+        VALUES (1, 'Parallel webhook', ?1, 'WARN', '["EVIDENCE"]',
+                'NONE', '', 60, 1)
+        "#,
+    )
+    .bind(receiver_url)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let store = AgentGovernanceStore::from_sqlite_pool(pool.clone());
+    let app = app_router_with_state(
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_governance_store(Some(store.clone())),
+    );
+    let evaluate_request = || {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/agents/notifications/evaluate")
+            .header("x-iscy-tenant-id", "1")
+            .header("x-iscy-user-id", "1")
+            .header("x-iscy-roles", "ADMIN")
+            .body(Body::empty())
+            .unwrap()
+    };
+
+    let (first, second) = tokio::join!(
+        app.clone().oneshot(evaluate_request()),
+        app.clone().oneshot(evaluate_request()),
+    );
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+    let first: serde_json::Value =
+        serde_json::from_slice(&to_bytes(first.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let second: serde_json::Value =
+        serde_json::from_slice(&to_bytes(second.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(
+        first["result"]["sent"].as_i64().unwrap() + second["result"]["sent"].as_i64().unwrap(),
+        1
+    );
+    assert_eq!(receiver_attempts.load(Ordering::SeqCst), 1);
+
+    sqlx::query(
+        "UPDATE evidence_evidenceitem SET valid_until=date('now', '+10 days') WHERE id=701",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let changed = app.clone().oneshot(evaluate_request()).await.unwrap();
+    let changed: serde_json::Value =
+        serde_json::from_slice(&to_bytes(changed.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(changed["result"]["sent"], 1);
+    assert_eq!(receiver_attempts.load(Ordering::SeqCst), 2);
+
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem
+            (id, tenant_id, title, file, file_sha256, valid_until, retention_until, reviewed_at)
+        VALUES
+            (702, 1, 'Worker overlap', 'worker.pdf', 'def', date('now', '-1 day'), date('now', '+1 year'), CURRENT_TIMESTAMP)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let worker_store = store.clone();
+    let worker = tokio::spawn(async move { worker_store.dispatch_notifications(1).await.unwrap() });
+    for _ in 0..100 {
+        if receiver_attempts.load(Ordering::SeqCst) >= 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(receiver_attempts.load(Ordering::SeqCst), 3);
+    let manual = app.oneshot(evaluate_request()).await.unwrap();
+    let manual: serde_json::Value =
+        serde_json::from_slice(&to_bytes(manual.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let worker = worker.await.unwrap();
+    assert_eq!(worker.sent, 1);
+    assert_eq!(manual["result"]["sent"], 0);
+    assert_eq!(receiver_attempts.load(Ordering::SeqCst), 3);
+
+    let delivery_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM zero_trust_agent_notification_delivery WHERE tenant_id=1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(delivery_count, 3);
+    let claim_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM zero_trust_agent_notification_dispatch_claim WHERE tenant_id=1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(claim_count, 3);
+    receiver_task.abort();
+}
+
+#[tokio::test]
+async fn notification_web_errors_redact_internal_store_details() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query("DROP TABLE zero_trust_agent_notification_channel")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_governance_store(Some(AgentGovernanceStore::from_sqlite_pool(pool))),
+    );
+
+    let overview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/zero-trust/?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let overview = String::from_utf8(
+        to_bytes(overview.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(overview.contains("Agent-Governance-Daten sind derzeit nicht verfuegbar."));
+
+    let channel = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/zero-trust/notification-channels/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from("name=SOC&endpoint_url=http%3A%2F%2F127.0.0.1%3A19099%2Fhook&minimum_level=WARN&event_evidence=on&auth_type=NONE&secret_env_name=&cooldown_minutes=60&enabled=on"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let channel = String::from_utf8(
+        to_bytes(channel.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(channel.contains("Notification-Kanal konnte nicht gespeichert werden."));
+
+    let evaluate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/zero-trust/notifications/evaluate")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let evaluate = String::from_utf8(
+        to_bytes(evaluate.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(evaluate.contains("Notification-Auswertung konnte nicht abgeschlossen werden."));
+
+    let api = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/notification-channels")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let api = String::from_utf8(
+        to_bytes(api.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(api.contains("Notification-Kanaele konnten nicht gelesen werden."));
+
+    for response in [&overview, &channel, &evaluate, &api] {
+        for sensitive_detail in [
+            "zero_trust_agent_notification_channel",
+            "no such table",
+            "error returned from database",
+            "sqlite-notification",
+            "constraint",
+            "query",
+        ] {
+            assert!(
+                !response.to_ascii_lowercase().contains(sensitive_detail),
+                "internal detail leaked: {sensitive_detail}: {response}"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -12125,7 +12404,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0026_rust_product_security_evidence_packages",
             "0027_rust_ai_governance_links",
             "0028_rust_guided_agent_onboarding",
-            "0029_rust_cross_domain_notifications"
+            "0029_rust_cross_domain_notifications",
+            "0030_rust_notification_dispatch_claim"
         ]
     );
     assert!(
