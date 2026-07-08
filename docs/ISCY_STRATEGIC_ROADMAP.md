@@ -1,6 +1,6 @@
 # ISCY Strategic Roadmap
 
-Stand: 2026-06-27
+Stand: 2026-07-07
 
 Diese Roadmap beschreibt die fachlich sinnvollen naechsten Ausbaustufen nach dem Rust-only-Cutover. Sie ersetzt die alte Rust-Migrationsroadmap nicht, sondern beginnt danach: ISCY ist technisch auf Rust umgestellt und soll nun fachlich reifer, pruefbarer und im Betrieb wirksamer werden.
 
@@ -185,6 +185,10 @@ Umgesetzt:
 - Soll-/Ist-Coverage, Heartbeat-Freshness, Mindestscore und Finding-Grenzwerte je Policy
 - sichere Webhook-Kanaele mit Production-Allowlist, Bearer-/HMAC-Secret-Referenz, Redirect-Sperre und Cooldown
 - periodischer Worker, manuelle Auswertung, Delivery-Historie sowie Operations-/Prometheus-Signale
+- fachuebergreifende Signale fuer Evidence-Ablauf und -Qualitaet, offene CVE-/Korrelationsreviews, offene Incident-Nicht-Meldeentscheidungen sowie faellige, ueberfaellige, blockierte oder kritische Roadmap-Tasks
+- gemeinsame stabile Signal-Keys aus Tenant, Domaene, Objekttyp, Objekt-ID, Signaltyp und Zustands-/Faelligkeitskontext
+- sichere Delivery-Metadaten mit Domaene, Objektbezug, Signaltyp, letzter Zustellung, Fehlerklasse und naechstem Cooldown-Zeitpunkt; Payloads und interne Fehler bleiben aus API und Read-only-Ansicht entfernt
+- Migration `0029_rust_cross_domain_notifications` erweitert die bestehende Delivery-Historie additiv fuer SQLite und PostgreSQL
 - gefuehrter Drei-Schritt-Assistent fuer Windows, Linux, macOS und NixOS auf Basis der vorhandenen Deployment-Artefakte
 - begrenzter Enrollment-Token-Lifecycle mit sicheren Metadaten, Widerruf, Ablauf, partieller Verwendung und Auditspur
 - transaktionssichere Token-Nutzung mit Policy-Zuordnung und Schutz gegen parallele Limitueberschreitung
@@ -192,9 +196,14 @@ Umgesetzt:
 
 Offen:
 
-- Das Notification-Modell auf ablaufende Evidence, offene CVE-Reviews, offene Nicht-Meldeentscheidungen und Roadmap-Tasks erweitern.
 - signierte MSI-/PKG-/deb-/rpm-Pakete und Release-Provenance bereitstellen.
 - lokale CSR-Erzeugung und providerunabhaengige CA-Anbindung als eigener spaeterer Meilenstein untersuchen.
+
+Bewusst nicht Teil der fachuebergreifenden Notifications sind Supplier-Review-
+Erweiterungen, Management-/Regulatory-Templates, Evidence-Legal-Hold,
+Disposition oder kontrollierte Loeschung, Re-Hash-Worker, Objektspeicher,
+CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete, Release-Provenance sowie
+Performance-, HA- und visuelle Regressionserweiterungen.
 
 Erfolgskriterium:
 
@@ -202,10 +211,9 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Benachrichtigungen auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern.
-2. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
-3. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
-4. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
+1. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
+2. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
+3. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
 
 ## Verbleibende Roadmap
 
@@ -216,8 +224,8 @@ Erfolgskriterium:
 | Erledigt | Product-Security-Evidence-Pakete und Produkt-Lifecycle | Versionierte Release-/PSIRT-Freigaben enthalten SBOM, VEX, Advisories, Support-Ende, offene Risiken, Roadmap und Evidence; Blocker-Gates und Exporte sind umgesetzt. |
 | Erledigt | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
 | Erledigt | Gefuehrtes Agent-Onboarding | Enrollment-Tokens, Deployment-Artefakte und Flottenstatus sind ueber einen sicheren Admin-Assistenten bedienbar. |
-| Jetzt | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
-| Danach | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen und Exit-Test-Nachweise. |
+| Unreleased | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
+| Jetzt | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen und Exit-Test-Nachweise. |
 | Danach | Management-/Regulatory-Templates | Wiederholbare Quartals-, Audit-, NIS2-, DORA- und DSGVO-Pakete werden kontextsensitiv erzeugt. |
 | Reifegrad | Evidence-Disposition und Objektspeicher | Legal Hold, kontrollierte Loeschung, periodische Integritaetspruefung und Storage-Restore sind auditierbar. |
 | Reifegrad | Performance, HA und visuelle Regression | Lastgrenzen, Mehrinstanzbetrieb und UI-Regressionen sind messbar abgesichert. |

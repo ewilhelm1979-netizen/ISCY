@@ -1,7 +1,7 @@
 use std::{env, time::Duration};
 
 use anyhow::{bail, Context};
-use chrono::{DateTime, Duration as ChronoDuration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, NaiveDateTime, Utc};
 use hmac::{Hmac, Mac};
 use reqwest::{redirect::Policy as RedirectPolicy, Client, Url};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,14 @@ use sqlx::{
 use crate::cve_store::normalize_database_url;
 
 type HmacSha256 = Hmac<Sha256>;
+
+const NOTIFICATION_EVENT_TYPES: &[&str] = &[
+    "AGENT_POLICY",
+    "EVIDENCE",
+    "PRODUCT_SECURITY",
+    "INCIDENT",
+    "ROADMAP",
+];
 
 #[derive(Clone)]
 pub enum AgentGovernanceStore {
@@ -128,15 +136,37 @@ pub struct AgentNotificationDelivery {
     pub tenant_id: i64,
     pub channel_id: i64,
     pub policy_id: Option<i64>,
+    pub domain: String,
+    pub object_type: String,
+    pub object_id: Option<i64>,
+    pub signal_type: String,
     pub event_key: String,
     pub event_type: String,
     pub level: String,
     pub status: String,
     pub response_status: Option<i64>,
+    #[serde(skip_serializing)]
     pub error_message: String,
+    pub error_class: String,
+    #[serde(skip_serializing)]
     pub payload: Value,
     pub created_at: String,
+    pub last_attempt_at: Option<String>,
+    pub next_eligible_at: Option<String>,
     pub delivered_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NotificationSignal {
+    pub tenant_id: i64,
+    pub domain: String,
+    pub object_type: String,
+    pub object_id: i64,
+    pub signal_type: String,
+    pub level: String,
+    pub status: String,
+    pub due_at: Option<String>,
+    pub event_key: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -154,6 +184,7 @@ pub struct AgentNotificationDispatchResult {
     pub tenant_id: i64,
     pub evaluated_policies: i64,
     pub policy_violations: i64,
+    pub evaluated_signals: i64,
     pub enabled_channels: i64,
     pub sent: i64,
     pub failed: i64,
@@ -175,9 +206,43 @@ struct AgentPolicyDeviceSignal {
     business_unit_name: Option<String>,
 }
 
+struct EvidenceNotificationSource {
+    id: i64,
+    file_name: Option<String>,
+    file_sha256: String,
+    valid_until: Option<String>,
+    retention_until: Option<String>,
+    reviewed_at: Option<String>,
+}
+
+struct CveNotificationSource {
+    id: i64,
+    severity: String,
+    deterministic_priority: String,
+    deterministic_due_days: i64,
+    reviewed_at: Option<String>,
+    created_at: String,
+}
+
+struct IncidentNotificationSource {
+    id: i64,
+    status: String,
+    significance_status: String,
+    justification: String,
+    review_state: String,
+}
+
+struct RoadmapNotificationSource {
+    id: i64,
+    status: String,
+    priority: String,
+    due_date: Option<String>,
+}
+
 struct DeliveryAttempt {
     status: &'static str,
     response_status: Option<i64>,
+    error_class: &'static str,
     error_message: String,
 }
 
@@ -276,11 +341,7 @@ impl AgentGovernanceStore {
         } else {
             Vec::new()
         };
-        let recent_deliveries = if include_channels {
-            self.list_notification_deliveries(tenant_id, 25).await?
-        } else {
-            Vec::new()
-        };
+        let recent_deliveries = self.list_notification_deliveries(tenant_id, 25).await?;
         Ok(AgentFleetGovernanceOverview {
             tenant_id,
             summary,
@@ -354,29 +415,62 @@ impl AgentGovernanceStore {
         }
     }
 
-    pub async fn dispatch_policy_notifications(
+    pub async fn evaluate_notification_signals(
+        &self,
+        tenant_id: i64,
+    ) -> anyhow::Result<Vec<NotificationSignal>> {
+        let evaluations = self.evaluate_policies(tenant_id).await?;
+        let mut signals = evaluations
+            .iter()
+            .filter(|evaluation| !evaluation.compliant)
+            .map(|evaluation| NotificationSignal {
+                tenant_id,
+                domain: "AGENT".to_string(),
+                object_type: "POLICY".to_string(),
+                object_id: evaluation.policy_id,
+                signal_type: "AGENT_POLICY".to_string(),
+                level: evaluation.level.clone(),
+                status: evaluation.level.clone(),
+                due_at: None,
+                event_key: format!("AGENT_POLICY:{}:{}", evaluation.policy_id, evaluation.level),
+            })
+            .collect::<Vec<_>>();
+        match self {
+            Self::Postgres(pool) => {
+                signals.extend(cross_domain_signals_postgres(pool, tenant_id).await?)
+            }
+            Self::Sqlite(pool) => {
+                signals.extend(cross_domain_signals_sqlite(pool, tenant_id).await?)
+            }
+        }
+        Ok(signals)
+    }
+
+    pub async fn dispatch_notifications(
         &self,
         tenant_id: i64,
     ) -> anyhow::Result<AgentNotificationDispatchResult> {
         let evaluations = self.evaluate_policies(tenant_id).await?;
+        let signals = self.evaluate_notification_signals(tenant_id).await?;
         let channels = self
             .list_notification_channels(tenant_id)
             .await?
             .into_iter()
             .filter(|channel| channel.enabled)
             .collect::<Vec<_>>();
-        let violations = evaluations
+        let policy_violations = signals
             .iter()
-            .filter(|evaluation| !evaluation.compliant)
-            .collect::<Vec<_>>();
+            .filter(|signal| signal.signal_type == "AGENT_POLICY")
+            .count() as i64;
         let mut result = AgentNotificationDispatchResult {
             tenant_id,
             evaluated_policies: evaluations.len() as i64,
-            policy_violations: violations.len() as i64,
+            policy_violations,
+            evaluated_signals: signals.len() as i64,
             enabled_channels: channels.len() as i64,
             ..AgentNotificationDispatchResult::default()
         };
-        if channels.is_empty() || violations.is_empty() {
+        if channels.is_empty() || signals.is_empty() {
             return Ok(result);
         }
 
@@ -388,24 +482,22 @@ impl AgentGovernanceStore {
             .context("Notification-HTTP-Client konnte nicht erstellt werden")?;
 
         for channel in &channels {
-            if !channel
-                .event_types
-                .iter()
-                .any(|event_type| event_type == "AGENT_POLICY")
-            {
-                continue;
-            }
-            for evaluation in &violations {
-                if level_rank(&evaluation.level) < level_rank(&channel.minimum_level) {
+            for signal in &signals {
+                if !channel
+                    .event_types
+                    .iter()
+                    .any(|event_type| event_type == notification_channel_event_type(&signal.domain))
+                {
                     continue;
                 }
-                let event_key =
-                    format!("AGENT_POLICY:{}:{}", evaluation.policy_id, evaluation.level);
+                if level_rank(&signal.level) < level_rank(&channel.minimum_level) {
+                    continue;
+                }
                 if self
-                    .recent_successful_delivery(
+                    .recent_delivery_in_cooldown(
                         tenant_id,
                         channel.id,
-                        &event_key,
+                        &signal.event_key,
                         channel.cooldown_minutes,
                     )
                     .await?
@@ -413,19 +505,12 @@ impl AgentGovernanceStore {
                     result.suppressed += 1;
                     continue;
                 }
-                let payload = notification_payload(tenant_id, &event_key, evaluation);
+                let payload = notification_payload(signal);
                 let payload_json = serde_json::to_string(&payload)?;
-                let attempt = deliver_webhook(&client, channel, &event_key, &payload_json).await;
+                let attempt =
+                    deliver_webhook(&client, channel, &signal.event_key, &payload_json).await;
                 let delivery = self
-                    .record_delivery(
-                        tenant_id,
-                        channel.id,
-                        Some(evaluation.policy_id),
-                        &event_key,
-                        &evaluation.level,
-                        &payload,
-                        &attempt,
-                    )
+                    .record_delivery(tenant_id, channel, signal, &payload, &attempt)
                     .await?;
                 if attempt.status == "SENT" {
                     result.sent += 1;
@@ -438,7 +523,7 @@ impl AgentGovernanceStore {
         Ok(result)
     }
 
-    async fn recent_successful_delivery(
+    async fn recent_delivery_in_cooldown(
         &self,
         tenant_id: i64,
         channel_id: i64,
@@ -457,29 +542,20 @@ impl AgentGovernanceStore {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn record_delivery(
         &self,
         tenant_id: i64,
-        channel_id: i64,
-        policy_id: Option<i64>,
-        event_key: &str,
-        level: &str,
+        channel: &AgentNotificationChannel,
+        signal: &NotificationSignal,
         payload: &Value,
         attempt: &DeliveryAttempt,
     ) -> anyhow::Result<AgentNotificationDelivery> {
         match self {
             Self::Postgres(pool) => {
-                record_delivery_postgres(
-                    pool, tenant_id, channel_id, policy_id, event_key, level, payload, attempt,
-                )
-                .await
+                record_delivery_postgres(pool, tenant_id, channel, signal, payload, attempt).await
             }
             Self::Sqlite(pool) => {
-                record_delivery_sqlite(
-                    pool, tenant_id, channel_id, policy_id, event_key, level, payload, attempt,
-                )
-                .await
+                record_delivery_sqlite(pool, tenant_id, channel, signal, payload, attempt).await
             }
         }
     }
@@ -555,9 +631,9 @@ fn validate_channel_payload(
     if payload
         .event_types
         .iter()
-        .any(|event_type| event_type != "AGENT_POLICY")
+        .any(|event_type| !NOTIFICATION_EVENT_TYPES.contains(&event_type.as_str()))
     {
-        bail!("Derzeit wird nur der Notification-Event AGENT_POLICY unterstuetzt");
+        bail!("Notification event_types enthaelt einen nicht unterstuetzten Bereich");
     }
     if !matches!(
         payload.auth_type.as_str(),
@@ -579,6 +655,30 @@ fn validate_channel_payload(
 }
 
 fn validate_webhook_url(raw_url: &str) -> anyhow::Result<Url> {
+    let production = env::var("ISCY_APP_MODE")
+        .unwrap_or_else(|_| "development".to_string())
+        .eq_ignore_ascii_case("production");
+    let allowed_hosts = env::var("ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>();
+    validate_webhook_url_with_policy(
+        raw_url,
+        env_flag("ISCY_NOTIFICATION_ALLOW_HTTP"),
+        production,
+        &allowed_hosts,
+    )
+}
+
+fn validate_webhook_url_with_policy(
+    raw_url: &str,
+    allow_http: bool,
+    production: bool,
+    allowed_hosts: &[String],
+) -> anyhow::Result<Url> {
     let url = Url::parse(raw_url).context("Notification-Webhook-URL ist ungueltig")?;
     if !url.username().is_empty() || url.password().is_some() {
         bail!("Notification-Webhook-URL darf keine Zugangsdaten enthalten");
@@ -586,28 +686,17 @@ fn validate_webhook_url(raw_url: &str) -> anyhow::Result<Url> {
     let host = url
         .host_str()
         .ok_or_else(|| anyhow::anyhow!("Notification-Webhook-URL benoetigt einen Host"))?;
-    let allow_http = env_flag("ISCY_NOTIFICATION_ALLOW_HTTP") || is_loopback_host(host);
+    let allow_http = allow_http || is_loopback_host(host);
     if url.scheme() != "https" && !(url.scheme() == "http" && allow_http) {
         bail!("Notification-Webhook muss HTTPS nutzen; lokales HTTP braucht ISCY_NOTIFICATION_ALLOW_HTTP=1");
     }
-    if env::var("ISCY_APP_MODE")
-        .unwrap_or_else(|_| "development".to_string())
-        .eq_ignore_ascii_case("production")
-    {
-        let allowed_hosts = env::var("ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_ascii_lowercase)
-            .collect::<Vec<_>>();
-        if allowed_hosts.is_empty()
+    if production
+        && (allowed_hosts.is_empty()
             || !allowed_hosts
                 .iter()
-                .any(|allowed| allowed.eq_ignore_ascii_case(host))
-        {
-            bail!("Produktive Notification-Webhooks benoetigen einen Host in ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS");
-        }
+                .any(|allowed| allowed.eq_ignore_ascii_case(host)))
+    {
+        bail!("Produktive Notification-Webhooks benoetigen einen Host in ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS");
     }
     Ok(url)
 }
@@ -820,19 +909,32 @@ fn coverage_summary(evaluations: &[AgentPolicyEvaluation]) -> AgentFleetCoverage
     }
 }
 
-fn notification_payload(
-    tenant_id: i64,
-    event_key: &str,
-    evaluation: &AgentPolicyEvaluation,
-) -> Value {
+fn notification_channel_event_type(domain: &str) -> &str {
+    if domain == "AGENT" {
+        "AGENT_POLICY"
+    } else {
+        domain
+    }
+}
+
+fn notification_payload(signal: &NotificationSignal) -> Value {
     json!({
         "specversion": "1.0",
-        "type": "iscy.agent.policy.violation",
-        "source": format!("iscy://tenant/{tenant_id}/agent-fleet"),
-        "id": event_key,
+        "type": format!("iscy.notification.{}", signal.signal_type.to_ascii_lowercase()),
+        "source": format!("iscy://tenant/{}/{}", signal.tenant_id, signal.domain.to_ascii_lowercase()),
+        "id": signal.event_key,
         "time": Utc::now().to_rfc3339(),
-        "subject": format!("agent-policy/{}", evaluation.policy_id),
-        "data": evaluation,
+        "subject": format!("{}/{}", signal.object_type.to_ascii_lowercase(), signal.object_id),
+        "data": {
+            "tenant_id": signal.tenant_id,
+            "domain": signal.domain,
+            "object_type": signal.object_type,
+            "object_id": signal.object_id,
+            "signal_type": signal.signal_type,
+            "severity": signal.level,
+            "status": signal.status,
+            "due_at": signal.due_at,
+        },
     })
 }
 
@@ -844,7 +946,12 @@ async fn deliver_webhook(
 ) -> DeliveryAttempt {
     let url = match validate_webhook_url(&channel.endpoint_url) {
         Ok(url) => url,
-        Err(err) => return failed_attempt(err.to_string()),
+        Err(_) => {
+            return failed_attempt(
+                "DESTINATION_REJECTED",
+                "Webhook-Ziel wurde durch die Sicherheitsrichtlinie abgelehnt",
+            )
+        }
     };
     let secret = if channel.auth_type == "NONE" {
         None
@@ -855,10 +962,10 @@ async fn deliver_webhook(
         {
             Some(secret) => Some(secret),
             None => {
-                return failed_attempt(format!(
-                    "Secret-Referenz {} ist nicht gesetzt",
-                    channel.secret_env_name
-                ))
+                return failed_attempt(
+                    "SECRET_UNAVAILABLE",
+                    "Konfigurierte Secret-Referenz ist nicht verfuegbar",
+                )
             }
         }
     };
@@ -879,7 +986,12 @@ async fn deliver_webhook(
                 let message = format!("{timestamp}.{payload_json}");
                 let mut mac = match <HmacSha256 as Mac>::new_from_slice(secret.as_bytes()) {
                     Ok(mac) => mac,
-                    Err(_) => return failed_attempt("HMAC-Secret ist ungueltig".to_string()),
+                    Err(_) => {
+                        return failed_attempt(
+                            "SECRET_INVALID",
+                            "Konfiguriertes HMAC-Secret ist ungueltig",
+                        )
+                    }
                 };
                 mac.update(message.as_bytes());
                 request = request
@@ -896,6 +1008,7 @@ async fn deliver_webhook(
                 return DeliveryAttempt {
                     status: "SENT",
                     response_status: Some(i64::from(response.status().as_u16())),
+                    error_class: "",
                     error_message: String::new(),
                 };
             }
@@ -913,11 +1026,21 @@ async fn deliver_webhook(
                     tokio::time::sleep(webhook_retry_delay(attempt)).await;
                     continue;
                 }
-                return failed_attempt(format!("Webhook-Zustellung fehlgeschlagen: {err}"));
+                let error_class = if err.is_timeout() {
+                    "TIMEOUT"
+                } else if err.is_connect() {
+                    "NETWORK"
+                } else {
+                    "REQUEST_FAILED"
+                };
+                return failed_attempt(error_class, "Webhook-Zustellung fehlgeschlagen");
             }
         }
     }
-    failed_attempt("Webhook-Zustellung ohne Ergebnis beendet".to_string())
+    failed_attempt(
+        "DELIVERY_FAILED",
+        "Webhook-Zustellung ohne Ergebnis beendet",
+    )
 }
 
 fn webhook_retryable_status(status: u16) -> bool {
@@ -929,18 +1052,26 @@ fn webhook_retry_delay(attempt: usize) -> Duration {
 }
 
 fn failed_http_attempt(status: u16) -> DeliveryAttempt {
+    let error_class = match status {
+        401 | 403 => "DESTINATION_AUTH",
+        429 => "RATE_LIMITED",
+        500..=599 => "DESTINATION_SERVER",
+        _ => "DESTINATION_REJECTED",
+    };
     DeliveryAttempt {
         status: "FAILED",
         response_status: Some(i64::from(status)),
+        error_class,
         error_message: format!("Webhook antwortete mit HTTP {status}"),
     }
 }
 
-fn failed_attempt(message: String) -> DeliveryAttempt {
+fn failed_attempt(error_class: &'static str, message: &str) -> DeliveryAttempt {
     DeliveryAttempt {
         status: "FAILED",
         response_status: None,
-        error_message: truncate(&message, 1000),
+        error_class,
+        error_message: truncate(message, 1000),
     }
 }
 
@@ -977,6 +1108,452 @@ fn secret_available(auth_type: &str, secret_env_name: &str) -> bool {
             .is_some_and(|value| !value.trim().is_empty())
 }
 
+fn notification_signal(
+    tenant_id: i64,
+    object: (&str, &str, i64),
+    signal_type: &str,
+    level: &str,
+    status: &str,
+    due_at: Option<String>,
+) -> NotificationSignal {
+    let (domain, object_type, object_id) = object;
+    let context = due_at.clone().unwrap_or_else(|| status.to_string());
+    NotificationSignal {
+        tenant_id,
+        domain: domain.to_string(),
+        object_type: object_type.to_string(),
+        object_id,
+        signal_type: signal_type.to_string(),
+        level: level.to_string(),
+        status: status.to_string(),
+        due_at,
+        event_key: format!(
+            "T{tenant_id}:{domain}:{object_type}:{object_id}:{signal_type}:{context}"
+        ),
+    }
+}
+
+fn append_evidence_signals(
+    signals: &mut Vec<NotificationSignal>,
+    tenant_id: i64,
+    sources: Vec<EvidenceNotificationSource>,
+) {
+    let today = Utc::now().date_naive();
+    for source in sources {
+        if let Some(valid_until) = source.valid_until.as_deref().and_then(database_date) {
+            if valid_until < today {
+                signals.push(notification_signal(
+                    tenant_id,
+                    ("EVIDENCE", "EVIDENCE_ITEM", source.id),
+                    "EVIDENCE_EXPIRED",
+                    "CRITICAL",
+                    "EXPIRED",
+                    source.valid_until.clone(),
+                ));
+            } else if valid_until <= today + ChronoDuration::days(30) {
+                signals.push(notification_signal(
+                    tenant_id,
+                    ("EVIDENCE", "EVIDENCE_ITEM", source.id),
+                    "EVIDENCE_EXPIRING",
+                    "WARN",
+                    "DUE_SOON",
+                    source.valid_until.clone(),
+                ));
+            }
+        }
+        if source.reviewed_at.is_none() {
+            signals.push(notification_signal(
+                tenant_id,
+                ("EVIDENCE", "EVIDENCE_ITEM", source.id),
+                "EVIDENCE_REVIEW_MISSING",
+                "WARN",
+                "REVIEW_MISSING",
+                None,
+            ));
+        }
+        if source.retention_until.is_none() {
+            signals.push(notification_signal(
+                tenant_id,
+                ("EVIDENCE", "EVIDENCE_ITEM", source.id),
+                "EVIDENCE_RETENTION_MISSING",
+                "WARN",
+                "RETENTION_MISSING",
+                None,
+            ));
+        }
+        if source
+            .file_name
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            && source.file_sha256.trim().is_empty()
+        {
+            signals.push(notification_signal(
+                tenant_id,
+                ("EVIDENCE", "EVIDENCE_ITEM", source.id),
+                "EVIDENCE_HASH_MISSING",
+                "WARN",
+                "HASH_MISSING",
+                None,
+            ));
+        }
+    }
+}
+
+fn append_cve_signals(
+    signals: &mut Vec<NotificationSignal>,
+    tenant_id: i64,
+    sources: Vec<CveNotificationSource>,
+) {
+    let now = Utc::now();
+    for source in sources
+        .into_iter()
+        .filter(|source| source.reviewed_at.is_none())
+    {
+        signals.push(notification_signal(
+            tenant_id,
+            ("PRODUCT_SECURITY", "CVE_ASSESSMENT", source.id),
+            "CVE_REVIEW_OPEN",
+            "WARN",
+            "REVIEW_OPEN",
+            None,
+        ));
+        let due_at = parse_database_timestamp(&source.created_at)
+            .map(|created_at| created_at + ChronoDuration::days(source.deterministic_due_days));
+        if due_at.is_some_and(|due_at| due_at < now) {
+            signals.push(notification_signal(
+                tenant_id,
+                ("PRODUCT_SECURITY", "CVE_ASSESSMENT", source.id),
+                "CVE_TRIAGE_OVERDUE",
+                "CRITICAL",
+                "OVERDUE",
+                due_at.map(|value| value.to_rfc3339()),
+            ));
+        }
+        if source.severity.eq_ignore_ascii_case("CRITICAL")
+            || source
+                .deterministic_priority
+                .eq_ignore_ascii_case("CRITICAL")
+        {
+            signals.push(notification_signal(
+                tenant_id,
+                ("PRODUCT_SECURITY", "CVE_ASSESSMENT", source.id),
+                "CVE_CRITICAL_OPEN",
+                "CRITICAL",
+                "CRITICAL_OPEN",
+                None,
+            ));
+        }
+    }
+}
+
+fn append_cve_correlation_signals(
+    signals: &mut Vec<NotificationSignal>,
+    tenant_id: i64,
+    correlation_ids: Vec<i64>,
+) {
+    for correlation_id in correlation_ids {
+        signals.push(notification_signal(
+            tenant_id,
+            ("PRODUCT_SECURITY", "CVE_CORRELATION", correlation_id),
+            "CVE_CORRELATION_REVIEW_OPEN",
+            "WARN",
+            "REVIEW_OPEN",
+            None,
+        ));
+    }
+}
+
+fn append_incident_signals(
+    signals: &mut Vec<NotificationSignal>,
+    tenant_id: i64,
+    sources: Vec<IncidentNotificationSource>,
+) {
+    for source in sources {
+        if !source
+            .significance_status
+            .eq_ignore_ascii_case("NOT_SIGNIFICANT")
+            || source.review_state.eq_ignore_ascii_case("APPROVED")
+            || is_closed_status(&source.status)
+        {
+            continue;
+        }
+        signals.push(notification_signal(
+            tenant_id,
+            ("INCIDENT", "INCIDENT", source.id),
+            "INCIDENT_NON_REPORTING_REVIEW_OPEN",
+            "WARN",
+            &source.review_state,
+            None,
+        ));
+        if source.justification.trim().is_empty() {
+            signals.push(notification_signal(
+                tenant_id,
+                ("INCIDENT", "INCIDENT", source.id),
+                "INCIDENT_NON_REPORTING_JUSTIFICATION_MISSING",
+                "CRITICAL",
+                "JUSTIFICATION_MISSING",
+                None,
+            ));
+        }
+    }
+}
+
+fn append_roadmap_signals(
+    signals: &mut Vec<NotificationSignal>,
+    tenant_id: i64,
+    sources: Vec<RoadmapNotificationSource>,
+) {
+    let today = Utc::now().date_naive();
+    for source in sources
+        .into_iter()
+        .filter(|source| !is_closed_status(&source.status))
+    {
+        if let Some(due_date) = source.due_date.as_deref().and_then(database_date) {
+            if due_date < today {
+                signals.push(notification_signal(
+                    tenant_id,
+                    ("ROADMAP", "ROADMAP_TASK", source.id),
+                    "ROADMAP_TASK_OVERDUE",
+                    "CRITICAL",
+                    "OVERDUE",
+                    source.due_date.clone(),
+                ));
+            } else if due_date == today {
+                signals.push(notification_signal(
+                    tenant_id,
+                    ("ROADMAP", "ROADMAP_TASK", source.id),
+                    "ROADMAP_TASK_DUE",
+                    "WARN",
+                    "DUE",
+                    source.due_date.clone(),
+                ));
+            }
+        }
+        if source.status.eq_ignore_ascii_case("BLOCKED") {
+            signals.push(notification_signal(
+                tenant_id,
+                ("ROADMAP", "ROADMAP_TASK", source.id),
+                "ROADMAP_TASK_BLOCKED",
+                "CRITICAL",
+                "BLOCKED",
+                source.due_date.clone(),
+            ));
+        }
+        if source.priority.eq_ignore_ascii_case("CRITICAL") {
+            signals.push(notification_signal(
+                tenant_id,
+                ("ROADMAP", "ROADMAP_TASK", source.id),
+                "ROADMAP_TASK_CRITICAL_OPEN",
+                "CRITICAL",
+                "CRITICAL_OPEN",
+                source.due_date.clone(),
+            ));
+        }
+    }
+}
+
+fn database_date(value: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .ok()
+        .or_else(|| parse_database_timestamp(value).map(|timestamp| timestamp.date_naive()))
+}
+
+fn is_closed_status(status: &str) -> bool {
+    matches!(
+        status.trim().to_ascii_uppercase().as_str(),
+        "DONE" | "COMPLETED" | "RESOLVED" | "CLOSED" | "CANCELLED"
+    )
+}
+
+async fn cross_domain_signals_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<Vec<NotificationSignal>> {
+    let evidence = sqlx::query(
+        "SELECT id, file, file_sha256, valid_until, retention_until, reviewed_at FROM evidence_evidenceitem WHERE tenant_id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-Evidence-Notification-Signale konnten nicht gelesen werden")?
+    .into_iter()
+    .map(|row| EvidenceNotificationSource {
+        id: row.get("id"),
+        file_name: row.get("file"),
+        file_sha256: row.get("file_sha256"),
+        valid_until: row.get("valid_until"),
+        retention_until: row.get("retention_until"),
+        reviewed_at: row.get("reviewed_at"),
+    })
+    .collect();
+    let cves = sqlx::query(
+        "SELECT assessment.id, record.severity, assessment.deterministic_priority, assessment.deterministic_due_days, assessment.reviewed_at, assessment.created_at FROM vulnerability_intelligence_cveassessment assessment JOIN vulnerability_intelligence_cverecord record ON record.id=assessment.cve_id WHERE assessment.tenant_id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-CVE-Notification-Signale konnten nicht gelesen werden")?
+    .into_iter()
+    .map(|row| CveNotificationSource {
+        id: row.get("id"),
+        severity: row.get("severity"),
+        deterministic_priority: row.get("deterministic_priority"),
+        deterministic_due_days: row.get("deterministic_due_days"),
+        reviewed_at: row.get("reviewed_at"),
+        created_at: row.get("created_at"),
+    })
+    .collect();
+    let cve_correlations = sqlx::query_scalar(
+        "SELECT id FROM product_security_cvecorrelation WHERE tenant_id=$1 AND status='SUGGESTED'",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-CVE-Korrelationsreviews konnten nicht gelesen werden")?;
+    let incidents = sqlx::query(
+        "SELECT id, status, nis2_significance_status, nis2_significance_justification, review_state FROM incidents_incident WHERE tenant_id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-Incident-Notification-Signale konnten nicht gelesen werden")?
+    .into_iter()
+    .map(|row| IncidentNotificationSource {
+        id: row.get("id"),
+        status: row.get("status"),
+        significance_status: row.get("nis2_significance_status"),
+        justification: row.get("nis2_significance_justification"),
+        review_state: row.get("review_state"),
+    })
+    .collect();
+    let roadmap = sqlx::query(
+        "SELECT task.id, task.status, task.priority, task.due_date::text AS due_date FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON phase.id=task.phase_id JOIN roadmap_roadmapplan plan ON plan.id=phase.plan_id WHERE plan.tenant_id=$1",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-Roadmap-Notification-Signale konnten nicht gelesen werden")?
+    .into_iter()
+    .map(|row| RoadmapNotificationSource {
+        id: row.get("id"),
+        status: row.get("status"),
+        priority: row.get("priority"),
+        due_date: row.get("due_date"),
+    })
+    .collect();
+    Ok(build_cross_domain_signals(
+        tenant_id,
+        evidence,
+        cves,
+        cve_correlations,
+        incidents,
+        roadmap,
+    ))
+}
+
+async fn cross_domain_signals_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<Vec<NotificationSignal>> {
+    let evidence = sqlx::query(
+        "SELECT id, file, file_sha256, valid_until, retention_until, reviewed_at FROM evidence_evidenceitem WHERE tenant_id=?1",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-Evidence-Notification-Signale konnten nicht gelesen werden")?
+    .into_iter()
+    .map(|row| EvidenceNotificationSource {
+        id: row.get("id"),
+        file_name: row.get("file"),
+        file_sha256: row.get("file_sha256"),
+        valid_until: row.get("valid_until"),
+        retention_until: row.get("retention_until"),
+        reviewed_at: row.get("reviewed_at"),
+    })
+    .collect();
+    let cves = sqlx::query(
+        "SELECT assessment.id, record.severity, assessment.deterministic_priority, assessment.deterministic_due_days, assessment.reviewed_at, assessment.created_at FROM vulnerability_intelligence_cveassessment assessment JOIN vulnerability_intelligence_cverecord record ON record.id=assessment.cve_id WHERE assessment.tenant_id=?1",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-CVE-Notification-Signale konnten nicht gelesen werden")?
+    .into_iter()
+    .map(|row| CveNotificationSource {
+        id: row.get("id"),
+        severity: row.get("severity"),
+        deterministic_priority: row.get("deterministic_priority"),
+        deterministic_due_days: row.get("deterministic_due_days"),
+        reviewed_at: row.get("reviewed_at"),
+        created_at: row.get("created_at"),
+    })
+    .collect();
+    let cve_correlations = sqlx::query_scalar(
+        "SELECT id FROM product_security_cvecorrelation WHERE tenant_id=?1 AND status='SUGGESTED'",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-CVE-Korrelationsreviews konnten nicht gelesen werden")?;
+    let incidents = sqlx::query(
+        "SELECT id, status, nis2_significance_status, nis2_significance_justification, review_state FROM incidents_incident WHERE tenant_id=?1",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-Incident-Notification-Signale konnten nicht gelesen werden")?
+    .into_iter()
+    .map(|row| IncidentNotificationSource {
+        id: row.get("id"),
+        status: row.get("status"),
+        significance_status: row.get("nis2_significance_status"),
+        justification: row.get("nis2_significance_justification"),
+        review_state: row.get("review_state"),
+    })
+    .collect();
+    let roadmap = sqlx::query(
+        "SELECT task.id, task.status, task.priority, CAST(task.due_date AS TEXT) AS due_date FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON phase.id=task.phase_id JOIN roadmap_roadmapplan plan ON plan.id=phase.plan_id WHERE plan.tenant_id=?1",
+    )
+    .bind(tenant_id)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-Roadmap-Notification-Signale konnten nicht gelesen werden")?
+    .into_iter()
+    .map(|row| RoadmapNotificationSource {
+        id: row.get("id"),
+        status: row.get("status"),
+        priority: row.get("priority"),
+        due_date: row.get("due_date"),
+    })
+    .collect();
+    Ok(build_cross_domain_signals(
+        tenant_id,
+        evidence,
+        cves,
+        cve_correlations,
+        incidents,
+        roadmap,
+    ))
+}
+
+fn build_cross_domain_signals(
+    tenant_id: i64,
+    evidence: Vec<EvidenceNotificationSource>,
+    cves: Vec<CveNotificationSource>,
+    cve_correlations: Vec<i64>,
+    incidents: Vec<IncidentNotificationSource>,
+    roadmap: Vec<RoadmapNotificationSource>,
+) -> Vec<NotificationSignal> {
+    let mut signals = Vec::new();
+    append_evidence_signals(&mut signals, tenant_id, evidence);
+    append_cve_signals(&mut signals, tenant_id, cves);
+    append_cve_correlation_signals(&mut signals, tenant_id, cve_correlations);
+    append_incident_signals(&mut signals, tenant_id, incidents);
+    append_roadmap_signals(&mut signals, tenant_id, roadmap);
+    signals
+}
+
 fn policy_select_sql() -> &'static str {
     "id, tenant_id, name, description, scope_type, scope_value, expected_device_count, heartbeat_max_age_hours, minimum_zero_trust_score, max_critical_findings, max_high_findings, enabled, created_by_id, created_at, updated_at"
 }
@@ -986,7 +1563,7 @@ fn channel_select_sql() -> &'static str {
 }
 
 fn delivery_select_sql() -> &'static str {
-    "id, tenant_id, channel_id, policy_id, event_key, event_type, level, status, response_status, error_message, payload_json, created_at, delivered_at"
+    "id, tenant_id, channel_id, policy_id, domain, object_type, object_id, signal_type, event_key, event_type, level, status, response_status, error_message, error_class, payload_json, created_at, last_attempt_at, next_eligible_at, delivered_at"
 }
 
 async fn list_policies_postgres(
@@ -1407,7 +1984,7 @@ async fn recent_delivery_postgres(
     cooldown_minutes: i64,
 ) -> anyhow::Result<bool> {
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint FROM zero_trust_agent_notification_delivery WHERE tenant_id=$1 AND channel_id=$2 AND event_key=$3 AND status='SENT' AND created_at::timestamp >= CURRENT_TIMESTAMP - ($4::text || ' minutes')::interval",
+        "SELECT COUNT(*)::bigint FROM zero_trust_agent_notification_delivery WHERE tenant_id=$1 AND channel_id=$2 AND event_key=$3 AND created_at::timestamp >= CURRENT_TIMESTAMP - ($4::text || ' minutes')::interval",
     )
     .bind(tenant_id)
     .bind(channel_id)
@@ -1427,7 +2004,7 @@ async fn recent_delivery_sqlite(
     cooldown_minutes: i64,
 ) -> anyhow::Result<bool> {
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM zero_trust_agent_notification_delivery WHERE tenant_id=?1 AND channel_id=?2 AND event_key=?3 AND status='SENT' AND created_at >= datetime('now', '-' || ?4 || ' minutes')",
+        "SELECT COUNT(*) FROM zero_trust_agent_notification_delivery WHERE tenant_id=?1 AND channel_id=?2 AND event_key=?3 AND created_at >= datetime('now', '-' || ?4 || ' minutes')",
     )
     .bind(tenant_id)
     .bind(channel_id)
@@ -1439,67 +2016,81 @@ async fn recent_delivery_sqlite(
     Ok(count > 0)
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn record_delivery_postgres(
     pool: &PgPool,
     tenant_id: i64,
-    channel_id: i64,
-    policy_id: Option<i64>,
-    event_key: &str,
-    level: &str,
+    channel: &AgentNotificationChannel,
+    signal: &NotificationSignal,
     payload: &Value,
     attempt: &DeliveryAttempt,
 ) -> anyhow::Result<AgentNotificationDelivery> {
     let payload_json = serde_json::to_string(payload)?;
+    let policy_id = (signal.domain == "AGENT").then_some(signal.object_id);
+    let next_eligible_at =
+        (Utc::now() + ChronoDuration::minutes(channel.cooldown_minutes)).to_rfc3339();
     let row = sqlx::query(&format!(
-        "INSERT INTO zero_trust_agent_notification_delivery (tenant_id,channel_id,policy_id,event_key,event_type,level,status,response_status,error_message,payload_json,created_at,delivered_at) VALUES ($1,$2,$3,$4,'AGENT_POLICY',$5,$6,$7,$8,$9,CURRENT_TIMESTAMP::text,CASE WHEN $6='SENT' THEN CURRENT_TIMESTAMP::text ELSE NULL END) RETURNING {}",
+        "INSERT INTO zero_trust_agent_notification_delivery (tenant_id,channel_id,policy_id,domain,object_type,object_id,signal_type,event_key,event_type,level,status,response_status,error_message,error_class,payload_json,created_at,last_attempt_at,next_eligible_at,delivered_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,CURRENT_TIMESTAMP::text,CURRENT_TIMESTAMP::text,$16,CASE WHEN $11='SENT' THEN CURRENT_TIMESTAMP::text ELSE NULL END) RETURNING {}",
         delivery_select_sql()
     ))
     .bind(tenant_id)
-    .bind(channel_id)
+    .bind(channel.id)
     .bind(policy_id)
-    .bind(event_key)
-    .bind(level)
+    .bind(&signal.domain)
+    .bind(&signal.object_type)
+    .bind(signal.object_id)
+    .bind(&signal.signal_type)
+    .bind(&signal.event_key)
+    .bind(notification_channel_event_type(&signal.domain))
+    .bind(&signal.level)
     .bind(attempt.status)
     .bind(attempt.response_status)
     .bind(&attempt.error_message)
+    .bind(attempt.error_class)
     .bind(payload_json)
+    .bind(next_eligible_at)
     .fetch_one(pool)
     .await
     .context("PostgreSQL-Notification-Delivery konnte nicht gespeichert werden")?;
-    update_channel_delivery_state_postgres(pool, tenant_id, channel_id, attempt).await?;
+    update_channel_delivery_state_postgres(pool, tenant_id, channel.id, attempt).await?;
     delivery_from_pg_row(row).map_err(Into::into)
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn record_delivery_sqlite(
     pool: &SqlitePool,
     tenant_id: i64,
-    channel_id: i64,
-    policy_id: Option<i64>,
-    event_key: &str,
-    level: &str,
+    channel: &AgentNotificationChannel,
+    signal: &NotificationSignal,
     payload: &Value,
     attempt: &DeliveryAttempt,
 ) -> anyhow::Result<AgentNotificationDelivery> {
     let payload_json = serde_json::to_string(payload)?;
+    let policy_id = (signal.domain == "AGENT").then_some(signal.object_id);
+    let next_eligible_at =
+        (Utc::now() + ChronoDuration::minutes(channel.cooldown_minutes)).to_rfc3339();
     let row = sqlx::query(&format!(
-        "INSERT INTO zero_trust_agent_notification_delivery (tenant_id,channel_id,policy_id,event_key,event_type,level,status,response_status,error_message,payload_json,created_at,delivered_at) VALUES (?1,?2,?3,?4,'AGENT_POLICY',?5,?6,?7,?8,?9,CURRENT_TIMESTAMP,CASE WHEN ?6='SENT' THEN CURRENT_TIMESTAMP ELSE NULL END) RETURNING {}",
+        "INSERT INTO zero_trust_agent_notification_delivery (tenant_id,channel_id,policy_id,domain,object_type,object_id,signal_type,event_key,event_type,level,status,response_status,error_message,error_class,payload_json,created_at,last_attempt_at,next_eligible_at,delivered_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?16,CASE WHEN ?11='SENT' THEN CURRENT_TIMESTAMP ELSE NULL END) RETURNING {}",
         delivery_select_sql()
     ))
     .bind(tenant_id)
-    .bind(channel_id)
+    .bind(channel.id)
     .bind(policy_id)
-    .bind(event_key)
-    .bind(level)
+    .bind(&signal.domain)
+    .bind(&signal.object_type)
+    .bind(signal.object_id)
+    .bind(&signal.signal_type)
+    .bind(&signal.event_key)
+    .bind(notification_channel_event_type(&signal.domain))
+    .bind(&signal.level)
     .bind(attempt.status)
     .bind(attempt.response_status)
     .bind(&attempt.error_message)
+    .bind(attempt.error_class)
     .bind(payload_json)
+    .bind(next_eligible_at)
     .fetch_one(pool)
     .await
     .context("SQLite-Notification-Delivery konnte nicht gespeichert werden")?;
-    update_channel_delivery_state_sqlite(pool, tenant_id, channel_id, attempt).await?;
+    update_channel_delivery_state_sqlite(pool, tenant_id, channel.id, attempt).await?;
     delivery_from_sqlite_row(row).map_err(Into::into)
 }
 
@@ -1513,7 +2104,7 @@ async fn update_channel_delivery_state_postgres(
         "UPDATE zero_trust_agent_notification_channel SET last_success_at=CASE WHEN $1='SENT' THEN CURRENT_TIMESTAMP::text ELSE last_success_at END, last_failure_at=CASE WHEN $1='FAILED' THEN CURRENT_TIMESTAMP::text ELSE last_failure_at END, last_error=CASE WHEN $1='SENT' THEN '' ELSE $2 END, updated_at=CURRENT_TIMESTAMP::text WHERE tenant_id=$3 AND id=$4",
     )
     .bind(attempt.status)
-    .bind(&attempt.error_message)
+    .bind(attempt.error_class)
     .bind(tenant_id)
     .bind(channel_id)
     .execute(pool)
@@ -1532,7 +2123,7 @@ async fn update_channel_delivery_state_sqlite(
         "UPDATE zero_trust_agent_notification_channel SET last_success_at=CASE WHEN ?1='SENT' THEN CURRENT_TIMESTAMP ELSE last_success_at END, last_failure_at=CASE WHEN ?1='FAILED' THEN CURRENT_TIMESTAMP ELSE last_failure_at END, last_error=CASE WHEN ?1='SENT' THEN '' ELSE ?2 END, updated_at=CURRENT_TIMESTAMP WHERE tenant_id=?3 AND id=?4",
     )
     .bind(attempt.status)
-    .bind(&attempt.error_message)
+    .bind(attempt.error_class)
     .bind(tenant_id)
     .bind(channel_id)
     .execute(pool)
@@ -1637,15 +2228,22 @@ fn delivery_from_pg_row(row: PgRow) -> Result<AgentNotificationDelivery, sqlx::E
         tenant_id: row.try_get("tenant_id")?,
         channel_id: row.try_get("channel_id")?,
         policy_id: row.try_get("policy_id")?,
+        domain: row.try_get("domain")?,
+        object_type: row.try_get("object_type")?,
+        object_id: row.try_get("object_id")?,
+        signal_type: row.try_get("signal_type")?,
         event_key: row.try_get("event_key")?,
         event_type: row.try_get("event_type")?,
         level: row.try_get("level")?,
         status: row.try_get("status")?,
         response_status: row.try_get("response_status")?,
         error_message: row.try_get("error_message")?,
+        error_class: row.try_get("error_class")?,
         payload: serde_json::from_str(&row.try_get::<String, _>("payload_json")?)
             .unwrap_or_else(|_| json!({})),
         created_at: row.try_get("created_at")?,
+        last_attempt_at: row.try_get("last_attempt_at")?,
+        next_eligible_at: row.try_get("next_eligible_at")?,
         delivered_at: row.try_get("delivered_at")?,
     })
 }
@@ -1656,15 +2254,22 @@ fn delivery_from_sqlite_row(row: SqliteRow) -> Result<AgentNotificationDelivery,
         tenant_id: row.try_get("tenant_id")?,
         channel_id: row.try_get("channel_id")?,
         policy_id: row.try_get("policy_id")?,
+        domain: row.try_get("domain")?,
+        object_type: row.try_get("object_type")?,
+        object_id: row.try_get("object_id")?,
+        signal_type: row.try_get("signal_type")?,
         event_key: row.try_get("event_key")?,
         event_type: row.try_get("event_type")?,
         level: row.try_get("level")?,
         status: row.try_get("status")?,
         response_status: row.try_get("response_status")?,
         error_message: row.try_get("error_message")?,
+        error_class: row.try_get("error_class")?,
         payload: serde_json::from_str(&row.try_get::<String, _>("payload_json")?)
             .unwrap_or_else(|_| json!({})),
         created_at: row.try_get("created_at")?,
+        last_attempt_at: row.try_get("last_attempt_at")?,
+        next_eligible_at: row.try_get("next_eligible_at")?,
         delivered_at: row.try_get("delivered_at")?,
     })
 }
@@ -1729,6 +2334,20 @@ mod tests {
         assert!(validate_webhook_url("http://127.0.0.1:9000/hook").is_ok());
         assert!(valid_env_name("ISCY_NOTIFY_SECRET"));
         assert!(!valid_env_name("ISCY-NOTIFY-SECRET"));
+        assert!(validate_webhook_url_with_policy(
+            "https://notify.example.org/hook",
+            false,
+            true,
+            &[]
+        )
+        .is_err());
+        assert!(validate_webhook_url_with_policy(
+            "https://notify.example.org/hook",
+            false,
+            true,
+            &["notify.example.org".to_string()]
+        )
+        .is_ok());
         for status in [429, 500, 502, 503, 504] {
             assert!(webhook_retryable_status(status));
         }

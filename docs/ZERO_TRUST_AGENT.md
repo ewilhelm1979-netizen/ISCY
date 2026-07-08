@@ -227,13 +227,27 @@ der Policy-Sollwerte und ist keine eindeutige Endpoint-Inventur.
 
 ## Aktive Benachrichtigungen
 
-Administratoren koennen Webhook-Kanaele in derselben Webansicht pflegen. Der
-Event `AGENT_POLICY` sendet Abweichungen als CloudEvents-aehnliches JSON. Pro
-Policy, Stufe und Kanal unterdrueckt ein konfigurierbarer Cooldown erfolgreiche
-Doppelmeldungen. Jeder Versuch wird mit Status, HTTP-Code, Fehler und Payload in
-der Delivery-Historie protokolliert. Transiente Verbindungs-/Timeoutfehler sowie
-HTTP 429, 500, 502, 503 und 504 werden begrenzt erneut versucht; permanente
-Clientfehler werden nicht wiederholt.
+Administratoren koennen Webhook-Kanaele in derselben Webansicht pflegen und die
+Signalbereiche `AGENT_POLICY`, `EVIDENCE`, `PRODUCT_SECURITY`, `INCIDENT` und
+`ROADMAP` je Kanal aktivieren. Damit nutzen Agent-Policy-Abweichungen,
+Evidence-Ablauf und -Qualitaetsluecken, offene CVE-/Korrelationsreviews,
+Incident-Nicht-Meldeentscheidungen und Roadmap-Faelligkeiten denselben sicheren
+Zustellpfad.
+
+Stabile Event-Keys enthalten Tenant, Domaene, Objekttyp, Objekt-ID, Signaltyp
+und Zustands- oder Faelligkeitskontext. Der konfigurierbare Cooldown unterdrueckt
+erneute Versuche desselben unveraenderten Signals nach erfolgreichen und
+fehlgeschlagenen Zustellungen. Transiente Verbindungs-/Timeoutfehler sowie HTTP
+429, 500, 502, 503 und 504 werden innerhalb eines Zustellversuchs begrenzt
+wiederholt; permanente Clientfehler werden nicht wiederholt.
+
+Die Delivery-Historie speichert nur sichere Betriebsmetadaten: Tenant, Domaene,
+Objektbezug, Signaltyp, Schweregrad, Status, Kanal, Zeitpunkt, letzter Versuch,
+sichere Fehlerklasse und naechsten Cooldown-Zeitpunkt. Vollstaendige Payloads,
+interne Fehlerdetails, Bearer-/HMAC-Secrets und Authorization Header werden
+weder ueber die API noch in der Read-only-Webansicht ausgegeben. Administratoren
+duerfen Kanaele und Signalbereiche konfigurieren; authentifizierte Read-only-
+Rollen sehen nur diese sicheren Delivery-Metadaten.
 
 Unterstuetzte Authentisierung:
 

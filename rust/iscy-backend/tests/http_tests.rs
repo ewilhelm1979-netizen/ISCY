@@ -128,6 +128,7 @@ async fn production_mode_blocks_untrusted_identity_headers() {
     ));
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/context/whoami")
@@ -654,8 +655,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0028_rust_guided_agent_onboarding"));
-    assert!(html.contains("28/28 angewendet"));
+    assert!(html.contains("0029_rust_cross_domain_notifications"));
+    assert!(html.contains("29/29 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -2655,11 +2656,23 @@ async fn agent_notification_webhook_delivers_once_and_audits_cooldown() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
 
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem
+            (tenant_id, title, file, file_sha256, valid_until, retention_until, reviewed_at)
+        VALUES
+            (1, 'Expired delivery test', 'delivery.pdf', 'abc', date('now', '-1 day'), date('now', '+1 year'), CURRENT_TIMESTAMP)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let channel_payload = serde_json::json!({
         "name": "SOC webhook",
         "endpoint_url": receiver_url,
         "minimum_level": "WARN",
-        "event_types": ["AGENT_POLICY"],
+        "event_types": ["AGENT_POLICY", "EVIDENCE"],
         "auth_type": "NONE",
         "secret_env_name": "",
         "cooldown_minutes": 60,
@@ -2717,7 +2730,8 @@ async fn agent_notification_webhook_delivers_once_and_audits_cooldown() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["result"]["policy_violations"], 1);
-    assert_eq!(payload["result"]["sent"], 1, "{payload:#}");
+    assert_eq!(payload["result"]["evaluated_signals"], 2);
+    assert_eq!(payload["result"]["sent"], 2, "{payload:#}");
     assert_eq!(payload["result"]["failed"], 0, "{payload:#}");
     assert!(receiver_attempts.load(Ordering::SeqCst) >= 2);
 
@@ -2739,7 +2753,7 @@ async fn agent_notification_webhook_delivers_once_and_audits_cooldown() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["result"]["sent"], 0);
-    assert_eq!(payload["result"]["suppressed"], 1);
+    assert_eq!(payload["result"]["suppressed"], 2);
 
     let response = app
         .clone()
@@ -2758,11 +2772,115 @@ async fn agent_notification_webhook_delivers_once_and_audits_cooldown() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let deliveries = payload["deliveries"].as_array().unwrap();
-    assert_eq!(deliveries.len(), 1);
-    assert_eq!(deliveries[0]["status"], "SENT");
-    assert_eq!(deliveries[0]["response_status"], 204);
+    assert_eq!(deliveries.len(), 2);
+    assert!(deliveries
+        .iter()
+        .all(|delivery| delivery["status"] == "SENT"));
+    assert!(deliveries
+        .iter()
+        .all(|delivery| delivery["response_status"] == 204));
+    assert!(deliveries
+        .iter()
+        .any(|delivery| delivery["domain"] == "AGENT"));
+    assert!(deliveries
+        .iter()
+        .any(|delivery| delivery["domain"] == "EVIDENCE"));
+    assert!(deliveries
+        .iter()
+        .all(|delivery| delivery.get("payload").is_none()));
+    assert!(deliveries
+        .iter()
+        .all(|delivery| delivery.get("error_message").is_none()));
+    assert!(deliveries
+        .iter()
+        .all(|delivery| delivery["last_attempt_at"].is_string()));
+    assert!(deliveries
+        .iter()
+        .all(|delivery| delivery["next_eligible_at"].is_string()));
 
     let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/notification-deliveries")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/notification-channels")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/notifications/evaluate")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/notification-deliveries")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["deliveries"].as_array().unwrap().is_empty());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/agents/notification-channels/1")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(channel_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/zero-trust/?tenant_id=1&user_id=1")
@@ -2781,7 +2899,311 @@ async fn agent_notification_webhook_delivers_once_and_audits_cooldown() {
     assert!(html.contains("Notification Delivery Audit"));
     assert!(html.contains("Jetzt auswerten"));
 
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/zero-trust/?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Domain Notification Delivery Audit"));
+    assert!(!html.contains("Notification-Kanaele"));
+    assert!(!html.contains("Secret Environment"));
+
     receiver_task.abort();
+}
+
+#[tokio::test]
+async fn notification_delivery_blocks_redirects_and_redacts_secret_failures() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO zero_trust_agent_policy_profile (tenant_id, name, expected_device_count) VALUES (1, 'Redirect policy', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let target_attempts = Arc::new(AtomicUsize::new(0));
+    let route_attempts = Arc::clone(&target_attempts);
+    let receiver = Router::new()
+        .route(
+            "/hook",
+            post(|| async { (StatusCode::TEMPORARY_REDIRECT, [("location", "/target")]) }),
+        )
+        .route(
+            "/target",
+            post(move || {
+                let route_attempts = Arc::clone(&route_attempts);
+                async move {
+                    route_attempts.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let receiver_url = format!("http://{}/hook", listener.local_addr().unwrap());
+    let receiver_task = tokio::spawn(async move {
+        axum::serve(listener, receiver).await.unwrap();
+    });
+    tokio::task::yield_now().await;
+
+    let app = app_router_with_state(
+        AppState::default()
+            .with_agent_governance_store(Some(AgentGovernanceStore::from_sqlite_pool(pool))),
+    );
+    for (name, auth_type, secret_env_name) in [
+        ("Redirect channel", "NONE", ""),
+        (
+            "Missing secret channel",
+            "BEARER",
+            "ISCY_TEST_WEBHOOK_SECRET_INTENTIONALLY_UNSET_8A71",
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agents/notification-channels")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "name": name,
+                            "endpoint_url": receiver_url,
+                            "minimum_level": "WARN",
+                            "event_types": ["AGENT_POLICY"],
+                            "auth_type": auth_type,
+                            "secret_env_name": secret_env_name,
+                            "cooldown_minutes": 60,
+                            "enabled": true
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/notifications/evaluate")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["result"]["failed"], 2, "{payload:#}");
+    assert_eq!(target_attempts.load(Ordering::SeqCst), 0);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/notifications/evaluate")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["result"]["failed"], 0);
+    assert_eq!(payload["result"]["suppressed"], 2);
+    assert_eq!(target_attempts.load(Ordering::SeqCst), 0);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/notification-deliveries")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let response_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!response_text.contains("ISCY_TEST_WEBHOOK_SECRET"));
+    let payload: serde_json::Value = serde_json::from_str(&response_text).unwrap();
+    let deliveries = payload["deliveries"].as_array().unwrap();
+    assert!(deliveries
+        .iter()
+        .any(|delivery| delivery["error_class"] == "DESTINATION_REJECTED"));
+    assert!(deliveries
+        .iter()
+        .any(|delivery| delivery["error_class"] == "SECRET_UNAVAILABLE"));
+    assert!(deliveries
+        .iter()
+        .all(|delivery| delivery.get("payload").is_none()));
+    assert!(deliveries
+        .iter()
+        .all(|delivery| delivery.get("error_message").is_none()));
+
+    receiver_task.abort();
+}
+
+#[tokio::test]
+async fn cross_domain_notification_signals_follow_existing_state_and_tenant_boundaries() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem
+            (id, tenant_id, title, file, file_sha256, valid_until, retention_until, reviewed_at)
+        VALUES
+            (101, 1, 'Expired', 'expired.pdf', 'abc', date('now', '-1 day'), date('now', '+1 year'), CURRENT_TIMESTAMP),
+            (102, 1, 'Expiring', 'expiring.pdf', 'def', date('now', '+10 days'), date('now', '+1 year'), CURRENT_TIMESTAMP),
+            (103, 1, 'Healthy', 'healthy.pdf', 'ghi', date('now', '+90 days'), date('now', '+1 year'), CURRENT_TIMESTAMP),
+            (105, 1, 'Quality gaps', 'quality.pdf', '', date('now', '+90 days'), NULL, NULL),
+            (104, 2, 'Foreign expired', 'foreign.pdf', 'jkl', date('now', '-1 day'), date('now', '+1 year'), CURRENT_TIMESTAMP)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO vulnerability_intelligence_cverecord (id, cve_id, severity) VALUES (201, 'CVE-2099-0001', 'CRITICAL')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO vulnerability_intelligence_cveassessment
+            (id, tenant_id, cve_id, deterministic_priority, deterministic_due_days, reviewed_at, created_at)
+        VALUES
+            (201, 1, 201, 'CRITICAL', 30, NULL, datetime('now', '-60 days')),
+            (202, 1, 201, 'CRITICAL', 30, CURRENT_TIMESTAMP, datetime('now', '-60 days'))
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_cvecorrelation
+            (id, tenant_id, cve, match_type, match_value, status)
+        VALUES
+            (301, 1, 'CVE-2099-0001', 'CPE', 'cpe:/a:test:open', 'SUGGESTED'),
+            (302, 1, 'CVE-2099-0001', 'CPE', 'cpe:/a:test:accepted', 'ACCEPTED')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO incidents_incident
+            (id, tenant_id, title, status, nis2_significance_status, nis2_significance_justification, review_state)
+        VALUES
+            (401, 1, 'Open non-reporting decision', 'TRIAGE', 'NOT_SIGNIFICANT', '', 'DRAFT'),
+            (402, 1, 'Approved non-reporting decision', 'TRIAGE', 'NOT_SIGNIFICANT', 'Documented', 'APPROVED')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO roadmap_roadmapplan (id, tenant_id, session_id, title) VALUES (501, 1, 1, 'Notification plan')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO roadmap_roadmapphase (id, plan_id, name) VALUES (501, 501, 'Delivery')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO roadmap_roadmaptask (id, phase_id, title, priority, status, due_date)
+        VALUES
+            (501, 501, 'Due today', 'MEDIUM', 'OPEN', date('now')),
+            (502, 501, 'Overdue', 'HIGH', 'OPEN', date('now', '-1 day')),
+            (503, 501, 'Completed', 'CRITICAL', 'DONE', date('now', '-10 days')),
+            (504, 501, 'Blocked critical', 'CRITICAL', 'BLOCKED', date('now', '+10 days'))
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let store = AgentGovernanceStore::from_sqlite_pool(pool);
+    let signals = store.evaluate_notification_signals(1).await.unwrap();
+    let has_signal = |object_id: i64, signal_type: &str| {
+        signals
+            .iter()
+            .any(|signal| signal.object_id == object_id && signal.signal_type == signal_type)
+    };
+
+    assert!(has_signal(101, "EVIDENCE_EXPIRED"));
+    assert!(has_signal(102, "EVIDENCE_EXPIRING"));
+    assert!(has_signal(105, "EVIDENCE_REVIEW_MISSING"));
+    assert!(has_signal(105, "EVIDENCE_RETENTION_MISSING"));
+    assert!(has_signal(105, "EVIDENCE_HASH_MISSING"));
+    assert!(has_signal(201, "CVE_REVIEW_OPEN"));
+    assert!(has_signal(201, "CVE_TRIAGE_OVERDUE"));
+    assert!(has_signal(201, "CVE_CRITICAL_OPEN"));
+    assert!(has_signal(301, "CVE_CORRELATION_REVIEW_OPEN"));
+    assert!(has_signal(401, "INCIDENT_NON_REPORTING_REVIEW_OPEN"));
+    assert!(has_signal(
+        401,
+        "INCIDENT_NON_REPORTING_JUSTIFICATION_MISSING"
+    ));
+    assert!(has_signal(501, "ROADMAP_TASK_DUE"));
+    assert!(has_signal(502, "ROADMAP_TASK_OVERDUE"));
+    assert!(has_signal(504, "ROADMAP_TASK_BLOCKED"));
+    assert!(has_signal(504, "ROADMAP_TASK_CRITICAL_OPEN"));
+
+    for completed_or_foreign_id in [103, 104, 202, 302, 402, 503] {
+        assert!(
+            signals
+                .iter()
+                .all(|signal| signal.object_id != completed_or_foreign_id),
+            "unexpected signal for object {completed_or_foreign_id}: {signals:#?}"
+        );
+    }
+    assert!(signals.iter().all(|signal| signal.tenant_id == 1));
 }
 
 #[tokio::test]
@@ -11702,7 +12124,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0025_rust_agent_fleet_governance",
             "0026_rust_product_security_evidence_packages",
             "0027_rust_ai_governance_links",
-            "0028_rust_guided_agent_onboarding"
+            "0028_rust_guided_agent_onboarding",
+            "0029_rust_cross_domain_notifications"
         ]
     );
     assert!(

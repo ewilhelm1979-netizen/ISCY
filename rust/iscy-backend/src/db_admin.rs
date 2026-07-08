@@ -202,6 +202,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_GUIDED_AGENT_ONBOARDING_SCHEMA,
         postgres_sql: POSTGRES_GUIDED_AGENT_ONBOARDING_SCHEMA,
     },
+    Migration {
+        version: "0029_rust_cross_domain_notifications",
+        sqlite_sql: SQLITE_CROSS_DOMAIN_NOTIFICATION_SCHEMA,
+        postgres_sql: POSTGRES_CROSS_DOMAIN_NOTIFICATION_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1447,6 +1452,46 @@ CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_token_lifecycle
     ON zero_trust_agent_enrollment_token(tenant_id, status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_zero_trust_agent_device_policy
     ON zero_trust_agent_device(tenant_id, policy_profile_id);
+"#;
+
+const SQLITE_CROSS_DOMAIN_NOTIFICATION_SCHEMA: &str = r#"
+UPDATE zero_trust_agent_notification_delivery
+SET domain = CASE WHEN domain = '' THEN 'AGENT' ELSE domain END,
+    object_type = CASE WHEN object_type = '' THEN 'POLICY' ELSE object_type END,
+    object_id = COALESCE(object_id, policy_id),
+    signal_type = CASE WHEN signal_type = '' THEN event_type ELSE signal_type END,
+    last_attempt_at = COALESCE(last_attempt_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_notification_delivery_domain
+    ON zero_trust_agent_notification_delivery(tenant_id, domain, signal_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_notification_delivery_object
+    ON zero_trust_agent_notification_delivery(tenant_id, domain, object_type, object_id);
+"#;
+
+const POSTGRES_CROSS_DOMAIN_NOTIFICATION_SCHEMA: &str = r#"
+ALTER TABLE zero_trust_agent_notification_delivery
+    ADD COLUMN IF NOT EXISTS domain varchar(32) NOT NULL DEFAULT 'AGENT';
+ALTER TABLE zero_trust_agent_notification_delivery
+    ADD COLUMN IF NOT EXISTS object_type varchar(48) NOT NULL DEFAULT 'POLICY';
+ALTER TABLE zero_trust_agent_notification_delivery
+    ADD COLUMN IF NOT EXISTS object_id BIGINT NULL;
+ALTER TABLE zero_trust_agent_notification_delivery
+    ADD COLUMN IF NOT EXISTS signal_type varchar(64) NOT NULL DEFAULT 'AGENT_POLICY';
+ALTER TABLE zero_trust_agent_notification_delivery
+    ADD COLUMN IF NOT EXISTS error_class varchar(48) NOT NULL DEFAULT '';
+ALTER TABLE zero_trust_agent_notification_delivery
+    ADD COLUMN IF NOT EXISTS last_attempt_at TEXT NULL;
+ALTER TABLE zero_trust_agent_notification_delivery
+    ADD COLUMN IF NOT EXISTS next_eligible_at TEXT NULL;
+UPDATE zero_trust_agent_notification_delivery
+SET domain = CASE WHEN domain = '' THEN 'AGENT' ELSE domain END,
+    object_type = CASE WHEN object_type = '' THEN 'POLICY' ELSE object_type END,
+    object_id = COALESCE(object_id, policy_id),
+    signal_type = CASE WHEN signal_type = '' THEN event_type ELSE signal_type END,
+    last_attempt_at = COALESCE(last_attempt_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_notification_delivery_domain
+    ON zero_trust_agent_notification_delivery(tenant_id, domain, signal_type, created_at);
+CREATE INDEX IF NOT EXISTS idx_notification_delivery_object
+    ON zero_trust_agent_notification_delivery(tenant_id, domain, object_type, object_id);
 "#;
 
 const SQLITE_SECURITY_RUNTIME_STATE_SCHEMA: &str = r#"
@@ -2924,6 +2969,25 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'st
                 ("zero_trust_agent_device", "last_enrolled_at", "TEXT NULL"),
             ] {
                 ensure_sqlite_column(pool, table, column, definition).await?;
+            }
+        }
+        if migration.version == "0029_rust_cross_domain_notifications" {
+            for (column, definition) in [
+                ("domain", "varchar(32) NOT NULL DEFAULT 'AGENT'"),
+                ("object_type", "varchar(48) NOT NULL DEFAULT 'POLICY'"),
+                ("object_id", "INTEGER NULL"),
+                ("signal_type", "varchar(64) NOT NULL DEFAULT 'AGENT_POLICY'"),
+                ("error_class", "varchar(48) NOT NULL DEFAULT ''"),
+                ("last_attempt_at", "TEXT NULL"),
+                ("next_eligible_at", "TEXT NULL"),
+            ] {
+                ensure_sqlite_column(
+                    pool,
+                    "zero_trust_agent_notification_delivery",
+                    column,
+                    definition,
+                )
+                .await?;
             }
         }
         execute_sqlite_script(pool, migration.sqlite_sql)
@@ -5346,7 +5410,7 @@ ON CONFLICT (id) DO NOTHING;
 mod tests {
     use sqlx::{sqlite::SqlitePoolOptions, Row};
 
-    use super::{run_sqlite_migrations, split_sql_script};
+    use super::{execute_sqlite_script, run_sqlite_migrations, split_sql_script, MIGRATIONS};
 
     #[test]
     fn split_sql_script_keeps_semicolons_inside_strings() {
@@ -5500,5 +5564,87 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(audit_exists, 1);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0029_is_restartable_and_preserves_delivery_history() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        execute_sqlite_script(
+            &pool,
+            r#"
+            CREATE TABLE iscy_schema_migrations (
+                version TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            CREATE TABLE zero_trust_agent_notification_delivery (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                policy_id INTEGER NULL,
+                event_key varchar(255) NOT NULL,
+                event_type varchar(64) NOT NULL DEFAULT 'AGENT_POLICY',
+                level varchar(16) NOT NULL,
+                status varchar(16) NOT NULL DEFAULT 'PENDING',
+                response_status INTEGER NULL,
+                error_message TEXT NOT NULL DEFAULT '',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                delivered_at TEXT NULL
+            );
+            "#,
+        )
+        .await
+        .unwrap();
+        for migration in MIGRATIONS.iter().take(28) {
+            sqlx::query(
+                "INSERT INTO iscy_schema_migrations (version, applied_at) VALUES (?1, '2026-01-01T00:00:00Z')",
+            )
+            .bind(migration.version)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO zero_trust_agent_notification_delivery (
+                id, tenant_id, channel_id, policy_id, event_key, event_type,
+                level, status, payload_json, created_at
+            ) VALUES (
+                9901, 99, 7, 42, 'AGENT_POLICY:42:WARN', 'AGENT_POLICY',
+                'WARN', 'SENT', '{"safe":true}', '2026-01-01T00:00:00Z'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0029_rust_cross_domain_notifications"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let delivery = sqlx::query(
+            "SELECT event_key, status, payload_json, domain, object_type, object_id, signal_type, last_attempt_at FROM zero_trust_agent_notification_delivery WHERE id=9901",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            delivery.get::<String, _>("event_key"),
+            "AGENT_POLICY:42:WARN"
+        );
+        assert_eq!(delivery.get::<String, _>("status"), "SENT");
+        assert_eq!(delivery.get::<String, _>("payload_json"), "{\"safe\":true}");
+        assert_eq!(delivery.get::<String, _>("domain"), "AGENT");
+        assert_eq!(delivery.get::<String, _>("object_type"), "POLICY");
+        assert_eq!(delivery.get::<i64, _>("object_id"), 42);
+        assert_eq!(delivery.get::<String, _>("signal_type"), "AGENT_POLICY");
+        assert_eq!(
+            delivery.get::<String, _>("last_attempt_at"),
+            "2026-01-01T00:00:00Z"
+        );
     }
 }
