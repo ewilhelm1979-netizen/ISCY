@@ -655,8 +655,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0030_rust_notification_dispatch_claim"));
-    assert!(html.contains("30/30 angewendet"));
+    assert!(html.contains("0031_rust_supplier_review_workflow"));
+    assert!(html.contains("31/31 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -4198,6 +4198,301 @@ async fn supplier_risk_detail_blocks_foreign_tenant_supplier() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn supplier_review_workflow_requires_write_role_and_reason() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_supplier_tables(&pool).await;
+    insert_supplier_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_supplier_store(Some(SupplierStore::from_sqlite_pool(pool))),
+    );
+
+    let auditor_payload = serde_json::json!({
+        "new_status": "in_review"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/50/reviews")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(auditor_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let rejected_without_reason = serde_json::json!({
+        "new_status": "rejected"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/50/reviews")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(rejected_without_reason.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_payload");
+
+    let approved_with_conditions = serde_json::json!({
+        "new_status": "approved_with_conditions",
+        "reason": "Security annex accepted with remediation condition.",
+        "risk_level": "high",
+        "evidence_refs": [500],
+        "control_refs": [15],
+        "next_review_due_at": "2026-12-31"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/50/reviews")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(approved_with_conditions.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["detail"]["supplier"]["review_status"],
+        "approved_with_conditions"
+    );
+    assert_eq!(payload["detail"]["reviews"][0]["risk_level"], "high");
+    assert_eq!(
+        payload["detail"]["audit_events"][0]["event_type"],
+        "supplier_review_status_changed"
+    );
+}
+
+#[tokio::test]
+async fn supplier_links_are_tenant_scoped_and_idempotent() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_supplier_tables(&pool).await;
+    insert_supplier_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_supplier_store(Some(SupplierStore::from_sqlite_pool(pool))),
+    );
+
+    let foreign_evidence = serde_json::json!({
+        "evidence_id": 501,
+        "link_type": "review"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/50/evidence-links")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(foreign_evidence.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let own_evidence = serde_json::json!({
+        "evidence_id": 500,
+        "link_type": "review"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/50/evidence-links")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(own_evidence.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "created");
+
+    let duplicate = serde_json::json!({
+        "evidence_id": 500,
+        "link_type": "review"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/50/evidence-links")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(duplicate.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["status"], "already_exists");
+
+    let control = serde_json::json!({"entity_id": 15});
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/50/control-links")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(control.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let foreign_risk = serde_json::json!({"entity_id": 401});
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/50/risk-links")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(foreign_risk.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn supplier_subprocessors_are_supplier_and_tenant_scoped() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_supplier_tables(&pool).await;
+    insert_supplier_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_supplier_store(Some(SupplierStore::from_sqlite_pool(pool))),
+    );
+
+    let subprocessor = serde_json::json!({
+        "name": "Hosting Subprocessor",
+        "purpose": "Managed hosting",
+        "country_region": "EU",
+        "data_relationship": "processor",
+        "criticality": "high",
+        "approval_status": "in_review",
+        "review_due_at": "2026-11-30"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/99/subprocessors")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(subprocessor.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let subprocessor = serde_json::json!({
+        "name": "Hosting Subprocessor",
+        "purpose": "Managed hosting",
+        "country_region": "EU",
+        "data_relationship": "processor",
+        "criticality": "high",
+        "approval_status": "in_review",
+        "review_due_at": "2026-11-30"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/50/subprocessors")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(subprocessor.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/suppliers/50/subprocessors")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["subprocessors"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["subprocessors"][0]["approval_status"], "in_review");
 }
 
 #[tokio::test]
@@ -12405,7 +12700,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0027_rust_ai_governance_links",
             "0028_rust_guided_agent_onboarding",
             "0029_rust_cross_domain_notifications",
-            "0030_rust_notification_dispatch_claim"
+            "0030_rust_notification_dispatch_claim",
+            "0031_rust_supplier_review_workflow"
         ]
     );
     assert!(
@@ -14590,12 +14886,155 @@ async fn create_supplier_tables(pool: &SqlitePool) {
             exit_dependency TEXT NOT NULL DEFAULT '',
             regulatory_scope TEXT NOT NULL DEFAULT '',
             review_status varchar(24) NOT NULL DEFAULT 'NOT_REVIEWED',
+            approval_status varchar(32) NOT NULL DEFAULT 'draft',
+            risk_assessment varchar(32) NOT NULL DEFAULT 'medium',
+            service_product_reference TEXT NOT NULL DEFAULT '',
+            data_access bool NOT NULL DEFAULT 0,
+            system_access bool NOT NULL DEFAULT 0,
+            ot_access bool NOT NULL DEFAULT 0,
+            exit_relevant bool NOT NULL DEFAULT 0,
+            responsible_role varchar(64) NOT NULL DEFAULT '',
+            responsible_user_id INTEGER NULL,
             last_reviewed_at date NULL,
             next_review_due_at date NULL,
             evidence_required bool NOT NULL DEFAULT 1,
             notes TEXT NOT NULL DEFAULT '',
+            contract_start_at TEXT NULL,
+            contract_end_at TEXT NULL,
+            contract_notice_period TEXT NOT NULL DEFAULT '',
+            contract_auto_renews bool NOT NULL DEFAULT 0,
+            next_contract_review_at TEXT NULL,
+            contract_evidence_id INTEGER NULL,
+            exit_test_required bool NOT NULL DEFAULT 0,
+            exit_test_status varchar(24) NOT NULL DEFAULT 'not_required',
+            last_exit_test_at TEXT NULL,
+            next_exit_test_at TEXT NULL,
+            exit_test_result TEXT NOT NULL DEFAULT '',
+            exit_test_open_actions TEXT NOT NULL DEFAULT '',
+            exit_test_evidence_id INTEGER NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE iscy_control_control (
+            id INTEGER PRIMARY KEY,
+            control_number INTEGER NOT NULL,
+            code varchar(32) NOT NULL,
+            title varchar(255) NOT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE supplier_review_event (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            old_status varchar(32) NOT NULL DEFAULT '',
+            new_status varchar(32) NOT NULL,
+            actor_id INTEGER NULL,
+            reason TEXT NOT NULL DEFAULT '',
+            risk_level varchar(32) NOT NULL DEFAULT '',
+            evidence_refs TEXT NOT NULL DEFAULT '[]',
+            control_refs TEXT NOT NULL DEFAULT '[]',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE supplier_subprocessor (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            name varchar(255) NOT NULL,
+            purpose TEXT NOT NULL DEFAULT '',
+            country_region varchar(128) NOT NULL DEFAULT '',
+            data_relationship varchar(128) NOT NULL DEFAULT '',
+            criticality varchar(32) NOT NULL DEFAULT 'medium',
+            approval_status varchar(32) NOT NULL DEFAULT 'draft',
+            review_due_at TEXT NULL,
+            created_by_id INTEGER NULL,
+            updated_by_id INTEGER NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE supplier_evidence_link (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            evidence_id INTEGER NOT NULL,
+            link_type varchar(64) NOT NULL DEFAULT 'review',
+            created_by_id INTEGER NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, supplier_id, evidence_id)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE supplier_control_link (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            control_id INTEGER NOT NULL,
+            created_by_id INTEGER NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, supplier_id, control_id)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE supplier_risk_link (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            risk_id INTEGER NOT NULL,
+            created_by_id INTEGER NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(tenant_id, supplier_id, risk_id)
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE supplier_audit_event (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            supplier_id INTEGER NOT NULL,
+            event_type varchar(64) NOT NULL,
+            actor_id INTEGER NULL,
+            detail TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         "#,
     )
@@ -14680,6 +15119,15 @@ async fn insert_supplier_fixture(pool: &SqlitePool) {
     .unwrap();
     sqlx::query(
         r#"
+        INSERT INTO iscy_control_control (id, control_number, code, title)
+        VALUES (15, 15, 'ISCY-15', 'Third-Party Management')
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
         INSERT INTO organizations_supplier (
             id, tenant_id, name, service_description, criticality, owner_id,
             contact_email, contract_reference, data_categories, regions, exit_dependency,
@@ -14736,10 +15184,15 @@ async fn insert_supplier_fixture(pool: &SqlitePool) {
     sqlx::query(
         r#"
         INSERT INTO risks_risk (id, tenant_id, title, description, treatment_plan, status)
-        VALUES (
-            400, 42, 'Supplier Delay', 'Secure Supplier patch delay can affect gateways',
-            'Escalate supplier patch SLA', 'IDENTIFIED'
-        )
+        VALUES
+            (
+                400, 42, 'Supplier Delay', 'Secure Supplier patch delay can affect gateways',
+                'Escalate supplier patch SLA', 'IDENTIFIED'
+            ),
+            (
+                401, 99, 'Foreign Supplier Risk', 'Other tenant risk',
+                'Do not expose', 'IDENTIFIED'
+            )
         "#,
     )
     .execute(pool)
@@ -14748,9 +15201,13 @@ async fn insert_supplier_fixture(pool: &SqlitePool) {
     sqlx::query(
         r#"
         INSERT INTO evidence_evidenceitem (id, tenant_id, linked_requirement, title, status)
-        VALUES (
-            500, 42, 'SUPPLIER:51', 'Audit Cloud supplier review', 'APPROVED'
-        )
+        VALUES
+            (
+                500, 42, 'SUPPLIER:51', 'Audit Cloud supplier review', 'APPROVED'
+            ),
+            (
+                501, 99, 'SUPPLIER:99', 'Foreign supplier review', 'APPROVED'
+            )
         "#,
     )
     .execute(pool)

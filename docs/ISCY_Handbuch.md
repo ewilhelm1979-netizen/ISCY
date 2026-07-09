@@ -673,17 +673,44 @@ Supplier Risk umfasst Lieferanten, Cloud-Provider, SaaS-Dienste, IKT-Drittdienst
 Aktueller Rust-Funktionsumfang:
 
 - Webansicht `/suppliers/` mit Supplier-Risk Register, Score, Kritikalitaet, Review-Status, Evidence-Stand und Exposure
-- API `GET /api/v1/suppliers` fuer die Uebersicht und `GET /api/v1/suppliers/{id}` fuer Detaildaten
+- Web-Detailansicht `/suppliers/{id}/` mit Reviewhistorie, Unterauftragnehmern, Vertrags-/Exit-Daten, Evidence-/Control-/Risk-Links und Auditspur
+- API `GET` und `POST /api/v1/suppliers` fuer Uebersicht und Anlage sowie `GET` und `PATCH /api/v1/suppliers/{id}` fuer Detaildaten und Aktualisierung
+- API `GET` und `POST /api/v1/suppliers/{id}/reviews` fuer Review-/Approval-Ereignisse
+- API `GET` und `POST /api/v1/suppliers/{id}/subprocessors` sowie `PATCH /api/v1/suppliers/{id}/subprocessors/{subprocessor_id}` fuer Unterauftragnehmer im Supplier-Kontext
+- API `GET /api/v1/suppliers/{id}/evidence`, `POST /api/v1/suppliers/{id}/evidence-links`, `POST /api/v1/suppliers/{id}/control-links` und `POST /api/v1/suppliers/{id}/risk-links` fuer explizite Nachweis-, Control- und Risiko-Bezuege
 - Datenfelder fuer Vertrags-/Security-Annex-Bezug, Security-Kontakt, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischen Scope, Review-Status, Review-Faelligkeit und Notes
+- additive Migration `0031_rust_supplier_review_workflow` fuer Review-Freigaben, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweise und Link-/Audit-Tabellen
 - automatische Signale aus Produktkomponenten, offenen Product-Security-Schwachstellen, Supplier-bezogenen Risiken und Supplier-Evidence
 - direkte Evidence-Vorbefuellung je Supplier mit stabilem Linked Requirement `SUPPLIER:{id}`
 - Score- und Issue-Logik fuer kritische CVEs, ueberfaellige Reviews, fehlende Evidence, fehlende Exit-Strategie, fehlenden Security-Kontakt und fehlende Risikodokumentation
+- Review-Statusmodell: draft, in_review, approved, approved_with_conditions, rejected, expired und archived
+- Exit-Test-Statusmodell: not_required, required, planned, passed, failed und overdue
+- Begruendungspflicht fuer `approved_with_conditions` und `rejected`
+- tenantgebundene Validierung fuer Supplier, Subprocessors, Owner, Evidence, Controls und Risiken
+- auditierbare Erstellung, Aenderung, Statusentscheidung, Subprocessor-Aenderung und Link-Verwaltung ohne Secrets, SQL-Details oder vertrauliche Payloads
 
 Fachlicher Nutzen:
 
 - DORA-IKT-Drittparteienrisiko, NIS2-Supply-Chain-Anforderungen, CRA-Komponenten-/Herstellerbezug, DSGVO-Datenverarbeitung und TISAX-Lieferkettennachweise koennen gemeinsam betrachtet werden.
 - Kritische externe Abhaengigkeiten werden sichtbar, bevor sie erst in einem Incident auffallen.
 - Evidence, Risiken, Product Security und Roadmap-Arbeit bekommen einen gemeinsamen Lieferantenbezug.
+- Review-Entscheidungen werden nicht nur als aktueller Status gespeichert, sondern als nachvollziehbare Freigabehistorie.
+- Vertragsende, automatischer Renew, Kuendigungsfrist und Exit-Test-Status helfen dabei, Abhaengigkeiten vor Ablauf, Eskalation oder Lieferantenwechsel zu steuern.
+
+Rollen- und Sicherheitsmodell:
+
+- Admin- und Editor-Rollen duerfen Supplier, Reviews, Subprocessors und Links schreiben.
+- Read-only-Rollen sehen sichere tenantgebundene Metadaten.
+- Fremde Tenant-Objekte, manipulierte Supplier-IDs sowie fremde Evidence-, Risk- und Owner-IDs werden nicht aufgeloest.
+- Interne Store- oder SQL-Fehler werden in API und Web UI nicht als technische Details ausgegeben.
+
+Bewusst nicht Teil dieses Moduls:
+
+- keine neue Evidence-Engine
+- keine neue Risiko-Engine
+- keine neue Control-Bibliothek
+- kein Legal-Hold-, Disposition-, Loesch-, Re-Hash- oder Objektspeichersystem
+- keine Management-/Regulatory-Paketgeneratoren
 
 Fuer Nicht-Sicherheitsleute:
 Dieser Bereich beantwortet: Von welchen externen Parteien haengt unser Betrieb ab, wie kritisch sind sie, welche Nachweise fehlen und wo entsteht daraus Risiko?
@@ -1114,10 +1141,10 @@ Responses noch in der Read-only-Ansicht ausgegeben. Administratoren duerfen
 Kanaele und Signalbereiche aendern; authentifizierte Read-only-Rollen sehen nur
 sichere tenantgebundene Delivery-Metadaten.
 
-Bewusst nicht umgesetzt sind Supplier-Review-Ausbau, Management-/Regulatory-
-Templates, Evidence-Legal-Hold und -Disposition, kontrollierte Loeschung,
-Re-Hash-Worker, Objektspeicher, CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete,
-Release-Provenance sowie Performance-, HA- und visuelle Regressionserweiterungen.
+Bewusst nicht umgesetzt sind Management-/Regulatory-Templates, Evidence-
+Legal-Hold und -Disposition, kontrollierte Loeschung, Re-Hash-Worker,
+Objektspeicher, CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete, Release-
+Provenance sowie Performance-, HA- und visuelle Regressionserweiterungen.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
@@ -1159,15 +1186,14 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Supplier-Reviews mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
-2. Management-/Regulatory-Templates fuer wiederholbare Pruefpakete
-3. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
-4. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe
-5. Performance-, HA- und visuelle Regressionstests
+1. Management-/Regulatory-Templates fuer wiederholbare Pruefpakete
+2. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
+3. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe
+4. Performance-, HA- und visuelle Regressionstests
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 

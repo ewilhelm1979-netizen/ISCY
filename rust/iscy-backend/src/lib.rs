@@ -84,7 +84,7 @@ use requirement_store::RequirementStore;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
 use security_store::SecurityStore;
-use supplier_store::SupplierStore;
+use supplier_store::{SupplierStore, SupplierStoreErrorKind};
 use tenant_store::TenantStore;
 use wizard_store::WizardStore;
 
@@ -684,6 +684,59 @@ struct WebControlStatusForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct WebSupplierCreateForm {
+    name: String,
+    service_description: Option<String>,
+    criticality: Option<String>,
+    owner_id: Option<String>,
+    contact_email: Option<String>,
+    contract_reference: Option<String>,
+    data_categories: Option<String>,
+    regions: Option<String>,
+    regulatory_scope: Option<String>,
+    exit_dependency: Option<String>,
+    next_review_due_at: Option<String>,
+    evidence_required: Option<String>,
+    service_product_reference: Option<String>,
+    data_access: Option<String>,
+    system_access: Option<String>,
+    ot_access: Option<String>,
+    exit_relevant: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSupplierReviewForm {
+    new_status: String,
+    reason: Option<String>,
+    risk_level: Option<String>,
+    next_review_due_at: Option<String>,
+    evidence_refs: Option<String>,
+    control_refs: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSupplierSubprocessorForm {
+    name: String,
+    purpose: Option<String>,
+    country_region: Option<String>,
+    data_relationship: Option<String>,
+    criticality: Option<String>,
+    approval_status: Option<String>,
+    review_due_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSupplierEvidenceLinkForm {
+    evidence_id: Option<String>,
+    link_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSupplierEntityLinkForm {
+    entity_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebTenantRegulatoryProfileForm {
     country: Option<String>,
     operation_countries: Option<String>,
@@ -961,7 +1014,36 @@ pub struct SupplierRiskOverviewResponse {
 #[derive(Debug, Serialize)]
 pub struct SupplierRiskDetailResponse {
     pub api_version: &'static str,
-    pub supplier: supplier_store::SupplierRiskSummaryRow,
+    pub detail: supplier_store::SupplierRiskDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierMutationResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub status: supplier_store::SupplierMutationStatus,
+    pub detail: Option<supplier_store::SupplierRiskDetail>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierReviewsResponse {
+    pub api_version: &'static str,
+    pub supplier_id: i64,
+    pub reviews: Vec<supplier_store::SupplierReviewEvent>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierSubprocessorsResponse {
+    pub api_version: &'static str,
+    pub supplier_id: i64,
+    pub subprocessors: Vec<supplier_store::SupplierSubprocessor>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierEvidenceLinksResponse {
+    pub api_version: &'static str,
+    pub supplier_id: i64,
+    pub evidence_links: Vec<supplier_store::SupplierEvidenceLink>,
 }
 
 #[derive(Debug, Serialize)]
@@ -5255,34 +5337,58 @@ async fn asset_inventory(State(state): State<AppState>, headers: HeaderMap) -> R
     }
 }
 
+fn supplier_store_error_response(err: supplier_store::SupplierStoreError) -> Response {
+    let (status, error_code) = match err.kind() {
+        SupplierStoreErrorKind::InvalidPayload => (StatusCode::BAD_REQUEST, "invalid_payload"),
+        SupplierStoreErrorKind::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+        SupplierStoreErrorKind::Database => (StatusCode::INTERNAL_SERVER_ERROR, "database_error"),
+    };
+    (
+        status,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: err.safe_message().to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn supplier_store_not_configured_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "database_not_configured",
+            message: "Rust-Supplier-Store ist nicht konfiguriert.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn supplier_database_error_response(message: &str) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "database_error",
+            message: message.to_string(),
+        }),
+    )
+        .into_response()
+}
+
 async fn supplier_risk_overview(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
-        Err(err) => {
-            return (
-                err.status_code(),
-                Json(ApiErrorResponse {
-                    accepted: false,
-                    api_version: "v1",
-                    error_code: err.error_code(),
-                    message: err.message().to_string(),
-                }),
-            )
-                .into_response();
-        }
+        Err(err) => return api_context_error(err),
     };
 
     let Some(store) = state.supplier_store else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "database_not_configured",
-                message: "Rust-Supplier-Store ist nicht konfiguriert.".to_string(),
-            }),
-        )
-            .into_response();
+        return supplier_store_not_configured_response();
     };
 
     match store.overview(context.tenant_id, 200).await {
@@ -5294,16 +5400,9 @@ async fn supplier_risk_overview(State(state): State<AppState>, headers: HeaderMa
             }),
         )
             .into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "database_error",
-                message: format!("Supplier-Risk-Uebersicht konnte nicht gelesen werden: {err}"),
-            }),
-        )
-            .into_response(),
+        Err(_) => supplier_database_error_response(
+            "Supplier-Risk-Uebersicht konnte nicht gelesen werden.",
+        ),
     }
 }
 
@@ -5314,39 +5413,19 @@ async fn supplier_risk_detail(
 ) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
-        Err(err) => {
-            return (
-                err.status_code(),
-                Json(ApiErrorResponse {
-                    accepted: false,
-                    api_version: "v1",
-                    error_code: err.error_code(),
-                    message: err.message().to_string(),
-                }),
-            )
-                .into_response();
-        }
+        Err(err) => return api_context_error(err),
     };
 
     let Some(store) = state.supplier_store else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "database_not_configured",
-                message: "Rust-Supplier-Store ist nicht konfiguriert.".to_string(),
-            }),
-        )
-            .into_response();
+        return supplier_store_not_configured_response();
     };
 
     match store.detail(context.tenant_id, supplier_id).await {
-        Ok(Some(supplier)) => (
+        Ok(Some(detail)) => (
             StatusCode::OK,
             Json(SupplierRiskDetailResponse {
                 api_version: "v1",
-                supplier,
+                detail,
             }),
         )
             .into_response(),
@@ -5360,16 +5439,368 @@ async fn supplier_risk_detail(
             }),
         )
             .into_response(),
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiErrorResponse {
-                accepted: false,
+        Err(_) => supplier_database_error_response("Supplier-Detail konnte nicht gelesen werden."),
+    }
+}
+
+async fn supplier_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_store::SupplierCreateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store
+        .create_supplier(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => (
+            StatusCode::CREATED,
+            Json(SupplierMutationResponse {
+                accepted: true,
                 api_version: "v1",
-                error_code: "database_error",
-                message: format!("Supplier-Detail konnte nicht gelesen werden: {err}"),
+                status: supplier_store::SupplierMutationStatus::Created,
+                detail: Some(detail),
             }),
         )
             .into_response(),
+        Err(err) => supplier_store_error_response(err),
+    }
+}
+
+async fn supplier_update(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_store::SupplierUpdateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store
+        .update_supplier(context.tenant_id, supplier_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => (
+            StatusCode::OK,
+            Json(SupplierMutationResponse {
+                accepted: true,
+                api_version: "v1",
+                status: supplier_store::SupplierMutationStatus::Updated,
+                detail: Some(detail),
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_store_error_response(err),
+    }
+}
+
+async fn supplier_reviews(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store.list_reviews(context.tenant_id, supplier_id).await {
+        Ok(reviews) => (
+            StatusCode::OK,
+            Json(SupplierReviewsResponse {
+                api_version: "v1",
+                supplier_id,
+                reviews,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_store_error_response(err),
+    }
+}
+
+async fn supplier_review_create(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_store::SupplierReviewRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store
+        .add_review(context.tenant_id, supplier_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => (
+            StatusCode::CREATED,
+            Json(SupplierMutationResponse {
+                accepted: true,
+                api_version: "v1",
+                status: supplier_store::SupplierMutationStatus::Updated,
+                detail: Some(detail),
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_store_error_response(err),
+    }
+}
+
+async fn supplier_subprocessors(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store
+        .list_subprocessors(context.tenant_id, supplier_id)
+        .await
+    {
+        Ok(subprocessors) => (
+            StatusCode::OK,
+            Json(SupplierSubprocessorsResponse {
+                api_version: "v1",
+                supplier_id,
+                subprocessors,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_store_error_response(err),
+    }
+}
+
+async fn supplier_subprocessor_create(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_store::SupplierSubprocessorRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store
+        .add_subprocessor(context.tenant_id, supplier_id, context.user_id, payload)
+        .await
+    {
+        Ok(_) => (
+            StatusCode::CREATED,
+            Json(SupplierMutationResponse {
+                accepted: true,
+                api_version: "v1",
+                status: supplier_store::SupplierMutationStatus::Created,
+                detail: None,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_store_error_response(err),
+    }
+}
+
+async fn supplier_subprocessor_update(
+    Path((supplier_id, subprocessor_id)): Path<(i64, i64)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_store::SupplierSubprocessorRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store
+        .update_subprocessor(
+            context.tenant_id,
+            supplier_id,
+            subprocessor_id,
+            context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(SupplierMutationResponse {
+                accepted: true,
+                api_version: "v1",
+                status: supplier_store::SupplierMutationStatus::Updated,
+                detail: None,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_store_error_response(err),
+    }
+}
+
+async fn supplier_evidence_links(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store
+        .list_evidence_links(context.tenant_id, supplier_id)
+        .await
+    {
+        Ok(evidence_links) => (
+            StatusCode::OK,
+            Json(SupplierEvidenceLinksResponse {
+                api_version: "v1",
+                supplier_id,
+                evidence_links,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_store_error_response(err),
+    }
+}
+
+async fn supplier_evidence_link_create(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_store::SupplierEvidenceLinkRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store
+        .link_evidence(context.tenant_id, supplier_id, context.user_id, payload)
+        .await
+    {
+        Ok(status) => (
+            StatusCode::OK,
+            Json(SupplierMutationResponse {
+                accepted: true,
+                api_version: "v1",
+                status,
+                detail: None,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_store_error_response(err),
+    }
+}
+
+async fn supplier_control_link_create(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_store::SupplierEntityLinkRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store
+        .link_control(context.tenant_id, supplier_id, context.user_id, payload)
+        .await
+    {
+        Ok(status) => (
+            StatusCode::OK,
+            Json(SupplierMutationResponse {
+                accepted: true,
+                api_version: "v1",
+                status,
+                detail: None,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_store_error_response(err),
+    }
+}
+
+async fn supplier_risk_link_create(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_store::SupplierEntityLinkRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_store else {
+        return supplier_store_not_configured_response();
+    };
+    match store
+        .link_risk(context.tenant_id, supplier_id, context.user_id, payload)
+        .await
+    {
+        Ok(status) => (
+            StatusCode::OK,
+            Json(SupplierMutationResponse {
+                accepted: true,
+                api_version: "v1",
+                status,
+                detail: None,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_store_error_response(err),
     }
 }
 
@@ -14775,15 +15206,22 @@ async fn web_suppliers(
     let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context("Suppliers", "/suppliers/");
     };
-    let Some(store) = state.supplier_store else {
+    let Some(ref store) = state.supplier_store else {
         return web_store_missing("Suppliers", "/suppliers/", &context, "Supplier");
     };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
     match store.overview(context.tenant_id, 200).await {
         Ok(overview) => {
             let rows = overview
                 .suppliers
                 .iter()
                 .map(|supplier| {
+                    let detail_href = web_path_with_context(
+                        &format!("/suppliers/{}/", supplier.id),
+                        Some(&context),
+                    );
                     let evidence_href = evidence_prefill_href(
                         &context,
                         &format!("Supplier Evidence: {}", supplier.name),
@@ -14797,14 +15235,21 @@ async fn web_suppliers(
                         Some(&context),
                     );
                     let evidence_count =
-                        format!("{} / {}", supplier.approved_evidence_count, supplier.evidence_count);
+                        format!(
+                            "{} / {} (+{} Links)",
+                            supplier.approved_evidence_count,
+                            supplier.evidence_count,
+                            supplier.linked_evidence_count
+                        );
                     let exposure = format!(
-                        "{} CVE · {} Risiken",
-                        supplier.open_vulnerability_count, supplier.open_risk_count
+                        "{} CVE / {} Risiken / {} Controls",
+                        supplier.open_vulnerability_count,
+                        supplier.open_risk_count + supplier.linked_risk_count,
+                        supplier.linked_control_count
                     );
                     format!(
-                        r#"<tr><td><a href="{}">{}</a><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Evidence</a></td></tr>"#,
-                        html_escape(&api_href),
+                        r#"<tr><td><a href="{}">{}</a><p>{}</p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Evidence</a> · <a href="{}">API</a></td></tr>"#,
+                        html_escape(&detail_href),
                         html_escape(&supplier.name),
                         html_escape(&supplier.service_description),
                         web_badge(
@@ -14815,15 +15260,62 @@ async fn web_suppliers(
                         supplier.score,
                         html_escape(supplier.owner_display.as_deref().unwrap_or("-")),
                         framework_badges(&supplier.regulatory_flags),
-                        supplier.review_status_label,
+                        web_badge(
+                            &supplier.review_status_label,
+                            supplier_review_badge_class(&supplier.review_status),
+                        ),
+                        html_escape(supplier.next_review_due_at.as_deref().unwrap_or("-")),
+                        web_badge(
+                            &supplier.exit_test_status_label,
+                            supplier_exit_badge_class(&supplier.exit_test_status),
+                        ),
+                        supplier.subprocessor_count,
                         evidence_count,
                         exposure,
                         supplier_issue_summary(&supplier.issues),
                         html_escape(&evidence_href),
+                        html_escape(&api_href),
                     )
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            let create_form = if can_write {
+                let action = web_path_with_context("/suppliers/", Some(&context));
+                format!(
+                    r#"
+                    <section class="panel wide">
+                      <h2>Supplier anlegen</h2>
+                      <form method="post" action="{}">
+                        <div class="form-grid">
+                          <label>Name<input name="name" required></label>
+                          <label>Service/Produkt<input name="service_product_reference"></label>
+                          <label>Kritikalitaet<select name="criticality"><option value="MEDIUM">Mittel</option><option value="HIGH">Hoch</option><option value="CRITICAL">Kritisch</option><option value="LOW">Niedrig</option></select></label>
+                          <label>Owner-ID<input name="owner_id" inputmode="numeric"></label>
+                          <label>Security-Kontakt<input name="contact_email" type="email"></label>
+                          <label>Review faellig<input name="next_review_due_at" type="date"></label>
+                          <label>Regulatorischer Scope<input name="regulatory_scope" placeholder="NIS2, DORA, CRA"></label>
+                          <label>Vertragsreferenz<input name="contract_reference"></label>
+                        </div>
+                        <label>Beschreibung<textarea name="service_description"></textarea></label>
+                        <label>Datenarten<textarea name="data_categories"></textarea></label>
+                        <label>Regionen<textarea name="regions"></textarea></label>
+                        <label>Exit-Abhaengigkeit<textarea name="exit_dependency"></textarea></label>
+                        <div class="toggle-row">
+                          <label class="checkbox-row"><input name="data_access" type="checkbox" value="1"> Datenzugriff</label>
+                          <label class="checkbox-row"><input name="system_access" type="checkbox" value="1"> Systemzugriff</label>
+                          <label class="checkbox-row"><input name="ot_access" type="checkbox" value="1"> OT-Zugriff</label>
+                          <label class="checkbox-row"><input name="exit_relevant" type="checkbox" value="1"> Exit-relevant</label>
+                          <label class="checkbox-row"><input name="evidence_required" type="checkbox" value="1" checked> Evidence erforderlich</label>
+                        </div>
+                        <button type="submit">Supplier anlegen</button>
+                      </form>
+                    </section>
+                    "#,
+                    html_escape(&action),
+                )
+            } else {
+                String::new()
+            };
             let body = format!(
                 r#"
                 <section class="hero compact"><h1>Suppliers</h1><p>Third-Party Risk, DORA/NIS2/CRA/TISAX-Nachweise und Exit-Abhaengigkeiten</p></section>
@@ -14835,10 +15327,11 @@ async fn web_suppliers(
                   {}
                   {}
                 </section>
+                {}
                 <section class="panel wide">
                   <h2>Supplier-Risk Register</h2>
                   <table>
-                    <thead><tr><th>Supplier</th><th>Kritikalitaet</th><th>Reife</th><th>Score</th><th>Owner</th><th>Scope</th><th>Review</th><th>Evidence</th><th>Exposure</th><th>Issues</th><th>Nachweis</th></tr></thead>
+                    <thead><tr><th>Supplier</th><th>Kritikalitaet</th><th>Reife</th><th>Score</th><th>Owner</th><th>Scope</th><th>Review</th><th>Faellig</th><th>Exit</th><th>Subs</th><th>Evidence</th><th>Exposure</th><th>Issues</th><th>Nachweis</th></tr></thead>
                     <tbody>{}</tbody>
                   </table>
                 </section>
@@ -14849,16 +15342,770 @@ async fn web_suppliers(
                 metric_card("Review ueberfaellig", overview.summary.overdue_reviews),
                 metric_card("Evidence fehlt", overview.summary.missing_evidence),
                 metric_card("Ø Score", overview.summary.average_score),
+                create_form,
                 if rows.is_empty() {
-                    web_empty_row(11, "Keine Supplier vorhanden.")
+                    web_empty_row(14, "Keine Supplier vorhanden.")
                 } else {
                     rows
                 },
             );
             web_page("Suppliers", "/suppliers/", Some(&context), &body)
         }
-        Err(err) => web_error_page("Suppliers", "/suppliers/", &context, &err.to_string()),
+        Err(_) => web_error_page(
+            "Suppliers",
+            "/suppliers/",
+            &context,
+            "Supplier-Risk Register konnte nicht gelesen werden.",
+        ),
     }
+}
+
+async fn web_suppliers_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSupplierCreateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Suppliers", "/suppliers/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Suppliers",
+            "/suppliers/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.supplier_store else {
+        return web_store_missing("Suppliers", "/suppliers/", &context, "Supplier").into_response();
+    };
+    let payload = match web_supplier_create_payload(form) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return web_error_page("Suppliers", "/suppliers/", &context, &message).into_response();
+        }
+    };
+    match store
+        .create_supplier(auth_context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(detail) => {
+            let path = web_path_with_context(
+                &format!("/suppliers/{}/", detail.supplier.id),
+                Some(&context),
+            );
+            Redirect::to(&path).into_response()
+        }
+        Err(err) => {
+            web_error_page("Suppliers", "/suppliers/", &context, err.safe_message()).into_response()
+        }
+    }
+}
+
+async fn web_supplier_detail(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Supplier Review", "/suppliers/");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    let Some(store) = state.supplier_store else {
+        return web_store_missing("Supplier Review", "/suppliers/", &context, "Supplier");
+    };
+    match store.detail(context.tenant_id, supplier_id).await {
+        Ok(Some(detail)) => {
+            let supplier = &detail.supplier;
+            let evidence_href = evidence_prefill_href(
+                &context,
+                &format!("Supplier Evidence: {}", supplier.name),
+                "Supplier Review, Vertrag, Security Annex, Zertifikat, SLA, SBOM/CSAF oder Exit-Nachweis.",
+                &format!("SUPPLIER:{}", supplier.id),
+                Some("SUBMITTED"),
+                Some(&web_path_with_context(
+                    &format!("/suppliers/{}/", supplier.id),
+                    Some(&context),
+                )),
+            );
+            let review_rows = detail
+                .reviews
+                .iter()
+                .map(|review| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&review.created_at),
+                        html_escape(&review.old_status_label),
+                        web_badge(
+                            &review.new_status_label,
+                            supplier_review_badge_class(&review.new_status),
+                        ),
+                        html_escape(&review.risk_level),
+                        html_escape(&review.reason),
+                        html_escape(&review.actor_id.map(|id| id.to_string()).unwrap_or_else(|| "-".to_string())),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let subprocessor_rows = detail
+                .subprocessors
+                .iter()
+                .map(|subprocessor| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&subprocessor.name),
+                        html_escape(&subprocessor.purpose),
+                        html_escape(&subprocessor.country_region),
+                        html_escape(&subprocessor.data_relationship),
+                        web_badge(
+                            &subprocessor.approval_status_label,
+                            supplier_review_badge_class(&subprocessor.approval_status),
+                        ),
+                        html_escape(subprocessor.review_due_at.as_deref().unwrap_or("-")),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let evidence_rows = detail
+                .evidence_links
+                .iter()
+                .map(|link| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        link.evidence_id,
+                        html_escape(&link.title),
+                        html_escape(&link.status),
+                        html_escape(&link.link_type),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let control_rows = detail
+                .control_links
+                .iter()
+                .map(|link| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        link.control_id,
+                        html_escape(&link.code),
+                        html_escape(&link.title),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let risk_rows = detail
+                .risk_links
+                .iter()
+                .map(|link| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        link.risk_id,
+                        html_escape(&link.title),
+                        html_escape(&link.status),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let audit_rows = detail
+                .audit_events
+                .iter()
+                .map(|event| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&event.created_at),
+                        html_escape(&event.event_type),
+                        html_escape(&event.detail),
+                        html_escape(
+                            &event
+                                .actor_id
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| "-".to_string())
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let forms = if can_write {
+                supplier_detail_forms(&context, supplier.id)
+            } else {
+                String::new()
+            };
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>{}</h1><p>Supplier Review, Vertrag, Unterauftragnehmer, Evidence und Exit-Test</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  <article class="panel">
+                    <h2>Review</h2>
+                    <p>Status: {}</p>
+                    <p>Letztes Review: {}</p>
+                    <p>Naechstes Review: {}</p>
+                    <p>Risiko: {}</p>
+                    <p>Issues: {}</p>
+                    <p><a href="{}">Evidence vorbereiten</a></p>
+                  </article>
+                  <article class="panel">
+                    <h2>Zugriff & Scope</h2>
+                    <p>Service/Produkt: {}</p>
+                    <p>Datenzugriff: {} / System: {} / OT: {}</p>
+                    <p>Regulatorik: {}</p>
+                    <p>Owner: {}</p>
+                  </article>
+                  <article class="panel">
+                    <h2>Vertrag & Exit</h2>
+                    <p>Vertrag: {} bis {}</p>
+                    <p>Auto-Renewal: {} / Kuendigung: {}</p>
+                    <p>Naechstes Vertragsreview: {}</p>
+                    <p>Exit: {} / Test: {}</p>
+                    <p>Offene Exit-Aktionen: {}</p>
+                  </article>
+                </section>
+                {}
+                <section class="panel wide">
+                  <h2>Approval History</h2>
+                  <table><thead><tr><th>Zeit</th><th>Alt</th><th>Neu</th><th>Risk</th><th>Grund</th><th>Actor</th></tr></thead><tbody>{}</tbody></table>
+                </section>
+                <section class="panel wide">
+                  <h2>Unterauftragnehmer</h2>
+                  <table><thead><tr><th>Name</th><th>Zweck</th><th>Land/Region</th><th>Datenbezug</th><th>Status</th><th>Review</th></tr></thead><tbody>{}</tbody></table>
+                </section>
+                <section class="grid">
+                  <article class="panel wide"><h2>Evidence Links</h2><table><thead><tr><th>ID</th><th>Titel</th><th>Status</th><th>Typ</th></tr></thead><tbody>{}</tbody></table></article>
+                  <article class="panel wide"><h2>Control Links</h2><table><thead><tr><th>ID</th><th>Code</th><th>Titel</th></tr></thead><tbody>{}</tbody></table></article>
+                  <article class="panel wide"><h2>Risk Links</h2><table><thead><tr><th>ID</th><th>Titel</th><th>Status</th></tr></thead><tbody>{}</tbody></table></article>
+                </section>
+                <section class="panel wide">
+                  <h2>Audit</h2>
+                  <table><thead><tr><th>Zeit</th><th>Typ</th><th>Detail</th><th>Actor</th></tr></thead><tbody>{}</tbody></table>
+                </section>
+                "#,
+                html_escape(&supplier.name),
+                metric_card("Score", supplier.score),
+                metric_card("Subprocessors", supplier.subprocessor_count),
+                metric_card("Evidence Links", supplier.linked_evidence_count),
+                metric_card("Control Links", supplier.linked_control_count),
+                metric_card("Risk Links", supplier.linked_risk_count),
+                metric_card("Open CVE", supplier.open_vulnerability_count),
+                web_badge(
+                    &supplier.review_status_label,
+                    supplier_review_badge_class(&supplier.review_status),
+                ),
+                html_escape(supplier.last_reviewed_at.as_deref().unwrap_or("-")),
+                html_escape(supplier.next_review_due_at.as_deref().unwrap_or("-")),
+                html_escape(&supplier.risk_assessment),
+                supplier_issue_summary(&supplier.issues),
+                html_escape(&evidence_href),
+                html_escape(&supplier.service_product_reference),
+                yes_no(supplier.data_access),
+                yes_no(supplier.system_access),
+                yes_no(supplier.ot_access),
+                framework_badges(&supplier.regulatory_flags),
+                html_escape(supplier.owner_display.as_deref().unwrap_or("-")),
+                html_escape(supplier.contract_start_at.as_deref().unwrap_or("-")),
+                html_escape(supplier.contract_end_at.as_deref().unwrap_or("-")),
+                yes_no(supplier.contract_auto_renews),
+                html_escape(&supplier.contract_notice_period),
+                html_escape(supplier.next_contract_review_at.as_deref().unwrap_or("-")),
+                yes_no(supplier.exit_relevant),
+                web_badge(
+                    &supplier.exit_test_status_label,
+                    supplier_exit_badge_class(&supplier.exit_test_status),
+                ),
+                html_escape(&supplier.exit_test_open_actions),
+                forms,
+                if review_rows.is_empty() {
+                    web_empty_row(6, "Keine Review-Historie vorhanden.")
+                } else {
+                    review_rows
+                },
+                if subprocessor_rows.is_empty() {
+                    web_empty_row(6, "Keine Unterauftragnehmer vorhanden.")
+                } else {
+                    subprocessor_rows
+                },
+                if evidence_rows.is_empty() {
+                    web_empty_row(4, "Keine Evidence verknuepft.")
+                } else {
+                    evidence_rows
+                },
+                if control_rows.is_empty() {
+                    web_empty_row(3, "Keine Controls verknuepft.")
+                } else {
+                    control_rows
+                },
+                if risk_rows.is_empty() {
+                    web_empty_row(3, "Keine Risiken verknuepft.")
+                } else {
+                    risk_rows
+                },
+                if audit_rows.is_empty() {
+                    web_empty_row(4, "Keine Audit-Ereignisse vorhanden.")
+                } else {
+                    audit_rows
+                },
+            );
+            web_page("Supplier Review", "/suppliers/", Some(&context), &body)
+        }
+        Ok(None) => web_error_page(
+            "Supplier Review",
+            "/suppliers/",
+            &context,
+            "Supplier wurde fuer diesen Tenant nicht gefunden.",
+        ),
+        Err(_) => web_error_page(
+            "Supplier Review",
+            "/suppliers/",
+            &context,
+            "Supplier-Detail konnte nicht gelesen werden.",
+        ),
+    }
+}
+
+async fn web_supplier_review_submit(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSupplierReviewForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Supplier Review", "/suppliers/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !auth_context.can_write() {
+        return web_supplier_permission_error(&context).into_response();
+    }
+    let Some(store) = state.supplier_store else {
+        return web_store_missing("Supplier Review", "/suppliers/", &context, "Supplier")
+            .into_response();
+    };
+    let payload = match web_supplier_review_payload(form) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return web_error_page("Supplier Review", "/suppliers/", &context, &message)
+                .into_response();
+        }
+    };
+    match store
+        .add_review(
+            auth_context.tenant_id,
+            supplier_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(_) => web_supplier_redirect(&context, supplier_id),
+        Err(err) => web_error_page(
+            "Supplier Review",
+            "/suppliers/",
+            &context,
+            err.safe_message(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_supplier_subprocessor_submit(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSupplierSubprocessorForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Supplier Review", "/suppliers/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !auth_context.can_write() {
+        return web_supplier_permission_error(&context).into_response();
+    }
+    let Some(store) = state.supplier_store else {
+        return web_store_missing("Supplier Review", "/suppliers/", &context, "Supplier")
+            .into_response();
+    };
+    let payload = supplier_store::SupplierSubprocessorRequest {
+        name: form.name,
+        purpose: form.purpose.unwrap_or_default(),
+        country_region: form.country_region.unwrap_or_default(),
+        data_relationship: form.data_relationship.unwrap_or_default(),
+        criticality: form.criticality,
+        approval_status: form.approval_status,
+        review_due_at: form.review_due_at,
+    };
+    match store
+        .add_subprocessor(
+            auth_context.tenant_id,
+            supplier_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(_) => web_supplier_redirect(&context, supplier_id),
+        Err(err) => web_error_page(
+            "Supplier Review",
+            "/suppliers/",
+            &context,
+            err.safe_message(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_supplier_evidence_link_submit(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSupplierEvidenceLinkForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Supplier Review", "/suppliers/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !auth_context.can_write() {
+        return web_supplier_permission_error(&context).into_response();
+    }
+    let Some(store) = state.supplier_store else {
+        return web_store_missing("Supplier Review", "/suppliers/", &context, "Supplier")
+            .into_response();
+    };
+    let evidence_id = match parse_optional_i64(form.evidence_id.as_deref(), "Evidence-ID") {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return web_error_page(
+                "Supplier Review",
+                "/suppliers/",
+                &context,
+                "Evidence-ID ist erforderlich.",
+            )
+            .into_response();
+        }
+        Err(message) => {
+            return web_error_page("Supplier Review", "/suppliers/", &context, &message)
+                .into_response();
+        }
+    };
+    let payload = supplier_store::SupplierEvidenceLinkRequest {
+        evidence_id,
+        link_type: form.link_type,
+    };
+    match store
+        .link_evidence(
+            auth_context.tenant_id,
+            supplier_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(_) => web_supplier_redirect(&context, supplier_id),
+        Err(err) => web_error_page(
+            "Supplier Review",
+            "/suppliers/",
+            &context,
+            err.safe_message(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_supplier_control_link_submit(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSupplierEntityLinkForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Supplier Review", "/suppliers/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !auth_context.can_write() {
+        return web_supplier_permission_error(&context).into_response();
+    }
+    let Some(store) = state.supplier_store else {
+        return web_store_missing("Supplier Review", "/suppliers/", &context, "Supplier")
+            .into_response();
+    };
+    let entity_id = match parse_optional_i64(form.entity_id.as_deref(), "Control-ID") {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return web_error_page(
+                "Supplier Review",
+                "/suppliers/",
+                &context,
+                "Control-ID ist erforderlich.",
+            )
+            .into_response();
+        }
+        Err(message) => {
+            return web_error_page("Supplier Review", "/suppliers/", &context, &message)
+                .into_response();
+        }
+    };
+    match store
+        .link_control(
+            auth_context.tenant_id,
+            supplier_id,
+            auth_context.user_id,
+            supplier_store::SupplierEntityLinkRequest { entity_id },
+        )
+        .await
+    {
+        Ok(_) => web_supplier_redirect(&context, supplier_id),
+        Err(err) => web_error_page(
+            "Supplier Review",
+            "/suppliers/",
+            &context,
+            err.safe_message(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_supplier_risk_link_submit(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSupplierEntityLinkForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Supplier Review", "/suppliers/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !auth_context.can_write() {
+        return web_supplier_permission_error(&context).into_response();
+    }
+    let Some(store) = state.supplier_store else {
+        return web_store_missing("Supplier Review", "/suppliers/", &context, "Supplier")
+            .into_response();
+    };
+    let entity_id = match parse_optional_i64(form.entity_id.as_deref(), "Risk-ID") {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return web_error_page(
+                "Supplier Review",
+                "/suppliers/",
+                &context,
+                "Risk-ID ist erforderlich.",
+            )
+            .into_response();
+        }
+        Err(message) => {
+            return web_error_page("Supplier Review", "/suppliers/", &context, &message)
+                .into_response();
+        }
+    };
+    match store
+        .link_risk(
+            auth_context.tenant_id,
+            supplier_id,
+            auth_context.user_id,
+            supplier_store::SupplierEntityLinkRequest { entity_id },
+        )
+        .await
+    {
+        Ok(_) => web_supplier_redirect(&context, supplier_id),
+        Err(err) => web_error_page(
+            "Supplier Review",
+            "/suppliers/",
+            &context,
+            err.safe_message(),
+        )
+        .into_response(),
+    }
+}
+
+fn supplier_detail_forms(context: &WebContext, supplier_id: i64) -> String {
+    let review_action =
+        web_path_with_context(&format!("/suppliers/{supplier_id}/reviews"), Some(context));
+    let subprocessor_action = web_path_with_context(
+        &format!("/suppliers/{supplier_id}/subprocessors"),
+        Some(context),
+    );
+    let evidence_action = web_path_with_context(
+        &format!("/suppliers/{supplier_id}/evidence-links"),
+        Some(context),
+    );
+    let control_action = web_path_with_context(
+        &format!("/suppliers/{supplier_id}/control-links"),
+        Some(context),
+    );
+    let risk_action = web_path_with_context(
+        &format!("/suppliers/{supplier_id}/risk-links"),
+        Some(context),
+    );
+    format!(
+        r#"
+        <section class="grid">
+          <article class="panel">
+            <h2>Status setzen</h2>
+            <form method="post" action="{}">
+              <label>Status<select name="new_status">
+                <option value="in_review">in_review</option>
+                <option value="approved">approved</option>
+                <option value="approved_with_conditions">approved_with_conditions</option>
+                <option value="rejected">rejected</option>
+                <option value="expired">expired</option>
+                <option value="archived">archived</option>
+                <option value="draft">draft</option>
+              </select></label>
+              <label>Risiko<select name="risk_level"><option value="medium">medium</option><option value="low">low</option><option value="high">high</option><option value="critical">critical</option></select></label>
+              <label>Naechstes Review<input name="next_review_due_at" type="date"></label>
+              <label>Evidence-Refs<textarea name="evidence_refs" placeholder="1,2,3"></textarea></label>
+              <label>Control-Refs<textarea name="control_refs" placeholder="15,16"></textarea></label>
+              <label>Grund<textarea name="reason"></textarea></label>
+              <button type="submit">Status auditiert speichern</button>
+            </form>
+          </article>
+          <article class="panel">
+            <h2>Unterauftragnehmer</h2>
+            <form method="post" action="{}">
+              <label>Name<input name="name" required></label>
+              <label>Zweck<input name="purpose"></label>
+              <label>Land/Region<input name="country_region"></label>
+              <label>Datenbezug<input name="data_relationship"></label>
+              <label>Kritikalitaet<select name="criticality"><option value="MEDIUM">Mittel</option><option value="HIGH">Hoch</option><option value="CRITICAL">Kritisch</option><option value="LOW">Niedrig</option></select></label>
+              <label>Status<select name="approval_status"><option value="draft">draft</option><option value="in_review">in_review</option><option value="approved">approved</option><option value="approved_with_conditions">approved_with_conditions</option><option value="rejected">rejected</option><option value="expired">expired</option><option value="archived">archived</option></select></label>
+              <label>Review faellig<input name="review_due_at" type="date"></label>
+              <button type="submit">Subprocessor anlegen</button>
+            </form>
+          </article>
+          <article class="panel">
+            <h2>Links</h2>
+            <form method="post" action="{}"><label>Evidence-ID<input name="evidence_id" inputmode="numeric" required></label><label>Typ<input name="link_type" value="review"></label><button type="submit">Evidence verknuepfen</button></form>
+            <form method="post" action="{}"><label>Control-ID<input name="entity_id" inputmode="numeric" required></label><button type="submit">Control verknuepfen</button></form>
+            <form method="post" action="{}"><label>Risk-ID<input name="entity_id" inputmode="numeric" required></label><button type="submit">Risiko verknuepfen</button></form>
+          </article>
+        </section>
+        "#,
+        html_escape(&review_action),
+        html_escape(&subprocessor_action),
+        html_escape(&evidence_action),
+        html_escape(&control_action),
+        html_escape(&risk_action),
+    )
+}
+
+fn web_supplier_create_payload(
+    form: WebSupplierCreateForm,
+) -> Result<supplier_store::SupplierCreateRequest, String> {
+    Ok(supplier_store::SupplierCreateRequest {
+        name: form.name,
+        service_description: form.service_description.unwrap_or_default(),
+        criticality: form.criticality,
+        owner_id: parse_optional_i64(form.owner_id.as_deref(), "Owner-ID")?,
+        contact_email: form.contact_email.unwrap_or_default(),
+        contract_reference: form.contract_reference.unwrap_or_default(),
+        data_categories: form.data_categories.unwrap_or_default(),
+        regions: form.regions.unwrap_or_default(),
+        exit_dependency: form.exit_dependency.unwrap_or_default(),
+        regulatory_scope: form.regulatory_scope.unwrap_or_default(),
+        review_status: Some("draft".to_string()),
+        next_review_due_at: form.next_review_due_at,
+        evidence_required: Some(form.evidence_required.is_some()),
+        notes: String::new(),
+        risk_assessment: None,
+        service_product_reference: form.service_product_reference.unwrap_or_default(),
+        data_access: Some(form.data_access.is_some()),
+        system_access: Some(form.system_access.is_some()),
+        ot_access: Some(form.ot_access.is_some()),
+        exit_relevant: Some(form.exit_relevant.is_some()),
+        responsible_role: String::new(),
+        responsible_user_id: None,
+        contract_start_at: None,
+        contract_end_at: None,
+        contract_notice_period: String::new(),
+        contract_auto_renews: Some(false),
+        next_contract_review_at: None,
+        contract_evidence_id: None,
+        exit_test_required: Some(false),
+        exit_test_status: Some("not_required".to_string()),
+        last_exit_test_at: None,
+        next_exit_test_at: None,
+        exit_test_result: String::new(),
+        exit_test_open_actions: String::new(),
+        exit_test_evidence_id: None,
+    })
+}
+
+fn web_supplier_review_payload(
+    form: WebSupplierReviewForm,
+) -> Result<supplier_store::SupplierReviewRequest, String> {
+    Ok(supplier_store::SupplierReviewRequest {
+        new_status: form.new_status,
+        reason: form.reason,
+        risk_level: form.risk_level,
+        evidence_refs: parse_id_list(form.evidence_refs.as_deref(), "Evidence-Refs")?,
+        control_refs: parse_id_list(form.control_refs.as_deref(), "Control-Refs")?,
+        next_review_due_at: form.next_review_due_at,
+    })
+}
+
+fn parse_optional_i64(value: Option<&str>, field_name: &str) -> Result<Option<i64>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let parsed = value
+        .parse::<i64>()
+        .map_err(|_| format!("{field_name} muss eine Zahl sein."))?;
+    if parsed <= 0 {
+        return Err(format!("{field_name} muss groesser 0 sein."));
+    }
+    Ok(Some(parsed))
+}
+
+fn parse_id_list(value: Option<&str>, field_name: &str) -> Result<Vec<i64>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let mut ids = Vec::new();
+    for item in value.split([',', ';', '\n', ' ']) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        let id = item
+            .parse::<i64>()
+            .map_err(|_| format!("{field_name} enthaelt eine ungueltige ID."))?;
+        if id <= 0 {
+            return Err(format!("{field_name} enthaelt eine ungueltige ID."));
+        }
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
+fn web_supplier_redirect(context: &WebContext, supplier_id: i64) -> Response {
+    let path = web_path_with_context(&format!("/suppliers/{supplier_id}/"), Some(context));
+    Redirect::to(&path).into_response()
+}
+
+fn web_supplier_permission_error(context: &WebContext) -> Html<String> {
+    web_error_page(
+        "Supplier Review",
+        "/suppliers/",
+        context,
+        "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+    )
 }
 
 async fn web_imports(
@@ -27659,6 +28906,38 @@ fn supplier_criticality_badge_class(criticality: &str) -> &'static str {
     }
 }
 
+fn supplier_review_badge_class(status: &str) -> &'static str {
+    match status
+        .trim()
+        .replace('-', "_")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "approved" => "ok",
+        "approved_with_conditions" => "warn",
+        "in_review" => "info",
+        "rejected" => "danger",
+        "expired" => "danger",
+        "archived" => "muted-badge",
+        _ => "muted-badge",
+    }
+}
+
+fn supplier_exit_badge_class(status: &str) -> &'static str {
+    match status
+        .trim()
+        .replace('-', "_")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "passed" => "ok",
+        "planned" => "info",
+        "required" => "warn",
+        "failed" | "overdue" => "danger",
+        _ => "muted-badge",
+    }
+}
+
 fn supplier_issue_summary(issues: &[String]) -> String {
     if issues.is_empty() {
         return web_badge("Keine offenen Issues", "ok");
@@ -28937,8 +30216,42 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(agent_device_findings).post(agent_findings),
         )
         .route("/api/v1/assets/information-assets", get(asset_inventory))
-        .route("/api/v1/suppliers", get(supplier_risk_overview))
-        .route("/api/v1/suppliers/{supplier_id}", get(supplier_risk_detail))
+        .route(
+            "/api/v1/suppliers",
+            get(supplier_risk_overview).post(supplier_create),
+        )
+        .route(
+            "/api/v1/suppliers/{supplier_id}",
+            get(supplier_risk_detail).patch(supplier_update),
+        )
+        .route(
+            "/api/v1/suppliers/{supplier_id}/reviews",
+            get(supplier_reviews).post(supplier_review_create),
+        )
+        .route(
+            "/api/v1/suppliers/{supplier_id}/subprocessors",
+            get(supplier_subprocessors).post(supplier_subprocessor_create),
+        )
+        .route(
+            "/api/v1/suppliers/{supplier_id}/subprocessors/{subprocessor_id}",
+            patch(supplier_subprocessor_update),
+        )
+        .route(
+            "/api/v1/suppliers/{supplier_id}/evidence",
+            get(supplier_evidence_links),
+        )
+        .route(
+            "/api/v1/suppliers/{supplier_id}/evidence-links",
+            post(supplier_evidence_link_create),
+        )
+        .route(
+            "/api/v1/suppliers/{supplier_id}/control-links",
+            post(supplier_control_link_create),
+        )
+        .route(
+            "/api/v1/suppliers/{supplier_id}/risk-links",
+            post(supplier_risk_link_create),
+        )
         .route("/api/v1/processes", get(process_register))
         .route("/api/v1/processes/{process_id}", get(process_detail))
         .route("/api/v1/changes", get(change_register).post(change_create))
@@ -29327,7 +30640,28 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/evidence/", get(web_evidence).post(web_evidence_upload))
         .route("/evidence/quality/", get(web_evidence_quality))
         .route("/assets/", get(web_assets))
-        .route("/suppliers/", get(web_suppliers))
+        .route("/suppliers/", get(web_suppliers).post(web_suppliers_submit))
+        .route("/suppliers/{supplier_id}/", get(web_supplier_detail))
+        .route(
+            "/suppliers/{supplier_id}/reviews",
+            post(web_supplier_review_submit),
+        )
+        .route(
+            "/suppliers/{supplier_id}/subprocessors",
+            post(web_supplier_subprocessor_submit),
+        )
+        .route(
+            "/suppliers/{supplier_id}/evidence-links",
+            post(web_supplier_evidence_link_submit),
+        )
+        .route(
+            "/suppliers/{supplier_id}/control-links",
+            post(web_supplier_control_link_submit),
+        )
+        .route(
+            "/suppliers/{supplier_id}/risk-links",
+            post(web_supplier_risk_link_submit),
+        )
         .route("/imports/", get(web_imports).post(web_imports_submit))
         .route("/imports/preview/", post(web_imports_preview_submit))
         .route("/processes/", get(web_processes))

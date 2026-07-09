@@ -8,6 +8,10 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- add a tenant-scoped Supplier Review Workflow with additive migration `0031_rust_supplier_review_workflow`
+- add Supplier review statuses for draft, in_review, approved, approved_with_conditions, rejected, expired, and archived decisions
+- add Supplier approval history, subprocessor records, contract lifecycle metadata, exit-test status, and explicit Evidence, Control, and Risk links
+- extend Supplier APIs and Web UI with create, update, review, subprocessor, and link-management flows
 - extend the existing secure notification channels, worker, cooldown, and delivery audit to Evidence lifecycle and quality, Product Security/CVE reviews, Incident non-reporting decisions, and Roadmap task deadlines
 - add tenant-scoped cross-domain signal evaluation and safe delivery metadata through additive migration `0029_rust_cross_domain_notifications`
 - expose safe cross-domain delivery history to authenticated read-only roles while keeping channel and signal-scope configuration administrator-only
@@ -21,6 +25,8 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- audit Supplier creation, updates, review decisions, subprocessor changes, and Evidence, Control, and Risk link changes without exposing SQL details or secret payloads
+- enforce tenant-scoped Supplier writes, link validation, owner references, Evidence references, and subprocessor visibility
 - reserve tenant- and channel-scoped notification dispatch claims atomically before webhook delivery through additive migration `0030_rust_notification_dispatch_claim`, preventing duplicate sends from overlapping manual and periodic evaluations
 - correct PostgreSQL integer decoding in the Agent Governance notification path so policy, channel, CVE, device, and delivery metadata use the existing Rust API types consistently
 - redact internal Agent Governance store and SQL errors from HTML responses while preserving safe API validation behavior

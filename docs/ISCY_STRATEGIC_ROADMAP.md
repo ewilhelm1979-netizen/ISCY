@@ -100,23 +100,31 @@ Erfolgskriterium:
 
 Ziel: Lieferanten, Cloud-, SaaS-, IKT- und Produktzulieferer sollen als eigener Risikobereich sichtbar werden.
 
-Status: In V23.7.22 als Supplier-Risk-API und Webansicht umgesetzt.
+Status: In V23.7.22 als Supplier-Risk-API und Webansicht umgesetzt. Im
+Unreleased-Stand kommt der tenantgebundene Supplier-Review-Workflow hinzu.
 
 Umgesetzt:
 
 - Weboberflaeche unter `/suppliers/`.
-- API-Pfade `GET /api/v1/suppliers` und `GET /api/v1/suppliers/{id}`.
+- API-Pfade `GET` und `POST /api/v1/suppliers` sowie `GET` und `PATCH /api/v1/suppliers/{id}`.
 - Supplier-Register mit Kritikalitaet, Services, Vertragsbezug, Security-Kontakt, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischem Scope, Review-Status, Review-Faelligkeit und Notes.
 - Automatische Signale aus Produktkomponenten, offenen Product-Security-Schwachstellen, Supplier-bezogenen Risiken und Supplier-Evidence.
 - DORA-IKT-Drittparteienbezug, NIS2-Supply-Chain-Bezug, CRA-Komponenten-/Herstellerbezug, DSGVO-Datenbezug und TISAX-Lieferkettennachweise werden als gemeinsame Flags sichtbar.
 - Score- und Issue-Logik fuer kritische CVEs, ueberfaellige Reviews, fehlende Evidence, fehlenden Security-Kontakt, fehlende Exit-Strategie und fehlende Risikodokumentation.
 - Evidence-Vorbefuellung mit stabilem Linked Requirement `SUPPLIER:{id}`.
+- Migration `0031_rust_supplier_review_workflow` erweitert Supplier additiv um Review-Freigaben, Vertragslaufzeiten, Exit-Test-Nachweise, Verantwortungsreferenzen und explizite Linktabellen.
+- Review-Statusmodell: draft, in_review, approved, approved_with_conditions, rejected, expired und archived.
+- Freigabehistorie mit altem/neuem Status, Akteurreferenz, Begruendung, Risikostufe sowie optionalen Evidence- und Control-Referenzen.
+- Unterauftragnehmer/Subprocessors sind nur im Supplier- und Tenant-Kontext sichtbar und werden bei Aenderungen auditierbar protokolliert.
+- Supplier koennen explizit mit bestehenden Evidence-, ISCY-27-Control- und Risiko-Objekten verknuepft werden, ohne eine parallele Evidence-, Risiko- oder Control-Engine einzufuehren.
+- Vertragsbeginn, Vertragsende, Kuendigungsfrist, automatische Verlaengerung, naechster Vertragsreview, Vertrags-Evidence sowie Exit-Test-Status und Exit-Test-Evidence sind als Metadaten abbildbar.
+- Web-Detailansicht `/suppliers/{id}/` zeigt Reviewstand, Historie, Subprocessors, Vertrags-/Exit-Daten, Links und Auditspur; schreibende Aktionen bleiben Admin-/Editor-Rollen vorbehalten.
 
 Naechste Vertiefung:
 
-- Supplier-Controls direkt mit ISCY-27 Control 15/16 und Evidence Needs verbinden.
-- Supplier-Reviews als eigener Review-Workflow mit Freigabehistorie ausbauen.
-- Vertragslaufzeiten, Unterauftragnehmer, Datenuebermittlungen und Exit-Tests granular versionieren.
+- Datenuebermittlungen und komplexere Vertrags-/Exit-Versionierung spaeter bewusst als eigenen Reifegrad betrachten.
+- Supplier-Advisory- und Herstellerfeeds aus dem Product-Security-Bereich fachlich anbinden.
+- Management-/Regulatory-Templates koennen Supplier-Review-Daten spaeter in wiederholbare Pruefpakete aufnehmen.
 
 Erfolgskriterium:
 
@@ -199,8 +207,7 @@ Offen:
 - signierte MSI-/PKG-/deb-/rpm-Pakete und Release-Provenance bereitstellen.
 - lokale CSR-Erzeugung und providerunabhaengige CA-Anbindung als eigener spaeterer Meilenstein untersuchen.
 
-Bewusst nicht Teil der fachuebergreifenden Notifications sind Supplier-Review-
-Erweiterungen, Management-/Regulatory-Templates, Evidence-Legal-Hold,
+Bewusst nicht Teil der fachuebergreifenden Notifications sind Management-/Regulatory-Templates, Evidence-Legal-Hold,
 Disposition oder kontrollierte Loeschung, Re-Hash-Worker, Objektspeicher,
 CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete, Release-Provenance sowie
 Performance-, HA- und visuelle Regressionserweiterungen.
@@ -211,9 +218,9 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Supplier-Reviews granularisieren: Freigabehistorie, Unterauftragnehmer, Exit-Tests und Vertragslaufzeiten.
-2. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
-3. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
+1. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
+2. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
+3. Signierte Agent-Pakete, Release-Provenance und eine spaetere getrennte CA-/PKI-Stufe.
 
 ## Verbleibende Roadmap
 
@@ -225,7 +232,7 @@ Erfolgskriterium:
 | Erledigt | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
 | Erledigt | Gefuehrtes Agent-Onboarding | Enrollment-Tokens, Deployment-Artefakte und Flottenstatus sind ueber einen sicheren Admin-Assistenten bedienbar. |
 | Unreleased | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
-| Jetzt | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen und Exit-Test-Nachweise. |
+| Unreleased | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen, Exit-Test-Nachweise und tenantgesicherte Evidence-/Control-/Risk-Links. |
 | Danach | Management-/Regulatory-Templates | Wiederholbare Quartals-, Audit-, NIS2-, DORA- und DSGVO-Pakete werden kontextsensitiv erzeugt. |
 | Reifegrad | Evidence-Disposition und Objektspeicher | Legal Hold, kontrollierte Loeschung, periodische Integritaetspruefung und Storage-Restore sind auditierbar. |
 | Reifegrad | Performance, HA und visuelle Regression | Lastgrenzen, Mehrinstanzbetrieb und UI-Regressionen sind messbar abgesichert. |
