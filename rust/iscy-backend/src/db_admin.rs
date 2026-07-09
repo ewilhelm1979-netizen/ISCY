@@ -227,6 +227,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_EVIDENCE_INTEGRITY_DISPOSITION_SCHEMA,
         postgres_sql: POSTGRES_EVIDENCE_INTEGRITY_DISPOSITION_SCHEMA,
     },
+    Migration {
+        version: "0034_rust_supplier_product_security_governance",
+        sqlite_sql: SQLITE_SUPPLIER_PRODUCT_SECURITY_GOVERNANCE_SCHEMA,
+        postgres_sql: POSTGRES_SUPPLIER_PRODUCT_SECURITY_GOVERNANCE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1046,6 +1051,208 @@ CREATE INDEX IF NOT EXISTS idx_evidence_legal_hold
     ON evidence_evidenceitem(tenant_id, legal_hold_status);
 CREATE INDEX IF NOT EXISTS idx_evidence_disposition
     ON evidence_evidenceitem(tenant_id, disposition_status, disposition_due_at);
+"#;
+
+const SQLITE_SUPPLIER_PRODUCT_SECURITY_GOVERNANCE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS supplier_product_security_record (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    product_id INTEGER NULL,
+    product_or_service TEXT NOT NULL,
+    criticality varchar(32) NOT NULL DEFAULT 'medium',
+    internal_owner TEXT NOT NULL DEFAULT '',
+    supplier_security_contact TEXT NOT NULL DEFAULT '',
+    product_security_status varchar(32) NOT NULL DEFAULT 'not_assessed',
+    advisory_id varchar(128) NOT NULL DEFAULT '',
+    advisory_source_type varchar(32) NOT NULL DEFAULT 'manual',
+    advisory_reference TEXT NOT NULL DEFAULT '',
+    cve_ids_json TEXT NOT NULL DEFAULT '[]',
+    affected_versions TEXT NOT NULL DEFAULT '',
+    fixed_versions TEXT NOT NULL DEFAULT '',
+    severity varchar(32) NOT NULL DEFAULT 'unknown',
+    cvss_score REAL NULL,
+    epss_score REAL NULL,
+    exploitation_status varchar(32) NOT NULL DEFAULT 'unknown',
+    affected_assets_summary TEXT NOT NULL DEFAULT '',
+    impact_summary TEXT NOT NULL DEFAULT '',
+    remediation_summary TEXT NOT NULL DEFAULT '',
+    workaround_summary TEXT NOT NULL DEFAULT '',
+    review_status varchar(32) NOT NULL DEFAULT 'draft',
+    owner TEXT NOT NULL DEFAULT '',
+    due_date TEXT NULL,
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    sbom_vex_reference TEXT NOT NULL DEFAULT '',
+    open_actions TEXT NOT NULL DEFAULT '',
+    management_review_reference TEXT NOT NULL DEFAULT '',
+    contract_status varchar(32) NOT NULL DEFAULT 'not_recorded',
+    contract_review_date TEXT NULL,
+    next_contract_review_due TEXT NULL,
+    exit_plan_status varchar(32) NOT NULL DEFAULT 'not_recorded',
+    exit_plan_version varchar(64) NOT NULL DEFAULT '',
+    exit_plan_review_date TEXT NULL,
+    exit_plan_owner TEXT NOT NULL DEFAULT '',
+    critical_service_dependency bool NOT NULL DEFAULT 0,
+    data_processing_relevance bool NOT NULL DEFAULT 0,
+    dora_ict_third_party_relevance bool NOT NULL DEFAULT 0,
+    nis2_supply_chain_relevance bool NOT NULL DEFAULT 0,
+    termination_risk_summary TEXT NOT NULL DEFAULT '',
+    alternative_supplier_summary TEXT NOT NULL DEFAULT '',
+    created_by_id INTEGER NULL,
+    updated_by_id INTEGER NULL,
+    reviewed_at TEXT NULL,
+    reviewed_by INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS supplier_product_security_evidence_link (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    record_id INTEGER NOT NULL,
+    evidence_id INTEGER NOT NULL,
+    link_type varchar(64) NOT NULL DEFAULT 'review',
+    created_by_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, record_id, evidence_id)
+);
+CREATE TABLE IF NOT EXISTS supplier_product_security_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    record_id INTEGER NOT NULL,
+    event_type varchar(64) NOT NULL,
+    actor_id INTEGER NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS supplier_contract_exit_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    record_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    version_number INTEGER NOT NULL,
+    changed_by INTEGER NULL,
+    changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    change_reason TEXT NOT NULL DEFAULT '',
+    previous_status varchar(64) NOT NULL DEFAULT '',
+    new_status varchar(64) NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_tenant_supplier
+    ON supplier_product_security_record(tenant_id, supplier_id, review_status);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_product
+    ON supplier_product_security_record(tenant_id, product_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_due
+    ON supplier_product_security_record(tenant_id, due_date, review_status);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_relevance
+    ON supplier_product_security_record(tenant_id, dora_ict_third_party_relevance, nis2_supply_chain_relevance, data_processing_relevance);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_evidence
+    ON supplier_product_security_evidence_link(tenant_id, record_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_event
+    ON supplier_product_security_event(tenant_id, record_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_supplier_contract_exit_history
+    ON supplier_contract_exit_history(tenant_id, supplier_id, record_id, version_number);
+"#;
+
+const POSTGRES_SUPPLIER_PRODUCT_SECURITY_GOVERNANCE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS supplier_product_security_record (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    supplier_id BIGINT NOT NULL,
+    product_id BIGINT NULL,
+    product_or_service TEXT NOT NULL,
+    criticality varchar(32) NOT NULL DEFAULT 'medium',
+    internal_owner TEXT NOT NULL DEFAULT '',
+    supplier_security_contact TEXT NOT NULL DEFAULT '',
+    product_security_status varchar(32) NOT NULL DEFAULT 'not_assessed',
+    advisory_id varchar(128) NOT NULL DEFAULT '',
+    advisory_source_type varchar(32) NOT NULL DEFAULT 'manual',
+    advisory_reference TEXT NOT NULL DEFAULT '',
+    cve_ids_json TEXT NOT NULL DEFAULT '[]',
+    affected_versions TEXT NOT NULL DEFAULT '',
+    fixed_versions TEXT NOT NULL DEFAULT '',
+    severity varchar(32) NOT NULL DEFAULT 'unknown',
+    cvss_score DOUBLE PRECISION NULL,
+    epss_score DOUBLE PRECISION NULL,
+    exploitation_status varchar(32) NOT NULL DEFAULT 'unknown',
+    affected_assets_summary TEXT NOT NULL DEFAULT '',
+    impact_summary TEXT NOT NULL DEFAULT '',
+    remediation_summary TEXT NOT NULL DEFAULT '',
+    workaround_summary TEXT NOT NULL DEFAULT '',
+    review_status varchar(32) NOT NULL DEFAULT 'draft',
+    owner TEXT NOT NULL DEFAULT '',
+    due_date TEXT NULL,
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    sbom_vex_reference TEXT NOT NULL DEFAULT '',
+    open_actions TEXT NOT NULL DEFAULT '',
+    management_review_reference TEXT NOT NULL DEFAULT '',
+    contract_status varchar(32) NOT NULL DEFAULT 'not_recorded',
+    contract_review_date TEXT NULL,
+    next_contract_review_due TEXT NULL,
+    exit_plan_status varchar(32) NOT NULL DEFAULT 'not_recorded',
+    exit_plan_version varchar(64) NOT NULL DEFAULT '',
+    exit_plan_review_date TEXT NULL,
+    exit_plan_owner TEXT NOT NULL DEFAULT '',
+    critical_service_dependency BOOLEAN NOT NULL DEFAULT FALSE,
+    data_processing_relevance BOOLEAN NOT NULL DEFAULT FALSE,
+    dora_ict_third_party_relevance BOOLEAN NOT NULL DEFAULT FALSE,
+    nis2_supply_chain_relevance BOOLEAN NOT NULL DEFAULT FALSE,
+    termination_risk_summary TEXT NOT NULL DEFAULT '',
+    alternative_supplier_summary TEXT NOT NULL DEFAULT '',
+    created_by_id BIGINT NULL,
+    updated_by_id BIGINT NULL,
+    reviewed_at TEXT NULL,
+    reviewed_by BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text
+);
+CREATE TABLE IF NOT EXISTS supplier_product_security_evidence_link (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    record_id BIGINT NOT NULL,
+    evidence_id BIGINT NOT NULL,
+    link_type varchar(64) NOT NULL DEFAULT 'review',
+    created_by_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id, record_id, evidence_id)
+);
+CREATE TABLE IF NOT EXISTS supplier_product_security_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    record_id BIGINT NOT NULL,
+    event_type varchar(64) NOT NULL,
+    actor_id BIGINT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text
+);
+CREATE TABLE IF NOT EXISTS supplier_contract_exit_history (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    record_id BIGINT NOT NULL,
+    supplier_id BIGINT NOT NULL,
+    version_number BIGINT NOT NULL,
+    changed_by BIGINT NULL,
+    changed_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    change_reason TEXT NOT NULL DEFAULT '',
+    previous_status varchar(64) NOT NULL DEFAULT '',
+    new_status varchar(64) NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_tenant_supplier
+    ON supplier_product_security_record(tenant_id, supplier_id, review_status);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_product
+    ON supplier_product_security_record(tenant_id, product_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_due
+    ON supplier_product_security_record(tenant_id, due_date, review_status);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_relevance
+    ON supplier_product_security_record(tenant_id, dora_ict_third_party_relevance, nis2_supply_chain_relevance, data_processing_relevance);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_evidence
+    ON supplier_product_security_evidence_link(tenant_id, record_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_product_security_event
+    ON supplier_product_security_event(tenant_id, record_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_supplier_contract_exit_history
+    ON supplier_contract_exit_history(tenant_id, supplier_id, record_id, version_number);
 "#;
 
 const SQLITE_SUPPLIER_RISK_CORE_SCHEMA: &str = r#"
@@ -6449,5 +6656,123 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(index_count, 4);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0034_is_restartable_and_preserves_supplier_product_security_governance() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO organizations_supplier (
+                id, tenant_id, name, service_description, criticality, review_status,
+                approval_status, risk_assessment, created_at, updated_at
+            ) VALUES (
+                6601, 66, 'Existing PSIRT Supplier', 'Existing product security data',
+                'CRITICAL', 'approved', 'approved', 'high',
+                '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO supplier_product_security_record (
+                id, tenant_id, supplier_id, product_or_service, criticality,
+                advisory_id, cve_ids_json, severity, review_status, owner,
+                evidence_ids_json, contract_status, exit_plan_status,
+                critical_service_dependency, data_processing_relevance,
+                dora_ict_third_party_relevance, nis2_supply_chain_relevance,
+                open_actions
+            ) VALUES (
+                6602, 66, 6601, 'Existing Managed Service', 'critical',
+                'PSIRT-2026-001', '["CVE-2026-6601"]', 'critical',
+                'needs_review', 'Supplier Security Owner', '[6603]',
+                'active', 'planned', 1, 1, 1, 1, 'Patch window abstimmen'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO supplier_contract_exit_history (
+                tenant_id, record_id, supplier_id, version_number, changed_by,
+                change_reason, previous_status, new_status, summary, evidence_ids_json
+            ) VALUES (
+                66, 6602, 6601, 1, 6, 'Existing history',
+                '', 'active', 'Existing contract metadata', '[6603]'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0034_rust_supplier_product_security_governance'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(
+            applied,
+            vec!["0034_rust_supplier_product_security_governance"]
+        );
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let record = sqlx::query(
+            r#"
+            SELECT product_or_service, advisory_id, cve_ids_json, severity,
+                   review_status, owner, evidence_ids_json, contract_status,
+                   exit_plan_status, critical_service_dependency,
+                   dora_ict_third_party_relevance, nis2_supply_chain_relevance
+            FROM supplier_product_security_record
+            WHERE tenant_id = 66 AND id = 6602
+            "#,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            record.get::<String, _>("product_or_service"),
+            "Existing Managed Service"
+        );
+        assert_eq!(record.get::<String, _>("advisory_id"), "PSIRT-2026-001");
+        assert_eq!(
+            record.get::<String, _>("cve_ids_json"),
+            "[\"CVE-2026-6601\"]"
+        );
+        assert_eq!(record.get::<String, _>("severity"), "critical");
+        assert_eq!(record.get::<String, _>("review_status"), "needs_review");
+        assert_eq!(record.get::<String, _>("owner"), "Supplier Security Owner");
+        assert_eq!(record.get::<String, _>("evidence_ids_json"), "[6603]");
+        assert_eq!(record.get::<String, _>("contract_status"), "active");
+        assert_eq!(record.get::<String, _>("exit_plan_status"), "planned");
+        assert_eq!(record.get::<i64, _>("critical_service_dependency"), 1);
+        assert_eq!(record.get::<i64, _>("dora_ict_third_party_relevance"), 1);
+        assert_eq!(record.get::<i64, _>("nis2_supply_chain_relevance"), 1);
+        let history_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM supplier_contract_exit_history WHERE tenant_id = 66 AND record_id = 6602",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(history_count, 1);
+        let index_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_supplier_product_security_tenant_supplier','idx_supplier_product_security_product','idx_supplier_product_security_due','idx_supplier_product_security_relevance','idx_supplier_product_security_evidence','idx_supplier_product_security_event','idx_supplier_contract_exit_history')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(index_count, 7);
     }
 }

@@ -8,6 +8,11 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- ergaenzt Supplier/Product-Security-Deepening mit tenantgebundenem Governance-Modell fuer Lieferant, Produkt/Service, lokale Advisory-/PSIRT-/CVE-Metadaten, SBOM-/VEX-Bezuege, Review-Status, offene Massnahmen und Management-/Regulatory-Review-Bezug
+- ergaenzt additive Migration `0034_rust_supplier_product_security_governance` fuer Supplier/Product-Security-Datensaetze, Evidence-Links, Ereignis-/Audit-Historie und Vertrags-/Exit-Plan-Historie ohne destruktive Datenbankoperationen
+- ergaenzt API-Pfade fuer Supplier/Product Security unter `/api/v1/suppliers/product-security`, Detail-, Status-, Evidence-, Ereignis- und Supplier-bezogene Contract-/Exit-History-Abfragen
+- ergaenzt die deutsche Weboberflaeche `/suppliers/product-security/` mit Filtern nach Supplier, Produkt/Service, Status, Schweregrad, ueberfaelligen Reviews sowie DORA-, NIS2-, DSGVO- und kritischer-Service-Relevanz
+- erweitert Regulatory Review-Pakete fuer NIS2, DORA, DSGVO und generische Security Governance um Supplier/Product-Security-Gaps, offene Advisorys, kritische Lieferantenabhaengigkeiten, fehlende Evidence, fehlende Owner, offene Massnahmen sowie Vertrags-/Exit-Plan-Hinweise
 - ergaenzt Review-Pack-Filter fuer Pack-Typ, Status, Zeitraum, offene/kritische Luecken und sichere Limits
 - ergaenzt Owner-/Verantwortlichen-Hinweise in Regulatory Review Pack Previews, ohne fehlende Verantwortliche zu erfinden oder Kontaktdaten unnoetig auszugeben
 - ergaenzt pack-spezifische Lueckengruppierung fuer NIS2, DORA, DSGVO/GDPR und generische Security Governance
@@ -43,6 +48,10 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- haelt Supplier/Product-Security-Datensaetze, Evidence-Links, Events und Vertrags-/Exit-Historie tenantgebunden; Admin-/Editor-Rollen duerfen schreiben, Read-only-Rollen sehen nur sichere Metadaten
+- validiert Status-, Severity-, Datums-, CVE-, Score-, Owner-, Supplier-, Evidence- und Referenzfelder mit sicheren 4xx-Fehlern ohne SQL-/Store-Details, Secrets, Rohpayloads oder absolute Dateipfade
+- speichert Advisory-/PSIRT-/CVE-Referenzen nur lokal als Text/URL und fuehrt keine externen Live-Abfragen aus; URL-Ausgabe in API und Web UI bleibt gegen unsichere Schemes und HTML-Injection abgesichert
+- auditierbare Supplier/Product-Security-Erstellung, Aenderung, Statuswechsel, Evidence-Verknuepfung und Vertrags-/Exit-Plan-Aenderung ohne vertrauliche Datei-Inhalte, Tokens, Authorization-Header oder fremde Tenant-IDs
 - haelt Regulatory-Review-Pack-Filter, Previews, Snapshots und Exporte tenantgebunden; Read-only-Rollen duerfen sichere Inhalte lesen, Snapshot-Erzeugung bleibt schreibenden Rollen vorbehalten
 - validiert Pack-Typ-, Status-, Zeitraum-, Gap- und Limit-Filter mit sicheren 4xx-Fehlern ohne SQL-/Store-Details
 - nutzt die bestehende Management-Review-Snapshot- und Audit-Infrastruktur fuer Regulatory Review-Pakete, ohne zweiten Compliance-Store und ohne Evidence-Pfade, SQL-Details, Secrets oder rohe Evidence-Payloads offenzulegen

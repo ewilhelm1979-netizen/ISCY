@@ -96,6 +96,7 @@ Die wichtigsten Bereiche sind:
 - Evidence unter `/evidence/`
 - Assets unter `/assets/`
 - Suppliers unter `/suppliers/`
+- Supplier/Product Security unter `/suppliers/product-security/`
 - Imports unter `/imports/`
 - Processes unter `/processes/`
 - AI Governance unter `/ai-governance/`
@@ -492,7 +493,7 @@ Management-Review-Pakete:
 
 - werden aus aktuellen ISCY-Daten fuer einen Zeitraum erzeugt
 - koennen als generisches Security-Governance-Paket oder ueber Templates fuer ISO 27001, NIS2, DORA, DSGVO und KRITIS vorbereitet werden
-- speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Evidence-Integrity-/Storage-Aggregate, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage, Supplier-Review-Summary, Agent-Posture, AI-Governance, Quellenzaehlung, Gap-Summary, Management-Hinweise und regulatorischen Kontext als Snapshot
+- speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Evidence-Integrity-/Storage-Aggregate, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage, Supplier-Review-Summary, Supplier/Product-Security-Lage, Agent-Posture, AI-Governance, Quellenzaehlung, Gap-Summary, Management-Hinweise und regulatorischen Kontext als Snapshot
 - verlinken Snapshot-Zeilen zurueck zu Risiko, Control, Evidence, Incident und Roadmap
 - koennen von Draft ueber In Review bis Approved oder Archived gefuehrt werden
 - dokumentieren Entscheidung, naechste Massnahmen, freigebenden User und Freigabezeitpunkt
@@ -502,11 +503,12 @@ Regulatory Review-Pakete:
 
 - nutzen dieselbe eingefrorene Snapshot-Schicht wie Management Reviews und erzeugen kein separates Compliance-Silo
 - bieten fokussierte Pack-Typen fuer NIS2, DORA und DSGVO sowie ein generisches Security-Governance-Pack
-- beruecksichtigen Organisationsprofil, Risiken, ISCY-27-Controls, Evidence-Qualitaet, Evidence-Integritaet, Storage-/Restore-Drill-Signale, Incidents, Supplier Review, Product Security, AI Governance, Roadmap und Agent Posture soweit vorhanden
+- beruecksichtigen Organisationsprofil, Risiken, ISCY-27-Controls, Evidence-Qualitaet, Evidence-Integritaet, Storage-/Restore-Drill-Signale, Incidents, Supplier Review, Supplier/Product Security, Product Security, AI Governance, Roadmap und Agent Posture soweit vorhanden
 - unterscheiden Preview und Snapshot-Erzeugung: Read-only-Rollen koennen Vorschauen lesen, aber keine eingefrorenen Snapshots erstellen
 - bieten sichere Filter fuer Pack-Typ, Status, Zeitraum, offene Luecken, kritische Luecken und Limit
 - zeigen Owner-/Verantwortlichen-Hinweise aus vorhandenen Rollen-/Owner-Daten; fehlende Verantwortliche werden als `Nicht erfasst` markiert und nicht geraten
 - gruppieren Luecken pack-spezifisch, z. B. NIS2 nach Incident-/Meldeentscheidungen, TOMs, Evidence und Supplier; DORA nach ICT-Risk, Incident, ICT-Third-Party und Storage; DSGVO nach Datenschutzrollen, Data-Breach, Legal Hold / Aufbewahrungssperre, Disposition und Supplier-Datenbezug
+- nehmen Supplier/Product-Security-Gaps auf: offene Advisorys, kritische Lieferantenabhaengigkeiten, fehlende Evidence, fehlende Owner, offene Massnahmen, ueberfaellige Reviews sowie Vertrags-/Exit-Plan-Hinweise fuer DORA, NIS2 und DSGVO
 - enthalten Hinweise, dass ISCY Governance- und Evidence-Unterstuetzung liefert, jedoch keine Rechtsberatung, Zertifizierung, automatische Meldung oder formale Einreichung ersetzt
 
 API- und Web-Pfade:
@@ -537,7 +539,7 @@ Fachlicher Nutzen:
 
 GUI-Nachweis:
 
-- Die aktuelle Screenshot-Uebersicht fuer Dashboard, Evidence, Regulatory Review-Pakete, Supplier Review, Product Security, AI Governance und Operations liegt in [docs/GUI_SCREENSHOTS.md](GUI_SCREENSHOTS.md).
+- Die aktuelle Screenshot-Uebersicht fuer Dashboard, Evidence, Regulatory Review-Pakete, Supplier Review, Supplier/Product Security, Product Security, AI Governance und Operations liegt in [docs/GUI_SCREENSHOTS.md](GUI_SCREENSHOTS.md).
 
 Fuer Nicht-Sicherheitsleute:
 Reports sind die offizielle Zusammenfassung des Stands.
@@ -612,6 +614,7 @@ Typische Objekte:
 - VEX-Entscheidung
 - PSIRT Case
 - CSAF-/SBOM-Importhistorie
+- lokale Supplier-Advisory-/PSIRT-/CVE-Metadaten
 - SBOM-Diff
 - CVE-Asset-Korrelation
 - CVE-Risiko-Review-Queue
@@ -630,6 +633,7 @@ Fachlicher Nutzen:
 - automatische Ableitung von Risiko- und Roadmap-Arbeit aus akzeptierten CVE-Korrelationen
 - Nachweissteuerung ueber Evidence-Keys fuer CVE, Import, Risiko und Roadmap
 - dokumentierte Release-/PSIRT-Entscheidungen mit eingefrorenem Nachweisstand und Blocker-Gates
+- Verbindung zu Supplier/Product Security, damit Hersteller-, Lieferanten- und Produktbezuege gemeinsam mit Evidence, Review-Status und offenen Massnahmen sichtbar werden
 
 Fuer Nicht-Sicherheitsleute:
 Dieser Bereich ist fuer Unternehmen wichtig, die Software, digitale Produkte oder vernetzte Systeme bereitstellen.
@@ -654,6 +658,9 @@ Aktueller Rust-Funktionsumfang:
 - vorbehaltlose Freigabe nur ohne Blocker; bedingte Freigabe nur mit dokumentierter Review-Notiz
 - Markdown-, HTML-, PDF- und JSON-Export je Paketversion
 - Betriebsstatus fuer Paket-Backlog und offene Blocker
+- Supplier/Product-Security-Register unter `/suppliers/product-security/` fuer lokale Advisory-/PSIRT-/CVE-Metadaten, Lieferantenprodukt, betroffene und behobene Versionen, SBOM-/VEX-Bezug, Review-Status, Owner, Faelligkeit und Evidence
+- API-Pfade unter `/api/v1/suppliers/product-security` fuer Liste, Anlage, Detail, Aenderung, Statuswechsel, Evidence-Verknuepfung und Ereignishistorie
+- Keine externen Live-Abfragen gegen NVD, Herstellerportale, GitHub Advisories oder andere Feeds; Referenzen werden nur sicher gespeichert und ausgegeben
 
 ### 5.16 AI Governance
 
@@ -726,16 +733,22 @@ Aktueller Rust-Funktionsumfang:
 - API `GET` und `POST /api/v1/suppliers/{id}/reviews` fuer Review-/Approval-Ereignisse
 - API `GET` und `POST /api/v1/suppliers/{id}/subprocessors` sowie `PATCH /api/v1/suppliers/{id}/subprocessors/{subprocessor_id}` fuer Unterauftragnehmer im Supplier-Kontext
 - API `GET /api/v1/suppliers/{id}/evidence`, `POST /api/v1/suppliers/{id}/evidence-links`, `POST /api/v1/suppliers/{id}/control-links` und `POST /api/v1/suppliers/{id}/risk-links` fuer explizite Nachweis-, Control- und Risiko-Bezuege
+- Webansicht `/suppliers/product-security/` fuer Supplier/Product Security mit lokaler Advisory-/PSIRT-/CVE-Erfassung, Review-Status, Evidence, Vertragsstatus und Exit-Plan-Status
+- API `GET` und `POST /api/v1/suppliers/product-security`, `GET` und `PATCH /api/v1/suppliers/product-security/{record_id}`, `POST /api/v1/suppliers/product-security/{record_id}/status`, `POST /api/v1/suppliers/product-security/{record_id}/evidence`, `GET /api/v1/suppliers/product-security/{record_id}/events`, `GET /api/v1/suppliers/{supplier_id}/product-security` und `GET /api/v1/suppliers/{supplier_id}/contract-exit-history`
 - Datenfelder fuer Vertrags-/Security-Annex-Bezug, Security-Kontakt, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischen Scope, Review-Status, Review-Faelligkeit und Notes
 - additive Migration `0031_rust_supplier_review_workflow` fuer Review-Freigaben, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweise und Link-/Audit-Tabellen
+- additive Migration `0034_rust_supplier_product_security_governance` fuer Supplier/Product-Security-Datensaetze, Evidence-Links, Ereignisse und Vertrags-/Exit-Plan-Historie
 - automatische Signale aus Produktkomponenten, offenen Product-Security-Schwachstellen, Supplier-bezogenen Risiken und Supplier-Evidence
 - direkte Evidence-Vorbefuellung je Supplier mit stabilem Linked Requirement `SUPPLIER:{id}`
 - Score- und Issue-Logik fuer kritische CVEs, ueberfaellige Reviews, fehlende Evidence, fehlende Exit-Strategie, fehlenden Security-Kontakt und fehlende Risikodokumentation
 - Review-Statusmodell: draft, in_review, approved, approved_with_conditions, rejected, expired und archived
+- Supplier/Product-Security-Review-Statusmodell: draft, needs_review, in_review, accepted_risk, remediation_required, mitigated, closed und not_applicable
 - Exit-Test-Statusmodell: not_required, required, planned, passed, failed und overdue
+- Vertrags-/Exit-Plan-Historie mit Version, Akteurreferenz, Aenderungszeitpunkt, Grund, vorherigem/neuem Status, Summary und Evidence-Referenzen
 - Begruendungspflicht fuer `approved_with_conditions` und `rejected`
 - tenantgebundene Validierung fuer Supplier, Subprocessors, Owner, Evidence, Controls und Risiken
-- auditierbare Erstellung, Aenderung, Statusentscheidung, Subprocessor-Aenderung und Link-Verwaltung ohne Secrets, SQL-Details oder vertrauliche Payloads
+- tenantgebundene Filter fuer Lieferant, Produkt/Service, Review-Status, Schweregrad, offene Massnahmen, ueberfaellige Reviews sowie DORA-, NIS2-, DSGVO- und kritische-Service-Relevanz
+- auditierbare Erstellung, Aenderung, Statusentscheidung, Subprocessor-Aenderung, Product-Security-Statuswechsel, Evidence-Verknuepfung, Vertrags-/Exit-Plan-Aenderung und Link-Verwaltung ohne Secrets, SQL-Details oder vertrauliche Payloads
 
 Fachlicher Nutzen:
 
@@ -744,12 +757,14 @@ Fachlicher Nutzen:
 - Evidence, Risiken, Product Security und Roadmap-Arbeit bekommen einen gemeinsamen Lieferantenbezug.
 - Review-Entscheidungen werden nicht nur als aktueller Status gespeichert, sondern als nachvollziehbare Freigabehistorie.
 - Vertragsende, automatischer Renew, Kuendigungsfrist und Exit-Test-Status helfen dabei, Abhaengigkeiten vor Ablauf, Eskalation oder Lieferantenwechsel zu steuern.
+- Lokale Advisory-/PSIRT-/CVE-Metadaten machen sichtbar, welche Lieferantenprodukte, Versionen, Nachweise und Massnahmen fuer NIS2, DORA, DSGVO, CRA und Auditvorbereitung relevant sind.
 
 Rollen- und Sicherheitsmodell:
 
-- Admin- und Editor-Rollen duerfen Supplier, Reviews, Subprocessors und Links schreiben.
+- Admin- und Editor-Rollen duerfen Supplier, Reviews, Subprocessors, Supplier/Product-Security-Datensaetze, Status, Evidence-Links und Links schreiben.
 - Read-only-Rollen sehen sichere tenantgebundene Metadaten.
 - Fremde Tenant-Objekte, manipulierte Supplier-IDs sowie fremde Evidence-, Risk- und Owner-IDs werden nicht aufgeloest.
+- Advisory-Referenzen werden nur als lokale Text-/URL-Metadaten gespeichert; ISCY ruft keine externen Feeds automatisch ab und rendert unsichere URL-Schemes nicht als Link.
 - Interne Store- oder SQL-Fehler werden in API und Web UI nicht als technische Details ausgegeben.
 
 Bewusst nicht Teil dieses Moduls:
@@ -757,6 +772,7 @@ Bewusst nicht Teil dieses Moduls:
 - keine neue Evidence-Engine
 - keine neue Risiko-Engine
 - keine neue Control-Bibliothek
+- keine externe NVD-, Hersteller-, GitHub-Advisory- oder sonstige Live-Feed-Integration
 - kein Legal-Hold-, Disposition-, Loesch-, Re-Hash- oder Objektspeichersystem
 
 Fuer Nicht-Sicherheitsleute:
@@ -830,6 +846,8 @@ Hier wird aus einer technischen Schwachstellenmeldung eine geschaeftlich nutzbar
 9. CVE-Risiko-Review-Queue abarbeiten
 10. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen
 11. CRA-Readiness je Produkt pruefen und Massnahmen ueber Roadmap oder Risiko-Behandlung steuern
+12. Supplier/Product-Security-Datensaetze fuer relevante Lieferantenprodukte pflegen, Advisory-/PSIRT-/CVE-Bezuege lokal dokumentieren und Evidence verknuepfen
+13. Vertrags-/Exit-Plan-Status fuer kritische Lieferantenprodukte pruefen und Review-Pakete fuer NIS2, DORA oder DSGVO vorbereiten
 
 ### 6.5 Incident- und NIS2-Meldeworkflow
 
@@ -1359,11 +1377,11 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews. Kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO nutzen diese bestehende Snapshot-Schicht und nehmen Evidence-Integrity-/Storage-Aggregate auf, ohne ein neues Compliance-Silo oder ein zweites Evidence-System anzulegen. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Evidence Object Storage & Restore Drill Phase 2 nutzt diese bestehenden Metadaten fuer eine interne lokale Storage-Abstraktion, sichere Artefaktreferenzen und tenantgebundene Restore-/Integritaetsdrills ohne neues Speichersystem. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews. Kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO nutzen diese bestehende Snapshot-Schicht und nehmen Evidence-Integrity-/Storage-Aggregate auf, ohne ein neues Compliance-Silo oder ein zweites Evidence-System anzulegen. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Evidence Object Storage & Restore Drill Phase 2 nutzt diese bestehenden Metadaten fuer eine interne lokale Storage-Abstraktion, sichere Artefaktreferenzen und tenantgebundene Restore-/Integritaetsdrills ohne neues Speichersystem. Migration `0034_rust_supplier_product_security_governance` verbindet Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs tenantgebunden, ohne externe Live-Feeds einzufuehren. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Review-Pack-Bedienung weiter polishen, z. B. zusaetzliche Filter, Pack-spezifische Gap-Gruppierung und Review-Owner-Hinweise
+1. Supplier/Product-Security-Workflow fachlich weiter polishen, z. B. feinere Import-Vorbereitung fuer Hersteller-Advisorys, Contract-/Exit-Reifegrade und Review-Pack-Gliederung
 2. Evidence-Integrity-Worker, kontrollierte physische Disposition und spaeteres produktives Objektspeicher-Backend
 3. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe
 4. Performance-, HA- und visuelle Regressionstests

@@ -31,6 +31,7 @@ use iscy_backend::{
     risk_store::RiskStore,
     roadmap_store::RoadmapStore,
     security_store::SecurityStore,
+    supplier_product_security_store::SupplierProductSecurityStore,
     supplier_store::SupplierStore,
     tenant_store::TenantStore,
     wizard_store::WizardStore,
@@ -693,8 +694,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0033_rust_evidence_integrity_disposition"));
-    assert!(html.contains("33/33 angewendet"));
+    assert!(html.contains("0034_rust_supplier_product_security_governance"));
+    assert!(html.contains("34/34 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -4448,6 +4449,443 @@ async fn supplier_links_are_tenant_scoped_and_idempotent() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn supplier_product_security_workflow_is_tenant_scoped_and_feeds_review_packs() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO organizations_supplier (
+            id, tenant_id, name, service_description, criticality, review_status,
+            approval_status, risk_assessment
+        ) VALUES
+            (50, 42, 'Secure Supplier', 'Managed service supplier', 'CRITICAL', 'approved', 'approved', 'high'),
+            (99, 99, 'Foreign Supplier', 'Other tenant', 'HIGH', 'approved', 'approved', 'high')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_product (id, tenant_id, name, code)
+        VALUES
+            (1100, 42, 'Managed Sensor Gateway', 'MSG'),
+            (9900, 99, 'Foreign Product', 'FOREIGN')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (id, tenant_id, linked_requirement, title, status)
+        VALUES
+            (500, 42, 'SUPPLIER-PRODUCT-SECURITY:50', 'PSIRT Review Evidence', 'APPROVED'),
+            (501, 99, 'SUPPLIER-PRODUCT-SECURITY:99', 'Foreign Evidence', 'APPROVED')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let app = app_router_with_state(
+        AppState::default()
+            .with_supplier_product_security_store(Some(
+                SupplierProductSecurityStore::from_sqlite_pool(pool.clone()),
+            ))
+            .with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let create_payload: serde_json::Value = serde_json::from_str(
+        r#"{
+            "supplier_id": 50,
+            "product_id": 1100,
+            "product_or_service": "Managed Sensor Gateway",
+            "criticality": "critical",
+            "internal_owner": "Platform Security",
+            "supplier_security_contact": "psirt@example.test",
+            "product_security_status": "affected",
+            "advisory_id": "PSIRT-2026-050",
+            "advisory_source_type": "psirt",
+            "advisory_reference": "https://example.test/advisories/psirt-2026-050",
+            "cve_ids": ["CVE-2026-0050"],
+            "affected_versions": "1.0 - 1.2",
+            "fixed_versions": "1.3",
+            "severity": "critical",
+            "cvss_score": 9.8,
+            "epss_score": 0.42,
+            "exploitation_status": "proof_of_concept",
+            "affected_assets_summary": "Edge gateways in production-like networks",
+            "impact_summary": "Remote compromise possible",
+            "remediation_summary": "Update firmware and verify SBOM/VEX",
+            "workaround_summary": "Restrict management interface",
+            "review_status": "needs_review",
+            "owner": "Supplier Security Owner",
+            "due_date": "2026-01-31",
+            "evidence_ids": [500],
+            "sbom_vex_reference": "https://example.test/sbom/msg-1.3.json",
+            "open_actions": "Patch window abstimmen",
+            "management_review_reference": "NIS2/DORA Review Q1",
+            "contract_status": "active",
+            "contract_review_date": "2026-01-15",
+            "next_contract_review_due": "2026-06-30",
+            "exit_plan_status": "planned",
+            "exit_plan_version": "v1",
+            "exit_plan_review_date": "2026-02-01",
+            "exit_plan_owner": "Vendor Manager",
+            "critical_service_dependency": true,
+            "data_processing_relevance": true,
+            "dora_ict_third_party_relevance": true,
+            "nis2_supply_chain_relevance": true,
+            "termination_risk_summary": "Supplier replacement needs controlled migration",
+            "alternative_supplier_summary": "Fallback supplier under review",
+            "change_reason": "Initial PSIRT review"
+        }"#,
+    )
+    .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/product-security")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(create_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/suppliers/product-security")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(create_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let record_id = payload["detail"]["record"]["id"].as_i64().unwrap();
+    assert_eq!(payload["detail"]["record"]["supplier_id"], 50);
+    assert_eq!(payload["detail"]["record"]["review_status"], "needs_review");
+    assert_eq!(payload["detail"]["record"]["cve_ids"][0], "CVE-2026-0050");
+    assert_eq!(
+        payload["detail"]["evidence_links"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(payload["detail"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|event| !event["detail_json"].to_string().contains("/home/")));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/suppliers/product-security?product=Sensor&status=needs_review&severity=critical&dora_relevant=true&nis2_relevant=true&data_processing_relevant=true&critical_services=true&overdue=true&limit=1")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["summary"]["total_records"], 1);
+    assert_eq!(payload["summary"]["open_advisories"], 1);
+    assert_eq!(payload["summary"]["critical_records"], 1);
+    assert_eq!(payload["summary"]["overdue_reviews"], 1);
+    assert_eq!(payload["summary"]["dora_relevant"], 1);
+    assert_eq!(payload["records"].as_array().unwrap().len(), 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/suppliers/product-security?dora_relevant=maybe")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_filter");
+    assert!(!payload["message"].to_string().contains("sqlite"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/suppliers/product-security/{record_id}"))
+                .header("x-iscy-tenant-id", "99")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let unsafe_reference = serde_json::json!({
+        "advisory_reference": "javascript:alert(1)"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/suppliers/product-security/{record_id}"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(unsafe_reference.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_payload");
+    assert!(!payload["message"].to_string().contains("SELECT"));
+
+    let update_payload = serde_json::json!({
+        "contract_status": "renewal_due",
+        "exit_plan_status": "needs_update",
+        "open_actions": "Patch window und Exit-Test einplanen",
+        "change_reason": "Contract and exit review updated"
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/suppliers/product-security/{record_id}"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(update_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["detail"]["record"]["contract_status"],
+        "renewal_due"
+    );
+    assert_eq!(
+        payload["detail"]["record"]["exit_plan_status"],
+        "needs_update"
+    );
+    assert!(
+        payload["detail"]["contract_exit_history"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 2
+    );
+
+    let status_payload = serde_json::json!({
+        "new_status": "accepted_risk",
+        "reason": "Business owner accepted temporary residual risk.",
+        "review_notes": "Review remains visible in management pack."
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/suppliers/product-security/{record_id}/status"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(status_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["detail"]["record"]["review_status"],
+        "accepted_risk"
+    );
+
+    let foreign_evidence = serde_json::json!({"evidence_id": 501, "link_type": "review"});
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/suppliers/product-security/{record_id}/evidence"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(foreign_evidence.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/suppliers/product-security/{record_id}/events"
+                ))
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["event_type"] == "supplier_product_security_status_changed"));
+    assert!(!payload.to_string().contains("Authorization"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/suppliers/50/contract-exit-history")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["history"].as_array().unwrap().len() >= 2);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/suppliers/product-security/?tenant_id=42&user_id=7&status=accepted_risk")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Supplier/Product-Security-Register"));
+    assert!(html.contains("Produkt/Service"));
+    assert!(html.contains("Offene Massnahmen"));
+    assert!(html.contains("Datensatz anlegen"));
+    assert!(!html.contains("/home/"));
+
+    for pack_type in [
+        "nis2_management_summary",
+        "dora_ict_risk_supplier_incident_summary",
+        "dsgvo_data_protection_review",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/api/v1/regulatory/review-packs/{pack_type}/preview"
+                    ))
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "period_start": "2026-01-01",
+                            "period_end": "2026-12-31"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            payload["preview"]["product_security_json"]["supplier_product_security_records"],
+            1
+        );
+        assert_eq!(
+            payload["preview"]["gap_summary_json"]["open_supplier_product_security_advisories"],
+            1
+        );
+        assert_eq!(
+            payload["preview"]["gap_summary_json"]["supplier_product_security_missing_owner"],
+            0
+        );
+        assert!(payload["preview"]["gap_groups_json"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["items"].as_array().into_iter().flatten())
+            .any(|item| item["key"] == "open_supplier_product_security_advisories"));
+    }
 }
 
 #[tokio::test]
@@ -13800,7 +14238,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0030_rust_notification_dispatch_claim",
             "0031_rust_supplier_review_workflow",
             "0032_rust_management_regulatory_templates",
-            "0033_rust_evidence_integrity_disposition"
+            "0033_rust_evidence_integrity_disposition",
+            "0034_rust_supplier_product_security_governance"
         ]
     );
     assert!(
@@ -13997,6 +14436,14 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             .await
             .unwrap()
     );
+    for table in [
+        "supplier_product_security_record",
+        "supplier_product_security_evidence_link",
+        "supplier_product_security_event",
+        "supplier_contract_exit_history",
+    ] {
+        assert!(db_admin::sqlite_table_exists(&pool, table).await.unwrap());
+    }
 
     let applied_again = db_admin::run_sqlite_migrations(&pool).await.unwrap();
     assert!(applied_again.is_empty());

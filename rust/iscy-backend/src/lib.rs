@@ -56,6 +56,7 @@ pub mod requirement_store;
 pub mod risk_store;
 pub mod roadmap_store;
 pub mod security_store;
+pub mod supplier_product_security_store;
 pub mod supplier_store;
 pub mod tenant_store;
 pub mod wizard_store;
@@ -89,6 +90,9 @@ use requirement_store::RequirementStore;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
 use security_store::SecurityStore;
+use supplier_product_security_store::{
+    SupplierProductSecurityErrorKind, SupplierProductSecurityStore,
+};
 use supplier_store::{SupplierStore, SupplierStoreErrorKind};
 use tenant_store::TenantStore;
 use wizard_store::WizardStore;
@@ -117,6 +121,7 @@ pub struct AppState {
     pub risk_store: Option<RiskStore>,
     pub roadmap_store: Option<RoadmapStore>,
     pub security_store: Option<SecurityStore>,
+    pub supplier_product_security_store: Option<SupplierProductSecurityStore>,
     pub supplier_store: Option<SupplierStore>,
     pub tenant_store: Option<TenantStore>,
     pub wizard_store: Option<WizardStore>,
@@ -159,6 +164,7 @@ impl AppState {
             risk_store: None,
             roadmap_store: None,
             security_store: None,
+            supplier_product_security_store: None,
             supplier_store: None,
             tenant_store: None,
             wizard_store: None,
@@ -194,6 +200,7 @@ impl AppState {
             risk_store: None,
             roadmap_store: None,
             security_store: None,
+            supplier_product_security_store: None,
             supplier_store: None,
             tenant_store,
             wizard_store: None,
@@ -341,6 +348,14 @@ impl AppState {
 
     pub fn with_supplier_store(mut self, supplier_store: Option<SupplierStore>) -> Self {
         self.supplier_store = supplier_store;
+        self
+    }
+
+    pub fn with_supplier_product_security_store(
+        mut self,
+        supplier_product_security_store: Option<SupplierProductSecurityStore>,
+    ) -> Self {
+        self.supplier_product_security_store = supplier_product_security_store;
         self
     }
 
@@ -742,6 +757,109 @@ struct WebSupplierEntityLinkForm {
 }
 
 #[derive(Debug, Deserialize)]
+struct WebSupplierProductSecurityCreateForm {
+    supplier_id: String,
+    product_id: Option<String>,
+    product_or_service: String,
+    criticality: Option<String>,
+    internal_owner: Option<String>,
+    supplier_security_contact: Option<String>,
+    product_security_status: Option<String>,
+    advisory_id: Option<String>,
+    advisory_source_type: Option<String>,
+    advisory_reference: Option<String>,
+    cve_ids: Option<String>,
+    affected_versions: Option<String>,
+    fixed_versions: Option<String>,
+    severity: Option<String>,
+    cvss_score: Option<String>,
+    epss_score: Option<String>,
+    exploitation_status: Option<String>,
+    affected_assets_summary: Option<String>,
+    impact_summary: Option<String>,
+    remediation_summary: Option<String>,
+    workaround_summary: Option<String>,
+    review_status: Option<String>,
+    owner: Option<String>,
+    due_date: Option<String>,
+    evidence_ids: Option<String>,
+    sbom_vex_reference: Option<String>,
+    open_actions: Option<String>,
+    management_review_reference: Option<String>,
+    contract_status: Option<String>,
+    contract_review_date: Option<String>,
+    next_contract_review_due: Option<String>,
+    exit_plan_status: Option<String>,
+    exit_plan_version: Option<String>,
+    exit_plan_review_date: Option<String>,
+    exit_plan_owner: Option<String>,
+    critical_service_dependency: Option<String>,
+    data_processing_relevance: Option<String>,
+    dora_ict_third_party_relevance: Option<String>,
+    nis2_supply_chain_relevance: Option<String>,
+    termination_risk_summary: Option<String>,
+    alternative_supplier_summary: Option<String>,
+    change_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSupplierProductSecurityPatchForm {
+    product_id: Option<String>,
+    product_or_service: Option<String>,
+    criticality: Option<String>,
+    internal_owner: Option<String>,
+    supplier_security_contact: Option<String>,
+    product_security_status: Option<String>,
+    advisory_id: Option<String>,
+    advisory_source_type: Option<String>,
+    advisory_reference: Option<String>,
+    cve_ids: Option<String>,
+    affected_versions: Option<String>,
+    fixed_versions: Option<String>,
+    severity: Option<String>,
+    cvss_score: Option<String>,
+    epss_score: Option<String>,
+    exploitation_status: Option<String>,
+    affected_assets_summary: Option<String>,
+    impact_summary: Option<String>,
+    remediation_summary: Option<String>,
+    workaround_summary: Option<String>,
+    owner: Option<String>,
+    due_date: Option<String>,
+    evidence_ids: Option<String>,
+    sbom_vex_reference: Option<String>,
+    open_actions: Option<String>,
+    management_review_reference: Option<String>,
+    contract_status: Option<String>,
+    contract_review_date: Option<String>,
+    next_contract_review_due: Option<String>,
+    exit_plan_status: Option<String>,
+    exit_plan_version: Option<String>,
+    exit_plan_review_date: Option<String>,
+    exit_plan_owner: Option<String>,
+    critical_service_dependency: Option<String>,
+    data_processing_relevance: Option<String>,
+    dora_ict_third_party_relevance: Option<String>,
+    nis2_supply_chain_relevance: Option<String>,
+    termination_risk_summary: Option<String>,
+    alternative_supplier_summary: Option<String>,
+    change_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSupplierProductSecurityStatusForm {
+    new_status: String,
+    reason: Option<String>,
+    review_notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSupplierProductSecurityEvidenceForm {
+    evidence_id: Option<String>,
+    link_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebTenantRegulatoryProfileForm {
     country: Option<String>,
     operation_countries: Option<String>,
@@ -1057,6 +1175,54 @@ pub struct SupplierEvidenceLinksResponse {
     pub api_version: &'static str,
     pub supplier_id: i64,
     pub evidence_links: Vec<supplier_store::SupplierEvidenceLink>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierProductSecurityOverviewResponse {
+    pub api_version: &'static str,
+    #[serde(flatten)]
+    pub overview: supplier_product_security_store::SupplierProductSecurityOverview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierProductSecurityDetailResponse {
+    pub api_version: &'static str,
+    pub detail: supplier_product_security_store::SupplierProductSecurityDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierProductSecurityWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub detail: supplier_product_security_store::SupplierProductSecurityDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierProductSecurityEventsResponse {
+    pub api_version: &'static str,
+    pub record_id: i64,
+    pub events: Vec<supplier_product_security_store::SupplierProductSecurityEvent>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupplierContractExitHistoryResponse {
+    pub api_version: &'static str,
+    pub supplier_id: i64,
+    pub history: Vec<supplier_product_security_store::SupplierContractExitHistoryEntry>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct SupplierProductSecurityApiQuery {
+    pub supplier_id: Option<i64>,
+    pub product: Option<String>,
+    pub status: Option<String>,
+    pub severity: Option<String>,
+    pub dora_relevant: Option<String>,
+    pub nis2_relevant: Option<String>,
+    pub data_processing_relevant: Option<String>,
+    pub critical_services: Option<String>,
+    pub overdue: Option<String>,
+    pub limit: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1613,6 +1779,14 @@ pub struct WebContextQuery {
     pub channel_id: Option<i64>,
     pub pack_type: Option<String>,
     pub status: Option<String>,
+    pub supplier_id: Option<i64>,
+    pub product: Option<String>,
+    pub severity: Option<String>,
+    pub dora_relevant: Option<String>,
+    pub nis2_relevant: Option<String>,
+    pub data_processing_relevant: Option<String>,
+    pub critical_services: Option<String>,
+    pub overdue: Option<String>,
     pub period_start: Option<String>,
     pub period_end: Option<String>,
     pub has_open_gaps: Option<String>,
@@ -6022,6 +6196,413 @@ async fn supplier_risk_link_create(
         )
             .into_response(),
         Err(err) => supplier_store_error_response(err),
+    }
+}
+
+fn supplier_product_security_error_response(
+    err: supplier_product_security_store::SupplierProductSecurityError,
+) -> Response {
+    let (status, error_code) = match err.kind() {
+        SupplierProductSecurityErrorKind::InvalidPayload => {
+            (StatusCode::BAD_REQUEST, "invalid_payload")
+        }
+        SupplierProductSecurityErrorKind::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+        SupplierProductSecurityErrorKind::Database => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "database_error")
+        }
+    };
+    (
+        status,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: err.safe_message().to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn supplier_product_security_not_configured_response() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "database_not_configured",
+            message: "Rust-Supplier/Product-Security-Store ist nicht konfiguriert.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn supplier_product_security_bad_request(message: impl Into<String>) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "invalid_filter",
+            message: message.into(),
+        }),
+    )
+        .into_response()
+}
+
+fn supplier_product_security_not_found_response() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "not_found",
+            message: "Supplier/Product-Security-Datensatz wurde fuer diesen Tenant nicht gefunden."
+                .to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn supplier_product_security_filters_from_api_query(
+    query: SupplierProductSecurityApiQuery,
+    supplier_id_override: Option<i64>,
+) -> Result<supplier_product_security_store::SupplierProductSecurityFilters, String> {
+    let supplier_id = supplier_id_override.or(query.supplier_id);
+    if supplier_id.is_some_and(|value| value <= 0) {
+        return Err("Supplier-ID muss positiv sein.".to_string());
+    }
+    let product = query
+        .product
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if product.as_ref().is_some_and(|value| value.len() > 120) {
+        return Err("Produkt-/Service-Filter ist zu lang.".to_string());
+    }
+    let review_status = query
+        .status
+        .map(|value| value.trim().to_ascii_lowercase().replace('-', "_"))
+        .filter(|value| !value.is_empty());
+    let severity = query
+        .severity
+        .map(|value| value.trim().to_ascii_lowercase().replace('-', "_"))
+        .filter(|value| !value.is_empty());
+    Ok(
+        supplier_product_security_store::SupplierProductSecurityFilters {
+            supplier_id,
+            product,
+            review_status,
+            severity,
+            dora_relevant: normalized_filter_bool(query.dora_relevant.as_deref(), "DORA-Filter")?,
+            nis2_relevant: normalized_filter_bool(query.nis2_relevant.as_deref(), "NIS2-Filter")?,
+            data_processing_relevant: normalized_filter_bool(
+                query.data_processing_relevant.as_deref(),
+                "DSGVO-/Datenverarbeitungsfilter",
+            )?,
+            critical_services: normalized_filter_bool(
+                query.critical_services.as_deref(),
+                "Kritische-Services-Filter",
+            )?,
+            overdue: normalized_filter_bool(query.overdue.as_deref(), "Ueberfaellig-Filter")?,
+            limit: normalized_filter_limit(query.limit.as_deref())?,
+        },
+    )
+}
+
+fn supplier_product_security_filters_from_web_query(
+    query: &WebContextQuery,
+) -> Result<supplier_product_security_store::SupplierProductSecurityFilters, String> {
+    supplier_product_security_filters_from_api_query(
+        SupplierProductSecurityApiQuery {
+            supplier_id: query.supplier_id,
+            product: query.product.clone(),
+            status: query.status.clone(),
+            severity: query.severity.clone(),
+            dora_relevant: query.dora_relevant.clone(),
+            nis2_relevant: query.nis2_relevant.clone(),
+            data_processing_relevant: query.data_processing_relevant.clone(),
+            critical_services: query.critical_services.clone(),
+            overdue: query.overdue.clone(),
+            limit: query.limit.clone(),
+        },
+        None,
+    )
+}
+
+async fn supplier_product_security_overview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SupplierProductSecurityApiQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let filters = match supplier_product_security_filters_from_api_query(query, None) {
+        Ok(filters) => filters,
+        Err(message) => return supplier_product_security_bad_request(message),
+    };
+    let Some(store) = state.supplier_product_security_store else {
+        return supplier_product_security_not_configured_response();
+    };
+    match store.overview(context.tenant_id, filters).await {
+        Ok(overview) => (
+            StatusCode::OK,
+            Json(SupplierProductSecurityOverviewResponse {
+                api_version: "v1",
+                overview,
+            }),
+        )
+            .into_response(),
+        Err(_) => supplier_database_error_response(
+            "Supplier/Product-Security-Uebersicht konnte nicht gelesen werden.",
+        ),
+    }
+}
+
+async fn supplier_product_security_by_supplier(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SupplierProductSecurityApiQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let filters = match supplier_product_security_filters_from_api_query(query, Some(supplier_id)) {
+        Ok(filters) => filters,
+        Err(message) => return supplier_product_security_bad_request(message),
+    };
+    let Some(store) = state.supplier_product_security_store else {
+        return supplier_product_security_not_configured_response();
+    };
+    match store.overview(context.tenant_id, filters).await {
+        Ok(overview) => (
+            StatusCode::OK,
+            Json(SupplierProductSecurityOverviewResponse {
+                api_version: "v1",
+                overview,
+            }),
+        )
+            .into_response(),
+        Err(_) => supplier_database_error_response(
+            "Supplier/Product-Security-Uebersicht konnte nicht gelesen werden.",
+        ),
+    }
+}
+
+async fn supplier_product_security_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_product_security_store::SupplierProductSecurityWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_product_security_store else {
+        return supplier_product_security_not_configured_response();
+    };
+    match store
+        .create_record(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => (
+            StatusCode::CREATED,
+            Json(SupplierProductSecurityWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_product_security_error_response(err),
+    }
+}
+
+async fn supplier_product_security_detail(
+    Path(record_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let Some(store) = state.supplier_product_security_store else {
+        return supplier_product_security_not_configured_response();
+    };
+    match store.detail(context.tenant_id, record_id).await {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(SupplierProductSecurityDetailResponse {
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => supplier_product_security_not_found_response(),
+        Err(err) => supplier_product_security_error_response(err),
+    }
+}
+
+async fn supplier_product_security_update(
+    Path(record_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_product_security_store::SupplierProductSecurityPatchRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_product_security_store else {
+        return supplier_product_security_not_configured_response();
+    };
+    match store
+        .update_record(context.tenant_id, record_id, context.user_id, payload)
+        .await
+    {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(SupplierProductSecurityWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => supplier_product_security_not_found_response(),
+        Err(err) => supplier_product_security_error_response(err),
+    }
+}
+
+async fn supplier_product_security_status_update(
+    Path(record_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_product_security_store::SupplierProductSecurityStatusRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_product_security_store else {
+        return supplier_product_security_not_configured_response();
+    };
+    match store
+        .update_status(context.tenant_id, record_id, context.user_id, payload)
+        .await
+    {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(SupplierProductSecurityWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => supplier_product_security_not_found_response(),
+        Err(err) => supplier_product_security_error_response(err),
+    }
+}
+
+async fn supplier_product_security_evidence_link(
+    Path(record_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<supplier_product_security_store::SupplierProductSecurityEvidenceRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.supplier_product_security_store else {
+        return supplier_product_security_not_configured_response();
+    };
+    match store
+        .link_evidence(context.tenant_id, record_id, context.user_id, payload)
+        .await
+    {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(SupplierProductSecurityWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => supplier_product_security_not_found_response(),
+        Err(err) => supplier_product_security_error_response(err),
+    }
+}
+
+async fn supplier_product_security_events(
+    Path(record_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let Some(store) = state.supplier_product_security_store else {
+        return supplier_product_security_not_configured_response();
+    };
+    match store.events(context.tenant_id, record_id).await {
+        Ok(events) => (
+            StatusCode::OK,
+            Json(SupplierProductSecurityEventsResponse {
+                api_version: "v1",
+                record_id,
+                events,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_product_security_error_response(err),
+    }
+}
+
+async fn supplier_contract_exit_history(
+    Path(supplier_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let Some(store) = state.supplier_product_security_store else {
+        return supplier_product_security_not_configured_response();
+    };
+    match store
+        .supplier_contract_exit_history(context.tenant_id, supplier_id)
+        .await
+    {
+        Ok(history) => (
+            StatusCode::OK,
+            Json(SupplierContractExitHistoryResponse {
+                api_version: "v1",
+                supplier_id,
+                history,
+            }),
+        )
+            .into_response(),
+        Err(err) => supplier_product_security_error_response(err),
     }
 }
 
@@ -14225,7 +14806,7 @@ async fn web_risks(
                 r#"
                 <section class="hero compact"><h1>Risks</h1><p>{} Risiken</p></section>
                 <section class="panel wide">
-                  <table>
+            <table>
                     <thead><tr><th>Titel</th><th>Score</th><th>Level</th><th>Status</th><th>Owner</th><th>Evidence</th><th>Review</th></tr></thead>
                     <tbody>{}</tbody>
                   </table>
@@ -18262,6 +18843,720 @@ async fn web_suppliers_submit(
     }
 }
 
+async fn web_supplier_product_security(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Supplier/Product Security", "/suppliers/product-security/");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    let Some(store) = state.supplier_product_security_store else {
+        return web_store_missing(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product Security",
+        );
+    };
+    let filters = match supplier_product_security_filters_from_web_query(&query) {
+        Ok(filters) => filters,
+        Err(message) => {
+            return web_error_page(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+                &context,
+                &message,
+            );
+        }
+    };
+    match store.overview(context.tenant_id, filters).await {
+        Ok(overview) => {
+            let rows = overview
+                .records
+                .iter()
+                .map(|record| {
+                    let detail_href = web_path_with_context(
+                        &format!("/suppliers/product-security/{}/", record.id),
+                        Some(&context),
+                    );
+                    let supplier_href = web_path_with_context(
+                        &format!("/suppliers/{}/", record.supplier_id),
+                        Some(&context),
+                    );
+                    format!(
+                        r#"<tr><td><a href="{}">{}</a><p><a href="{}">{}</a></p></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&detail_href),
+                        html_escape(&record.product_or_service),
+                        html_escape(&supplier_href),
+                        html_escape(&record.supplier_name),
+                        web_badge(
+                            &record.criticality_label,
+                            supplier_product_security_criticality_badge_class(&record.criticality),
+                        ),
+                        supplier_product_security_cve_badges(&record.cve_ids),
+                        html_escape(&record.advisory_id),
+                        severity_badge(&record.severity, &record.severity_label),
+                        web_badge(
+                            &record.review_status_label,
+                            supplier_product_security_review_badge_class(&record.review_status),
+                        ),
+                        html_escape(if record.owner.is_empty() { "Nicht erfasst" } else { &record.owner }),
+                        html_escape(record.due_date.as_deref().unwrap_or("Nicht erfasst")),
+                        supplier_product_security_scope_badges(record),
+                        html_escape(if record.open_actions.is_empty() { "Keine offenen Massnahmen" } else { &record.open_actions }),
+                        web_badge(
+                            &record.contract_status_label,
+                            supplier_product_security_contract_badge_class(&record.contract_status),
+                        ),
+                        web_badge(
+                            &record.exit_plan_status_label,
+                            supplier_product_security_exit_badge_class(&record.exit_plan_status),
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let create_form = if can_write {
+                supplier_product_security_create_panel(&context)
+            } else {
+                String::new()
+            };
+            let filter_panel = supplier_product_security_filter_panel(&context, &query);
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Supplier/Product Security</h1><p>Lieferanten, Product Security / Produktsicherheit, Advisorys, CVEs, Evidence und Exit-Plan-Reife</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                {}
+                {}
+                <section class="panel wide">
+                  <h2>Supplier/Product-Security-Register</h2>
+                  <table class="wide-table supplier-product-security-table">
+                    <thead><tr><th>Produkt / Lieferant</th><th>Kritikalitaet</th><th>CVE</th><th>Advisory</th><th>Schweregrad</th><th>Status</th><th>Owner / Verantwortlicher</th><th>Faelligkeit</th><th>Regulatorik</th><th>Offene Massnahmen</th><th>Vertrag</th><th>Exit-Plan</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                metric_card("Datensaetze", overview.summary.total_records),
+                metric_card("Offene Advisorys", overview.summary.open_advisories),
+                metric_card("Kritisch", overview.summary.critical_records),
+                metric_card("Ueberfaellig", overview.summary.overdue_reviews),
+                metric_card("Evidence fehlt", overview.summary.missing_evidence),
+                metric_card("DORA", overview.summary.dora_relevant),
+                metric_card("NIS2", overview.summary.nis2_relevant),
+                metric_card("DSGVO/Daten", overview.summary.data_processing_relevant),
+                filter_panel,
+                create_form,
+                if rows.is_empty() {
+                    web_empty_row(12, "Keine Supplier/Product-Security-Daten erfasst.")
+                } else {
+                    rows
+                },
+            );
+            web_page(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+                Some(&context),
+                &body,
+            )
+        }
+        Err(_) => web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product-Security-Register konnte nicht gelesen werden.",
+        ),
+    }
+}
+
+async fn web_supplier_product_security_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSupplierProductSecurityCreateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+            )
+            .into_response();
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.supplier_product_security_store else {
+        return web_store_missing(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product Security",
+        )
+        .into_response();
+    };
+    let payload = match web_supplier_product_security_create_payload(form) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return web_error_page(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+                &context,
+                &message,
+            )
+            .into_response();
+        }
+    };
+    match store
+        .create_record(auth_context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(detail) => {
+            web_supplier_product_security_redirect(&context, detail.record.id).into_response()
+        }
+        Err(err) => web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            err.safe_message(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_supplier_product_security_detail(
+    Path(record_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Supplier/Product Security", "/suppliers/product-security/");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    let Some(store) = state.supplier_product_security_store else {
+        return web_store_missing(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product Security",
+        );
+    };
+    match store.detail(context.tenant_id, record_id).await {
+        Ok(Some(detail)) => {
+            let record = &detail.record;
+            let supplier_href = web_path_with_context(
+                &format!("/suppliers/{}/", record.supplier_id),
+                Some(&context),
+            );
+            let evidence_rows = detail
+                .evidence_links
+                .iter()
+                .map(|link| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        link.evidence_id,
+                        html_escape(&link.title),
+                        html_escape(&link.status),
+                        html_escape(&link.link_type),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let event_rows = detail
+                .events
+                .iter()
+                .map(|event| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&event.created_at),
+                        html_escape(&event.event_type),
+                        html_escape(
+                            &event
+                                .actor_id
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| "-".to_string())
+                        ),
+                        html_escape(&event.detail_json.to_string()),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let history_rows = detail
+                .contract_exit_history
+                .iter()
+                .map(|entry| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        entry.version_number,
+                        html_escape(&entry.changed_at),
+                        html_escape(&entry.previous_status),
+                        html_escape(&entry.new_status),
+                        html_escape(&entry.change_reason),
+                        html_escape(&entry.evidence_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(", ")),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            let forms = if can_write {
+                supplier_product_security_detail_forms(&context, &detail)
+            } else {
+                String::new()
+            };
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>{}</h1><p><a href="{}">{}</a> · Advisory / Sicherheitshinweis, CVE, SBOM/VEX, Vertrag und Exit-Plan</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="grid">
+                  <article class="panel">
+                    <h2>Advisory / CVE</h2>
+                    <p>Advisory-ID: {}</p>
+                    <p>Quelle: {}</p>
+                    <p>Referenz: {}</p>
+                    <p>CVE: {}</p>
+                    <p>Betroffene Versionen: {}</p>
+                    <p>Behobene Versionen: {}</p>
+                  </article>
+                  <article class="panel">
+                    <h2>Review</h2>
+                    <p>Status: {}</p>
+                    <p>Product-Security-Status: {}</p>
+                    <p>Owner / Verantwortlicher: {}</p>
+                    <p>Interner Owner: {}</p>
+                    <p>Faelligkeit: {}</p>
+                    <p>Review-Bezug: {}</p>
+                  </article>
+                  <article class="panel">
+                    <h2>Vertrag & Exit-Plan</h2>
+                    <p>Vertrag: {}</p>
+                    <p>Naechste Vertragspruefung: {}</p>
+                    <p>Exit-Plan: {} · Version {}</p>
+                    <p>Exit-Plan-Owner: {}</p>
+                    <p>Kritischer Service: {}</p>
+                    <p>DORA/NIS2/DSGVO: {} / {} / {}</p>
+                  </article>
+                </section>
+                <section class="panel wide">
+                  <h2>Auswirkung und Massnahmen</h2>
+                  <p><strong>Assets:</strong> {}</p>
+                  <p><strong>Impact:</strong> {}</p>
+                  <p><strong>Remediation:</strong> {}</p>
+                  <p><strong>Workaround:</strong> {}</p>
+                  <p><strong>Offene Massnahmen:</strong> {}</p>
+                  <p><strong>SBOM/VEX:</strong> {}</p>
+                  <p><strong>Kuendigungsrisiko:</strong> {}</p>
+                  <p><strong>Alternativlieferant:</strong> {}</p>
+                </section>
+                {}
+                <section class="panel wide">
+                  <h2>Evidence-Verknuepfungen</h2>
+                  <table><thead><tr><th>Evidence-ID</th><th>Titel</th><th>Status</th><th>Typ</th></tr></thead><tbody>{}</tbody></table>
+                </section>
+                <section class="panel wide">
+                  <h2>Contract-/Exit-Historie</h2>
+                  <table><thead><tr><th>Version</th><th>Zeit</th><th>Vorher</th><th>Neu</th><th>Grund</th><th>Evidence</th></tr></thead><tbody>{}</tbody></table>
+                </section>
+                <section class="panel wide">
+                  <h2>Audit-/Ereignis-Historie</h2>
+                  <table><thead><tr><th>Zeit</th><th>Ereignis</th><th>Actor</th><th>Details</th></tr></thead><tbody>{}</tbody></table>
+                </section>
+                "#,
+                html_escape(&record.product_or_service),
+                html_escape(&supplier_href),
+                html_escape(&record.supplier_name),
+                metric_card("Schweregrad", 0),
+                severity_badge(&record.severity, &record.severity_label),
+                web_badge(
+                    &record.review_status_label,
+                    supplier_product_security_review_badge_class(&record.review_status),
+                ),
+                web_badge(
+                    &record.criticality_label,
+                    supplier_product_security_criticality_badge_class(&record.criticality),
+                ),
+                metric_card("Evidence", record.evidence_ids.len() as i64),
+                metric_card("Events", detail.events.len() as i64),
+                html_escape(if record.advisory_id.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.advisory_id
+                }),
+                html_escape(&record.advisory_source_type_label),
+                supplier_product_security_reference_html(&record.advisory_reference),
+                supplier_product_security_cve_badges(&record.cve_ids),
+                html_escape(if record.affected_versions.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.affected_versions
+                }),
+                html_escape(if record.fixed_versions.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.fixed_versions
+                }),
+                web_badge(
+                    &record.review_status_label,
+                    supplier_product_security_review_badge_class(&record.review_status),
+                ),
+                html_escape(&record.product_security_status_label),
+                html_escape(if record.owner.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.owner
+                }),
+                html_escape(if record.internal_owner.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.internal_owner
+                }),
+                html_escape(record.due_date.as_deref().unwrap_or("Nicht erfasst")),
+                html_escape(if record.management_review_reference.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.management_review_reference
+                }),
+                web_badge(
+                    &record.contract_status_label,
+                    supplier_product_security_contract_badge_class(&record.contract_status),
+                ),
+                html_escape(
+                    record
+                        .next_contract_review_due
+                        .as_deref()
+                        .unwrap_or("Nicht erfasst")
+                ),
+                web_badge(
+                    &record.exit_plan_status_label,
+                    supplier_product_security_exit_badge_class(&record.exit_plan_status),
+                ),
+                html_escape(if record.exit_plan_version.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.exit_plan_version
+                }),
+                html_escape(if record.exit_plan_owner.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.exit_plan_owner
+                }),
+                yes_no(record.critical_service_dependency),
+                yes_no(record.dora_ict_third_party_relevance),
+                yes_no(record.nis2_supply_chain_relevance),
+                yes_no(record.data_processing_relevance),
+                html_escape(if record.affected_assets_summary.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.affected_assets_summary
+                }),
+                html_escape(if record.impact_summary.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.impact_summary
+                }),
+                html_escape(if record.remediation_summary.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.remediation_summary
+                }),
+                html_escape(if record.workaround_summary.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.workaround_summary
+                }),
+                html_escape(if record.open_actions.is_empty() {
+                    "Keine offenen Massnahmen"
+                } else {
+                    &record.open_actions
+                }),
+                supplier_product_security_reference_html(&record.sbom_vex_reference),
+                html_escape(if record.termination_risk_summary.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.termination_risk_summary
+                }),
+                html_escape(if record.alternative_supplier_summary.is_empty() {
+                    "Nicht erfasst"
+                } else {
+                    &record.alternative_supplier_summary
+                }),
+                forms,
+                if evidence_rows.is_empty() {
+                    web_empty_row(4, "Keine Evidence verknuepft.")
+                } else {
+                    evidence_rows
+                },
+                if history_rows.is_empty() {
+                    web_empty_row(6, "Keine Contract-/Exit-Historie erfasst.")
+                } else {
+                    history_rows
+                },
+                if event_rows.is_empty() {
+                    web_empty_row(4, "Keine Audit-Ereignisse vorhanden.")
+                } else {
+                    event_rows
+                },
+            );
+            web_page(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+                Some(&context),
+                &body,
+            )
+        }
+        Ok(None) => web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product-Security-Datensatz wurde fuer diesen Tenant nicht gefunden.",
+        ),
+        Err(_) => web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product-Security-Detail konnte nicht gelesen werden.",
+        ),
+    }
+}
+
+async fn web_supplier_product_security_update_submit(
+    Path(record_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSupplierProductSecurityPatchForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+            )
+            .into_response();
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !auth_context.can_write() {
+        return web_supplier_product_security_permission_error(&context).into_response();
+    }
+    let Some(store) = state.supplier_product_security_store else {
+        return web_store_missing(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product Security",
+        )
+        .into_response();
+    };
+    let payload = match web_supplier_product_security_patch_payload(form) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return web_error_page(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+                &context,
+                &message,
+            )
+            .into_response();
+        }
+    };
+    match store
+        .update_record(
+            auth_context.tenant_id,
+            record_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => web_supplier_product_security_redirect(&context, record_id).into_response(),
+        Ok(None) => web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product-Security-Datensatz wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            err.safe_message(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_supplier_product_security_status_submit(
+    Path(record_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSupplierProductSecurityStatusForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+            )
+            .into_response();
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !auth_context.can_write() {
+        return web_supplier_product_security_permission_error(&context).into_response();
+    }
+    let Some(store) = state.supplier_product_security_store else {
+        return web_store_missing(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product Security",
+        )
+        .into_response();
+    };
+    let payload = supplier_product_security_store::SupplierProductSecurityStatusRequest {
+        new_status: form.new_status,
+        reason: web_form_text(form.reason),
+        review_notes: web_form_text(form.review_notes),
+    };
+    match store
+        .update_status(
+            auth_context.tenant_id,
+            record_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => web_supplier_product_security_redirect(&context, record_id).into_response(),
+        Ok(None) => web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product-Security-Datensatz wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            err.safe_message(),
+        )
+        .into_response(),
+    }
+}
+
+async fn web_supplier_product_security_evidence_submit(
+    Path(record_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSupplierProductSecurityEvidenceForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+            )
+            .into_response();
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !auth_context.can_write() {
+        return web_supplier_product_security_permission_error(&context).into_response();
+    }
+    let Some(store) = state.supplier_product_security_store else {
+        return web_store_missing(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product Security",
+        )
+        .into_response();
+    };
+    let evidence_id = match parse_optional_i64(form.evidence_id.as_deref(), "Evidence-ID") {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return web_error_page(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+                &context,
+                "Evidence-ID ist erforderlich.",
+            )
+            .into_response();
+        }
+        Err(message) => {
+            return web_error_page(
+                "Supplier/Product Security",
+                "/suppliers/product-security/",
+                &context,
+                &message,
+            )
+            .into_response();
+        }
+    };
+    let payload = supplier_product_security_store::SupplierProductSecurityEvidenceRequest {
+        evidence_id,
+        link_type: normalized_optional_form_text(form.link_type),
+    };
+    match store
+        .link_evidence(
+            auth_context.tenant_id,
+            record_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => web_supplier_product_security_redirect(&context, record_id).into_response(),
+        Ok(None) => web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            "Supplier/Product-Security-Datensatz wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(err) => web_error_page(
+            "Supplier/Product Security",
+            "/suppliers/product-security/",
+            &context,
+            err.safe_message(),
+        )
+        .into_response(),
+    }
+}
+
 async fn web_supplier_detail(
     Path(supplier_id): Path<i64>,
     State(state): State<AppState>,
@@ -18858,6 +20153,678 @@ fn supplier_detail_forms(context: &WebContext, supplier_id: i64) -> String {
         html_escape(&control_action),
         html_escape(&risk_action),
     )
+}
+
+fn supplier_product_security_filter_panel(context: &WebContext, query: &WebContextQuery) -> String {
+    let action = web_path_with_context("/suppliers/product-security/", Some(context));
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Filter</h2>
+          <form method="get" action="{}">
+            {}
+            <div class="form-grid">
+              <label>Supplier-ID<input name="supplier_id" inputmode="numeric" value="{}"></label>
+              <label>Produkt/Service<input name="product" value="{}"></label>
+              <label>Status<select name="status">
+                <option value="">Alle</option>
+                {}
+              </select></label>
+              <label>Schweregrad<select name="severity">
+                <option value="">Alle</option>
+                {}
+              </select></label>
+              <label>DORA<select name="dora_relevant">{}</select></label>
+              <label>NIS2<select name="nis2_relevant">{}</select></label>
+              <label>DSGVO/Daten<select name="data_processing_relevant">{}</select></label>
+              <label>Kritische Services<select name="critical_services">{}</select></label>
+              <label>Ueberfaellig<select name="overdue">{}</select></label>
+              <label>Limit<input name="limit" inputmode="numeric" value="{}"></label>
+            </div>
+            <button type="submit">Filtern</button>
+          </form>
+        </section>
+        "#,
+        html_escape(&action),
+        web_context_hidden_inputs(context),
+        html_escape(
+            &query
+                .supplier_id
+                .map(|id| id.to_string())
+                .unwrap_or_default()
+        ),
+        html_escape(query.product.as_deref().unwrap_or_default()),
+        supplier_product_security_select_options(
+            query.status.as_deref().unwrap_or_default(),
+            &[
+                ("draft", "Draft"),
+                ("needs_review", "Review erforderlich"),
+                ("in_review", "In Review"),
+                ("accepted_risk", "Risiko akzeptiert"),
+                ("remediation_required", "Remediation erforderlich"),
+                ("mitigated", "Mitigiert"),
+                ("closed", "Geschlossen"),
+                ("not_applicable", "Nicht anwendbar"),
+            ],
+        ),
+        supplier_product_security_select_options(
+            query.severity.as_deref().unwrap_or_default(),
+            &[
+                ("critical", "Kritisch"),
+                ("high", "Hoch"),
+                ("medium", "Mittel"),
+                ("low", "Niedrig"),
+                ("info", "Info"),
+                ("unknown", "Unbekannt"),
+            ],
+        ),
+        bool_filter_options_for_query(query.dora_relevant.as_deref()),
+        bool_filter_options_for_query(query.nis2_relevant.as_deref()),
+        bool_filter_options_for_query(query.data_processing_relevant.as_deref()),
+        bool_filter_options_for_query(query.critical_services.as_deref()),
+        bool_filter_options_for_query(query.overdue.as_deref()),
+        html_escape(query.limit.as_deref().unwrap_or("50")),
+    )
+}
+
+fn supplier_product_security_create_panel(context: &WebContext) -> String {
+    let action = web_path_with_context("/suppliers/product-security/", Some(context));
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Supplier/Product-Security-Datensatz anlegen</h2>
+          <form method="post" action="{}">
+            <div class="form-grid">
+              <label>Supplier-ID<input name="supplier_id" inputmode="numeric" required></label>
+              <label>Produkt-ID optional<input name="product_id" inputmode="numeric"></label>
+              <label>Produkt oder Service<input name="product_or_service" required></label>
+              <label>Kritikalitaet<select name="criticality"><option value="medium">Mittel</option><option value="high">Hoch</option><option value="critical">Kritisch</option><option value="low">Niedrig</option></select></label>
+              <label>Schweregrad<select name="severity"><option value="unknown">Unbekannt</option><option value="critical">Kritisch</option><option value="high">Hoch</option><option value="medium">Mittel</option><option value="low">Niedrig</option><option value="info">Info</option></select></label>
+              <label>Review-Status<select name="review_status"><option value="draft">Draft</option><option value="needs_review">Review erforderlich</option><option value="in_review">In Review</option><option value="remediation_required">Remediation erforderlich</option><option value="accepted_risk">Risiko akzeptiert</option><option value="mitigated">Mitigiert</option><option value="closed">Geschlossen</option><option value="not_applicable">Nicht anwendbar</option></select></label>
+              <label>Owner / Verantwortlicher<input name="owner"></label>
+              <label>Interner Owner<input name="internal_owner"></label>
+              <label>Supplier Security Contact<input name="supplier_security_contact"></label>
+              <label>Faelligkeit<input name="due_date" type="date"></label>
+              <label>Advisory-ID<input name="advisory_id"></label>
+              <label>Advisory-Quelle<select name="advisory_source_type"><option value="manual">Manuell</option><option value="psirt">PSIRT</option><option value="vendor">Hersteller</option><option value="customer">Kunde</option><option value="internal">Intern</option><option value="import_preparation">Import-Vorbereitung</option></select></label>
+              <label>CVSS<input name="cvss_score" inputmode="decimal"></label>
+              <label>EPSS<input name="epss_score" inputmode="decimal"></label>
+              <label>Exploitation<select name="exploitation_status"><option value="unknown">Unbekannt</option><option value="not_observed">Nicht beobachtet</option><option value="proof_of_concept">Proof of Concept</option><option value="active">Aktiv</option><option value="exploited">Ausgenutzt</option></select></label>
+              <label>Vertragsstatus<select name="contract_status"><option value="not_recorded">Nicht erfasst</option><option value="draft">Draft</option><option value="active">Aktiv</option><option value="under_review">In Pruefung</option><option value="renewal_due">Verlaengerung faellig</option><option value="terminated">Beendet</option><option value="exit_required">Exit erforderlich</option></select></label>
+              <label>Naechste Vertragspruefung<input name="next_contract_review_due" type="date"></label>
+              <label>Exit-Plan<select name="exit_plan_status"><option value="not_recorded">Nicht erfasst</option><option value="draft">Draft</option><option value="planned">Geplant</option><option value="tested">Getestet</option><option value="needs_update">Update erforderlich</option><option value="not_required">Nicht erforderlich</option></select></label>
+              <label>Exit-Plan-Version<input name="exit_plan_version"></label>
+            </div>
+            <label>Advisory-Referenz<textarea name="advisory_reference" rows="2" placeholder="Nur Text oder http(s)-URL; kein Abruf durch ISCY."></textarea></label>
+            <label>CVE-IDs<textarea name="cve_ids" rows="2" placeholder="CVE-2026-1234, CVE-2026-5678"></textarea></label>
+            <label>Betroffene Versionen<textarea name="affected_versions" rows="2"></textarea></label>
+            <label>Behobene Versionen<textarea name="fixed_versions" rows="2"></textarea></label>
+            <label>Impact<textarea name="impact_summary" rows="3"></textarea></label>
+            <label>Remediation<textarea name="remediation_summary" rows="3"></textarea></label>
+            <label>Offene Massnahmen<textarea name="open_actions" rows="3"></textarea></label>
+            <label>Evidence-IDs<textarea name="evidence_ids" rows="2" placeholder="1,2,3"></textarea></label>
+            <label>SBOM-/VEX-Referenz<textarea name="sbom_vex_reference" rows="2"></textarea></label>
+            <div class="toggle-row">
+              <label class="checkbox-row"><input name="critical_service_dependency" type="checkbox" value="1"> Kritischer Service</label>
+              <label class="checkbox-row"><input name="data_processing_relevance" type="checkbox" value="1"> DSGVO-/Datenbezug</label>
+              <label class="checkbox-row"><input name="dora_ict_third_party_relevance" type="checkbox" value="1"> DORA ICT Third Party</label>
+              <label class="checkbox-row"><input name="nis2_supply_chain_relevance" type="checkbox" value="1"> NIS2 Supply Chain</label>
+            </div>
+            <button type="submit">Datensatz anlegen</button>
+          </form>
+        </section>
+        "#,
+        html_escape(&action),
+    )
+}
+
+fn supplier_product_security_detail_forms(
+    context: &WebContext,
+    detail: &supplier_product_security_store::SupplierProductSecurityDetail,
+) -> String {
+    let record = &detail.record;
+    let update_action = web_path_with_context(
+        &format!("/suppliers/product-security/{}/update", record.id),
+        Some(context),
+    );
+    let status_action = web_path_with_context(
+        &format!("/suppliers/product-security/{}/status", record.id),
+        Some(context),
+    );
+    let evidence_action = web_path_with_context(
+        &format!("/suppliers/product-security/{}/evidence", record.id),
+        Some(context),
+    );
+    format!(
+        r#"
+        <section class="grid">
+          <article class="panel">
+            <h2>Status auditiert setzen</h2>
+            <form method="post" action="{}">
+              <label>Status<select name="new_status">
+                {}
+              </select></label>
+              <label>Grund<textarea name="reason" rows="3"></textarea></label>
+              <label>Review-Notiz<textarea name="review_notes" rows="3"></textarea></label>
+              <button type="submit">Status speichern</button>
+            </form>
+          </article>
+          <article class="panel">
+            <h2>Evidence verknuepfen</h2>
+            <form method="post" action="{}">
+              <label>Evidence-ID<input name="evidence_id" inputmode="numeric" required></label>
+              <label>Linktyp<input name="link_type" value="review"></label>
+              <button type="submit">Evidence verknuepfen</button>
+            </form>
+          </article>
+        </section>
+        <section class="panel wide">
+          <h2>Datensatz bearbeiten</h2>
+          <form method="post" action="{}">
+            <div class="form-grid">
+              <label>Produkt-ID optional<input name="product_id" inputmode="numeric" value="{}"></label>
+              <label>Produkt oder Service<input name="product_or_service" value="{}"></label>
+              <label>Kritikalitaet<select name="criticality">{}</select></label>
+              <label>Schweregrad<select name="severity">{}</select></label>
+              <label>Owner / Verantwortlicher<input name="owner" value="{}"></label>
+              <label>Interner Owner<input name="internal_owner" value="{}"></label>
+              <label>Supplier Security Contact<input name="supplier_security_contact" value="{}"></label>
+              <label>Faelligkeit<input name="due_date" type="date" value="{}"></label>
+              <label>Advisory-ID<input name="advisory_id" value="{}"></label>
+              <label>Advisory-Quelle<select name="advisory_source_type">{}</select></label>
+              <label>CVSS<input name="cvss_score" inputmode="decimal" value="{}"></label>
+              <label>EPSS<input name="epss_score" inputmode="decimal" value="{}"></label>
+              <label>Exploitation<select name="exploitation_status">{}</select></label>
+              <label>Vertragsstatus<select name="contract_status">{}</select></label>
+              <label>Vertragspruefung<input name="contract_review_date" type="date" value="{}"></label>
+              <label>Naechste Vertragspruefung<input name="next_contract_review_due" type="date" value="{}"></label>
+              <label>Exit-Plan<select name="exit_plan_status">{}</select></label>
+              <label>Exit-Plan-Version<input name="exit_plan_version" value="{}"></label>
+              <label>Exit-Plan-Pruefung<input name="exit_plan_review_date" type="date" value="{}"></label>
+              <label>Exit-Plan-Owner<input name="exit_plan_owner" value="{}"></label>
+            </div>
+            <label>Advisory-Referenz<textarea name="advisory_reference" rows="2">{}</textarea></label>
+            <label>CVE-IDs<textarea name="cve_ids" rows="2">{}</textarea></label>
+            <label>Betroffene Versionen<textarea name="affected_versions" rows="2">{}</textarea></label>
+            <label>Behobene Versionen<textarea name="fixed_versions" rows="2">{}</textarea></label>
+            <label>Betroffene Assets<textarea name="affected_assets_summary" rows="2">{}</textarea></label>
+            <label>Impact<textarea name="impact_summary" rows="3">{}</textarea></label>
+            <label>Remediation<textarea name="remediation_summary" rows="3">{}</textarea></label>
+            <label>Workaround<textarea name="workaround_summary" rows="3">{}</textarea></label>
+            <label>Offene Massnahmen<textarea name="open_actions" rows="3">{}</textarea></label>
+            <label>Evidence-IDs<textarea name="evidence_ids" rows="2">{}</textarea></label>
+            <label>SBOM-/VEX-Referenz<textarea name="sbom_vex_reference" rows="2">{}</textarea></label>
+            <label>Management-/Regulatory-Review-Bezug<textarea name="management_review_reference" rows="2">{}</textarea></label>
+            <label>Kuendigungsrisiko<textarea name="termination_risk_summary" rows="2">{}</textarea></label>
+            <label>Alternativlieferant<textarea name="alternative_supplier_summary" rows="2">{}</textarea></label>
+            <label>Aenderungsgrund<textarea name="change_reason" rows="2">Datensatz im Web-UI aktualisiert.</textarea></label>
+            <div class="toggle-row">
+              <label class="checkbox-row"><input name="critical_service_dependency" type="checkbox" value="1"{}> Kritischer Service</label>
+              <label class="checkbox-row"><input name="data_processing_relevance" type="checkbox" value="1"{}> DSGVO-/Datenbezug</label>
+              <label class="checkbox-row"><input name="dora_ict_third_party_relevance" type="checkbox" value="1"{}> DORA ICT Third Party</label>
+              <label class="checkbox-row"><input name="nis2_supply_chain_relevance" type="checkbox" value="1"{}> NIS2 Supply Chain</label>
+            </div>
+            <button type="submit">Aenderungen speichern</button>
+          </form>
+        </section>
+        "#,
+        html_escape(&status_action),
+        supplier_product_security_select_options(
+            &record.review_status,
+            &[
+                ("draft", "Draft"),
+                ("needs_review", "Review erforderlich"),
+                ("in_review", "In Review"),
+                ("accepted_risk", "Risiko akzeptiert"),
+                ("remediation_required", "Remediation erforderlich"),
+                ("mitigated", "Mitigiert"),
+                ("closed", "Geschlossen"),
+                ("not_applicable", "Nicht anwendbar"),
+            ],
+        ),
+        html_escape(&evidence_action),
+        html_escape(&update_action),
+        html_escape(
+            &record
+                .product_id
+                .map(|id| id.to_string())
+                .unwrap_or_default()
+        ),
+        html_escape(&record.product_or_service),
+        supplier_product_security_select_options(
+            &record.criticality,
+            &[
+                ("critical", "Kritisch"),
+                ("high", "Hoch"),
+                ("medium", "Mittel"),
+                ("low", "Niedrig"),
+            ],
+        ),
+        supplier_product_security_select_options(
+            &record.severity,
+            &[
+                ("critical", "Kritisch"),
+                ("high", "Hoch"),
+                ("medium", "Mittel"),
+                ("low", "Niedrig"),
+                ("info", "Info"),
+                ("unknown", "Unbekannt"),
+            ],
+        ),
+        html_escape(&record.owner),
+        html_escape(&record.internal_owner),
+        html_escape(&record.supplier_security_contact),
+        html_escape(record.due_date.as_deref().unwrap_or_default()),
+        html_escape(&record.advisory_id),
+        supplier_product_security_select_options(
+            &record.advisory_source_type,
+            &[
+                ("manual", "Manuell"),
+                ("psirt", "PSIRT"),
+                ("vendor", "Hersteller"),
+                ("customer", "Kunde"),
+                ("internal", "Intern"),
+                ("import_preparation", "Import-Vorbereitung"),
+            ],
+        ),
+        html_escape(
+            &record
+                .cvss_score
+                .map(|value| value.to_string())
+                .unwrap_or_default()
+        ),
+        html_escape(
+            &record
+                .epss_score
+                .map(|value| value.to_string())
+                .unwrap_or_default()
+        ),
+        supplier_product_security_select_options(
+            &record.exploitation_status,
+            &[
+                ("unknown", "Unbekannt"),
+                ("not_observed", "Nicht beobachtet"),
+                ("proof_of_concept", "Proof of Concept"),
+                ("active", "Aktiv"),
+                ("exploited", "Ausgenutzt"),
+            ],
+        ),
+        supplier_product_security_select_options(
+            &record.contract_status,
+            &[
+                ("not_recorded", "Nicht erfasst"),
+                ("draft", "Draft"),
+                ("active", "Aktiv"),
+                ("under_review", "In Pruefung"),
+                ("renewal_due", "Verlaengerung faellig"),
+                ("terminated", "Beendet"),
+                ("exit_required", "Exit erforderlich"),
+            ],
+        ),
+        html_escape(record.contract_review_date.as_deref().unwrap_or_default()),
+        html_escape(
+            record
+                .next_contract_review_due
+                .as_deref()
+                .unwrap_or_default()
+        ),
+        supplier_product_security_select_options(
+            &record.exit_plan_status,
+            &[
+                ("not_recorded", "Nicht erfasst"),
+                ("draft", "Draft"),
+                ("planned", "Geplant"),
+                ("tested", "Getestet"),
+                ("needs_update", "Update erforderlich"),
+                ("not_required", "Nicht erforderlich"),
+            ],
+        ),
+        html_escape(&record.exit_plan_version),
+        html_escape(record.exit_plan_review_date.as_deref().unwrap_or_default()),
+        html_escape(&record.exit_plan_owner),
+        html_escape(&record.advisory_reference),
+        html_escape(&record.cve_ids.join(", ")),
+        html_escape(&record.affected_versions),
+        html_escape(&record.fixed_versions),
+        html_escape(&record.affected_assets_summary),
+        html_escape(&record.impact_summary),
+        html_escape(&record.remediation_summary),
+        html_escape(&record.workaround_summary),
+        html_escape(&record.open_actions),
+        html_escape(
+            &record
+                .evidence_ids
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        html_escape(&record.sbom_vex_reference),
+        html_escape(&record.management_review_reference),
+        html_escape(&record.termination_risk_summary),
+        html_escape(&record.alternative_supplier_summary),
+        checked_attr(record.critical_service_dependency),
+        checked_attr(record.data_processing_relevance),
+        checked_attr(record.dora_ict_third_party_relevance),
+        checked_attr(record.nis2_supply_chain_relevance),
+    )
+}
+
+fn web_supplier_product_security_create_payload(
+    form: WebSupplierProductSecurityCreateForm,
+) -> Result<supplier_product_security_store::SupplierProductSecurityWriteRequest, String> {
+    let supplier_id = parse_optional_i64(Some(form.supplier_id.as_str()), "Supplier-ID")?
+        .ok_or_else(|| "Supplier-ID ist erforderlich.".to_string())?;
+    Ok(
+        supplier_product_security_store::SupplierProductSecurityWriteRequest {
+            supplier_id,
+            product_id: parse_optional_i64(form.product_id.as_deref(), "Produkt-ID")?,
+            product_or_service: form.product_or_service,
+            criticality: normalized_optional_form_text(form.criticality),
+            internal_owner: web_form_text(form.internal_owner),
+            supplier_security_contact: web_form_text(form.supplier_security_contact),
+            product_security_status: normalized_optional_form_text(form.product_security_status),
+            advisory_id: web_form_text(form.advisory_id),
+            advisory_source_type: normalized_optional_form_text(form.advisory_source_type),
+            advisory_reference: web_form_text(form.advisory_reference),
+            cve_ids: parse_text_list(form.cve_ids.as_deref()),
+            affected_versions: web_form_text(form.affected_versions),
+            fixed_versions: web_form_text(form.fixed_versions),
+            severity: normalized_optional_form_text(form.severity),
+            cvss_score: parse_optional_f64(form.cvss_score.as_deref(), "CVSS")?,
+            epss_score: parse_optional_f64(form.epss_score.as_deref(), "EPSS")?,
+            exploitation_status: normalized_optional_form_text(form.exploitation_status),
+            affected_assets_summary: web_form_text(form.affected_assets_summary),
+            impact_summary: web_form_text(form.impact_summary),
+            remediation_summary: web_form_text(form.remediation_summary),
+            workaround_summary: web_form_text(form.workaround_summary),
+            review_status: normalized_optional_form_text(form.review_status),
+            owner: web_form_text(form.owner),
+            due_date: normalized_optional_form_text(form.due_date),
+            evidence_ids: parse_id_list(form.evidence_ids.as_deref(), "Evidence-IDs")?,
+            sbom_vex_reference: web_form_text(form.sbom_vex_reference),
+            open_actions: web_form_text(form.open_actions),
+            management_review_reference: web_form_text(form.management_review_reference),
+            contract_status: normalized_optional_form_text(form.contract_status),
+            contract_review_date: normalized_optional_form_text(form.contract_review_date),
+            next_contract_review_due: normalized_optional_form_text(form.next_contract_review_due),
+            exit_plan_status: normalized_optional_form_text(form.exit_plan_status),
+            exit_plan_version: web_form_text(form.exit_plan_version),
+            exit_plan_review_date: normalized_optional_form_text(form.exit_plan_review_date),
+            exit_plan_owner: web_form_text(form.exit_plan_owner),
+            critical_service_dependency: Some(form_checkbox_value(
+                form.critical_service_dependency,
+            )),
+            data_processing_relevance: Some(form_checkbox_value(form.data_processing_relevance)),
+            dora_ict_third_party_relevance: Some(form_checkbox_value(
+                form.dora_ict_third_party_relevance,
+            )),
+            nis2_supply_chain_relevance: Some(form_checkbox_value(
+                form.nis2_supply_chain_relevance,
+            )),
+            termination_risk_summary: web_form_text(form.termination_risk_summary),
+            alternative_supplier_summary: web_form_text(form.alternative_supplier_summary),
+            change_reason: web_form_text(form.change_reason),
+        },
+    )
+}
+
+fn web_supplier_product_security_patch_payload(
+    form: WebSupplierProductSecurityPatchForm,
+) -> Result<supplier_product_security_store::SupplierProductSecurityPatchRequest, String> {
+    Ok(
+        supplier_product_security_store::SupplierProductSecurityPatchRequest {
+            product_id: parse_optional_i64(form.product_id.as_deref(), "Produkt-ID")?,
+            product_or_service: normalized_optional_form_text(form.product_or_service),
+            criticality: normalized_optional_form_text(form.criticality),
+            internal_owner: normalized_optional_form_text(form.internal_owner),
+            supplier_security_contact: normalized_optional_form_text(
+                form.supplier_security_contact,
+            ),
+            product_security_status: normalized_optional_form_text(form.product_security_status),
+            advisory_id: normalized_optional_form_text(form.advisory_id),
+            advisory_source_type: normalized_optional_form_text(form.advisory_source_type),
+            advisory_reference: normalized_optional_form_text(form.advisory_reference),
+            cve_ids: normalized_optional_form_text(form.cve_ids)
+                .map(|value| parse_text_list(Some(&value))),
+            affected_versions: normalized_optional_form_text(form.affected_versions),
+            fixed_versions: normalized_optional_form_text(form.fixed_versions),
+            severity: normalized_optional_form_text(form.severity),
+            cvss_score: parse_optional_f64(form.cvss_score.as_deref(), "CVSS")?,
+            epss_score: parse_optional_f64(form.epss_score.as_deref(), "EPSS")?,
+            exploitation_status: normalized_optional_form_text(form.exploitation_status),
+            affected_assets_summary: normalized_optional_form_text(form.affected_assets_summary),
+            impact_summary: normalized_optional_form_text(form.impact_summary),
+            remediation_summary: normalized_optional_form_text(form.remediation_summary),
+            workaround_summary: normalized_optional_form_text(form.workaround_summary),
+            review_status: None,
+            owner: normalized_optional_form_text(form.owner),
+            due_date: form.due_date,
+            evidence_ids: Some(parse_id_list(form.evidence_ids.as_deref(), "Evidence-IDs")?),
+            sbom_vex_reference: normalized_optional_form_text(form.sbom_vex_reference),
+            open_actions: normalized_optional_form_text(form.open_actions),
+            management_review_reference: normalized_optional_form_text(
+                form.management_review_reference,
+            ),
+            contract_status: normalized_optional_form_text(form.contract_status),
+            contract_review_date: form.contract_review_date,
+            next_contract_review_due: form.next_contract_review_due,
+            exit_plan_status: normalized_optional_form_text(form.exit_plan_status),
+            exit_plan_version: normalized_optional_form_text(form.exit_plan_version),
+            exit_plan_review_date: form.exit_plan_review_date,
+            exit_plan_owner: normalized_optional_form_text(form.exit_plan_owner),
+            critical_service_dependency: Some(form_checkbox_value(
+                form.critical_service_dependency,
+            )),
+            data_processing_relevance: Some(form_checkbox_value(form.data_processing_relevance)),
+            dora_ict_third_party_relevance: Some(form_checkbox_value(
+                form.dora_ict_third_party_relevance,
+            )),
+            nis2_supply_chain_relevance: Some(form_checkbox_value(
+                form.nis2_supply_chain_relevance,
+            )),
+            termination_risk_summary: normalized_optional_form_text(form.termination_risk_summary),
+            alternative_supplier_summary: normalized_optional_form_text(
+                form.alternative_supplier_summary,
+            ),
+            change_reason: normalized_optional_form_text(form.change_reason),
+        },
+    )
+}
+
+fn web_supplier_product_security_redirect(context: &WebContext, record_id: i64) -> Response {
+    let path = web_path_with_context(
+        &format!("/suppliers/product-security/{record_id}/"),
+        Some(context),
+    );
+    Redirect::to(&path).into_response()
+}
+
+fn web_supplier_product_security_permission_error(context: &WebContext) -> Html<String> {
+    web_error_page(
+        "Supplier/Product Security",
+        "/suppliers/product-security/",
+        context,
+        "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+    )
+}
+
+fn web_form_text(value: Option<String>) -> String {
+    normalized_optional_form_text(value).unwrap_or_default()
+}
+
+fn parse_text_list(value: Option<&str>) -> Vec<String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    for item in value.split([',', ';', '\n', '\r', '\t', ' ']) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        let normalized = item.to_ascii_uppercase();
+        if !values.iter().any(|existing| existing == &normalized) {
+            values.push(normalized);
+        }
+    }
+    values
+}
+
+fn parse_optional_f64(value: Option<&str>, field_name: &str) -> Result<Option<f64>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    value
+        .replace(',', ".")
+        .parse::<f64>()
+        .map(Some)
+        .map_err(|_| format!("{field_name} muss eine Zahl sein."))
+}
+
+fn supplier_product_security_select_options(selected: &str, options: &[(&str, &str)]) -> String {
+    let selected = selected.trim().replace('-', "_").to_ascii_lowercase();
+    options
+        .iter()
+        .map(|(value, label)| {
+            let option_selected = selected == *value;
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                html_escape(value),
+                selected_attr(option_selected),
+                html_escape(label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn bool_filter_options_for_query(selected: Option<&str>) -> String {
+    let normalized = selected
+        .map(|value| value.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    [("", "Alle"), ("true", "Ja"), ("false", "Nein")]
+        .iter()
+        .map(|(value, label)| {
+            let selected = normalized == *value
+                || (normalized == "1" && *value == "true")
+                || (normalized == "0" && *value == "false");
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                value,
+                selected_attr(selected),
+                label,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn supplier_product_security_reference_html(reference: &str) -> String {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return "Nicht erfasst".to_string();
+    }
+    let lower = reference.to_ascii_lowercase();
+    if lower.starts_with("https://") || lower.starts_with("http://") {
+        return format!(
+            r#"<a href="{}" rel="noreferrer noopener">{}</a>"#,
+            html_escape(reference),
+            html_escape(reference),
+        );
+    }
+    html_escape(reference)
+}
+
+fn supplier_product_security_cve_badges(cves: &[String]) -> String {
+    if cves.is_empty() {
+        return "Nicht erfasst".to_string();
+    }
+    cves.iter()
+        .map(|cve| web_badge(cve, "info"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn supplier_product_security_scope_badges(
+    record: &supplier_product_security_store::SupplierProductSecurityRecord,
+) -> String {
+    let mut badges = Vec::new();
+    if record.dora_ict_third_party_relevance {
+        badges.push(web_badge("DORA", "info"));
+    }
+    if record.nis2_supply_chain_relevance {
+        badges.push(web_badge("NIS2", "info"));
+    }
+    if record.data_processing_relevance {
+        badges.push(web_badge("DSGVO/Daten", "info"));
+    }
+    if record.critical_service_dependency {
+        badges.push(web_badge("Kritischer Service", "warn"));
+    }
+    if badges.is_empty() {
+        "Nicht erfasst".to_string()
+    } else {
+        badges.join(" ")
+    }
+}
+
+fn supplier_product_security_criticality_badge_class(criticality: &str) -> &'static str {
+    match criticality
+        .trim()
+        .replace('-', "_")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "critical" => "danger",
+        "high" => "high",
+        "medium" => "warn",
+        "low" => "info",
+        _ => "muted-badge",
+    }
+}
+
+fn supplier_product_security_review_badge_class(status: &str) -> &'static str {
+    match status
+        .trim()
+        .replace('-', "_")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "closed" | "mitigated" | "not_applicable" => "ok",
+        "in_review" | "accepted_risk" => "info",
+        "needs_review" | "remediation_required" => "warn",
+        "draft" => "muted-badge",
+        _ => "muted-badge",
+    }
+}
+
+fn supplier_product_security_contract_badge_class(status: &str) -> &'static str {
+    match status
+        .trim()
+        .replace('-', "_")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "active" => "ok",
+        "under_review" | "renewal_due" => "warn",
+        "terminated" | "exit_required" => "danger",
+        _ => "muted-badge",
+    }
+}
+
+fn supplier_product_security_exit_badge_class(status: &str) -> &'static str {
+    match status
+        .trim()
+        .replace('-', "_")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "tested" | "not_required" => "ok",
+        "planned" => "info",
+        "needs_update" => "warn",
+        _ => "muted-badge",
+    }
 }
 
 fn web_supplier_create_payload(
@@ -29134,6 +31101,7 @@ fn web_page(
         ("/regulatory-review-packs/", "Review-Pakete"),
         ("/assets/", "Assets"),
         ("/suppliers/", "Suppliers"),
+        ("/suppliers/product-security/", "Supplier/Product Security"),
         ("/imports/", "Imports"),
         ("/processes/", "Processes"),
         ("/ai-governance/", "AI Governance"),
@@ -29231,6 +31199,14 @@ fn web_page(
     table {{ width:100%; min-width:720px; border-collapse:collapse; }}
     th, td {{ padding:10px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; overflow-wrap:anywhere; }}
     th {{ color:var(--muted); font-size:12px; text-transform:uppercase; }}
+    .wide-table {{ min-width:1180px; }}
+    .wide-table th, .wide-table td {{ overflow-wrap:normal; word-break:normal; }}
+    .wide-table td {{ overflow-wrap:anywhere; }}
+    .supplier-product-security-table {{ min-width:1320px; }}
+    .supplier-product-security-table th {{ white-space:nowrap; }}
+    .supplier-product-security-table td:first-child {{ min-width:230px; }}
+    .supplier-product-security-table td:nth-child(7),
+    .supplier-product-security-table td:nth-child(10) {{ min-width:160px; }}
     td a {{ color:var(--accent); text-decoration:none; }}
     pre {{ white-space:pre-wrap; overflow-wrap:anywhere; }}
     .badge {{ display:inline-flex; align-items:center; min-height:24px; padding:3px 8px; border-radius:999px; border:1px solid transparent; background:var(--soft); color:var(--ink); font-size:12px; font-weight:800; line-height:1.2; white-space:nowrap; }}
@@ -32210,6 +34186,37 @@ fn management_review_json_label(key: &str) -> String {
         "open_roadmap_tasks" => "Offene Roadmap-Tasks".to_string(),
         "critical_suppliers" => "Kritische Supplier".to_string(),
         "overdue_supplier_reviews" => "Ueberfaellige Supplier-Reviews".to_string(),
+        "supplier_product_security_records" => "Supplier/Product-Security-Datensaetze".to_string(),
+        "open_supplier_product_security_advisories" => {
+            "Offene Supplier/Product-Security-Advisorys".to_string()
+        }
+        "critical_supplier_product_security_advisories" => {
+            "Kritische Supplier/Product-Security-Advisorys".to_string()
+        }
+        "supplier_product_security_missing_evidence" => {
+            "Fehlende Supplier/Product-Security-Evidence".to_string()
+        }
+        "supplier_product_security_missing_owner" => {
+            "Fehlende Supplier/Product-Security-Owner".to_string()
+        }
+        "supplier_product_security_open_actions" => {
+            "Offene Supplier/Product-Security-Massnahmen".to_string()
+        }
+        "supplier_product_security_overdue_reviews" => {
+            "Ueberfaellige Supplier/Product-Security-Reviews".to_string()
+        }
+        "supplier_product_security_dora_relevant" => {
+            "DORA-relevante Supplier/Product-Security-Daten".to_string()
+        }
+        "supplier_product_security_nis2_relevant" => {
+            "NIS2-relevante Supplier/Product-Security-Daten".to_string()
+        }
+        "supplier_product_security_data_processing_relevant" => {
+            "Supplier/Product Security mit Datenbezug".to_string()
+        }
+        "supplier_product_security_critical_services" => {
+            "Kritische Supplier/Product-Security-Services".to_string()
+        }
         "evidence_integrity_not_checked" => "Evidence-Integritaet nicht geprueft".to_string(),
         "evidence_integrity_valid" => "Evidence-Integritaet gueltig".to_string(),
         "evidence_integrity_mismatch" => "Evidence-Integritaetsabweichungen".to_string(),
@@ -32707,6 +34714,23 @@ fn web_path_with_context(path: &str, context: Option<&WebContext>) -> String {
     format!(
         "{path}{separator}tenant_id={}&user_id={}{}",
         context.tenant_id, context.user_id, email
+    )
+}
+
+fn web_context_hidden_inputs(context: &WebContext) -> String {
+    let email = context
+        .user_email
+        .as_ref()
+        .map(|email| {
+            format!(
+                r#"<input type="hidden" name="user_email" value="{}">"#,
+                html_escape(email),
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r#"<input type="hidden" name="tenant_id" value="{}"><input type="hidden" name="user_id" value="{}">{}"#,
+        context.tenant_id, context.user_id, email,
     )
 }
 
@@ -33635,8 +35659,36 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/assets/information-assets", get(asset_inventory))
         .route(
+            "/api/v1/suppliers/product-security",
+            get(supplier_product_security_overview).post(supplier_product_security_create),
+        )
+        .route(
+            "/api/v1/suppliers/product-security/{record_id}",
+            get(supplier_product_security_detail).patch(supplier_product_security_update),
+        )
+        .route(
+            "/api/v1/suppliers/product-security/{record_id}/status",
+            post(supplier_product_security_status_update),
+        )
+        .route(
+            "/api/v1/suppliers/product-security/{record_id}/evidence",
+            post(supplier_product_security_evidence_link),
+        )
+        .route(
+            "/api/v1/suppliers/product-security/{record_id}/events",
+            get(supplier_product_security_events),
+        )
+        .route(
             "/api/v1/suppliers",
             get(supplier_risk_overview).post(supplier_create),
+        )
+        .route(
+            "/api/v1/suppliers/{supplier_id}/product-security",
+            get(supplier_product_security_by_supplier),
+        )
+        .route(
+            "/api/v1/suppliers/{supplier_id}/contract-exit-history",
+            get(supplier_contract_exit_history),
         )
         .route(
             "/api/v1/suppliers/{supplier_id}",
@@ -34187,6 +36239,26 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/assets/", get(web_assets))
         .route("/suppliers/", get(web_suppliers).post(web_suppliers_submit))
+        .route(
+            "/suppliers/product-security/",
+            get(web_supplier_product_security).post(web_supplier_product_security_submit),
+        )
+        .route(
+            "/suppliers/product-security/{record_id}/",
+            get(web_supplier_product_security_detail),
+        )
+        .route(
+            "/suppliers/product-security/{record_id}/update",
+            post(web_supplier_product_security_update_submit),
+        )
+        .route(
+            "/suppliers/product-security/{record_id}/status",
+            post(web_supplier_product_security_status_submit),
+        )
+        .route(
+            "/suppliers/product-security/{record_id}/evidence",
+            post(web_supplier_product_security_evidence_submit),
+        )
         .route("/suppliers/{supplier_id}/", get(web_supplier_detail))
         .route(
             "/suppliers/{supplier_id}/reviews",

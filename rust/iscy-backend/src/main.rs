@@ -32,6 +32,7 @@ use iscy_backend::{
     risk_store::RiskStore,
     roadmap_store::RoadmapStore,
     security_store::SecurityStore,
+    supplier_product_security_store::SupplierProductSecurityStore,
     supplier_store::SupplierStore,
     tenant_store::TenantStore,
     wizard_store::WizardStore,
@@ -104,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
         roadmap_store,
         security_store,
         supplier_store,
+        supplier_product_security_store,
         wizard_store,
         product_security_store,
         ai_governance_store,
@@ -131,6 +133,8 @@ async fn main() -> anyhow::Result<()> {
             let roadmap_store = RoadmapStore::connect(database_url).await?;
             let security_store = SecurityStore::connect(database_url).await?;
             let supplier_store = SupplierStore::connect(database_url).await?;
+            let supplier_product_security_store =
+                SupplierProductSecurityStore::connect(database_url).await?;
             let wizard_store = WizardStore::connect(database_url).await?;
             let product_security_store = ProductSecurityStore::connect(database_url).await?;
             let ai_governance_store = AiGovernanceStore::connect(database_url).await?;
@@ -157,6 +161,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(roadmap_store),
                 Some(security_store),
                 Some(supplier_store),
+                Some(supplier_product_security_store),
                 Some(wizard_store),
                 Some(product_security_store),
                 Some(ai_governance_store),
@@ -164,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => (
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
-            None, None, None, None, None, None, None, None, None, None, None,
+            None, None, None, None, None, None, None, None, None, None, None, None,
         ),
     };
     let notification_worker_store = agent_governance_store.clone();
@@ -190,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
         .with_roadmap_store(roadmap_store)
         .with_security_store(security_store)
         .with_supplier_store(supplier_store)
+        .with_supplier_product_security_store(supplier_product_security_store)
         .with_wizard_store(wizard_store)
         .with_product_security_store(product_security_store)
         .with_ai_governance_store(ai_governance_store)

@@ -45,7 +45,7 @@ Erfolgskriterium:
 
 Ziel: ISCY soll aus vorhandenen Daten automatisch ein Management-Review- und Audit-Paket erzeugen.
 
-Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt; V23.7.21 ergaenzt Exporte und Snapshot-Ruecklinks. Im Unreleased-Stand kommen Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews sowie kontextsensitive Regulatory Review-Pakete fuer NIS2, DORA und DSGVO hinzu. Der Review-Pack-Polish ergaenzt Filter, Owner-Hinweise, pack-spezifische Lueckengruppen und deutsch konsistente UI-Beschriftungen.
+Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt; V23.7.21 ergaenzt Exporte und Snapshot-Ruecklinks. Im Unreleased-Stand kommen Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews sowie kontextsensitive Regulatory Review-Pakete fuer NIS2, DORA und DSGVO hinzu. Der Review-Pack-Polish ergaenzt Filter, Owner-Hinweise, pack-spezifische Lueckengruppen und deutsch konsistente UI-Beschriftungen; Supplier/Product-Security-Gaps werden nun in NIS2-, DORA-, DSGVO- und generischen Review-Paketen beruecksichtigt.
 
 Umgesetzt:
 
@@ -64,6 +64,7 @@ Umgesetzt:
 - Weboberflaeche mit Template-Auswahl, Preview vor Snapshot-Erzeugung und Detailansicht fuer Quellen, Gaps, Management-Hinweise, Supplier Review und regulatorischen Kontext.
 - Weboberflaeche `/regulatory-review-packs/` mit NIS2-, DORA- und DSGVO-Auswahl, Filterbereich, Preview, Owner-/Verantwortlichen-Hinweisen, pack-spezifischer Lueckenuebersicht, Snapshot-Erzeugung und Snapshot-Liste.
 - Preview erzeugt keinen Review-Snapshot; Snapshot-Erzeugung bleibt schreibenden Rollen vorbehalten.
+- Supplier/Product-Security-Daten aus Migration `0034_rust_supplier_product_security_governance` fliessen in Review-Pakete als offene Advisorys, kritische Lieferantenabhaengigkeiten, fehlende Evidence, fehlende Owner, offene Massnahmen, Vertrags-/Exit-Plan-Hinweise und relevante DORA-/NIS2-/DSGVO-Bezuege ein.
 - Regulatory Review-Pakete liefern Governance- und Evidence-Unterstuetzung, aber keine Rechtsberatung, Zertifizierung, automatische Meldung oder formale Einreichung.
 
 Naechste Vertiefung:
@@ -120,7 +121,8 @@ Erfolgskriterium:
 Ziel: Lieferanten, Cloud-, SaaS-, IKT- und Produktzulieferer sollen als eigener Risikobereich sichtbar werden.
 
 Status: In V23.7.22 als Supplier-Risk-API und Webansicht umgesetzt. Im
-Unreleased-Stand kommt der tenantgebundene Supplier-Review-Workflow hinzu.
+Unreleased-Stand kommen der tenantgebundene Supplier-Review-Workflow und das
+Supplier/Product-Security-Deepening hinzu.
 
 Umgesetzt:
 
@@ -138,18 +140,23 @@ Umgesetzt:
 - Supplier koennen explizit mit bestehenden Evidence-, ISCY-27-Control- und Risiko-Objekten verknuepft werden, ohne eine parallele Evidence-, Risiko- oder Control-Engine einzufuehren.
 - Vertragsbeginn, Vertragsende, Kuendigungsfrist, automatische Verlaengerung, naechster Vertragsreview, Vertrags-Evidence sowie Exit-Test-Status und Exit-Test-Evidence sind als Metadaten abbildbar.
 - Web-Detailansicht `/suppliers/{id}/` zeigt Reviewstand, Historie, Subprocessors, Vertrags-/Exit-Daten, Links und Auditspur; schreibende Aktionen bleiben Admin-/Editor-Rollen vorbehalten.
+- Migration `0034_rust_supplier_product_security_governance` verbindet Supplier, Produkt/Service, lokale Advisory-/PSIRT-/CVE-Metadaten, SBOM-/VEX-Bezuege, Evidence, Review-Status, offene Massnahmen und Management-/Regulatory-Review-Bezug.
+- Weboberflaeche `/suppliers/product-security/` zeigt Lieferant, Produkt/Service, Kritikalitaet, Advisory-/CVE-/PSIRT-Bezug, betroffene und behobene Versionen, Status, Owner, Faelligkeit, Evidence, Vertragsstatus, Exit-Plan-Status und DORA-/NIS2-/DSGVO-Relevanz.
+- API-Pfade `GET`/`POST /api/v1/suppliers/product-security`, `GET`/`PATCH /api/v1/suppliers/product-security/{record_id}`, Status-, Evidence- und Event-Endpunkte sowie Supplier-bezogene Contract-/Exit-History-Abfragen.
+- Vertrags-/Exit-Plan-Aenderungen werden als Historie mit Version, Akteurreferenz, Zeitpunkt, Grund, vorherigem/neuem Status, Summary und Evidence-Referenzen gefuehrt.
+- Advisory-/PSIRT-/CVE-Referenzen bleiben lokale Metadaten und Import-Vorbereitung. ISCY ruft keine externen Hersteller-, NVD-, GitHub-Advisory- oder sonstigen Live-Feeds ab.
 
 Naechste Vertiefung:
 
-- Datenuebermittlungen und komplexere Vertrags-/Exit-Versionierung spaeter bewusst als eigenen Reifegrad betrachten.
-- Supplier-Advisory- und Herstellerfeeds aus dem Product-Security-Bereich fachlich anbinden.
-- Management-/Regulatory-Templates nehmen Supplier-Review-Daten bereits als eingefrorene Summary in wiederholbare Pruefpakete auf.
+- Datenuebermittlungen und noch feinere Vertrags-/Exit-Dokumentenmodelle spaeter bewusst als eigenen Reifegrad betrachten.
+- Externe Supplier-Advisory- und Herstellerfeeds erst als getrennten, sicherheitsgeprueften Import-Meilenstein anbinden.
+- Management-/Regulatory-Templates nehmen Supplier-Review- und Supplier/Product-Security-Daten als eingefrorene Summary in wiederholbare Pruefpakete auf.
 
 Erfolgskriterium:
 
 - ISCY kann zeigen, welche externen Abhaengigkeiten kritisch sind, welche Nachweise fehlen und welche Risiken daraus entstehen.
 
-## Prioritaet 5: Product-Security-Reife (umgesetzt in V23.7.23 und V23.7.26)
+## Prioritaet 5: Product-Security-Reife (umgesetzt in V23.7.23 und V23.7.26, vertieft im Unreleased-Stand)
 
 Ziel: Der bestehende Product-Security-Bereich soll von Import/Korrelation zu einem echten PSIRT-/CRA-Arbeitsplatz wachsen.
 
@@ -163,11 +170,12 @@ Umgesetzt:
 - Blocker-Gate fuer vorbehaltlose Freigaben sowie dokumentierte bedingte Freigaben.
 - Paketversionierung mit Vorgaengerbezug und Export als Markdown, HTML, PDF und JSON.
 - Betriebs- und Prometheus-Signal fuer offene Paketreviews und Blocker.
+- Supplier/Product-Security-Deepening verknuepft lokale Supplier-Advisory-, PSIRT- und CVE-Metadaten mit Lieferanten, Produkt/Service, Evidence, Review-Status, offenen Massnahmen, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs.
 
 Noch ausbaufähig:
 
 - Security-Update- und Support-Ende je Produkt/Version pflegen.
-- Supplier-Advisory- und Herstellerfeeds je Produkt verknuepfen.
+- Externe Supplier-Advisory- und Herstellerfeeds je Produkt als separaten Import-/Validierungsmeilenstein verknuepfen.
 
 Erfolgskriterium:
 
@@ -254,6 +262,7 @@ Erfolgskriterium:
 | Erledigt | Gefuehrtes Agent-Onboarding | Enrollment-Tokens, Deployment-Artefakte und Flottenstatus sind ueber einen sicheren Admin-Assistenten bedienbar. |
 | Unreleased | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
 | Unreleased | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen, Exit-Test-Nachweise und tenantgesicherte Evidence-/Control-/Risk-Links. |
+| Unreleased | Supplier/Product-Security-Deepening | Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs sind tenantgebunden verbunden. |
 | Umgesetzt / Vertiefung | Management-/Regulatory-Templates | Wiederholbare ISO-27001-, NIS2-, DORA-, KRITIS- und Governance-Pakete werden aus bestehenden Snapshots erzeugt; feinere Varianten koennen spaeter folgen. |
 | Unreleased | Evidence Integrity & Disposition Phase 1 | Manuelle und begrenzte Batch-Re-Hash-Pruefung, Legal Hold, metadata-only Disposition und auditierbare Integritaetsereignisse sind tenantgebunden verfuegbar. |
 | Unreleased | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |

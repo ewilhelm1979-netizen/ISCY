@@ -2209,7 +2209,18 @@ async fn product_security_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Res
         "open_vulnerabilities": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM product_security_vulnerability WHERE tenant_id = $1 AND status NOT IN ('FIXED', 'CLOSED', 'RESOLVED')", tenant_id).await?,
         "critical_open_vulnerabilities": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM product_security_vulnerability WHERE tenant_id = $1 AND severity = 'CRITICAL' AND status NOT IN ('FIXED', 'CLOSED', 'RESOLVED')", tenant_id).await?,
         "open_cve_correlation_reviews": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM product_security_cvecorrelation WHERE tenant_id = $1 AND status = 'SUGGESTED'", tenant_id).await?,
-        "invalid_imports": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM product_security_importartifact WHERE tenant_id = $1 AND validation_status NOT IN ('VALID', 'VALIDATED')", tenant_id).await?
+        "invalid_imports": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM product_security_importartifact WHERE tenant_id = $1 AND validation_status NOT IN ('VALID', 'VALIDATED')", tenant_id).await?,
+        "supplier_product_security_records": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1", tenant_id).await?,
+        "open_supplier_product_security_advisories": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1 AND review_status NOT IN ('closed', 'mitigated', 'not_applicable')", tenant_id).await?,
+        "critical_supplier_product_security_advisories": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1 AND (severity = 'critical' OR criticality = 'critical') AND review_status NOT IN ('closed', 'mitigated', 'not_applicable')", tenant_id).await?,
+        "supplier_product_security_missing_evidence": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1 AND review_status NOT IN ('closed', 'mitigated', 'not_applicable') AND (BTRIM(evidence_ids_json) = '[]' OR evidence_ids_json IS NULL)", tenant_id).await?,
+        "supplier_product_security_missing_owner": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1 AND BTRIM(owner) = '' AND BTRIM(internal_owner) = ''", tenant_id).await?,
+        "supplier_product_security_open_actions": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1 AND review_status NOT IN ('closed', 'mitigated', 'not_applicable') AND BTRIM(open_actions) <> ''", tenant_id).await?,
+        "supplier_product_security_overdue_reviews": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1 AND due_date IS NOT NULL AND due_date::text < CURRENT_DATE::text AND review_status NOT IN ('closed', 'mitigated', 'not_applicable')", tenant_id).await?,
+        "supplier_product_security_dora_relevant": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1 AND dora_ict_third_party_relevance = TRUE", tenant_id).await?,
+        "supplier_product_security_nis2_relevant": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1 AND nis2_supply_chain_relevance = TRUE", tenant_id).await?,
+        "supplier_product_security_data_processing_relevant": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1 AND data_processing_relevance = TRUE", tenant_id).await?,
+        "supplier_product_security_critical_services": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM supplier_product_security_record WHERE tenant_id = $1 AND critical_service_dependency = TRUE", tenant_id).await?
     }))
 }
 
@@ -2219,7 +2230,18 @@ async fn product_security_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::R
         "open_vulnerabilities": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM product_security_vulnerability WHERE tenant_id = ? AND status NOT IN ('FIXED', 'CLOSED', 'RESOLVED')", tenant_id).await?,
         "critical_open_vulnerabilities": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM product_security_vulnerability WHERE tenant_id = ? AND severity = 'CRITICAL' AND status NOT IN ('FIXED', 'CLOSED', 'RESOLVED')", tenant_id).await?,
         "open_cve_correlation_reviews": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM product_security_cvecorrelation WHERE tenant_id = ? AND status = 'SUGGESTED'", tenant_id).await?,
-        "invalid_imports": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM product_security_importartifact WHERE tenant_id = ? AND validation_status NOT IN ('VALID', 'VALIDATED')", tenant_id).await?
+        "invalid_imports": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM product_security_importartifact WHERE tenant_id = ? AND validation_status NOT IN ('VALID', 'VALIDATED')", tenant_id).await?,
+        "supplier_product_security_records": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ?", tenant_id).await?,
+        "open_supplier_product_security_advisories": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ? AND review_status NOT IN ('closed', 'mitigated', 'not_applicable')", tenant_id).await?,
+        "critical_supplier_product_security_advisories": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ? AND (severity = 'critical' OR criticality = 'critical') AND review_status NOT IN ('closed', 'mitigated', 'not_applicable')", tenant_id).await?,
+        "supplier_product_security_missing_evidence": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ? AND review_status NOT IN ('closed', 'mitigated', 'not_applicable') AND (TRIM(evidence_ids_json) = '[]' OR evidence_ids_json IS NULL)", tenant_id).await?,
+        "supplier_product_security_missing_owner": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ? AND TRIM(owner) = '' AND TRIM(internal_owner) = ''", tenant_id).await?,
+        "supplier_product_security_open_actions": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ? AND review_status NOT IN ('closed', 'mitigated', 'not_applicable') AND TRIM(open_actions) <> ''", tenant_id).await?,
+        "supplier_product_security_overdue_reviews": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ? AND due_date IS NOT NULL AND CAST(due_date AS TEXT) < date('now') AND review_status NOT IN ('closed', 'mitigated', 'not_applicable')", tenant_id).await?,
+        "supplier_product_security_dora_relevant": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ? AND dora_ict_third_party_relevance = 1", tenant_id).await?,
+        "supplier_product_security_nis2_relevant": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ? AND nis2_supply_chain_relevance = 1", tenant_id).await?,
+        "supplier_product_security_data_processing_relevant": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ? AND data_processing_relevance = 1", tenant_id).await?,
+        "supplier_product_security_critical_services": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM supplier_product_security_record WHERE tenant_id = ? AND critical_service_dependency = 1", tenant_id).await?
     }))
 }
 
@@ -2651,6 +2673,7 @@ fn management_review_source_counts(
         "roadmap_tasks": counts.roadmap,
         "product_security_products": json_i64(product_security, "products"),
         "product_security_open_vulnerabilities": json_i64(product_security, "open_vulnerabilities"),
+        "supplier_product_security_records": json_i64(product_security, "supplier_product_security_records"),
         "suppliers": counts.suppliers,
         "agent_devices": json_i64(agent_posture, "devices"),
         "ai_governance_systems": counts.ai_governance,
@@ -2662,6 +2685,7 @@ fn management_review_source_counts(
             "incidents": counts.incidents == 0,
             "roadmap_tasks": counts.roadmap == 0,
             "suppliers": counts.suppliers == 0,
+            "supplier_product_security": json_i64(product_security, "supplier_product_security_records") == 0,
             "ai_governance": counts.ai_governance == 0
         }
     })
@@ -2684,6 +2708,16 @@ fn management_review_gap_summary(
         "critical_open_vulnerabilities": json_i64(product_security, "critical_open_vulnerabilities"),
         "open_cve_correlation_reviews": json_i64(product_security, "open_cve_correlation_reviews"),
         "invalid_product_security_imports": json_i64(product_security, "invalid_imports"),
+        "open_supplier_product_security_advisories": json_i64(product_security, "open_supplier_product_security_advisories"),
+        "critical_supplier_product_security_advisories": json_i64(product_security, "critical_supplier_product_security_advisories"),
+        "supplier_product_security_missing_evidence": json_i64(product_security, "supplier_product_security_missing_evidence"),
+        "supplier_product_security_missing_owner": json_i64(product_security, "supplier_product_security_missing_owner"),
+        "supplier_product_security_open_actions": json_i64(product_security, "supplier_product_security_open_actions"),
+        "supplier_product_security_overdue_reviews": json_i64(product_security, "supplier_product_security_overdue_reviews"),
+        "supplier_product_security_dora_relevant": json_i64(product_security, "supplier_product_security_dora_relevant"),
+        "supplier_product_security_nis2_relevant": json_i64(product_security, "supplier_product_security_nis2_relevant"),
+        "supplier_product_security_data_processing_relevant": json_i64(product_security, "supplier_product_security_data_processing_relevant"),
+        "supplier_product_security_critical_services": json_i64(product_security, "supplier_product_security_critical_services"),
         "evidence_integrity_not_checked": json_i64(metrics, "evidence_integrity_not_checked"),
         "evidence_integrity_mismatch": json_i64(metrics, "evidence_integrity_mismatch"),
         "evidence_storage_artifact_references": json_i64(metrics, "evidence_storage_artifact_references"),
@@ -2752,8 +2786,33 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                 &[
                     ("Kritische Supplier", "critical_suppliers", true),
                     (
+                        "Offene Supplier/Product-Security-Advisorys",
+                        "open_supplier_product_security_advisories",
+                        true,
+                    ),
+                    (
+                        "Kritische Lieferantenabhaengigkeiten",
+                        "supplier_product_security_critical_services",
+                        true,
+                    ),
+                    (
+                        "Offene Supplier/Product-Security-Massnahmen",
+                        "supplier_product_security_open_actions",
+                        false,
+                    ),
+                    (
                         "Fehlende Supplier-Evidence",
                         "missing_supplier_evidence",
+                        false,
+                    ),
+                    (
+                        "Fehlende Supplier/Product-Security-Evidence",
+                        "supplier_product_security_missing_evidence",
+                        false,
+                    ),
+                    (
+                        "Fehlende Supplier/Product-Security-Owner",
+                        "supplier_product_security_missing_owner",
                         false,
                     ),
                     (
@@ -2784,6 +2843,21 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                 &[
                     ("Kritische Supplier", "critical_suppliers", true),
                     (
+                        "DORA-relevante Supplier/Product-Security-Datensaetze",
+                        "supplier_product_security_dora_relevant",
+                        false,
+                    ),
+                    (
+                        "Kritische ICT-Dienstleister / Services",
+                        "supplier_product_security_critical_services",
+                        true,
+                    ),
+                    (
+                        "Offene Supplier/Product-Security-Advisorys",
+                        "open_supplier_product_security_advisories",
+                        true,
+                    ),
+                    (
                         "Ueberfaellige oder nicht bewertete Supplier",
                         "overdue_or_unreviewed_suppliers",
                         false,
@@ -2798,6 +2872,11 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
             (
                 "Exit-, Contract- und Review-Gaps",
                 &[
+                    (
+                        "Ueberfaellige Supplier/Product-Security-Reviews",
+                        "supplier_product_security_overdue_reviews",
+                        false,
+                    ),
                     (
                         "Ueberfaellige oder nicht bewertete Supplier",
                         "overdue_or_unreviewed_suppliers",
@@ -2860,8 +2939,28 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                 &[
                     ("Kritische Supplier", "critical_suppliers", true),
                     (
+                        "Supplier/Product Security mit Datenbezug",
+                        "supplier_product_security_data_processing_relevant",
+                        false,
+                    ),
+                    (
+                        "Offene Supplier-Advisorys mit moeglichem Datenbezug",
+                        "open_supplier_product_security_advisories",
+                        true,
+                    ),
+                    (
                         "Fehlende Supplier-Evidence",
                         "missing_supplier_evidence",
+                        false,
+                    ),
+                    (
+                        "Fehlende Supplier/Product-Security-Evidence",
+                        "supplier_product_security_missing_evidence",
+                        false,
+                    ),
+                    (
+                        "Fehlende Owner oder Reviews",
+                        "supplier_product_security_missing_owner",
                         false,
                     ),
                     (
@@ -2921,6 +3020,31 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                     (
                         "Fehlende Supplier-Evidence",
                         "missing_supplier_evidence",
+                        false,
+                    ),
+                ],
+            ),
+            (
+                "Supplier/Product Security",
+                &[
+                    (
+                        "Offene Advisorys",
+                        "open_supplier_product_security_advisories",
+                        true,
+                    ),
+                    (
+                        "Offene Massnahmen",
+                        "supplier_product_security_open_actions",
+                        false,
+                    ),
+                    (
+                        "Fehlende Evidence",
+                        "supplier_product_security_missing_evidence",
+                        false,
+                    ),
+                    (
+                        "Ueberfaellige Reviews",
+                        "supplier_product_security_overdue_reviews",
                         false,
                     ),
                 ],
@@ -3059,8 +3183,10 @@ fn review_owner_hints(
         ),
         owner_hint(
             "Product Security / PSIRT",
-            if json_i64(product_security, "products") > 0 {
-                "PSIRT-/Product-Security-Verantwortung pruefen"
+            if json_i64(product_security, "products") > 0
+                || json_i64(product_security, "supplier_product_security_records") > 0
+            {
+                "PSIRT-, Supplier/Product-Security- und Remediation-Verantwortung pruefen"
             } else {
                 "Keine Product-Security-Daten erfasst"
             },
@@ -3136,6 +3262,7 @@ fn review_data_completeness_summary(source_counts: &Value) -> Value {
         ("Incidents", "incidents"),
         ("Roadmap-Tasks", "roadmap_tasks"),
         ("Supplier", "suppliers"),
+        ("Supplier/Product Security", "supplier_product_security"),
         ("AI Governance", "ai_governance"),
     ]
     .iter()
@@ -3146,6 +3273,7 @@ fn review_data_completeness_summary(source_counts: &Value) -> Value {
             "ai_governance" => "ai_governance_systems",
             "controls" => "controls",
             "suppliers" => "suppliers",
+            "supplier_product_security" => "supplier_product_security_records",
             key => key,
         };
         let count = json_i64(source_counts, count_key);
@@ -3177,6 +3305,12 @@ fn regulatory_review_has_open_gaps(gap_summary: &Value) -> bool {
         "critical_open_vulnerabilities",
         "open_cve_correlation_reviews",
         "invalid_product_security_imports",
+        "open_supplier_product_security_advisories",
+        "critical_supplier_product_security_advisories",
+        "supplier_product_security_missing_evidence",
+        "supplier_product_security_missing_owner",
+        "supplier_product_security_open_actions",
+        "supplier_product_security_overdue_reviews",
         "evidence_integrity_not_checked",
         "evidence_integrity_mismatch",
         "evidence_legal_hold_active",
@@ -3198,6 +3332,8 @@ fn regulatory_review_has_critical_gaps(gap_summary: &Value) -> bool {
     [
         "critical_open_risks",
         "critical_open_vulnerabilities",
+        "critical_supplier_product_security_advisories",
+        "supplier_product_security_critical_services",
         "evidence_integrity_mismatch",
         "critical_suppliers",
         "critical_agent_findings",
@@ -3239,6 +3375,35 @@ fn management_review_decision_summary(
         || json_i64(sources.product_security, "critical_open_vulnerabilities") > 0
     {
         required_decisions.push("Product-Security-CVE-Review und Remediation-Prioritaet");
+    }
+    if json_i64(
+        sources.product_security,
+        "open_supplier_product_security_advisories",
+    ) > 0
+        || json_i64(
+            sources.product_security,
+            "supplier_product_security_open_actions",
+        ) > 0
+        || json_i64(
+            sources.product_security,
+            "supplier_product_security_overdue_reviews",
+        ) > 0
+    {
+        required_decisions.push(
+            "Supplier/Product-Security-Advisorys, Vertrags-/Exit-Plan-Status und offene Massnahmen pruefen",
+        );
+    }
+    if json_i64(
+        sources.product_security,
+        "supplier_product_security_missing_evidence",
+    ) > 0
+        || json_i64(
+            sources.product_security,
+            "supplier_product_security_missing_owner",
+        ) > 0
+    {
+        required_decisions
+            .push("Supplier/Product-Security-Evidence und Owner / Verantwortliche nachziehen");
     }
     if json_i64(sources.metrics, "evidence_integrity_mismatch") > 0
         || json_i64(sources.metrics, "evidence_integrity_not_checked") > 0
