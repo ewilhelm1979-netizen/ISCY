@@ -59,6 +59,19 @@ POST /api/v1/agents/notification-channels
 PATCH /api/v1/agents/notification-channels/{channel_id}
 GET  /api/v1/agents/notification-deliveries
 POST /api/v1/agents/notifications/evaluate
+GET  /api/v1/agents/pki/providers
+POST /api/v1/agents/pki/providers
+GET  /api/v1/agents/pki/csrs
+POST /api/v1/agents/pki/csrs
+POST /api/v1/agents/pki/csrs/{csr_id}/approve
+POST /api/v1/agents/pki/csrs/{csr_id}/reject
+POST /api/v1/agents/pki/csrs/{csr_id}/cancel
+GET  /api/v1/agents/pki/certificates
+PATCH /api/v1/agents/pki/certificates/{certificate_id}/status
+POST /api/v1/agents/pki/certificates/{certificate_id}/rotation-required
+POST /api/v1/agents/pki/certificates/{certificate_id}/revocation-request
+GET  /api/v1/agents/{agent_id}/pki
+GET  /api/v1/agents/onboarding/pki
 ```
 
 Admin-/Demo-Headers:
@@ -146,11 +159,11 @@ GET  /api/v1/agents/onboarding/artifacts
 ```
 
 Read-only-Rollen sehen sichere Metadaten. Schreibende Rollen duerfen Manifest-
-Refresh, SHA-256-Pruefung und Signaturstatuspruefung ausloesen. Das Signaturmodell
-ist in diesem Stand bewusst vorbereitend: Es enthaelt keine produktiven
+Refresh, SHA-256-Pruefung und Signaturstatuspruefung ausloesen. Das Artefakt- und
+Signaturmodell ist bewusst vorbereitend: Es enthaelt keine produktiven
 Code-Signing-Zertifikate, keine privaten Schluessel, keine externe PKI/CA, keine
-CSR-Funktion, keine Sigstore-/Rekor-/Fulcio-Netzwerkaufrufe und keine automatische
-GitHub-Release-Veroeffentlichung.
+produktive CA-/CSR-Operation, keine Sigstore-/Rekor-/Fulcio-Netzwerkaufrufe und
+keine automatische GitHub-Release-Veroeffentlichung.
 
 ### Token-Lifecycle
 
@@ -455,10 +468,31 @@ zusaetzlich:
 - Policy-Konformitaet und erwartete Coverage ueber alle konfigurierten Scopes
 - aktivierte Notification-Kanaele und fehlende Secret-Konfiguration
 
-## Spaetere CA-/PKI-Stufe
+## Agent-PKI, CSR und mTLS-Governance
 
-Dieser Meilenstein implementiert keine CA oder Zertifikatsausstellung. Eine
-spaetere, eigene Ausbaustufe kann lokale Schluessel- und CSR-Erzeugung auf dem
-Agent, eine providerunabhaengige CA-Schnittstelle sowie Ausstellung, Rotation,
-Widerruf und Ablaufueberwachung ergaenzen. Der private Agent-Schluessel darf das
-Geraet dabei niemals verlassen.
+ISCY bildet eine vorbereitete CA-/PKI-/CSR-Governance-Schicht fuer Agenten ab.
+Sie ist ein Metadata-only-Modell und keine produktive CA. Erfasst werden
+CA-Provider-Status, Trust Domain, Issuing Policy, erlaubte Agent-Profile,
+Zertifikatslaufzeit, Renewal-Fenster, Widerrufsmodus, CRL-/OCSP-Referenz,
+Key-Storage-Policy, Secret-Referenzstatus und bekannte Limitierungen.
+
+CSR-Datensaetze enthalten sichere Metadaten wie Agent-Bezug, Common Name,
+SAN-Zusammenfassung, Key-Algorithmus, beantragte Nutzung, Fingerprints, Hashes,
+Review-Status, Freigabe/Ablehnung und Audit-Summary. Rohe private Schluessel,
+produktive CA-Secrets und lokale Pfade werden nicht gespeichert. Rohes CSR-PEM
+wird bewusst nicht als Freitext abgelegt; bevorzugt werden Fingerprints und
+Hashes.
+
+Zertifikatsstatus wird pro Tenant und Agent als Governance-Sicht gepflegt:
+Status, mTLS-Bindung, Rotation, Widerruf, Laufzeit, Fingerprint, sichere
+Issuer-/Subject-Summaries und Evidence-IDs. Die Weboberflaeche unter
+`/zero-trust/` zeigt Provider, offene CSR, Zertifikatsstatus, mTLS-Gaps,
+Rotation und Widerruf. Der Onboarding-Assistent zeigt denselben Status als
+Vorbereitungs- und Betriebscheck.
+
+Bewusst nicht enthalten sind echte Zertifikatsausstellung, produktive
+CA-Anbindung, automatische mTLS-Aktivierung, produktive Rotation, produktiver
+Widerruf, private Schluessel, echte CA-Secrets und externe CA-Netzwerkaufrufe.
+Eine spaetere produktive Stufe muss lokale Schluessel- und CSR-Erzeugung auf dem
+Agenten, Provider-Adapter, Secret-Management und negative mTLS-/CA-Tests separat
+reviewen. Der private Agent-Schluessel darf das Geraet dabei niemals verlassen.

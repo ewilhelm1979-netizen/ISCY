@@ -8,6 +8,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use iscy_backend::{
     account_store::AccountStore,
     agent_governance_store::AgentGovernanceStore,
+    agent_pki_store::AgentPkiStore,
     agent_release_store::AgentReleaseStore,
     agent_store::AgentStore,
     ai_governance_store::AiGovernanceStore,
@@ -695,8 +696,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0036_rust_agent_release_artifact_provenance"));
-    assert!(html.contains("36/36 angewendet"));
+    assert!(html.contains("0037_rust_agent_pki_csr_governance"));
+    assert!(html.contains("37/37 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -14746,7 +14747,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0033_rust_evidence_integrity_disposition",
             "0034_rust_supplier_product_security_governance",
             "0035_rust_evidence_worker_disposition_storage",
-            "0036_rust_agent_release_artifact_provenance"
+            "0036_rust_agent_release_artifact_provenance",
+            "0037_rust_agent_pki_csr_governance"
         ]
     );
     assert!(
@@ -14805,6 +14807,14 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             .await
             .unwrap()
     );
+    for table in [
+        "agent_pki_provider",
+        "agent_certificate_request",
+        "agent_certificate_status",
+        "agent_pki_event",
+    ] {
+        assert!(db_admin::sqlite_table_exists(&pool, table).await.unwrap());
+    }
     let evidence_columns = sqlx::query("PRAGMA table_info(evidence_evidenceitem)")
         .fetch_all(&pool)
         .await
@@ -15253,6 +15263,385 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             .await
             .unwrap();
     assert_eq!(mapping_count, 67);
+}
+
+#[tokio::test]
+async fn agent_pki_csr_governance_enforces_roles_tenants_and_review_snapshot() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_device (
+            tenant_id, stable_device_id, hostname, os_family,
+            enrollment_status, zero_trust_score
+        ) VALUES (
+            1, 'zt-agent-pki-http', 'zt-agent-pki-http', 'LINUX',
+            'ACTIVE', 95
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let agent_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM zero_trust_agent_device WHERE tenant_id = 1 AND stable_device_id = 'zt-agent-pki-http'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_pki_store(Some(AgentPkiStore::from_sqlite_pool(pool.clone())))
+            .with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/pki/providers")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+
+    let readonly_create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/pki/providers")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(
+                    r#"{"ca_provider_id":"pki-http","provider_type":"internal_placeholder"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly_create.status(), StatusCode::FORBIDDEN);
+
+    let invalid_provider = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/pki/providers")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(
+                    r#"{"ca_provider_id":"pki-http","provider_type":"real_ca_live"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_provider.status(), StatusCode::BAD_REQUEST);
+
+    let provider = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/pki/providers")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(
+                    r#"{"ca_provider_id":"pki-http","provider_name":"HTTP PKI Governance","provider_type":"internal_placeholder","provider_status":"configured_metadata_only","trust_domain":"agent.local","allowed_agent_profiles":["linux"],"known_limitations":"Nur Metadaten, keine produktive CA"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(provider.status(), StatusCode::CREATED);
+    let body = to_bytes(provider.into_body(), usize::MAX).await.unwrap();
+    let provider_body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!provider_body.contains("PRIVATE KEY"));
+    assert!(!provider_body.contains("/home/"));
+
+    let foreign_provider = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/pki/providers/pki-http")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_provider.status(), StatusCode::NOT_FOUND);
+
+    let raw_csr = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/pki/csrs")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(format!(
+                    r#"{{"csr_id":"csr-raw","agent_id":{agent_id},"subject_common_name":"zt-agent-pki-http.agent.local","csr_pem_redacted_or_hash":"-----BEGIN CERTIFICATE REQUEST-----"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(raw_csr.status(), StatusCode::BAD_REQUEST);
+
+    let csr = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/pki/csrs")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(format!(
+                    r#"{{"csr_id":"csr-http","agent_id":{agent_id},"agent_ref":"zt-agent-pki-http","subject_common_name":"zt-agent-pki-http.agent.local","subject_alt_names":["zt-agent-pki-http"],"requested_usages":["clientAuth"],"ca_provider_id":"pki-http","audit_summary":"CSR metadata-only erfasst; keine CA-Ausstellung."}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(csr.status(), StatusCode::CREATED);
+
+    let approved = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/pki/csrs/csr-http/approve")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approved.status(), StatusCode::OK);
+
+    for (csr_id, action, body) in [
+        (
+            "csr-reject",
+            "reject",
+            r#"{"reason":"Nicht benoetigt im Test"}"#,
+        ),
+        ("csr-cancel", "cancel", "{}"),
+    ] {
+        let create = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/agents/pki/csrs")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "CONTRIBUTOR")
+                    .body(Body::from(format!(
+                        r#"{{"csr_id":"{csr_id}","agent_id":{agent_id},"subject_common_name":"{csr_id}.agent.local","ca_provider_id":"pki-http"}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create.status(), StatusCode::CREATED);
+        let transition = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/agents/pki/csrs/{csr_id}/{action}"))
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "CONTRIBUTOR")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(transition.status(), StatusCode::OK);
+    }
+
+    let pending_csr = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/pki/csrs")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(format!(
+                    r#"{{"csr_id":"csr-pending","agent_id":{agent_id},"subject_common_name":"csr-pending.agent.local","ca_provider_id":"pki-http"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pending_csr.status(), StatusCode::CREATED);
+
+    let certificate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/agents/pki/certificates/cert-http/status")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(format!(
+                    r#"{{"agent_id":{agent_id},"ca_provider_id":"pki-http","subject_summary":"zt-agent-pki-http.agent.local","fingerprint_sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","certificate_status":"expiring_soon","mtls_binding_status":"mismatch","rotation_status":"not_required","revocation_status":"not_revoked","evidence_ids":[1,2]}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(certificate.status(), StatusCode::OK);
+
+    for path in [
+        "/api/v1/agents/pki/certificates/cert-http/rotation-required",
+        "/api/v1/agents/pki/certificates/cert-http/revocation-request",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "CONTRIBUTOR")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let agent_overview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/agents/{agent_id}/pki"))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(agent_overview.status(), StatusCode::OK);
+    let body = to_bytes(agent_overview.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["pki"]["pending_csr_count"], 1);
+    assert_eq!(payload["pki"]["mtls_gap_count"], 1);
+
+    let onboarding = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/onboarding/pki")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(onboarding.status(), StatusCode::OK);
+
+    let web = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/zero-trust/?tenant_id=1&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(web.status(), StatusCode::OK);
+    let body = to_bytes(web.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Agent-PKI, CSR und mTLS-Governance"));
+    assert!(html.contains("Nur Metadaten"));
+    assert!(!html.contains("PRIVATE KEY"));
+
+    let review = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/reports/management-reviews")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(
+                    r#"{"template_type":"nis2","title":"Agent PKI Review"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(review.status(), StatusCode::CREATED);
+    let body = to_bytes(review.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_pki_providers"],
+        1
+    );
+    assert_eq!(
+        payload["package"]["gap_summary_json"]["mtls_binding_gaps"],
+        1
+    );
+    assert_eq!(
+        payload["package"]["source_counts_json"]["no_data_recorded"]["agent_pki"],
+        false
+    );
+
+    let audit_text: String = sqlx::query_scalar(
+        "SELECT group_concat(summary, ' ') FROM agent_pki_event WHERE tenant_id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!audit_text.contains("PRIVATE KEY"));
+    assert!(!audit_text.contains("BEGIN CERTIFICATE REQUEST"));
 }
 
 #[tokio::test]

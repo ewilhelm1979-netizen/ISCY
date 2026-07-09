@@ -23,6 +23,9 @@ Diese Screenshots dokumentieren die aktuelle serverseitige ISCY-Weboberflaeche f
 Die Zero-Trust-Ansicht enthaelt zusaetzlich Agent-Artefakte und
 Release-Provenance mit SHA-256, Signaturstatus, Verification-Status,
 Provenance-Status und sicheren schreibrollenbasierten Pruefaktionen.
+Sie enthaelt ausserdem die Agent-PKI-/CSR-/mTLS-Governance mit Provider-,
+CSR-, Zertifikats-, Rotations- und Widerrufstatus als Metadata-only-Ansicht
+ohne produktive CA-Ausstellung.
 
 ## Zero Trust Mobile
 

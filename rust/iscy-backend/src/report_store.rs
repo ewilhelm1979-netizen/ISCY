@@ -574,6 +574,7 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "supplier reviews",
             "AI governance",
             "agent posture",
+            "agent PKI/mTLS governance",
         ],
         sections: &[
             "Management-Zusammenfassung",
@@ -683,6 +684,7 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "roadmap",
             "supplier reviews",
             "agent posture",
+            "agent PKI/mTLS governance",
         ],
         sections: &[
             "NIS2-Scope-Hinweise",
@@ -837,6 +839,7 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "evidence",
             "roadmap",
             "agent posture",
+            "agent PKI/mTLS governance",
             "supplier reviews",
         ],
         sections: &[
@@ -2618,6 +2621,75 @@ async fn agent_posture_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result
         tenant_id,
     )
     .await?;
+    let pki_providers = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_pki_provider WHERE tenant_id = $1",
+        tenant_id,
+    )
+    .await?;
+    let pki_provider_not_configured = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_pki_provider WHERE tenant_id = $1 AND provider_status = 'not_configured'",
+        tenant_id,
+    )
+    .await?;
+    let pending_csrs = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_certificate_request WHERE tenant_id = $1 AND csr_status = 'pending_review'",
+        tenant_id,
+    )
+    .await?;
+    let certificates = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_certificate_status WHERE tenant_id = $1",
+        tenant_id,
+    )
+    .await?;
+    let agents_without_certificate_status = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_device device WHERE device.tenant_id = $1 AND NOT EXISTS (SELECT 1 FROM agent_certificate_status cert WHERE cert.tenant_id = device.tenant_id AND cert.agent_id = device.id)",
+        tenant_id,
+    )
+    .await?;
+    let expiring_agent_certificates = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_certificate_status WHERE tenant_id = $1 AND certificate_status = 'expiring_soon'",
+        tenant_id,
+    )
+    .await?;
+    let expired_agent_certificates = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_certificate_status WHERE tenant_id = $1 AND certificate_status = 'expired'",
+        tenant_id,
+    )
+    .await?;
+    let mtls_binding_gaps = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_certificate_status WHERE tenant_id = $1 AND mtls_binding_status IN ('not_configured','pending','mismatch','stale','failed')",
+        tenant_id,
+    )
+    .await?;
+    let rotation_required_certificates = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_certificate_status WHERE tenant_id = $1 AND rotation_status = 'rotation_required'",
+        tenant_id,
+    )
+    .await?;
+    let revocation_requested_certificates = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_certificate_status WHERE tenant_id = $1 AND revocation_status = 'revocation_requested'",
+        tenant_id,
+    )
+    .await?;
+    let agent_pki_governance_gaps = (if pki_providers == 0 { 1 } else { 0 })
+        + pki_provider_not_configured
+        + pending_csrs
+        + agents_without_certificate_status
+        + expiring_agent_certificates
+        + expired_agent_certificates
+        + mtls_binding_gaps
+        + rotation_required_certificates
+        + revocation_requested_certificates;
     Ok(serde_json::json!({
         "devices": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_device WHERE tenant_id = $1", tenant_id).await?,
         "active_devices": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_device WHERE tenant_id = $1 AND enrollment_status = 'ACTIVE'", tenant_id).await?,
@@ -2633,7 +2705,18 @@ async fn agent_posture_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result
             + release_artifacts_without_checksum
             + unsigned_release_artifacts
             + release_artifacts_missing_provenance
-            + release_artifacts_unverified
+            + release_artifacts_unverified,
+        "agent_pki_providers": pki_providers,
+        "agent_pki_provider_not_configured": pki_provider_not_configured,
+        "agent_certificates": certificates,
+        "agents_without_certificate_status": agents_without_certificate_status,
+        "pending_agent_csrs": pending_csrs,
+        "expiring_agent_certificates": expiring_agent_certificates,
+        "expired_agent_certificates": expired_agent_certificates,
+        "mtls_binding_gaps": mtls_binding_gaps,
+        "rotation_required_certificates": rotation_required_certificates,
+        "revocation_requested_certificates": revocation_requested_certificates,
+        "agent_pki_governance_gaps": agent_pki_governance_gaps
     }))
 }
 
@@ -2668,6 +2751,75 @@ async fn agent_posture_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Resu
         tenant_id,
     )
     .await?;
+    let pki_providers = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_pki_provider WHERE tenant_id = ?",
+        tenant_id,
+    )
+    .await?;
+    let pki_provider_not_configured = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_pki_provider WHERE tenant_id = ? AND provider_status = 'not_configured'",
+        tenant_id,
+    )
+    .await?;
+    let pending_csrs = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_certificate_request WHERE tenant_id = ? AND csr_status = 'pending_review'",
+        tenant_id,
+    )
+    .await?;
+    let certificates = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_certificate_status WHERE tenant_id = ?",
+        tenant_id,
+    )
+    .await?;
+    let agents_without_certificate_status = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM zero_trust_agent_device device WHERE device.tenant_id = ? AND NOT EXISTS (SELECT 1 FROM agent_certificate_status cert WHERE cert.tenant_id = device.tenant_id AND cert.agent_id = device.id)",
+        tenant_id,
+    )
+    .await?;
+    let expiring_agent_certificates = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_certificate_status WHERE tenant_id = ? AND certificate_status = 'expiring_soon'",
+        tenant_id,
+    )
+    .await?;
+    let expired_agent_certificates = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_certificate_status WHERE tenant_id = ? AND certificate_status = 'expired'",
+        tenant_id,
+    )
+    .await?;
+    let mtls_binding_gaps = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_certificate_status WHERE tenant_id = ? AND mtls_binding_status IN ('not_configured','pending','mismatch','stale','failed')",
+        tenant_id,
+    )
+    .await?;
+    let rotation_required_certificates = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_certificate_status WHERE tenant_id = ? AND rotation_status = 'rotation_required'",
+        tenant_id,
+    )
+    .await?;
+    let revocation_requested_certificates = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_certificate_status WHERE tenant_id = ? AND revocation_status = 'revocation_requested'",
+        tenant_id,
+    )
+    .await?;
+    let agent_pki_governance_gaps = (if pki_providers == 0 { 1 } else { 0 })
+        + pki_provider_not_configured
+        + pending_csrs
+        + agents_without_certificate_status
+        + expiring_agent_certificates
+        + expired_agent_certificates
+        + mtls_binding_gaps
+        + rotation_required_certificates
+        + revocation_requested_certificates;
     Ok(serde_json::json!({
         "devices": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM zero_trust_agent_device WHERE tenant_id = ?", tenant_id).await?,
         "active_devices": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM zero_trust_agent_device WHERE tenant_id = ? AND enrollment_status = 'ACTIVE'", tenant_id).await?,
@@ -2683,7 +2835,18 @@ async fn agent_posture_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Resu
             + release_artifacts_without_checksum
             + unsigned_release_artifacts
             + release_artifacts_missing_provenance
-            + release_artifacts_unverified
+            + release_artifacts_unverified,
+        "agent_pki_providers": pki_providers,
+        "agent_pki_provider_not_configured": pki_provider_not_configured,
+        "agent_certificates": certificates,
+        "agents_without_certificate_status": agents_without_certificate_status,
+        "pending_agent_csrs": pending_csrs,
+        "expiring_agent_certificates": expiring_agent_certificates,
+        "expired_agent_certificates": expired_agent_certificates,
+        "mtls_binding_gaps": mtls_binding_gaps,
+        "rotation_required_certificates": rotation_required_certificates,
+        "revocation_requested_certificates": revocation_requested_certificates,
+        "agent_pki_governance_gaps": agent_pki_governance_gaps
     }))
 }
 
@@ -2776,6 +2939,8 @@ fn management_review_source_counts(
         "suppliers": counts.suppliers,
         "agent_devices": json_i64(agent_posture, "devices"),
         "agent_release_artifacts": json_i64(agent_posture, "release_artifacts"),
+        "agent_pki_providers": json_i64(agent_posture, "agent_pki_providers"),
+        "agent_certificates": json_i64(agent_posture, "agent_certificates"),
         "ai_governance_systems": counts.ai_governance,
         "no_data_recorded": {
             "risks": counts.top_risks == 0,
@@ -2787,6 +2952,8 @@ fn management_review_source_counts(
             "suppliers": counts.suppliers == 0,
             "supplier_product_security": json_i64(product_security, "supplier_product_security_records") == 0,
             "agent_release_artifacts": json_i64(agent_posture, "release_artifacts") == 0,
+            "agent_pki": json_i64(agent_posture, "agent_pki_providers") == 0
+                && json_i64(agent_posture, "agent_certificates") == 0,
             "ai_governance": counts.ai_governance == 0
         }
     })
@@ -2873,6 +3040,50 @@ fn management_review_gap_summary(
                 "agent_release_artifact_supply_chain_gaps",
                 json_i64(agent_posture, "release_artifact_supply_chain_gaps"),
             ),
+            (
+                "agent_pki_provider_missing",
+                if json_i64(agent_posture, "agent_pki_providers") == 0 {
+                    1
+                } else {
+                    0
+                },
+            ),
+            (
+                "agent_pki_provider_not_configured",
+                json_i64(agent_posture, "agent_pki_provider_not_configured"),
+            ),
+            (
+                "pending_agent_csrs",
+                json_i64(agent_posture, "pending_agent_csrs"),
+            ),
+            (
+                "agents_without_certificate_status",
+                json_i64(agent_posture, "agents_without_certificate_status"),
+            ),
+            (
+                "expiring_agent_certificates",
+                json_i64(agent_posture, "expiring_agent_certificates"),
+            ),
+            (
+                "expired_agent_certificates",
+                json_i64(agent_posture, "expired_agent_certificates"),
+            ),
+            (
+                "mtls_binding_gaps",
+                json_i64(agent_posture, "mtls_binding_gaps"),
+            ),
+            (
+                "rotation_required_certificates",
+                json_i64(agent_posture, "rotation_required_certificates"),
+            ),
+            (
+                "revocation_requested_certificates",
+                json_i64(agent_posture, "revocation_requested_certificates"),
+            ),
+            (
+                "agent_pki_governance_gaps",
+                json_i64(agent_posture, "agent_pki_governance_gaps"),
+            ),
         ] {
             object.insert(key.to_string(), serde_json::json!(value));
         }
@@ -2900,6 +3111,23 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         false,
                     ),
                     ("Kritische Agent-Findings", "critical_agent_findings", true),
+                    (
+                        "Agenten ohne Zertifikatsstatus",
+                        "agents_without_certificate_status",
+                        false,
+                    ),
+                    ("mTLS-Bindungs-Gaps", "mtls_binding_gaps", true),
+                    (
+                        "Ablaufende oder abgelaufene Agent-Zertifikate",
+                        "expired_agent_certificates",
+                        true,
+                    ),
+                    ("Offene CSR-Pruefungen", "pending_agent_csrs", false),
+                    (
+                        "Rotation oder Widerruf offen",
+                        "agent_pki_governance_gaps",
+                        false,
+                    ),
                 ],
             ),
             (
@@ -3077,6 +3305,17 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         "agent_release_artifacts_missing_provenance",
                         false,
                     ),
+                    ("mTLS-Bindungs-Gaps", "mtls_binding_gaps", true),
+                    (
+                        "Agent-Zertifikatsrotation offen",
+                        "rotation_required_certificates",
+                        false,
+                    ),
+                    (
+                        "Agent-Zertifikatswiderruf angefordert",
+                        "revocation_requested_certificates",
+                        true,
+                    ),
                 ],
             ),
         ],
@@ -3150,6 +3389,12 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         "agent_release_artifacts_unverified",
                         false,
                     ),
+                    (
+                        "Unklare Agent-Zertifikatsbindung",
+                        "agents_without_certificate_status",
+                        false,
+                    ),
+                    ("mTLS-Bindungs-Gaps", "mtls_binding_gaps", false),
                     (
                         "Fehlende Owner oder Reviews",
                         "supplier_product_security_missing_owner",
@@ -3319,6 +3564,33 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         "Unverifizierte Agent-Artefakte",
                         "agent_release_artifacts_unverified",
                         false,
+                    ),
+                    (
+                        "Agent-PKI-Provider fehlt",
+                        "agent_pki_provider_missing",
+                        false,
+                    ),
+                    (
+                        "Agent-PKI-Provider nicht konfiguriert",
+                        "agent_pki_provider_not_configured",
+                        false,
+                    ),
+                    ("Offene Agent-CSR", "pending_agent_csrs", false),
+                    (
+                        "Agenten ohne Zertifikatsstatus",
+                        "agents_without_certificate_status",
+                        false,
+                    ),
+                    ("mTLS-Bindungs-Gaps", "mtls_binding_gaps", true),
+                    (
+                        "Rotation erforderlich",
+                        "rotation_required_certificates",
+                        false,
+                    ),
+                    (
+                        "Widerruf angefordert",
+                        "revocation_requested_certificates",
+                        true,
                     ),
                 ],
             ),
@@ -3492,6 +3764,7 @@ fn review_data_completeness_summary(source_counts: &Value) -> Value {
         ("Supplier", "suppliers"),
         ("Supplier/Product Security", "supplier_product_security"),
         ("Agent-Artefakte", "agent_release_artifacts"),
+        ("Agent-PKI", "agent_pki"),
         ("AI Governance", "ai_governance"),
     ]
     .iter()
@@ -3503,6 +3776,7 @@ fn review_data_completeness_summary(source_counts: &Value) -> Value {
             "controls" => "controls",
             "suppliers" => "suppliers",
             "supplier_product_security" => "supplier_product_security_records",
+            "agent_pki" => "agent_pki_providers",
             key => key,
         };
         let count = json_i64(source_counts, count_key);
@@ -3552,6 +3826,16 @@ fn regulatory_review_has_open_gaps(gap_summary: &Value) -> bool {
         "overdue_or_unreviewed_suppliers",
         "critical_agent_findings",
         "stale_or_open_agent_findings",
+        "agent_pki_provider_missing",
+        "agent_pki_provider_not_configured",
+        "pending_agent_csrs",
+        "agents_without_certificate_status",
+        "expiring_agent_certificates",
+        "expired_agent_certificates",
+        "mtls_binding_gaps",
+        "rotation_required_certificates",
+        "revocation_requested_certificates",
+        "agent_pki_governance_gaps",
         "ai_systems_without_risk_links",
         "ai_systems_without_roadmap_links",
         "ai_systems_without_evidence",
@@ -3570,6 +3854,9 @@ fn regulatory_review_has_critical_gaps(gap_summary: &Value) -> bool {
         "evidence_disposition_failed",
         "critical_suppliers",
         "critical_agent_findings",
+        "expired_agent_certificates",
+        "mtls_binding_gaps",
+        "revocation_requested_certificates",
         "ai_systems_without_risk_links",
     ]
     .iter()
@@ -3656,6 +3943,10 @@ fn management_review_decision_summary(
     }
     if json_i64(sources.agent_posture, "critical_findings") > 0 {
         required_decisions.push("Agent-Posture-Remediation und operative Eskalation");
+    }
+    if json_i64(sources.agent_posture, "agent_pki_governance_gaps") > 0 {
+        required_decisions
+            .push("Agent-PKI-/mTLS-Governance, CSR-Review, Rotation oder Widerruf nachziehen");
     }
     if json_i64(sources.metrics, "ai_systems_without_risk_links") > 0
         || sources.ai_governance["system_count"].as_i64().unwrap_or(0) > 0
