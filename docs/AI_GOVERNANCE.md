@@ -48,4 +48,6 @@ Die Rust-Schemata folgen beim Verzicht auf nachtraegliche Foreign Keys dem beste
 
 Neue Management-Review-Pakete frieren fuer jedes AI-System Klasse, Kritikalitaet, Status, Review-Termin, Evidence-Zahl und die Anzahl verknuepfter Risiken, Roadmap-Tasks, Incidents und Changes ein. Webansicht sowie Markdown-, HTML-, PDF- und JSON-Export verwenden diesen Snapshot. Spaetere Linkaenderungen veraendern bereits erzeugte Pakete nicht.
 
+Die Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, KRITIS und generische Security-Governance-Reviews verwenden diese eingefrorenen AI-Governance-Daten als Summary. Sie ersetzen keine rechtliche Bewertung, Zertifizierung oder formale Konformitaetsentscheidung.
+
 Migration `0027_rust_ai_governance_links` ist additiv. Bereits migrierte Datenbanken ueberspringen sie anhand von `iscy_schema_migrations`; SQLite prueft die beiden neuen Spalten vor dem Anlegen, damit auch ein Wiederanlauf nach einer unvollstaendigen Strukturvorbereitung keine vorhandenen Daten oder Spalten ueberschreibt.

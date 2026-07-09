@@ -1,6 +1,6 @@
 # ISCY Strategic Roadmap
 
-Stand: 2026-07-07
+Stand: 2026-07-09
 
 Diese Roadmap beschreibt die fachlich sinnvollen naechsten Ausbaustufen nach dem Rust-only-Cutover. Sie ersetzt die alte Rust-Migrationsroadmap nicht, sondern beginnt danach: ISCY ist technisch auf Rust umgestellt und soll nun fachlich reifer, pruefbarer und im Betrieb wirksamer werden.
 
@@ -45,7 +45,7 @@ Erfolgskriterium:
 
 Ziel: ISCY soll aus vorhandenen Daten automatisch ein Management-Review- und Audit-Paket erzeugen.
 
-Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt; V23.7.21 ergaenzt Exporte und Snapshot-Ruecklinks.
+Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt; V23.7.21 ergaenzt Exporte und Snapshot-Ruecklinks. Im Unreleased-Stand kommen Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, KRITIS und generische Security-Governance-Reviews hinzu.
 
 Umgesetzt:
 
@@ -57,10 +57,14 @@ Umgesetzt:
 - Direkte Ruecklinks aus Snapshot-Zeilen zu Risiken, Controls, Evidence, Incidents und Roadmap.
 - Export als Markdown, HTML, PDF und JSON.
 - Demo-Seed und Migration `0019_rust_management_review_packages`.
+- Additive Migration `0032_rust_management_regulatory_templates` ergaenzt Template-Typ, Template-Version, regulatorischen Kontext, Supplier-Summary, Source Counts, Gap-Summary, Decision-Summary und eine Management-Review-Auditspur.
+- API-Pfade `GET /api/v1/management/templates`, `GET /api/v1/management/templates/{template_type}`, `POST /api/v1/regulatory/templates/{template_type}/preview` sowie Alias-Pfade unter `/api/v1/management/reviews`.
+- Weboberflaeche mit Template-Auswahl, Preview vor Snapshot-Erzeugung und Detailansicht fuer Quellen, Gaps, Management-Hinweise, Supplier Review und regulatorischen Kontext.
+- Preview erzeugt keinen Review-Snapshot; Snapshot-Erzeugung bleibt schreibenden Rollen vorbehalten.
 
 Naechste Vertiefung:
 
-- Review-Templates fuer Quartal, internes Audit, Management Review nach ISO 27001 und regulatorische Steering-Sitzung.
+- Optional feinere Template-Varianten fuer internes Audit, Quartalslenkung und regulatorische Board-Pakete, wenn sich in der Praxis wiederkehrende Review-Formate zeigen.
 
 Erfolgskriterium:
 
@@ -124,7 +128,7 @@ Naechste Vertiefung:
 
 - Datenuebermittlungen und komplexere Vertrags-/Exit-Versionierung spaeter bewusst als eigenen Reifegrad betrachten.
 - Supplier-Advisory- und Herstellerfeeds aus dem Product-Security-Bereich fachlich anbinden.
-- Management-/Regulatory-Templates koennen Supplier-Review-Daten spaeter in wiederholbare Pruefpakete aufnehmen.
+- Management-/Regulatory-Templates nehmen Supplier-Review-Daten bereits als eingefrorene Summary in wiederholbare Pruefpakete auf.
 
 Erfolgskriterium:
 
@@ -218,7 +222,7 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Management-Review-Templates und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete.
+1. Feinere Template-Varianten und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete auf Basis der neuen Management-/Regulatory-Template-Schicht.
 2. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
 3. Signierte Agent-Pakete, Release-Provenance und eine spaetere getrennte CA-/PKI-Stufe.
 
@@ -233,7 +237,7 @@ Erfolgskriterium:
 | Erledigt | Gefuehrtes Agent-Onboarding | Enrollment-Tokens, Deployment-Artefakte und Flottenstatus sind ueber einen sicheren Admin-Assistenten bedienbar. |
 | Unreleased | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
 | Unreleased | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen, Exit-Test-Nachweise und tenantgesicherte Evidence-/Control-/Risk-Links. |
-| Danach | Management-/Regulatory-Templates | Wiederholbare Quartals-, Audit-, NIS2-, DORA- und DSGVO-Pakete werden kontextsensitiv erzeugt. |
+| Umgesetzt / Vertiefung | Management-/Regulatory-Templates | Wiederholbare ISO-27001-, NIS2-, DORA-, KRITIS- und Governance-Pakete werden aus bestehenden Snapshots erzeugt; feinere Varianten koennen spaeter folgen. |
 | Reifegrad | Evidence-Disposition und Objektspeicher | Legal Hold, kontrollierte Loeschung, periodische Integritaetspruefung und Storage-Restore sind auditierbar. |
 | Reifegrad | Performance, HA und visuelle Regression | Lastgrenzen, Mehrinstanzbetrieb und UI-Regressionen sind messbar abgesichert. |
 

@@ -217,6 +217,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_SUPPLIER_REVIEW_WORKFLOW_SCHEMA,
         postgres_sql: POSTGRES_SUPPLIER_REVIEW_WORKFLOW_SCHEMA,
     },
+    Migration {
+        version: "0032_rust_management_regulatory_templates",
+        sqlite_sql: SQLITE_MANAGEMENT_REGULATORY_TEMPLATE_SCHEMA,
+        postgres_sql: POSTGRES_MANAGEMENT_REGULATORY_TEMPLATE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -915,6 +920,48 @@ CREATE TABLE IF NOT EXISTS reports_managementreviewpackage (
 );
 CREATE INDEX IF NOT EXISTS idx_management_review_tenant_status
     ON reports_managementreviewpackage(tenant_id, status, created_at);
+"#;
+
+const SQLITE_MANAGEMENT_REGULATORY_TEMPLATE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS management_review_audit_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    review_id INTEGER NULL,
+    template_type varchar(64) NOT NULL DEFAULT '',
+    action varchar(64) NOT NULL,
+    actor_id INTEGER NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_management_review_audit_tenant
+    ON management_review_audit_event(tenant_id, review_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_management_review_template_type
+    ON reports_managementreviewpackage(tenant_id, template_type, created_at);
+"#;
+
+const POSTGRES_MANAGEMENT_REGULATORY_TEMPLATE_SCHEMA: &str = r#"
+ALTER TABLE reports_managementreviewpackage ADD COLUMN IF NOT EXISTS template_type varchar(64) NOT NULL DEFAULT 'generic_security_governance';
+ALTER TABLE reports_managementreviewpackage ADD COLUMN IF NOT EXISTS template_version varchar(32) NOT NULL DEFAULT '2026.1';
+ALTER TABLE reports_managementreviewpackage ADD COLUMN IF NOT EXISTS regulatory_context_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE reports_managementreviewpackage ADD COLUMN IF NOT EXISTS supplier_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE reports_managementreviewpackage ADD COLUMN IF NOT EXISTS source_counts_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE reports_managementreviewpackage ADD COLUMN IF NOT EXISTS gap_summary_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE reports_managementreviewpackage ADD COLUMN IF NOT EXISTS decision_summary_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS management_review_audit_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    review_id BIGINT NULL,
+    template_type varchar(64) NOT NULL DEFAULT '',
+    action varchar(64) NOT NULL,
+    actor_id BIGINT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_management_review_audit_tenant
+    ON management_review_audit_event(tenant_id, review_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_management_review_template_type
+    ON reports_managementreviewpackage(tenant_id, template_type, created_at);
 "#;
 
 const SQLITE_SUPPLIER_RISK_CORE_SCHEMA: &str = r#"
@@ -3283,6 +3330,23 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'st
                 ("exit_test_evidence_id", "INTEGER NULL"),
             ] {
                 ensure_sqlite_column(pool, "organizations_supplier", column, definition).await?;
+            }
+        }
+        if migration.version == "0032_rust_management_regulatory_templates" {
+            for (column, definition) in [
+                (
+                    "template_type",
+                    "varchar(64) NOT NULL DEFAULT 'generic_security_governance'",
+                ),
+                ("template_version", "varchar(32) NOT NULL DEFAULT '2026.1'"),
+                ("regulatory_context_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("supplier_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("source_counts_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("gap_summary_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("decision_summary_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ] {
+                ensure_sqlite_column(pool, "reports_managementreviewpackage", column, definition)
+                    .await?;
             }
         }
         execute_sqlite_script(pool, migration.sqlite_sql)
@@ -6080,5 +6144,81 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(tables, 6);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0032_is_restartable_and_preserves_management_review_snapshots() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO reports_managementreviewpackage (
+                id, tenant_id, title, template_type, template_version, status,
+                metrics_json, top_risks_json, control_gaps_json, evidence_gaps_json,
+                incident_decisions_json, roadmap_json, product_security_json,
+                agent_posture_json, ai_governance_json, supplier_json,
+                regulatory_context_json, source_counts_json, gap_summary_json,
+                decision_summary_json
+            ) VALUES (
+                8801, 88, 'Existing Management Snapshot', 'nis2_management_summary',
+                '2026.1', 'DRAFT', '{}', '[]', '[]', '[]', '[]', '[]',
+                '{}', '{}', '{}', '{"supplier_count":1}', '{"template_type":"nis2_management_summary"}',
+                '{"risks":0}', '{"open_control_gaps":0}', '{"required_management_decisions":[]}'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0032_rust_management_regulatory_templates'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        execute_sqlite_script(
+            &pool,
+            r#"
+            DROP TABLE IF EXISTS management_review_audit_event;
+            "#,
+        )
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0032_rust_management_regulatory_templates"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let review = sqlx::query(
+            "SELECT title, template_type, supplier_json, regulatory_context_json FROM reports_managementreviewpackage WHERE id = 8801",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            review.get::<String, _>("title"),
+            "Existing Management Snapshot"
+        );
+        assert_eq!(
+            review.get::<String, _>("template_type"),
+            "nis2_management_summary"
+        );
+        assert_eq!(
+            review.get::<String, _>("supplier_json"),
+            "{\"supplier_count\":1}"
+        );
+        assert_eq!(
+            review.get::<String, _>("regulatory_context_json"),
+            "{\"template_type\":\"nis2_management_summary\"}"
+        );
+        assert!(
+            super::sqlite_table_exists(&pool, "management_review_audit_event")
+                .await
+                .unwrap()
+        );
     }
 }
