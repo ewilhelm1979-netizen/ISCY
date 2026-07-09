@@ -1162,6 +1162,9 @@ fn normalize_disposition_status(value: &str) -> anyhow::Result<String> {
             | "approved_for_disposition"
             | "disposition_deferred"
             | "disposition_completed_metadata_only"
+            | "disposition_executed"
+            | "disposition_failed"
+            | "disposition_cancelled"
     ) {
         Ok(value)
     } else {
@@ -1197,6 +1200,9 @@ fn disposition_status_label(status: &str) -> &'static str {
         "approved_for_disposition" => "Disposition freigegeben",
         "disposition_deferred" => "Disposition verschoben",
         "disposition_completed_metadata_only" => "metadata-only abgeschlossen",
+        "disposition_executed" => "physisch ausgesondert",
+        "disposition_failed" => "Aussonderung fehlgeschlagen",
+        "disposition_cancelled" => "Disposition abgebrochen",
         _ => "nicht faellig",
     }
 }
@@ -1354,6 +1360,59 @@ pub struct EvidenceDispositionRequest {
     pub reason: String,
     pub blocked_reason: Option<String>,
     pub review_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceIntegrityWorkerRun {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub started_by: Option<i64>,
+    pub status: String,
+    pub trigger_mode: String,
+    pub batch_size: i64,
+    pub max_runtime_seconds: i64,
+    pub cooldown_seconds: i64,
+    pub dry_run: bool,
+    pub checked_count: i64,
+    pub valid_count: i64,
+    pub mismatch_count: i64,
+    pub missing_count: i64,
+    pub failed_count: i64,
+    pub skipped_count: i64,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub detail: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct EvidenceIntegrityWorkerRunCreate {
+    pub trigger_mode: String,
+    pub batch_size: i64,
+    pub max_runtime_seconds: i64,
+    pub cooldown_seconds: i64,
+    pub dry_run: bool,
+    pub detail: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct EvidenceIntegrityWorkerRunFinish {
+    pub status: String,
+    pub checked_count: i64,
+    pub valid_count: i64,
+    pub mismatch_count: i64,
+    pub missing_count: i64,
+    pub failed_count: i64,
+    pub skipped_count: i64,
+    pub detail: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct EvidenceDispositionExecution {
+    pub deleted: bool,
+    pub storage_backend: String,
+    pub safe_error_class: String,
+    pub tombstone_sha256: String,
+    pub tombstone: Value,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1829,6 +1888,542 @@ impl EvidenceStore {
             }
         }
     }
+
+    pub async fn evidence_worker_runs(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EvidenceIntegrityWorkerRun>> {
+        match self {
+            Self::Postgres(pool) => evidence_worker_runs_postgres(pool, tenant_id, limit).await,
+            Self::Sqlite(pool) => evidence_worker_runs_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
+    pub async fn create_evidence_worker_run(
+        &self,
+        tenant_id: i64,
+        actor_id: i64,
+        payload: EvidenceIntegrityWorkerRunCreate,
+    ) -> anyhow::Result<EvidenceIntegrityWorkerRun> {
+        match self {
+            Self::Postgres(pool) => {
+                create_evidence_worker_run_postgres(pool, tenant_id, actor_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                create_evidence_worker_run_sqlite(pool, tenant_id, actor_id, payload).await
+            }
+        }
+    }
+
+    pub async fn finish_evidence_worker_run(
+        &self,
+        tenant_id: i64,
+        run_id: i64,
+        payload: EvidenceIntegrityWorkerRunFinish,
+    ) -> anyhow::Result<Option<EvidenceIntegrityWorkerRun>> {
+        match self {
+            Self::Postgres(pool) => {
+                finish_evidence_worker_run_postgres(pool, tenant_id, run_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                finish_evidence_worker_run_sqlite(pool, tenant_id, run_id, payload).await
+            }
+        }
+    }
+
+    pub async fn execute_disposition(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+        actor_id: i64,
+        execution: EvidenceDispositionExecution,
+    ) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+        match self {
+            Self::Postgres(pool) => {
+                execute_disposition_postgres(pool, tenant_id, evidence_id, actor_id, execution)
+                    .await
+            }
+            Self::Sqlite(pool) => {
+                execute_disposition_sqlite(pool, tenant_id, evidence_id, actor_id, execution).await
+            }
+        }
+    }
+}
+
+async fn evidence_worker_runs_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<EvidenceIntegrityWorkerRun>> {
+    let rows = sqlx::query(evidence_worker_run_postgres_sql())
+        .bind(tenant_id)
+        .bind(limit.clamp(1, 25))
+        .fetch_all(pool)
+        .await?;
+    rows.into_iter()
+        .map(evidence_worker_run_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn evidence_worker_runs_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<EvidenceIntegrityWorkerRun>> {
+    let rows = sqlx::query(evidence_worker_run_sqlite_sql())
+        .bind(tenant_id)
+        .bind(limit.clamp(1, 25))
+        .fetch_all(pool)
+        .await?;
+    rows.into_iter()
+        .map(evidence_worker_run_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn create_evidence_worker_run_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    actor_id: i64,
+    payload: EvidenceIntegrityWorkerRunCreate,
+) -> anyhow::Result<EvidenceIntegrityWorkerRun> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO evidence_integrity_worker_run (
+            tenant_id, started_by, status, trigger_mode, batch_size,
+            max_runtime_seconds, cooldown_seconds, dry_run, detail_json
+        )
+        VALUES ($1, $2, 'running', $3, $4, $5, $6, $7, $8)
+        RETURNING id, tenant_id, started_by, status, trigger_mode, batch_size,
+                  max_runtime_seconds, cooldown_seconds, dry_run, checked_count,
+                  valid_count, mismatch_count, missing_count, failed_count, skipped_count,
+                  started_at, completed_at, detail_json::text AS detail_json_text
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(actor_id)
+    .bind(payload.trigger_mode)
+    .bind(payload.batch_size)
+    .bind(payload.max_runtime_seconds)
+    .bind(payload.cooldown_seconds)
+    .bind(payload.dry_run)
+    .bind(sqlx::types::Json(payload.detail))
+    .fetch_one(pool)
+    .await?;
+    evidence_worker_run_from_pg_row(row).map_err(Into::into)
+}
+
+async fn create_evidence_worker_run_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    actor_id: i64,
+    payload: EvidenceIntegrityWorkerRunCreate,
+) -> anyhow::Result<EvidenceIntegrityWorkerRun> {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO evidence_integrity_worker_run (
+            tenant_id, started_by, status, trigger_mode, batch_size,
+            max_runtime_seconds, cooldown_seconds, dry_run, detail_json
+        )
+        VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6, ?7, ?8)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(actor_id)
+    .bind(payload.trigger_mode)
+    .bind(payload.batch_size)
+    .bind(payload.max_runtime_seconds)
+    .bind(payload.cooldown_seconds)
+    .bind(payload.dry_run)
+    .bind(payload.detail.to_string())
+    .execute(pool)
+    .await?;
+    evidence_worker_run_by_id_sqlite(pool, tenant_id, result.last_insert_rowid()).await
+}
+
+async fn finish_evidence_worker_run_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    run_id: i64,
+    payload: EvidenceIntegrityWorkerRunFinish,
+) -> anyhow::Result<Option<EvidenceIntegrityWorkerRun>> {
+    let row = sqlx::query(
+        r#"
+        UPDATE evidence_integrity_worker_run
+        SET status = $3,
+            checked_count = $4,
+            valid_count = $5,
+            mismatch_count = $6,
+            missing_count = $7,
+            failed_count = $8,
+            skipped_count = $9,
+            completed_at = (CURRENT_TIMESTAMP)::text,
+            detail_json = $10
+        WHERE tenant_id = $1 AND id = $2
+        RETURNING id, tenant_id, started_by, status, trigger_mode, batch_size,
+                  max_runtime_seconds, cooldown_seconds, dry_run, checked_count,
+                  valid_count, mismatch_count, missing_count, failed_count, skipped_count,
+                  started_at, completed_at, detail_json::text AS detail_json_text
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .bind(payload.status)
+    .bind(payload.checked_count)
+    .bind(payload.valid_count)
+    .bind(payload.mismatch_count)
+    .bind(payload.missing_count)
+    .bind(payload.failed_count)
+    .bind(payload.skipped_count)
+    .bind(sqlx::types::Json(payload.detail))
+    .fetch_optional(pool)
+    .await?;
+    row.map(evidence_worker_run_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn finish_evidence_worker_run_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    run_id: i64,
+    payload: EvidenceIntegrityWorkerRunFinish,
+) -> anyhow::Result<Option<EvidenceIntegrityWorkerRun>> {
+    let result = sqlx::query(
+        r#"
+        UPDATE evidence_integrity_worker_run
+        SET status = ?3,
+            checked_count = ?4,
+            valid_count = ?5,
+            mismatch_count = ?6,
+            missing_count = ?7,
+            failed_count = ?8,
+            skipped_count = ?9,
+            completed_at = datetime('now'),
+            detail_json = ?10
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .bind(payload.status)
+    .bind(payload.checked_count)
+    .bind(payload.valid_count)
+    .bind(payload.mismatch_count)
+    .bind(payload.missing_count)
+    .bind(payload.failed_count)
+    .bind(payload.skipped_count)
+    .bind(payload.detail.to_string())
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
+    }
+    evidence_worker_run_by_id_sqlite(pool, tenant_id, run_id)
+        .await
+        .map(Some)
+}
+
+async fn evidence_worker_run_by_id_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    run_id: i64,
+) -> anyhow::Result<EvidenceIntegrityWorkerRun> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, tenant_id, started_by, status, trigger_mode, batch_size,
+               max_runtime_seconds, cooldown_seconds, dry_run, checked_count,
+               valid_count, mismatch_count, missing_count, failed_count, skipped_count,
+               CAST(started_at AS TEXT) AS started_at,
+               CAST(completed_at AS TEXT) AS completed_at,
+               detail_json AS detail_json_text
+        FROM evidence_integrity_worker_run
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+    evidence_worker_run_from_sqlite_row(row).map_err(Into::into)
+}
+
+async fn execute_disposition_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    execution: EvidenceDispositionExecution,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    let current = evidence_integrity_item_by_id_postgres(pool, tenant_id, evidence_id).await?;
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    validate_disposition_execution_state(&current)?;
+    let final_status = if execution.deleted {
+        "disposition_executed"
+    } else {
+        "disposition_failed"
+    };
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET file = CASE WHEN $4 THEN NULL ELSE file END,
+            disposition_status = $5,
+            disposition_executed_by = CASE WHEN $4 THEN $3 ELSE disposition_executed_by END,
+            disposition_executed_at = CASE WHEN $4 THEN (CURRENT_TIMESTAMP)::text ELSE disposition_executed_at END,
+            disposition_execution_error_class = $6,
+            disposition_storage_backend = $7,
+            disposition_tombstone_sha256 = $8,
+            disposition_tombstone_json = $9,
+            disposal_candidate = FALSE,
+            updated_at = (CURRENT_TIMESTAMP)::text
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(actor_id)
+    .bind(execution.deleted)
+    .bind(final_status)
+    .bind(&execution.safe_error_class)
+    .bind(&execution.storage_backend)
+    .bind(&execution.tombstone_sha256)
+    .bind(sqlx::types::Json(execution.tombstone.clone()))
+    .execute(&mut *tx)
+    .await?;
+    insert_evidence_integrity_event_postgres_tx(
+        &mut tx,
+        tenant_id,
+        evidence_id,
+        EvidenceIntegrityEventWrite {
+            event_type: if execution.deleted {
+                "disposition_executed".to_string()
+            } else {
+                "disposition_execution_failed".to_string()
+            },
+            actor_id: Some(actor_id),
+            integrity_status: String::new(),
+            legal_hold_status: current.legal_hold_status,
+            disposition_status: final_status.to_string(),
+            mismatch: false,
+            error_class: execution.safe_error_class,
+            detail: execution.tombstone,
+            note: String::new(),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    evidence_integrity_item_by_id_postgres(pool, tenant_id, evidence_id).await
+}
+
+async fn execute_disposition_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    execution: EvidenceDispositionExecution,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    let current = evidence_integrity_item_by_id_sqlite(pool, tenant_id, evidence_id).await?;
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    validate_disposition_execution_state(&current)?;
+    let final_status = if execution.deleted {
+        "disposition_executed"
+    } else {
+        "disposition_failed"
+    };
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET file = CASE WHEN ?4 THEN NULL ELSE file END,
+            disposition_status = ?5,
+            disposition_executed_by = CASE WHEN ?4 THEN ?3 ELSE disposition_executed_by END,
+            disposition_executed_at = CASE WHEN ?4 THEN datetime('now') ELSE disposition_executed_at END,
+            disposition_execution_error_class = ?6,
+            disposition_storage_backend = ?7,
+            disposition_tombstone_sha256 = ?8,
+            disposition_tombstone_json = ?9,
+            disposal_candidate = 0,
+            updated_at = datetime('now')
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(actor_id)
+    .bind(execution.deleted)
+    .bind(final_status)
+    .bind(&execution.safe_error_class)
+    .bind(&execution.storage_backend)
+    .bind(&execution.tombstone_sha256)
+    .bind(execution.tombstone.to_string())
+    .execute(&mut *tx)
+    .await?;
+    insert_evidence_integrity_event_sqlite_tx(
+        &mut tx,
+        tenant_id,
+        evidence_id,
+        EvidenceIntegrityEventWrite {
+            event_type: if execution.deleted {
+                "disposition_executed".to_string()
+            } else {
+                "disposition_execution_failed".to_string()
+            },
+            actor_id: Some(actor_id),
+            integrity_status: String::new(),
+            legal_hold_status: current.legal_hold_status,
+            disposition_status: final_status.to_string(),
+            mismatch: false,
+            error_class: execution.safe_error_class,
+            detail: execution.tombstone,
+            note: String::new(),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    evidence_integrity_item_by_id_sqlite(pool, tenant_id, evidence_id).await
+}
+
+fn validate_disposition_execution_state(item: &EvidenceIntegrityItem) -> anyhow::Result<()> {
+    if item.legal_hold_status == "active" || item.legal_hold_blocks_disposition {
+        bail!("Disposition ist durch Legal Hold blockiert.");
+    }
+    if item.disposition_status != "approved_for_disposition" {
+        bail!("Disposition muss vor der Ausfuehrung freigegeben sein.");
+    }
+    if item.disposition_reason.trim().is_empty() {
+        bail!("Disposition benoetigt eine dokumentierte Begruendung.");
+    }
+    Ok(())
+}
+
+fn evidence_worker_run_postgres_sql() -> &'static str {
+    r#"
+    SELECT id, tenant_id, started_by, status, trigger_mode, batch_size,
+           max_runtime_seconds, cooldown_seconds, dry_run, checked_count,
+           valid_count, mismatch_count, missing_count, failed_count, skipped_count,
+           started_at, completed_at, detail_json::text AS detail_json_text
+    FROM evidence_integrity_worker_run
+    WHERE tenant_id = $1
+    ORDER BY started_at DESC, id DESC
+    LIMIT $2
+    "#
+}
+
+fn evidence_worker_run_sqlite_sql() -> &'static str {
+    r#"
+    SELECT id, tenant_id, started_by, status, trigger_mode, batch_size,
+           max_runtime_seconds, cooldown_seconds, dry_run, checked_count,
+           valid_count, mismatch_count, missing_count, failed_count, skipped_count,
+           CAST(started_at AS TEXT) AS started_at,
+           CAST(completed_at AS TEXT) AS completed_at,
+           detail_json AS detail_json_text
+    FROM evidence_integrity_worker_run
+    WHERE tenant_id = ?1
+    ORDER BY started_at DESC, id DESC
+    LIMIT ?2
+    "#
+}
+
+fn evidence_worker_run_from_pg_row(row: PgRow) -> Result<EvidenceIntegrityWorkerRun, sqlx::Error> {
+    evidence_worker_run_from_values(EvidenceWorkerRunValues {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        started_by: row.try_get("started_by")?,
+        status: row.try_get("status")?,
+        trigger_mode: row.try_get("trigger_mode")?,
+        batch_size: row.try_get("batch_size")?,
+        max_runtime_seconds: row.try_get("max_runtime_seconds")?,
+        cooldown_seconds: row.try_get("cooldown_seconds")?,
+        dry_run: row.try_get("dry_run")?,
+        checked_count: row.try_get("checked_count")?,
+        valid_count: row.try_get("valid_count")?,
+        mismatch_count: row.try_get("mismatch_count")?,
+        missing_count: row.try_get("missing_count")?,
+        failed_count: row.try_get("failed_count")?,
+        skipped_count: row.try_get("skipped_count")?,
+        started_at: row.try_get("started_at")?,
+        completed_at: row.try_get("completed_at")?,
+        detail_json_text: row.try_get("detail_json_text")?,
+    })
+}
+
+fn evidence_worker_run_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<EvidenceIntegrityWorkerRun, sqlx::Error> {
+    evidence_worker_run_from_values(EvidenceWorkerRunValues {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        started_by: row.try_get("started_by")?,
+        status: row.try_get("status")?,
+        trigger_mode: row.try_get("trigger_mode")?,
+        batch_size: row.try_get("batch_size")?,
+        max_runtime_seconds: row.try_get("max_runtime_seconds")?,
+        cooldown_seconds: row.try_get("cooldown_seconds")?,
+        dry_run: row.try_get("dry_run")?,
+        checked_count: row.try_get("checked_count")?,
+        valid_count: row.try_get("valid_count")?,
+        mismatch_count: row.try_get("mismatch_count")?,
+        missing_count: row.try_get("missing_count")?,
+        failed_count: row.try_get("failed_count")?,
+        skipped_count: row.try_get("skipped_count")?,
+        started_at: row.try_get("started_at")?,
+        completed_at: row.try_get("completed_at")?,
+        detail_json_text: row.try_get("detail_json_text")?,
+    })
+}
+
+struct EvidenceWorkerRunValues {
+    id: i64,
+    tenant_id: i64,
+    started_by: Option<i64>,
+    status: String,
+    trigger_mode: String,
+    batch_size: i64,
+    max_runtime_seconds: i64,
+    cooldown_seconds: i64,
+    dry_run: bool,
+    checked_count: i64,
+    valid_count: i64,
+    mismatch_count: i64,
+    missing_count: i64,
+    failed_count: i64,
+    skipped_count: i64,
+    started_at: String,
+    completed_at: Option<String>,
+    detail_json_text: String,
+}
+
+fn evidence_worker_run_from_values(
+    values: EvidenceWorkerRunValues,
+) -> Result<EvidenceIntegrityWorkerRun, sqlx::Error> {
+    let detail = serde_json::from_str(&values.detail_json_text).unwrap_or_else(|_| json!({}));
+    Ok(EvidenceIntegrityWorkerRun {
+        id: values.id,
+        tenant_id: values.tenant_id,
+        started_by: values.started_by,
+        status: values.status,
+        trigger_mode: values.trigger_mode,
+        batch_size: values.batch_size,
+        max_runtime_seconds: values.max_runtime_seconds,
+        cooldown_seconds: values.cooldown_seconds,
+        dry_run: values.dry_run,
+        checked_count: values.checked_count,
+        valid_count: values.valid_count,
+        mismatch_count: values.mismatch_count,
+        missing_count: values.missing_count,
+        failed_count: values.failed_count,
+        skipped_count: values.skipped_count,
+        started_at: values.started_at,
+        completed_at: values.completed_at,
+        detail,
+    })
 }
 
 fn evidence_integrity_item_postgres_sql(where_clause: &str) -> String {

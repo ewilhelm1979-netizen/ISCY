@@ -232,6 +232,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_SUPPLIER_PRODUCT_SECURITY_GOVERNANCE_SCHEMA,
         postgres_sql: POSTGRES_SUPPLIER_PRODUCT_SECURITY_GOVERNANCE_SCHEMA,
     },
+    Migration {
+        version: "0035_rust_evidence_worker_disposition_storage",
+        sqlite_sql: SQLITE_EVIDENCE_WORKER_DISPOSITION_STORAGE_SCHEMA,
+        postgres_sql: POSTGRES_EVIDENCE_WORKER_DISPOSITION_STORAGE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1051,6 +1056,97 @@ CREATE INDEX IF NOT EXISTS idx_evidence_legal_hold
     ON evidence_evidenceitem(tenant_id, legal_hold_status);
 CREATE INDEX IF NOT EXISTS idx_evidence_disposition
     ON evidence_evidenceitem(tenant_id, disposition_status, disposition_due_at);
+"#;
+
+const SQLITE_EVIDENCE_WORKER_DISPOSITION_STORAGE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS evidence_integrity_worker_run (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    started_by INTEGER NULL,
+    status varchar(32) NOT NULL DEFAULT 'running',
+    trigger_mode varchar(32) NOT NULL DEFAULT 'manual',
+    batch_size INTEGER NOT NULL DEFAULT 10,
+    max_runtime_seconds INTEGER NOT NULL DEFAULT 30,
+    cooldown_seconds INTEGER NOT NULL DEFAULT 300,
+    dry_run bool NOT NULL DEFAULT 0,
+    checked_count INTEGER NOT NULL DEFAULT 0,
+    valid_count INTEGER NOT NULL DEFAULT 0,
+    mismatch_count INTEGER NOT NULL DEFAULT 0,
+    missing_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TEXT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_worker_run_tenant
+    ON evidence_integrity_worker_run(tenant_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_worker_run_status
+    ON evidence_integrity_worker_run(tenant_id, status, started_at);
+
+CREATE TABLE IF NOT EXISTS evidence_storage_backend_status (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    backend_type varchar(64) NOT NULL,
+    configured bool NOT NULL DEFAULT 0,
+    status varchar(64) NOT NULL DEFAULT 'not_configured',
+    safe_error_class varchar(64) NOT NULL DEFAULT '',
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    checked_by INTEGER NULL,
+    checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_status_tenant
+    ON evidence_storage_backend_status(tenant_id, backend_type, checked_at);
+"#;
+
+const POSTGRES_EVIDENCE_WORKER_DISPOSITION_STORAGE_SCHEMA: &str = r#"
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_executed_by BIGINT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_executed_at TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_execution_error_class varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_storage_backend varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_tombstone_sha256 varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_tombstone_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS storage_backend varchar(64) NOT NULL DEFAULT 'local_filesystem';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS storage_object_reference TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS evidence_integrity_worker_run (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    started_by BIGINT NULL,
+    status varchar(32) NOT NULL DEFAULT 'running',
+    trigger_mode varchar(32) NOT NULL DEFAULT 'manual',
+    batch_size BIGINT NOT NULL DEFAULT 10,
+    max_runtime_seconds BIGINT NOT NULL DEFAULT 30,
+    cooldown_seconds BIGINT NOT NULL DEFAULT 300,
+    dry_run BOOLEAN NOT NULL DEFAULT FALSE,
+    checked_count BIGINT NOT NULL DEFAULT 0,
+    valid_count BIGINT NOT NULL DEFAULT 0,
+    mismatch_count BIGINT NOT NULL DEFAULT 0,
+    missing_count BIGINT NOT NULL DEFAULT 0,
+    failed_count BIGINT NOT NULL DEFAULT 0,
+    skipped_count BIGINT NOT NULL DEFAULT 0,
+    started_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    completed_at TEXT NULL,
+    detail_json JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_worker_run_tenant
+    ON evidence_integrity_worker_run(tenant_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_worker_run_status
+    ON evidence_integrity_worker_run(tenant_id, status, started_at);
+
+CREATE TABLE IF NOT EXISTS evidence_storage_backend_status (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    backend_type varchar(64) NOT NULL,
+    configured BOOLEAN NOT NULL DEFAULT FALSE,
+    status varchar(64) NOT NULL DEFAULT 'not_configured',
+    safe_error_class varchar(64) NOT NULL DEFAULT '',
+    detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    checked_by BIGINT NULL,
+    checked_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_status_tenant
+    ON evidence_storage_backend_status(tenant_id, backend_type, checked_at);
 "#;
 
 const SQLITE_SUPPLIER_PRODUCT_SECURITY_GOVERNANCE_SCHEMA: &str = r#"
@@ -3674,6 +3770,32 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'st
                 ("disposition_blocked_reason", "TEXT NOT NULL DEFAULT ''"),
                 ("disposal_candidate", "bool NOT NULL DEFAULT 0"),
                 ("legal_hold_blocks_disposition", "bool NOT NULL DEFAULT 0"),
+            ] {
+                ensure_sqlite_column(pool, "evidence_evidenceitem", column, definition).await?;
+            }
+        }
+        if migration.version == "0035_rust_evidence_worker_disposition_storage" {
+            for (column, definition) in [
+                ("disposition_executed_by", "INTEGER NULL"),
+                ("disposition_executed_at", "TEXT NULL"),
+                (
+                    "disposition_execution_error_class",
+                    "varchar(64) NOT NULL DEFAULT ''",
+                ),
+                (
+                    "disposition_storage_backend",
+                    "varchar(64) NOT NULL DEFAULT ''",
+                ),
+                (
+                    "disposition_tombstone_sha256",
+                    "varchar(64) NOT NULL DEFAULT ''",
+                ),
+                ("disposition_tombstone_json", "TEXT NOT NULL DEFAULT '{}'"),
+                (
+                    "storage_backend",
+                    "varchar(64) NOT NULL DEFAULT 'local_filesystem'",
+                ),
+                ("storage_object_reference", "TEXT NOT NULL DEFAULT ''"),
             ] {
                 ensure_sqlite_column(pool, "evidence_evidenceitem", column, definition).await?;
             }
@@ -6774,5 +6896,141 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(index_count, 7);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0035_is_restartable_and_preserves_evidence_worker_disposition_data() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_evidenceitem (
+                id, tenant_id, title, file, file_sha256, status,
+                integrity_status, disposition_status, disposition_reason,
+                disposition_executed_by, disposition_executed_at,
+                disposition_execution_error_class, disposition_storage_backend,
+                disposition_tombstone_sha256, disposition_tombstone_json,
+                storage_backend, storage_object_reference
+            ) VALUES (
+                8801, 88, 'Existing Disposition Evidence', NULL,
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'APPROVED', 'valid', 'disposition_executed',
+                'Retention abgelaufen und freigegeben', 8,
+                '2026-06-01T00:00:00Z', '', 'local_filesystem',
+                'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                '{"deleted":true,"paths_exposed":false}',
+                'local_filesystem', ''
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_integrity_worker_run (
+                tenant_id, started_by, status, trigger_mode, batch_size,
+                max_runtime_seconds, cooldown_seconds, dry_run, checked_count,
+                valid_count, mismatch_count, missing_count, failed_count,
+                skipped_count, detail_json
+            ) VALUES (
+                88, 8, 'completed', 'manual', 5, 30, 300, 0, 1,
+                1, 0, 0, 0, 0, '{"paths_exposed":false}'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_storage_backend_status (
+                tenant_id, backend_type, configured, status,
+                safe_error_class, detail_json, checked_by
+            ) VALUES (
+                88, 'local_filesystem', 1, 'configured', '',
+                '{"secrets_exposed":false}', 8
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0035_rust_evidence_worker_disposition_storage'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(
+            applied,
+            vec!["0035_rust_evidence_worker_disposition_storage"]
+        );
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let evidence = sqlx::query(
+            r#"
+            SELECT title, disposition_status, disposition_executed_by,
+                   disposition_storage_backend, disposition_tombstone_sha256,
+                   disposition_tombstone_json, storage_backend
+            FROM evidence_evidenceitem
+            WHERE id = 8801
+            "#,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            evidence.get::<String, _>("title"),
+            "Existing Disposition Evidence"
+        );
+        assert_eq!(
+            evidence.get::<String, _>("disposition_status"),
+            "disposition_executed"
+        );
+        assert_eq!(evidence.get::<i64, _>("disposition_executed_by"), 8);
+        assert_eq!(
+            evidence.get::<String, _>("disposition_storage_backend"),
+            "local_filesystem"
+        );
+        assert_eq!(
+            evidence.get::<String, _>("disposition_tombstone_sha256"),
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        );
+        assert_eq!(
+            evidence.get::<String, _>("disposition_tombstone_json"),
+            "{\"deleted\":true,\"paths_exposed\":false}"
+        );
+        assert_eq!(
+            evidence.get::<String, _>("storage_backend"),
+            "local_filesystem"
+        );
+        let worker_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM evidence_integrity_worker_run WHERE tenant_id = 88",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(worker_count, 1);
+        let backend_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM evidence_storage_backend_status WHERE tenant_id = 88",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(backend_count, 1);
+        let index_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_evidence_worker_run_tenant','idx_evidence_worker_run_status','idx_evidence_storage_backend_status_tenant')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(index_count, 3);
     }
 }

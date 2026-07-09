@@ -74,8 +74,8 @@ use control_store::ControlStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
 use evidence_artifact_storage::{
-    EvidenceArtifactDrill, EvidenceArtifactMetadata, EvidenceArtifactRef,
-    FilesystemEvidenceArtifactStorage,
+    EvidenceArtifactDisposition, EvidenceArtifactDrill, EvidenceArtifactMetadata,
+    EvidenceArtifactRef, FilesystemEvidenceArtifactStorage,
 };
 use evidence_store::EvidenceStore;
 use hardening::CommunitySecurityConfig;
@@ -1753,6 +1753,117 @@ pub struct EvidenceStorageBatchResponse {
     pub api_version: &'static str,
     pub checked: usize,
     pub results: Vec<EvidenceStorageDrillResponse>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceWorkerStatus {
+    pub enabled: bool,
+    pub configured_backend: String,
+    pub recommended_batch_size: i64,
+    pub max_runtime_seconds: i64,
+    pub cooldown_seconds: i64,
+    pub last_run: Option<evidence_store::EvidenceIntegrityWorkerRun>,
+    pub next_recommended_run: String,
+    pub open_targets: i64,
+    pub overdue_or_failed_targets: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceWorkerStatusResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub worker: EvidenceWorkerStatus,
+    pub runs: Vec<evidence_store::EvidenceIntegrityWorkerRun>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EvidenceWorkerRunRequest {
+    pub batch_size: Option<i64>,
+    pub max_runtime_seconds: Option<i64>,
+    pub dry_run: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceWorkerRunResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub run: evidence_store::EvidenceIntegrityWorkerRun,
+    pub items: Vec<evidence_store::EvidenceIntegrityItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceDispositionPreview {
+    pub evidence_id: i64,
+    pub title: String,
+    pub status: String,
+    pub eligible: bool,
+    pub reason_required: bool,
+    pub legal_hold_blocks: bool,
+    pub artifact_reference_present: bool,
+    pub artifact_present: bool,
+    pub storage_backend: String,
+    pub safe_error_class: String,
+    pub retention_until: Option<String>,
+    pub retention_due_at: Option<String>,
+    pub disposition_due_at: Option<String>,
+    pub disposition_status: String,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceDispositionCandidatesResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub candidates: Vec<EvidenceDispositionPreview>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceDispositionPreviewResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub preview: EvidenceDispositionPreview,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvidenceDispositionApprovalRequest {
+    pub reason: String,
+    pub decision: Option<String>,
+    pub disposition_due_at: Option<String>,
+    pub retention_due_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvidenceDispositionCancelRequest {
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceDispositionExecutionResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub evidence_id: i64,
+    pub disposition: EvidenceArtifactDisposition,
+    pub item: evidence_store::EvidenceIntegrityItem,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceStorageBackendStatus {
+    pub backend_type: String,
+    pub configured: bool,
+    pub active: bool,
+    pub status: String,
+    pub safe_error_class: String,
+    pub detail: Value,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceStorageBackendsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub backends: Vec<EvidenceStorageBackendStatus>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -9762,6 +9873,109 @@ async fn evidence_integrity(State(state): State<AppState>, headers: HeaderMap) -
     }
 }
 
+async fn evidence_integrity_worker(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match evidence_worker_status(&state, store, context.tenant_id).await {
+        Ok((worker, runs)) => (
+            StatusCode::OK,
+            Json(EvidenceWorkerStatusResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                worker,
+                runs,
+            }),
+        )
+            .into_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Evidence-Worker-Status konnte nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_integrity_worker_runs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store.evidence_worker_runs(context.tenant_id, 25).await {
+        Ok(runs) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "api_version": "v1",
+                "tenant_id": context.tenant_id,
+                "runs": runs
+            })),
+        )
+            .into_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Evidence-Worker-Laeufe konnten nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_integrity_worker_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<EvidenceWorkerRunRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match run_evidence_integrity_worker(&state, &store, &context, payload).await {
+        Ok((run, items)) => (
+            StatusCode::OK,
+            Json(EvidenceWorkerRunResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                run,
+                items,
+            }),
+        )
+            .into_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Evidence-Re-Hash-Worker konnte nicht sicher ausgefuehrt werden.",
+        ),
+    }
+}
+
 async fn evidence_integrity_check(
     Path(evidence_id): Path<i64>,
     State(state): State<AppState>,
@@ -9926,6 +10140,22 @@ async fn evidence_storage(State(state): State<AppState>, headers: HeaderMap) -> 
             "Evidence-Storage-Metadaten konnten nicht sicher gelesen werden.",
         ),
     }
+}
+
+async fn evidence_storage_backends(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    (
+        StatusCode::OK,
+        Json(EvidenceStorageBackendsResponse {
+            api_version: "v1",
+            tenant_id: context.tenant_id,
+            backends: evidence_storage_backend_statuses(&state),
+        }),
+    )
+        .into_response()
 }
 
 async fn evidence_storage_detail(
@@ -10108,6 +10338,396 @@ async fn evidence_storage_events(
             StatusCode::INTERNAL_SERVER_ERROR,
             "database_error",
             "Evidence-Storage-Ereignisse konnten nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_disposition_candidates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .evidence_integrity_overview(context.tenant_id, 500)
+        .await
+    {
+        Ok(overview) => {
+            let storage = evidence_artifact_storage(&state);
+            let candidates = overview
+                .items
+                .iter()
+                .filter(|item| evidence_disposition_candidate(item))
+                .map(|item| evidence_disposition_preview_from_item(&storage, item))
+                .collect::<Vec<_>>();
+            (
+                StatusCode::OK,
+                Json(EvidenceDispositionCandidatesResponse {
+                    api_version: "v1",
+                    tenant_id: context.tenant_id,
+                    candidates,
+                }),
+            )
+                .into_response()
+        }
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Disposition-Kandidaten konnten nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_disposition_preview(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store.clone() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .evidence_integrity_item(context.tenant_id, evidence_id)
+        .await
+    {
+        Ok(Some(item)) => {
+            let preview =
+                evidence_disposition_preview_from_item(&evidence_artifact_storage(&state), &item);
+            let _ = store
+                .record_evidence_integrity_event(
+                    context.tenant_id,
+                    evidence_id,
+                    Some(context.user_id),
+                    "disposition_preview_created",
+                    serde_json::json!({
+                        "eligible": preview.eligible,
+                        "legal_hold_blocks": preview.legal_hold_blocks,
+                        "artifact_reference_present": preview.artifact_reference_present,
+                        "artifact_present": preview.artifact_present,
+                        "storage_backend": preview.storage_backend,
+                        "safe_error_class": preview.safe_error_class,
+                    }),
+                    "",
+                )
+                .await;
+            (
+                StatusCode::OK,
+                Json(EvidenceDispositionPreviewResponse {
+                    accepted: true,
+                    api_version: "v1",
+                    tenant_id: context.tenant_id,
+                    preview,
+                }),
+            )
+                .into_response()
+        }
+        Ok(None) => evidence_not_found_api_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Disposition-Preview konnte nicht sicher erzeugt werden.",
+        ),
+    }
+}
+
+async fn evidence_disposition_approve(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<EvidenceDispositionApprovalRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    if payload.reason.trim().is_empty() {
+        return evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_disposition_reason",
+            "Disposition-Freigabe benoetigt eine Begruendung.",
+        );
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    let decision = payload
+        .decision
+        .unwrap_or_else(|| "Kontrollierte physische Aussonderung freigegeben.".to_string());
+    let request = evidence_store::EvidenceDispositionRequest {
+        disposition_status: "approved_for_disposition".to_string(),
+        retention_due_at: payload.retention_due_at,
+        disposition_due_at: payload.disposition_due_at,
+        decision: Some(decision),
+        reason: payload.reason,
+        blocked_reason: None,
+        review_note: Some("Freigabe fuer kontrollierte Aussonderung.".to_string()),
+    };
+    match store
+        .decide_disposition(context.tenant_id, evidence_id, context.user_id, request)
+        .await
+    {
+        Ok(Some(item)) => {
+            let _ = store
+                .record_evidence_integrity_event(
+                    context.tenant_id,
+                    evidence_id,
+                    Some(context.user_id),
+                    "disposition_approved",
+                    serde_json::json!({"reason_present": true}),
+                    "",
+                )
+                .await;
+            (
+                StatusCode::OK,
+                Json(EvidenceIntegrityItemResponse {
+                    accepted: true,
+                    api_version: "v1",
+                    item,
+                }),
+            )
+                .into_response()
+        }
+        Ok(None) => evidence_not_found_api_response(),
+        Err(err) if evidence_payload_error(&err) => evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_disposition_approval",
+            "Disposition-Freigabe ist ungueltig.",
+        ),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Disposition-Freigabe konnte nicht sicher gespeichert werden.",
+        ),
+    }
+}
+
+async fn evidence_disposition_execute(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    let item = match store
+        .evidence_integrity_item(context.tenant_id, evidence_id)
+        .await
+    {
+        Ok(Some(item)) => item,
+        Ok(None) => return evidence_not_found_api_response(),
+        Err(_) => {
+            return evidence_api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "Evidence konnte fuer Disposition nicht sicher gelesen werden.",
+            )
+        }
+    };
+    let storage = evidence_artifact_storage(&state);
+    if let Some(error_class) = evidence_disposition_execution_blocker(&item) {
+        let _ = store
+            .record_evidence_integrity_event(
+                context.tenant_id,
+                evidence_id,
+                Some(context.user_id),
+                "disposition_execution_denied",
+                serde_json::json!({"safe_error_class": error_class}),
+                "",
+            )
+            .await;
+        return evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_disposition_execution",
+            "Disposition-Ausfuehrung wurde durch Schutzregeln verweigert.",
+        );
+    }
+    let disposition = storage.delete_artifact(&evidence_artifact_ref_from_item(&item));
+    let tombstone = evidence_disposition_tombstone(&item, &disposition);
+    let execution = evidence_store::EvidenceDispositionExecution {
+        deleted: disposition.deleted,
+        storage_backend: disposition.backend.to_string(),
+        safe_error_class: disposition.safe_error_class.clone(),
+        tombstone_sha256: evidence_tombstone_hash(&tombstone),
+        tombstone,
+    };
+    match store
+        .execute_disposition(context.tenant_id, evidence_id, context.user_id, execution)
+        .await
+    {
+        Ok(Some(item)) => (
+            StatusCode::OK,
+            Json(EvidenceDispositionExecutionResponse {
+                accepted: disposition.deleted,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                disposition,
+                item,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(err) if evidence_payload_error(&err) => evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_disposition_execution",
+            "Disposition-Ausfuehrung wurde durch Schutzregeln verweigert.",
+        ),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Disposition-Ausfuehrung konnte nicht sicher gespeichert werden.",
+        ),
+    }
+}
+
+async fn evidence_disposition_cancel(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<EvidenceDispositionCancelRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    if payload.reason.trim().is_empty() {
+        return evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_disposition_cancel_reason",
+            "Disposition-Abbruch benoetigt eine Begruendung.",
+        );
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    let request = evidence_store::EvidenceDispositionRequest {
+        disposition_status: "disposition_cancelled".to_string(),
+        retention_due_at: None,
+        disposition_due_at: None,
+        decision: Some("Disposition abgebrochen.".to_string()),
+        reason: payload.reason,
+        blocked_reason: None,
+        review_note: Some("Disposition wurde abgebrochen.".to_string()),
+    };
+    match store
+        .decide_disposition(context.tenant_id, evidence_id, context.user_id, request)
+        .await
+    {
+        Ok(Some(item)) => {
+            let _ = store
+                .record_evidence_integrity_event(
+                    context.tenant_id,
+                    evidence_id,
+                    Some(context.user_id),
+                    "disposition_cancelled",
+                    serde_json::json!({"reason_present": true}),
+                    "",
+                )
+                .await;
+            (
+                StatusCode::OK,
+                Json(EvidenceIntegrityItemResponse {
+                    accepted: true,
+                    api_version: "v1",
+                    item,
+                }),
+            )
+                .into_response()
+        }
+        Ok(None) => evidence_not_found_api_response(),
+        Err(err) if evidence_payload_error(&err) => evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_disposition_cancel",
+            "Disposition-Abbruch ist ungueltig.",
+        ),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Disposition-Abbruch konnte nicht sicher gespeichert werden.",
+        ),
+    }
+}
+
+async fn evidence_disposition_events(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .evidence_integrity_events(context.tenant_id, evidence_id, 100)
+        .await
+    {
+        Ok(Some(events)) => (
+            StatusCode::OK,
+            Json(EvidenceIntegrityEventsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                events: events
+                    .into_iter()
+                    .filter(|event| event.event_type.starts_with("disposition_"))
+                    .collect(),
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Disposition-Ereignisse konnten nicht sicher gelesen werden.",
         ),
     }
 }
@@ -10312,6 +10932,170 @@ impl EvidenceIntegrityActionError {
     }
 }
 
+fn evidence_worker_config_value(name: &str, default: i64, min: i64, max: i64) -> i64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(default)
+        .clamp(min, max)
+}
+
+async fn evidence_worker_status(
+    _state: &AppState,
+    store: &EvidenceStore,
+    tenant_id: i64,
+) -> anyhow::Result<(
+    EvidenceWorkerStatus,
+    Vec<evidence_store::EvidenceIntegrityWorkerRun>,
+)> {
+    let batch_size = evidence_worker_config_value("ISCY_EVIDENCE_WORKER_BATCH_SIZE", 10, 1, 25);
+    let max_runtime_seconds =
+        evidence_worker_config_value("ISCY_EVIDENCE_WORKER_MAX_RUNTIME_SECONDS", 30, 1, 300);
+    let cooldown_seconds =
+        evidence_worker_config_value("ISCY_EVIDENCE_WORKER_COOLDOWN_SECONDS", 300, 0, 86_400);
+    let enabled = std::env::var("ISCY_EVIDENCE_WORKER_ENABLED")
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes"
+            )
+        })
+        .unwrap_or(true);
+    let overview = store.evidence_integrity_overview(tenant_id, 500).await?;
+    let open_targets = overview.summary.not_checked
+        + overview.summary.mismatch
+        + overview.summary.missing_artifact
+        + overview.summary.check_failed;
+    let overdue_or_failed_targets = overview.summary.missing_artifact
+        + overview.summary.check_failed
+        + overview.summary.mismatch;
+    let runs = store.evidence_worker_runs(tenant_id, 10).await?;
+    let last_run = runs.first().cloned();
+    let next_recommended_run = if !enabled {
+        "deaktiviert".to_string()
+    } else if open_targets > 0 {
+        "jetzt empfohlen".to_string()
+    } else {
+        format!("nach Cooldown von {cooldown_seconds} Sekunden")
+    };
+    Ok((
+        EvidenceWorkerStatus {
+            enabled,
+            configured_backend: evidence_active_storage_backend(),
+            recommended_batch_size: batch_size,
+            max_runtime_seconds,
+            cooldown_seconds,
+            last_run,
+            next_recommended_run,
+            open_targets,
+            overdue_or_failed_targets,
+        },
+        runs,
+    ))
+}
+
+async fn run_evidence_integrity_worker(
+    state: &AppState,
+    store: &EvidenceStore,
+    context: &AuthenticatedTenantContext,
+    payload: EvidenceWorkerRunRequest,
+) -> anyhow::Result<(
+    evidence_store::EvidenceIntegrityWorkerRun,
+    Vec<evidence_store::EvidenceIntegrityItem>,
+)> {
+    let batch_size = payload.batch_size.unwrap_or_else(|| {
+        evidence_worker_config_value("ISCY_EVIDENCE_WORKER_BATCH_SIZE", 10, 1, 25)
+    });
+    let batch_size = batch_size.clamp(1, 25);
+    let max_runtime_seconds = payload.max_runtime_seconds.unwrap_or_else(|| {
+        evidence_worker_config_value("ISCY_EVIDENCE_WORKER_MAX_RUNTIME_SECONDS", 30, 1, 300)
+    });
+    let max_runtime_seconds = max_runtime_seconds.clamp(1, 300);
+    let cooldown_seconds =
+        evidence_worker_config_value("ISCY_EVIDENCE_WORKER_COOLDOWN_SECONDS", 300, 0, 86_400);
+    let dry_run = payload.dry_run.unwrap_or(false);
+    let run = store
+        .create_evidence_worker_run(
+            context.tenant_id,
+            context.user_id,
+            evidence_store::EvidenceIntegrityWorkerRunCreate {
+                trigger_mode: "manual".to_string(),
+                batch_size,
+                max_runtime_seconds,
+                cooldown_seconds,
+                dry_run,
+                detail: serde_json::json!({
+                    "storage_backend": evidence_active_storage_backend(),
+                    "bounded": true,
+                    "paths_exposed": false
+                }),
+            },
+        )
+        .await?;
+    let targets = store
+        .evidence_integrity_targets(context.tenant_id, batch_size)
+        .await?;
+    let started = Instant::now();
+    let mut items = Vec::new();
+    let mut valid_count = 0;
+    let mut mismatch_count = 0;
+    let mut missing_count = 0;
+    let mut failed_count = 0;
+    let mut skipped_count = 0;
+    for target in targets {
+        if started.elapsed() >= Duration::from_secs(max_runtime_seconds as u64) {
+            skipped_count += 1;
+            continue;
+        }
+        if dry_run {
+            skipped_count += 1;
+            continue;
+        }
+        match run_evidence_integrity_check(state, store, context, target.id).await {
+            Ok(Some(item)) => {
+                match item.integrity_status.as_str() {
+                    "valid" => valid_count += 1,
+                    "mismatch" => mismatch_count += 1,
+                    "missing_artifact" => missing_count += 1,
+                    _ => failed_count += 1,
+                }
+                items.push(item);
+            }
+            Ok(None) => skipped_count += 1,
+            Err(_) => failed_count += 1,
+        }
+    }
+    let checked_count = items.len() as i64;
+    let status = if failed_count > 0 {
+        "completed_with_findings"
+    } else {
+        "completed"
+    };
+    let finished = store
+        .finish_evidence_worker_run(
+            context.tenant_id,
+            run.id,
+            evidence_store::EvidenceIntegrityWorkerRunFinish {
+                status: status.to_string(),
+                checked_count,
+                valid_count,
+                mismatch_count,
+                missing_count,
+                failed_count,
+                skipped_count,
+                detail: serde_json::json!({
+                    "dry_run": dry_run,
+                    "runtime_seconds": started.elapsed().as_secs(),
+                    "storage_backend": evidence_active_storage_backend(),
+                    "paths_exposed": false
+                }),
+            },
+        )
+        .await?
+        .unwrap_or(run);
+    Ok((finished, items))
+}
+
 async fn run_evidence_integrity_check(
     state: &AppState,
     store: &EvidenceStore,
@@ -10508,6 +11292,196 @@ fn evidence_storage_item_from_metadata(
         disposition_status: item.disposition_status.clone(),
         disposition_status_label: item.disposition_status_label.clone(),
     }
+}
+
+fn evidence_active_storage_backend() -> String {
+    std::env::var("ISCY_EVIDENCE_STORAGE_BACKEND")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| FilesystemEvidenceArtifactStorage::BACKEND.to_string())
+}
+
+fn evidence_storage_backend_statuses(state: &AppState) -> Vec<EvidenceStorageBackendStatus> {
+    let active = evidence_active_storage_backend();
+    let local_root = evidence_media_root(state);
+    let local_ok = local_root.exists() && local_root.is_dir();
+    let local = EvidenceStorageBackendStatus {
+        backend_type: FilesystemEvidenceArtifactStorage::BACKEND.to_string(),
+        configured: local_ok,
+        active: active == FilesystemEvidenceArtifactStorage::BACKEND,
+        status: if local_ok {
+            "configured".to_string()
+        } else {
+            "storage_not_configured".to_string()
+        },
+        safe_error_class: if local_ok {
+            String::new()
+        } else {
+            "storage_not_configured".to_string()
+        },
+        detail: serde_json::json!({
+            "media_root_configured": true,
+            "network_required": false,
+            "secrets_exposed": false
+        }),
+    };
+    let endpoint = std::env::var("ISCY_EVIDENCE_OBJECT_STORAGE_ENDPOINT").unwrap_or_default();
+    let bucket = std::env::var("ISCY_EVIDENCE_OBJECT_STORAGE_BUCKET").unwrap_or_default();
+    let region = std::env::var("ISCY_EVIDENCE_OBJECT_STORAGE_REGION").unwrap_or_default();
+    let endpoint_valid = endpoint.starts_with("https://");
+    let bucket_valid = evidence_object_storage_bucket_valid(&bucket);
+    let configured = endpoint_valid && bucket_valid && !region.trim().is_empty();
+    let object = EvidenceStorageBackendStatus {
+        backend_type: "s3_compatible".to_string(),
+        configured,
+        active: active == "s3_compatible" || active == "object_storage_s3_compatible",
+        status: if configured {
+            "prepared_not_live_checked".to_string()
+        } else {
+            "storage_not_configured".to_string()
+        },
+        safe_error_class: if configured {
+            String::new()
+        } else if endpoint.trim().is_empty() && bucket.trim().is_empty() {
+            "credentials_missing".to_string()
+        } else if !endpoint_valid {
+            "invalid_endpoint".to_string()
+        } else {
+            "storage_not_configured".to_string()
+        },
+        detail: serde_json::json!({
+            "endpoint_present": !endpoint.trim().is_empty(),
+            "endpoint_https": endpoint_valid,
+            "bucket_present": !bucket.trim().is_empty(),
+            "bucket_valid": bucket_valid,
+            "region_present": !region.trim().is_empty(),
+            "credentials_reference_present": evidence_object_storage_credentials_reference_present(),
+            "network_checked": false,
+            "secrets_exposed": false
+        }),
+    };
+    vec![local, object]
+}
+
+fn evidence_object_storage_credentials_reference_present() -> bool {
+    [
+        "ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE",
+        "ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE",
+        "ISCY_EVIDENCE_OBJECT_STORAGE_CREDENTIALS_REF",
+    ]
+    .iter()
+    .any(|name| {
+        std::env::var(name)
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
+    })
+}
+
+fn evidence_object_storage_bucket_valid(bucket: &str) -> bool {
+    let bucket = bucket.trim();
+    !bucket.is_empty()
+        && bucket.len() <= 63
+        && bucket.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'.'
+        })
+        && !bucket.starts_with('-')
+        && !bucket.ends_with('-')
+        && !bucket.contains("..")
+}
+
+fn evidence_disposition_candidate(item: &evidence_store::EvidenceIntegrityItem) -> bool {
+    item.disposal_candidate
+        || matches!(
+            item.disposition_status.as_str(),
+            "due"
+                | "review_required"
+                | "blocked_by_legal_hold"
+                | "approved_for_disposition"
+                | "disposition_failed"
+        )
+}
+
+fn evidence_disposition_preview_from_item(
+    storage: &FilesystemEvidenceArtifactStorage,
+    item: &evidence_store::EvidenceIntegrityItem,
+) -> EvidenceDispositionPreview {
+    let metadata = storage.inspect_metadata(&evidence_artifact_ref_from_item(item));
+    let legal_hold_blocks =
+        item.legal_hold_status == "active" || item.legal_hold_blocks_disposition;
+    let reason_required = item.disposition_reason.trim().is_empty();
+    let eligible = item.disposition_status == "approved_for_disposition"
+        && !legal_hold_blocks
+        && !reason_required
+        && metadata.artifact_reference_present
+        && metadata.artifact_present
+        && metadata.readable;
+    let message = if legal_hold_blocks {
+        "Durch Legal Hold / Aufbewahrungssperre blockiert.".to_string()
+    } else if reason_required {
+        "Vor Ausfuehrung ist eine dokumentierte Begruendung erforderlich.".to_string()
+    } else if item.disposition_status != "approved_for_disposition" {
+        "Vor Ausfuehrung ist eine explizite Disposition-Freigabe erforderlich.".to_string()
+    } else if !metadata.artifact_present {
+        "Artefakt ist nicht vorhanden oder nicht sicher referenziert.".to_string()
+    } else if !metadata.readable {
+        "Artefakt ist nicht sicher lesbar.".to_string()
+    } else {
+        "Kontrollierte physische Aussonderung ist freigegeben.".to_string()
+    };
+    EvidenceDispositionPreview {
+        evidence_id: item.id,
+        title: item.title.clone(),
+        status: item.evidence_status.clone(),
+        eligible,
+        reason_required,
+        legal_hold_blocks,
+        artifact_reference_present: metadata.artifact_reference_present,
+        artifact_present: metadata.artifact_present,
+        storage_backend: metadata.backend.to_string(),
+        safe_error_class: metadata.safe_error_class,
+        retention_until: item.retention_until.clone(),
+        retention_due_at: item.retention_due_at.clone(),
+        disposition_due_at: item.disposition_due_at.clone(),
+        disposition_status: item.disposition_status.clone(),
+        message,
+    }
+}
+
+fn evidence_disposition_execution_blocker(
+    item: &evidence_store::EvidenceIntegrityItem,
+) -> Option<&'static str> {
+    if item.legal_hold_status == "active" || item.legal_hold_blocks_disposition {
+        Some("blocked_by_legal_hold")
+    } else if item.disposition_status != "approved_for_disposition" {
+        Some("approval_required")
+    } else if item.disposition_reason.trim().is_empty() {
+        Some("reason_required")
+    } else {
+        None
+    }
+}
+
+fn evidence_disposition_tombstone(
+    item: &evidence_store::EvidenceIntegrityItem,
+    disposition: &EvidenceArtifactDisposition,
+) -> Value {
+    serde_json::json!({
+        "backend": disposition.backend,
+        "artifact_reference_present": disposition.artifact_reference_present,
+        "artifact_present_before": disposition.artifact_present_before,
+        "deleted": disposition.deleted,
+        "safe_error_class": disposition.safe_error_class,
+        "expected_hash_present": item.expected_sha256_present,
+        "previous_integrity_status": item.integrity_status.clone(),
+        "retention_until": item.retention_until.clone(),
+        "disposition_due_at": item.disposition_due_at.clone(),
+        "paths_exposed": false
+    })
+}
+
+fn evidence_tombstone_hash(tombstone: &Value) -> String {
+    format!("{:x}", Sha256::digest(tombstone.to_string().as_bytes()))
 }
 
 async fn run_evidence_storage_drill(
@@ -16730,6 +17704,22 @@ async fn web_evidence_integrity(
     {
         Ok(overview) => {
             let storage = evidence_artifact_storage(&state);
+            let worker_panel = match evidence_worker_status(&state, store, context.tenant_id).await {
+                Ok((worker, runs)) => evidence_worker_panel(&context, can_write, &worker, &runs),
+                Err(_) => {
+                    "<section class=\"panel wide\"><h2>Integritaets-Worker</h2><p>Worker-Status konnte nicht gelesen werden.</p></section>".to_string()
+                }
+            };
+            let backend_panel =
+                evidence_storage_backend_panel(&evidence_storage_backend_statuses(&state));
+            let disposition_panel = evidence_disposition_candidate_panel(
+                &overview
+                    .items
+                    .iter()
+                    .filter(|item| evidence_disposition_candidate(item))
+                    .map(|item| evidence_disposition_preview_from_item(&storage, item))
+                    .collect::<Vec<_>>(),
+            );
             let rows = overview
                 .items
                 .iter()
@@ -16747,8 +17737,11 @@ async fn web_evidence_integrity(
                   {}
                   {}
                 </section>
+                {}
+                {}
+                {}
                 <section class="panel wide">
-                  <h2>Integrity & Disposition</h2>
+                  <h2>Nachweis-Integritaet und Disposition</h2>
                   <table>
                     <thead><tr><th>Evidence</th><th>Storage</th><th>Integrity</th><th>Drill</th><th>Legal Hold</th><th>Disposition</th><th>Retention</th><th>Aktionen</th></tr></thead>
                     <tbody>{}</tbody>
@@ -16764,6 +17757,9 @@ async fn web_evidence_integrity(
                 metric_card("Legal Hold", overview.summary.legal_hold_active),
                 metric_card("Disposition faellig", overview.summary.disposition_due),
                 metric_card("Blockiert", overview.summary.disposition_blocked),
+                worker_panel,
+                backend_panel,
+                disposition_panel,
                 if rows.is_empty() {
                     web_empty_row(8, "Keine Evidence vorhanden.")
                 } else {
@@ -16840,6 +17836,68 @@ async fn web_evidence_storage_drill(
             "/evidence/integrity/",
             &context,
             "Storage-/Restore-Drill konnte nicht sicher ausgefuehrt werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_evidence_integrity_worker_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(_query): Query<WebContextQuery>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Nachweis-Integritaet", "/evidence/integrity/")
+                .into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Nachweis-Integritaet",
+            "/evidence/integrity/",
+            &context,
+            "Diese Aktion benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return web_store_missing(
+            "Nachweis-Integritaet",
+            "/evidence/integrity/",
+            &context,
+            "Evidence",
+        )
+        .into_response();
+    };
+    match run_evidence_integrity_worker(
+        &state,
+        &store,
+        &auth_context,
+        EvidenceWorkerRunRequest {
+            batch_size: None,
+            max_runtime_seconds: None,
+            dry_run: Some(false),
+        },
+    )
+    .await
+    {
+        Ok(_) => Redirect::to(&web_path_with_context(
+            "/evidence/integrity/",
+            Some(&context),
+        ))
+        .into_response(),
+        Err(_) => web_error_page(
+            "Nachweis-Integritaet",
+            "/evidence/integrity/",
+            &context,
+            "Re-Hash-Worker konnte nicht sicher ausgefuehrt werden.",
         )
         .into_response(),
     }
@@ -17125,6 +18183,269 @@ async fn web_evidence_disposition(
     }
 }
 
+async fn web_evidence_disposition_execute(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(_query): Query<WebContextQuery>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Nachweis-Integritaet", "/evidence/integrity/")
+                .into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Nachweis-Integritaet",
+            "/evidence/integrity/",
+            &context,
+            "Diese Aktion benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return web_store_missing(
+            "Nachweis-Integritaet",
+            "/evidence/integrity/",
+            &context,
+            "Evidence",
+        )
+        .into_response();
+    };
+    let item = match store
+        .evidence_integrity_item(auth_context.tenant_id, evidence_id)
+        .await
+    {
+        Ok(Some(item)) => item,
+        Ok(None) => {
+            return web_error_page(
+                "Nachweis-Integritaet",
+                "/evidence/integrity/",
+                &context,
+                "Evidence wurde fuer diesen Tenant nicht gefunden.",
+            )
+            .into_response()
+        }
+        Err(_) => {
+            return web_error_page(
+                "Nachweis-Integritaet",
+                "/evidence/integrity/",
+                &context,
+                "Evidence konnte nicht sicher gelesen werden.",
+            )
+            .into_response()
+        }
+    };
+    if let Some(error_class) = evidence_disposition_execution_blocker(&item) {
+        let _ = store
+            .record_evidence_integrity_event(
+                auth_context.tenant_id,
+                evidence_id,
+                Some(auth_context.user_id),
+                "disposition_execution_denied",
+                serde_json::json!({"safe_error_class": error_class}),
+                "",
+            )
+            .await;
+        return web_error_page(
+            "Nachweis-Integritaet",
+            "/evidence/integrity/",
+            &context,
+            "Disposition-Ausfuehrung wurde durch Schutzregeln verweigert.",
+        )
+        .into_response();
+    }
+    let disposition =
+        evidence_artifact_storage(&state).delete_artifact(&evidence_artifact_ref_from_item(&item));
+    let tombstone = evidence_disposition_tombstone(&item, &disposition);
+    let execution = evidence_store::EvidenceDispositionExecution {
+        deleted: disposition.deleted,
+        storage_backend: disposition.backend.to_string(),
+        safe_error_class: disposition.safe_error_class.clone(),
+        tombstone_sha256: evidence_tombstone_hash(&tombstone),
+        tombstone,
+    };
+    match store
+        .execute_disposition(
+            auth_context.tenant_id,
+            evidence_id,
+            auth_context.user_id,
+            execution,
+        )
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            "/evidence/integrity/",
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Nachweis-Integritaet",
+            "/evidence/integrity/",
+            &context,
+            "Evidence wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(_) => web_error_page(
+            "Nachweis-Integritaet",
+            "/evidence/integrity/",
+            &context,
+            "Disposition-Ausfuehrung wurde verweigert oder konnte nicht gespeichert werden.",
+        )
+        .into_response(),
+    }
+}
+
+fn evidence_worker_panel(
+    context: &WebContext,
+    can_write: bool,
+    worker: &EvidenceWorkerStatus,
+    runs: &[evidence_store::EvidenceIntegrityWorkerRun],
+) -> String {
+    let run_rows = runs
+        .iter()
+        .take(5)
+        .map(|run| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}/{}/{}/{}</td><td>{}</td></tr>",
+                html_escape(&run.started_at),
+                html_escape(&run.status),
+                run.checked_count,
+                run.valid_count,
+                run.mismatch_count,
+                run.missing_count,
+                run.failed_count,
+                html_escape(run.completed_at.as_deref().unwrap_or("-")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let action = if can_write {
+        format!(
+            r#"<form method="post" action="{}"><button type="submit">Integritaets-Worker starten</button></form>"#,
+            html_escape(&web_path_with_context(
+                "/evidence/integrity/worker/run",
+                Some(context),
+            ))
+        )
+    } else {
+        "<p>Nur Lesen: Worker-Start benoetigt eine schreibende ISCY-Rolle.</p>".to_string()
+    };
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Integritaets-Worker</h2>
+          <p>Status: {} · Backend: {} · offene Targets: {} · naechster Lauf: {}</p>
+          {}
+          <table>
+            <thead><tr><th>Start</th><th>Status</th><th>Geprueft</th><th>Valid/Mismatch/Fehlend/Fehler</th><th>Ende</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </section>
+        "#,
+        if worker.enabled {
+            "aktiv"
+        } else {
+            "deaktiviert"
+        },
+        html_escape(&worker.configured_backend),
+        worker.open_targets,
+        html_escape(&worker.next_recommended_run),
+        action,
+        if run_rows.is_empty() {
+            web_empty_row(5, "Keine Worker-Laeufe erfasst.")
+        } else {
+            run_rows
+        },
+    )
+}
+
+fn evidence_storage_backend_panel(backends: &[EvidenceStorageBackendStatus]) -> String {
+    let rows = backends
+        .iter()
+        .map(|backend| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&backend.backend_type),
+                if backend.active { "aktiv" } else { "-" },
+                if backend.configured {
+                    "konfiguriert"
+                } else {
+                    "nicht konfiguriert"
+                },
+                html_escape(&backend.status),
+                html_escape(&backend.safe_error_class),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Storage-Backend-Status</h2>
+          <p>Object Storage ist vorbereitet und wird ohne echte Credentials oder externe Live-Pruefung angezeigt.</p>
+          <table>
+            <thead><tr><th>Backend</th><th>Aktiv</th><th>Konfiguration</th><th>Status</th><th>Fehlerklasse</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </section>
+        "#,
+        if rows.is_empty() {
+            web_empty_row(5, "Keine Storage-Backends erfasst.")
+        } else {
+            rows
+        },
+    )
+}
+
+fn evidence_disposition_candidate_panel(candidates: &[EvidenceDispositionPreview]) -> String {
+    let rows = candidates
+        .iter()
+        .take(10)
+        .map(|candidate| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&candidate.title),
+                html_escape(&candidate.disposition_status),
+                if candidate.legal_hold_blocks {
+                    "blockiert"
+                } else if candidate.eligible {
+                    "ausfuehrbar"
+                } else {
+                    "Review erforderlich"
+                },
+                html_escape(candidate.disposition_due_at.as_deref().unwrap_or("-")),
+                html_escape(&candidate.message),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Disposition-Kandidaten</h2>
+          <p>Keine automatische Loeschung: Aussonderung benoetigt Freigabe, Begruendung und Legal-Hold-Pruefung.</p>
+          <table>
+            <thead><tr><th>Evidence</th><th>Status</th><th>Ausfuehrung</th><th>Faellig</th><th>Hinweis</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </section>
+        "#,
+        if rows.is_empty() {
+            web_empty_row(5, "Keine Disposition-Kandidaten erfasst.")
+        } else {
+            rows
+        },
+    )
+}
+
 fn evidence_integrity_web_row(
     context: &WebContext,
     storage: &FilesystemEvidenceArtifactStorage,
@@ -17177,6 +18498,10 @@ fn evidence_integrity_web_row(
         );
         let disposition_action =
             web_path_with_context(&format!("/evidence/{}/disposition", item.id), Some(context));
+        let execute_action = web_path_with_context(
+            &format!("/evidence/{}/disposition/execute", item.id),
+            Some(context),
+        );
         format!(
             r#"
             <form method="post" action="{}"><button type="submit">Re-Hash</button></form>
@@ -17204,6 +18529,21 @@ fn evidence_integrity_web_row(
                 <label>Notiz<input name="review_note"></label>
                 <button type="submit">Dokumentieren</button>
               </form>
+              <form method="post" action="{}">
+                <input type="hidden" name="disposition_status" value="approved_for_disposition">
+                <input type="hidden" name="decision" value="Kontrollierte Aussonderung freigegeben.">
+                <label>Freigabegrund<input name="reason" required value="{}"></label>
+                <button type="submit">Freigeben</button>
+              </form>
+              <form method="post" action="{}">
+                <button type="submit">Physisch aussondern</button>
+              </form>
+              <form method="post" action="{}">
+                <input type="hidden" name="disposition_status" value="disposition_cancelled">
+                <input type="hidden" name="decision" value="Disposition abgebrochen.">
+                <label>Abbruchgrund<input name="reason" required></label>
+                <button type="submit">Abbrechen</button>
+              </form>
             </details>
             "#,
             html_escape(&check_action),
@@ -17217,6 +18557,10 @@ fn evidence_integrity_web_row(
             html_escape(&item.disposition_decision),
             html_escape(&item.disposition_reason),
             html_escape(&item.disposition_blocked_reason),
+            html_escape(&disposition_action),
+            html_escape(&item.disposition_reason),
+            html_escape(&execute_action),
+            html_escape(&disposition_action),
         )
     } else {
         "Nur Lesen".to_string()
@@ -17252,6 +18596,9 @@ fn evidence_disposition_status_options(selected: &str) -> String {
         ("blocked_by_legal_hold", "durch Legal Hold blockiert"),
         ("approved_for_disposition", "Disposition freigegeben"),
         ("disposition_deferred", "Disposition verschoben"),
+        ("disposition_executed", "physisch ausgesondert"),
+        ("disposition_failed", "Aussonderung fehlgeschlagen"),
+        ("disposition_cancelled", "Disposition abgebrochen"),
         (
             "disposition_completed_metadata_only",
             "metadata-only abgeschlossen",
@@ -34222,8 +35569,13 @@ fn management_review_json_label(key: &str) -> String {
         "evidence_integrity_mismatch" => "Evidence-Integritaetsabweichungen".to_string(),
         "evidence_storage_artifact_references" => "Storage-Artefaktreferenzen".to_string(),
         "evidence_storage_drills_recorded" => "Storage-Drills erfasst".to_string(),
+        "evidence_worker_runs_recorded" => "Integritaets-Worker-Laeufe erfasst".to_string(),
+        "evidence_worker_missing_runs" => "Integritaets-Worker-Laeufe fehlen".to_string(),
+        "evidence_storage_drill_gaps" => "Offene Storage-/Restore-Pruefungen".to_string(),
         "evidence_legal_hold_active" => "Legal Hold / Aufbewahrungssperre aktiv".to_string(),
         "evidence_disposition_due" => "Disposition faellig".to_string(),
+        "evidence_disposition_executed" => "Physische Disposition ausgefuehrt".to_string(),
+        "evidence_disposition_failed" => "Physische Disposition fehlgeschlagen".to_string(),
         "total_items" => "Evidence gesamt".to_string(),
         "not_checked" => "Nicht geprueft".to_string(),
         "valid" => "Gueltig".to_string(),
@@ -34234,9 +35586,12 @@ fn management_review_json_label(key: &str) -> String {
         "artifact_references" => "Artefaktreferenzen".to_string(),
         "expected_hash_present" => "Erwarteter Hash vorhanden".to_string(),
         "storage_drills_recorded" => "Storage-Drills erfasst".to_string(),
+        "worker_runs_recorded" => "Integritaets-Worker-Laeufe erfasst".to_string(),
         "legal_hold_active" => "Legal Hold / Aufbewahrungssperre aktiv".to_string(),
         "disposition_due" => "Disposition faellig".to_string(),
         "disposition_blocked" => "Disposition blockiert".to_string(),
+        "disposition_executed" => "Physische Disposition ausgefuehrt".to_string(),
+        "disposition_failed" => "Physische Disposition fehlgeschlagen".to_string(),
         "disposal_candidates" => "Aussonderungskandidaten".to_string(),
         "notes" => "Hinweise".to_string(),
         "pack_type" => "Review-Paket".to_string(),
@@ -35896,7 +37251,23 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/evidence", get(evidence_overview))
         .route("/api/v1/evidence/quality", get(evidence_quality))
         .route("/api/v1/evidence/integrity", get(evidence_integrity))
+        .route(
+            "/api/v1/evidence/integrity/worker",
+            get(evidence_integrity_worker),
+        )
+        .route(
+            "/api/v1/evidence/integrity/worker/run",
+            post(evidence_integrity_worker_run),
+        )
+        .route(
+            "/api/v1/evidence/integrity/worker/runs",
+            get(evidence_integrity_worker_runs),
+        )
         .route("/api/v1/evidence/storage", get(evidence_storage))
+        .route(
+            "/api/v1/evidence/storage/backends",
+            get(evidence_storage_backends),
+        )
         .route(
             "/api/v1/evidence/integrity-checks",
             post(evidence_integrity_batch_checks),
@@ -35904,6 +37275,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/evidence/storage-drills",
             post(evidence_storage_drills),
+        )
+        .route(
+            "/api/v1/evidence/storage/drills",
+            post(evidence_storage_drills),
+        )
+        .route(
+            "/api/v1/evidence/disposition/candidates",
+            get(evidence_disposition_candidates),
         )
         .route("/api/v1/evidence/uploads", post(evidence_upload))
         .route(
@@ -35925,6 +37304,26 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/evidence/{evidence_id}/storage-events",
             get(evidence_storage_events),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/disposition/preview",
+            post(evidence_disposition_preview),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/disposition/approve",
+            post(evidence_disposition_approve),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/disposition/execute",
+            post(evidence_disposition_execute),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/disposition/cancel",
+            post(evidence_disposition_cancel),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/disposition/events",
+            get(evidence_disposition_events),
         )
         .route(
             "/api/v1/evidence/{evidence_id}/legal-hold",
@@ -36218,6 +37617,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/evidence/quality/", get(web_evidence_quality))
         .route("/evidence/integrity/", get(web_evidence_integrity))
         .route(
+            "/evidence/integrity/worker/run",
+            post(web_evidence_integrity_worker_run),
+        )
+        .route(
             "/evidence/{evidence_id}/integrity-check",
             post(web_evidence_integrity_check),
         )
@@ -36236,6 +37639,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/evidence/{evidence_id}/disposition",
             post(web_evidence_disposition),
+        )
+        .route(
+            "/evidence/{evidence_id}/disposition/execute",
+            post(web_evidence_disposition_execute),
         )
         .route("/assets/", get(web_assets))
         .route("/suppliers/", get(web_suppliers).post(web_suppliers_submit))
@@ -36417,9 +37824,73 @@ mod tests {
 
     use super::{
         agent_installation_command, alertmanager_hmac_message, alertmanager_hmac_secret_matches,
+        evidence_disposition_preview_from_item, evidence_object_storage_bucket_valid,
         hex_encode_bytes, is_agent_payload_error, normalize_cve_id, powershell_quote, shell_quote,
         simple_pdf_document, AlertmanagerHmacSha256,
     };
+    use crate::evidence_artifact_storage::FilesystemEvidenceArtifactStorage;
+    use crate::evidence_store::EvidenceIntegrityItem;
+
+    fn evidence_integrity_test_item(
+        file_name: Option<String>,
+        disposition_status: &str,
+        disposition_reason: &str,
+        legal_hold_status: &str,
+        legal_hold_blocks_disposition: bool,
+    ) -> EvidenceIntegrityItem {
+        EvidenceIntegrityItem {
+            id: 42,
+            tenant_id: 7,
+            title: "Test Evidence".to_string(),
+            evidence_status: "APPROVED".to_string(),
+            quality_status_label: "Nachweisbar".to_string(),
+            sensitivity: "internal".to_string(),
+            owner_id: Some(1),
+            owner_display: Some("Test Owner".to_string()),
+            file_name,
+            artifact_reference_present: true,
+            expected_sha256_present: true,
+            expected_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
+            last_calculated_sha256: String::new(),
+            last_integrity_checked_at: None,
+            integrity_status: "valid".to_string(),
+            integrity_status_label: "gueltig".to_string(),
+            integrity_mismatch: false,
+            quarantine_status: "none".to_string(),
+            integrity_checked_by_id: None,
+            integrity_checked_by_display: None,
+            integrity_result: String::new(),
+            integrity_error_class: String::new(),
+            integrity_review_note: String::new(),
+            valid_until: None,
+            retention_until: Some("2026-01-01".to_string()),
+            retention_due_at: Some("2026-01-01".to_string()),
+            legal_hold_status: legal_hold_status.to_string(),
+            legal_hold_status_label: "kein Legal Hold".to_string(),
+            legal_hold_reason: String::new(),
+            legal_hold_set_by: None,
+            legal_hold_set_by_display: None,
+            legal_hold_set_at: None,
+            legal_hold_released_by: None,
+            legal_hold_released_by_display: None,
+            legal_hold_released_at: None,
+            legal_hold_release_reason: String::new(),
+            disposition_status: disposition_status.to_string(),
+            disposition_status_label: "Disposition freigegeben".to_string(),
+            disposition_due_at: Some("2026-01-02".to_string()),
+            disposition_decision: "Kontrollierte Aussonderung freigegeben.".to_string(),
+            disposition_reason: disposition_reason.to_string(),
+            disposition_decided_by: Some(1),
+            disposition_decided_by_display: Some("Test Owner".to_string()),
+            disposition_decided_at: Some("2026-01-02T00:00:00Z".to_string()),
+            disposition_blocked_reason: String::new(),
+            disposal_candidate: true,
+            legal_hold_blocks_disposition,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            updated_at: "2026-01-02T00:00:00Z".to_string(),
+        }
+    }
 
     #[test]
     fn normalize_cve_id_uppercases_and_trims() {
@@ -36503,5 +37974,69 @@ mod tests {
         assert!(!is_agent_payload_error(
             "Agent-Enrollment-Token OS-Familien konnten nicht serialisiert werden"
         ));
+    }
+
+    #[test]
+    fn evidence_object_storage_bucket_validation_rejects_unsafe_names() {
+        assert!(evidence_object_storage_bucket_valid(
+            "iscy-evidence-archive"
+        ));
+        assert!(evidence_object_storage_bucket_valid("iscy.evidence.2026"));
+        assert!(!evidence_object_storage_bucket_valid(""));
+        assert!(!evidence_object_storage_bucket_valid("ISCY-Evidence"));
+        assert!(!evidence_object_storage_bucket_valid("-iscy-evidence"));
+        assert!(!evidence_object_storage_bucket_valid("iscy-evidence-"));
+        assert!(!evidence_object_storage_bucket_valid("iscy..evidence"));
+        assert!(!evidence_object_storage_bucket_valid("iscy/evidence"));
+    }
+
+    #[test]
+    fn evidence_disposition_preview_requires_approval_reason_and_no_legal_hold() {
+        let root = std::env::temp_dir().join(format!(
+            "iscy-disposition-preview-test-{}",
+            std::process::id()
+        ));
+        let artifact = root.join("tenant-7").join("evidence.txt");
+        std::fs::create_dir_all(artifact.parent().unwrap()).unwrap();
+        std::fs::write(&artifact, b"demo evidence").unwrap();
+        let storage = FilesystemEvidenceArtifactStorage::new(root.clone());
+
+        let approved = evidence_integrity_test_item(
+            Some("tenant-7/evidence.txt".to_string()),
+            "approved_for_disposition",
+            "Retention abgelaufen und fachlich freigegeben.",
+            "none",
+            false,
+        );
+        let preview = evidence_disposition_preview_from_item(&storage, &approved);
+        assert!(preview.eligible);
+        assert!(!preview.legal_hold_blocks);
+        assert_eq!(preview.storage_backend, "local_filesystem");
+
+        let without_reason = evidence_integrity_test_item(
+            Some("tenant-7/evidence.txt".to_string()),
+            "approved_for_disposition",
+            "",
+            "none",
+            false,
+        );
+        let preview = evidence_disposition_preview_from_item(&storage, &without_reason);
+        assert!(!preview.eligible);
+        assert!(preview.reason_required);
+
+        let legal_hold = evidence_integrity_test_item(
+            Some("tenant-7/evidence.txt".to_string()),
+            "approved_for_disposition",
+            "Retention abgelaufen und fachlich freigegeben.",
+            "active",
+            true,
+        );
+        let preview = evidence_disposition_preview_from_item(&storage, &legal_hold);
+        assert!(!preview.eligible);
+        assert!(preview.legal_hold_blocks);
+        let root_display = root.to_string_lossy();
+        assert!(!preview.message.contains(root_display.as_ref()));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

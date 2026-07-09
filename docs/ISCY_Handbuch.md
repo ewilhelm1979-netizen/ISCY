@@ -454,11 +454,16 @@ Typische Funktionen:
 - Evidence-Integritaet unter `/evidence/integrity/` pruefen
 - vorhandene Evidence-Artefakte manuell oder begrenzt im Batch serverseitig neu mit SHA-256 hashen
 - Integritaetsstatus, letzte Pruefung, berechneten Hash, Mismatch, sichere Fehlerklasse und Quarantaene-/Review-Status anzeigen
+- Integritaets-Worker-Status, letzte Laeufe, Batch-Grenzen und empfohlene naechste Pruefung sehen
+- Evidence-Integritaetspruefungen manuell als begrenzten Worker-Lauf mit Dry-Run-Option starten
 - Legal Hold mit Begruendung setzen oder freigeben
 - Disposition-/Retention-Entscheidungen als Governance-Metadaten dokumentieren
+- Disposition-Kandidaten per Preview pruefen, freigeben, abbrechen oder nach Freigabe kontrolliert physisch aussondern
+- Tombstone-Metadaten fuer kontrollierte physische Aussonderung erhalten, ohne Rohpfade oder Dateiinhalte offenzulegen
 - Integritaets-, Legal-Hold- und Disposition-Ereignisse auditierbar nachvollziehen
 - lokale Evidence-Artefakte ueber eine interne Storage-Abstraktion pruefen
 - Storage-/Restore-Drills fuer Vorhandensein, Lesbarkeit und SHA-256-Konsistenz ausloesen
+- Storage-Backend-Status fuer `local_filesystem` und vorbereitetes `s3_compatible` ohne echte Cloud-Credentials auswerten
 - sichere Storage-Fehlerklassen sehen, ohne absolute Dateipfade oder Rohpayloads offenzulegen
 
 Fachlicher Nutzen:
@@ -469,7 +474,7 @@ Fachlicher Nutzen:
 - klarere Rueckverfolgbarkeit durch stabile Linked-Requirement- und Evidence-Key-Bezuege
 - belastbarere Aussage, ob Nachweise nur vorhanden oder wirklich reviewt und verwertbar sind
 - nachvollziehbare Integritaet und Lifecycle-Steuerung ohne pauschal fest codierte gesetzliche Aufbewahrungsfrist
-- klare Trennung zwischen Nachweisqualitaet, Integritaetspruefung, Legal Hold und metadata-only Disposition
+- klare Trennung zwischen Nachweisqualitaet, Integritaetspruefung, Legal Hold, metadata-only Disposition und kontrollierter physischer Aussonderung
 - belastbarer Restore-/Integrity-Nachweis fuer lokal referenzierte Artefakte, ohne produktives Cloud-Storage vorauszusetzen
 
 Fuer Nicht-Sicherheitsleute:
@@ -773,7 +778,7 @@ Bewusst nicht Teil dieses Moduls:
 - keine neue Risiko-Engine
 - keine neue Control-Bibliothek
 - keine externe NVD-, Hersteller-, GitHub-Advisory- oder sonstige Live-Feed-Integration
-- kein Legal-Hold-, Disposition-, Loesch-, Re-Hash- oder Objektspeichersystem
+- keine eigenen Supplier-spezifischen Legal-Hold-, Disposition-, Loesch-, Re-Hash- oder Objektspeicher-Engines
 
 Fuer Nicht-Sicherheitsleute:
 Dieser Bereich beantwortet: Von welchen externen Parteien haengt unser Betrieb ab, wie kritisch sind sie, welche Nachweise fehlen und wo entsteht daraus Risiko?
@@ -1206,8 +1211,8 @@ Responses noch in der Read-only-Ansicht ausgegeben. Administratoren duerfen
 Kanaele und Signalbereiche aendern; authentifizierte Read-only-Rollen sehen nur
 sichere tenantgebundene Delivery-Metadaten.
 
-Bewusst nicht umgesetzt sind kontrollierte physische Loeschung, Re-Hash-Worker,
-Objektspeicher, CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete,
+Bewusst nicht Teil dieses Notification-Blocks sind produktive Cloud-Credentials,
+CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete,
 Release-Provenance sowie Performance-, HA- und visuelle
 Regressionserweiterungen.
 
@@ -1275,7 +1280,7 @@ Auditdetails enthalten keine Secrets, Tokens, Authorization Header,
 vollstaendigen Evidence-Payloads, vertraulichen Dateiinhalte, SQL-Details,
 fremden Tenant-IDs oder unnoetige absolute Dateipfade.
 
-Bewusst nicht Teil dieser Phase sind ein periodischer Re-Hash-Scheduler,
+Bewusst nicht Teil dieser Phase 1 waren ein periodischer Re-Hash-Scheduler,
 Objektspeicher/S3, kontrollierte physische Loeschung, technische
 Datenvernichtung, eine neue Evidence-, Risk-, Control- oder Notification-Engine
 sowie Plattform-, Docker-, Postgres-, nginx-, Nix- oder Dependency-Upgrades.
@@ -1332,10 +1337,115 @@ speichern letzten Pruefzeitpunkt, Status, berechneten Hash und sichere
 Fehlerklasse bereits ausreichend. Storage-Events werden in der bestehenden
 Ereignistabelle auditierbar gefuehrt.
 
-Bewusst nicht umgesetzt sind produktives S3/Object Storage, Cloud-Credentials,
+Bewusst nicht Teil dieser Phase 2 waren produktives S3/Object Storage, Cloud-Credentials,
 physische Loeschung, technische Datenvernichtung, Backup-Restore aus externem
 Storage, komplexer Scheduler, neue Evidence-/Risk-/Control-/Notification-
 Engines sowie Docker-, Postgres-, nginx-, Nix- oder Dependency-Upgrades.
+
+### 6.14 Evidence-Worker, kontrollierte Disposition und Object-Storage-Vorbereitung
+
+Der aktuelle Unreleased-Stand vertieft die Evidence-Integrity- und
+Storage-Grundlagen mit Migration
+`0035_rust_evidence_worker_disposition_storage`. Die Migration ist additiv und
+ergaenzt Worker-Laufhistorie, vorbereitete Storage-Backend-Statusdaten sowie
+Ausfuehrungsmetadaten fuer kontrollierte physische Disposition. Bestehende
+Evidence-Daten werden dabei nicht geloescht oder umgeschrieben.
+
+Der Integritaets-Worker ist bewusst begrenzt:
+
+- `ISCY_EVIDENCE_WORKER_ENABLED` schaltet den Worker-Betrieb logisch ein oder aus
+- `ISCY_EVIDENCE_WORKER_BATCH_SIZE` begrenzt die Anzahl pro Lauf
+- `ISCY_EVIDENCE_WORKER_MAX_RUNTIME_SECONDS` begrenzt die Laufzeit
+- `ISCY_EVIDENCE_WORKER_COOLDOWN_SECONDS` dokumentiert den empfohlenen Mindestabstand
+- Dry-Run-Laeufe dokumentieren die Auswahl, ohne Hash-Pruefungen auszufuehren
+
+Die API stellt dafuer bereit:
+
+- `GET /api/v1/evidence/integrity/worker`
+- `POST /api/v1/evidence/integrity/worker/run`
+- `GET /api/v1/evidence/integrity/worker/runs`
+
+Read-only-Rollen duerfen Worker-Status und Laufhistorie lesen. Admin- und
+Editor-Rollen duerfen manuelle begrenzte Worker-Laeufe starten. Jeder Lauf
+speichert Status, Trigger, Batch-Grenzen, Runtime-Grenze, Dry-Run, gepruefte
+Items und Ergebniszaehler. Responses und Auditdetails enthalten keine
+absoluten Dateipfade, Dateiinhalte, SQL-Details, Tokens oder Secrets.
+
+Kontrollierte physische Disposition ist vom metadata-only Status getrennt. ISCY
+loescht keine Datei nur wegen eines Ablaufdatums. Eine physische Aussonderung
+wird nur ausgefuehrt, wenn:
+
+- dieselbe Evidence-ID im aktuellen Tenant gefunden wird
+- eine schreibende Rolle handelt
+- `approved_for_disposition` gesetzt ist
+- eine dokumentierte Begruendung vorhanden ist
+- kein aktiver Legal Hold und keine Aufbewahrungssperre blockiert
+- die Storage-Operation ueber die gepruefte Storage-Abstraktion laeuft
+
+Die API stellt dafuer bereit:
+
+- `GET /api/v1/evidence/disposition/candidates`
+- `POST /api/v1/evidence/{evidence_id}/disposition/preview`
+- `POST /api/v1/evidence/{evidence_id}/disposition/approve`
+- `POST /api/v1/evidence/{evidence_id}/disposition/execute`
+- `POST /api/v1/evidence/{evidence_id}/disposition/cancel`
+- `GET /api/v1/evidence/{evidence_id}/disposition/events`
+
+Preview loescht nichts und zeigt nur sichere Metadaten wie Retention,
+Disposition-Faelligkeit, Legal-Hold-Status, Artefakt vorhanden ja/nein,
+Backend und sichere Fehlerklasse. Execute prueft Approval, Grund und Legal Hold
+vor jeder Storage-Operation. Wird eine Ausfuehrung verweigert, wird dies als
+`disposition_execution_denied` auditierbar dokumentiert, ohne das Artefakt zu
+beruehren. Bei erfolgreicher Aussonderung wird die lokale Datei ueber das
+Filesystem-Backend entfernt, die Evidence-Dateireferenz aus dem Datensatz
+genommen und ein Tombstone mit Backend, sicherer Fehlerklasse, vorherigem
+Artefaktstatus, Hash und `paths_exposed=false` gespeichert. Bei Storage-Fehlern
+wird `disposition_failed` mit sicherer Fehlerklasse dokumentiert.
+
+Das vorbereitete Object-Storage-Modell bleibt bewusst ohne produktive
+Cloud-Anbindung. `local_filesystem` bleibt Default. `s3_compatible` wird nur
+als Konfigurations- und Statussignal validiert:
+
+- `ISCY_EVIDENCE_STORAGE_BACKEND`
+- `ISCY_EVIDENCE_OBJECT_STORAGE_ENDPOINT`
+- `ISCY_EVIDENCE_OBJECT_STORAGE_BUCKET`
+- `ISCY_EVIDENCE_OBJECT_STORAGE_REGION`
+- `ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE`
+- `ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE`
+- `ISCY_EVIDENCE_OBJECT_STORAGE_CREDENTIALS_REF`
+
+`GET /api/v1/evidence/storage/backends` zeigt, ob ein Backend aktiv,
+konfiguriert oder mit sicherer Fehlerklasse nicht bereit ist. Endpoint und
+Bucket werden nur als Statusmerkmale validiert; ISCY fuehrt in diesem PR keine
+externen Netzwerkaufrufe aus und speichert oder zeigt keine Secretwerte.
+
+Die Webansicht `/evidence/integrity/` buendelt nun
+Nachweis-Integritaet, Integritaets-Worker, Storage-Backend-Status,
+Disposition-Kandidaten, Legal Hold, Storage-/Restore-Drills und
+Disposition-Aktionen in einer deutschsprachigen Operations-Ansicht. Read-only-
+Rollen sehen sichere Inhalte, Admin/Editor duerfen Worker starten,
+Dispositionen freigeben und nach Freigabe kontrolliert aussondern.
+
+NIS2-, DORA-, DSGVO- und generische Review-Pakete frieren die neuen
+Evidence-Operations-Signale in Snapshots ein. Dazu gehoeren nicht gepruefte
+Evidence, Integritaetsabweichungen, fehlende Worker-Laeufe, offene
+Storage-/Restore-Pruefungen, Legal-Hold-Konflikte, faellige Dispositionen und
+fehlgeschlagene Aussonderungen. ISCY liefert damit Governance- und
+Nachweisvorbereitung, aber keine Rechtsberatung, Zertifizierung, automatische
+Behoerdenmeldung oder formale Einreichung.
+
+Als Preflight fuer diesen Roadmap-Block wurde Migration
+`0034_rust_supplier_product_security_governance` zusaetzlich gegen eine echte
+lokale temporaere PostgreSQL-Instanz geprueft. Tabellen, Supplier/Product-
+Security-Datensatz, Statusaenderung, Evidence-Link, Events und Vertrags-/Exit-
+Historie liefen erfolgreich; die temporaere Instanz wurde danach gestoppt und
+die Daten wurden geloescht.
+
+Bewusst nicht Teil dieses Blocks sind echte Cloud-Credentials, produktive
+S3-Live-Anbindung, externe Live-Feeds, automatische Rechtsbewertung,
+automatische Behoerdenmeldung, neue Risk-/Control-/Notification-Engines,
+Dependency- oder Plattform-Upgrades, PKI/CSR, signierte Agent-Pakete,
+Release-Provenance sowie Performance-, HA- oder Visual-Regression-Ausbau.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
@@ -1377,12 +1487,12 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews. Kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO nutzen diese bestehende Snapshot-Schicht und nehmen Evidence-Integrity-/Storage-Aggregate auf, ohne ein neues Compliance-Silo oder ein zweites Evidence-System anzulegen. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Evidence Object Storage & Restore Drill Phase 2 nutzt diese bestehenden Metadaten fuer eine interne lokale Storage-Abstraktion, sichere Artefaktreferenzen und tenantgebundene Restore-/Integritaetsdrills ohne neues Speichersystem. Migration `0034_rust_supplier_product_security_governance` verbindet Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs tenantgebunden, ohne externe Live-Feeds einzufuehren. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews. Kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO nutzen diese bestehende Snapshot-Schicht und nehmen Evidence-Integrity-/Storage-Aggregate auf, ohne ein neues Compliance-Silo oder ein zweites Evidence-System anzulegen. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Evidence Object Storage & Restore Drill Phase 2 nutzt diese bestehenden Metadaten fuer eine interne lokale Storage-Abstraktion, sichere Artefaktreferenzen und tenantgebundene Restore-/Integritaetsdrills ohne neues Speichersystem. Migration `0034_rust_supplier_product_security_governance` verbindet Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs tenantgebunden, ohne externe Live-Feeds einzufuehren. Migration `0035_rust_evidence_worker_disposition_storage` ergaenzt begrenzte Evidence-Worker-Laeufe, kontrollierte physische Disposition mit Tombstone-Metadaten und ein vorbereitetes Object-Storage-Statusmodell ohne echte Cloud-Credentials. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
 1. Supplier/Product-Security-Workflow fachlich weiter polishen, z. B. feinere Import-Vorbereitung fuer Hersteller-Advisorys, Contract-/Exit-Reifegrade und Review-Pack-Gliederung
-2. Evidence-Integrity-Worker, kontrollierte physische Disposition und spaeteres produktives Objektspeicher-Backend
+2. Produktive Object-Storage-Anbindung fuer Evidence nur als separaten Security-PR mit Secret-, SSRF-, Restore- und Regressionstests vorbereiten
 3. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe
 4. Performance-, HA- und visuelle Regressionstests
 

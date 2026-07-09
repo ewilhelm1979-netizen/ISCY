@@ -79,7 +79,7 @@ Erfolgskriterium:
 
 Ziel: Evidence soll nicht nur vorhanden sein, sondern belastbar bewertet werden.
 
-Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert. Im Unreleased-Stand kommen Evidence Integrity & Disposition Phase 1 sowie Evidence Object Storage & Restore Drill Phase 2 hinzu.
+Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert. Im Unreleased-Stand sind Evidence Integrity & Disposition Phase 1, Evidence Object Storage & Restore Drill Phase 2 sowie die Vertiefung mit Integritaets-Worker, kontrollierter physischer Disposition und vorbereitetem Object-Storage-Backend umgesetzt.
 
 Umgesetzt:
 
@@ -105,12 +105,18 @@ Umgesetzt:
 - Die bestehende Weboberflaeche `/evidence/integrity/` zeigt lokale Storage-Metadaten und bietet fuer Admin/Editor einen Storage-/Restore-Drill an.
 - Filesystem-Backend prueft Artefaktreferenzen ueber canonical path containment, blockiert Traversal, absolute Pfade und Symlink-Flucht aus dem Media Root und gibt nur sichere Fehlerklassen zurueck.
 - Restore-/Integrity-Drill belegt, dass referenzierte Artefakte am erwarteten lokalen Storage-Ort vorhanden, lesbar und SHA-256-konsistent sind; Ergebnisse werden in den bestehenden Evidence-Integrity-Feldern und `storage_*` Audit-Events dokumentiert.
+- Migration `0035_rust_evidence_worker_disposition_storage` ergaenzt Worker-Laufhistorie, vorbereitete Storage-Backend-Statusdaten und kontrollierte Disposition-Ausfuehrungsmetadaten inklusive Tombstone-Hash.
+- Integritaets-Worker-APIs `GET /api/v1/evidence/integrity/worker`, `POST /api/v1/evidence/integrity/worker/run` und `GET /api/v1/evidence/integrity/worker/runs` liefern Betriebssignale, begrenzte manuelle Laeufe, Batch-/Runtime-Grenzen, Dry-Run und Laufhistorie.
+- Kontrollierte Disposition nutzt getrennte APIs fuer Kandidaten, Preview, Approval, Execute, Cancel und Ereignisse; Execute prueft vor jeder Storage-Operation Approval, Begruendung und Legal Hold und laeuft nur ueber die Storage-Abstraktion.
+- Storage-Backend-Status `GET /api/v1/evidence/storage/backends` zeigt `local_filesystem` als Default und ein vorbereitetes `s3_compatible`-Backend mit Konfigurationsvalidierung, aber ohne echte Cloud-Credentials oder externe Netzwerkaufrufe.
+- NIS2-, DORA-, DSGVO- und generische Review-Pakete nehmen Evidence-Worker-, Storage-/Restore-, Legal-Hold- und Disposition-Gaps als eingefrorene Snapshot-Signale auf.
+- Der PostgreSQL-Live-Haertungstest fuer Migration `0034_rust_supplier_product_security_governance` wurde lokal mit temporaerer PostgreSQL-Instanz, Supplier/Product-Security-API, Evidence-Link, Event- und Vertrags-/Exit-Historie erfolgreich nachgezogen.
 
 Naechste Vertiefung:
 
-- Periodischen Re-Hash-Worker mit Betriebssignalen und Queue-Steuerung ergaenzen.
-- Kontrollierte physische Loeschung/Datenvernichtung als getrennten, spaeteren Meilenstein entwerfen.
-- Optionales produktives S3-/Objektspeicher-Backend inklusive Restore- und Integritaetsdrill als spaeteren, separaten Meilenstein pruefen.
+- Produktiven S3-/Objektspeicher-Client mit Mock-/Contract-Tests erst in einem separaten Security-PR pruefen.
+- Vier-Augen-Prinzip fuer physische Disposition vorbereiten, falls das bestehende Rollenmodell fachlich erweitert wird.
+- Periodische Hintergrundausfuehrung des Evidence-Workers an den bestehenden Betriebs-/Scheduler-Rahmen anbinden.
 
 Erfolgskriterium:
 
@@ -248,7 +254,7 @@ Erfolgskriterium:
 ## Empfohlene Umsetzungsreihenfolge
 
 1. Review-Pack-Bedienung weiter polishen, z. B. zusaetzliche Filter, Pack-spezifische Gap-Gruppierung und Review-Owner-Hinweise.
-2. Evidence-Integrity-Worker, kontrollierte physische Disposition und optionales produktives Objektspeicher-Backend.
+2. Produktiven Object-Storage-Client fuer Evidence nur mit separatem Secret-/SSRF-/Restore-Testkonzept angehen.
 3. Signierte Agent-Pakete, Release-Provenance und eine spaetere getrennte CA-/PKI-Stufe.
 
 ## Verbleibende Roadmap
@@ -266,7 +272,7 @@ Erfolgskriterium:
 | Umgesetzt / Vertiefung | Management-/Regulatory-Templates | Wiederholbare ISO-27001-, NIS2-, DORA-, KRITIS- und Governance-Pakete werden aus bestehenden Snapshots erzeugt; feinere Varianten koennen spaeter folgen. |
 | Unreleased | Evidence Integrity & Disposition Phase 1 | Manuelle und begrenzte Batch-Re-Hash-Pruefung, Legal Hold, metadata-only Disposition und auditierbare Integritaetsereignisse sind tenantgebunden verfuegbar. |
 | Unreleased | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |
-| Reifegrad | Evidence-Worker, physische Disposition und produktiver Objektspeicher | Periodische Integritaetspruefung, kontrollierte Datenvernichtung und Storage-Restore sind auditierbar. |
+| Unreleased | Evidence-Worker, kontrollierte physische Disposition und Object-Storage-Vorbereitung | Begrenzte Integritaets-Worker-Laeufe, Approval-gebundene physische Disposition, Tombstone-Metadaten und vorbereitete Object-Storage-Konfiguration sind tenantgebunden auditierbar. |
 | Reifegrad | Performance, HA und visuelle Regression | Lastgrenzen, Mehrinstanzbetrieb und UI-Regressionen sind messbar abgesichert. |
 
 ## Abgrenzung

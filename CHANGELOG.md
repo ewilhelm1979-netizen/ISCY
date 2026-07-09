@@ -8,6 +8,13 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- ergaenzt Evidence-Worker, kontrollierte physische Disposition und vorbereitetes Object-Storage-Backend ueber additive Migration `0035_rust_evidence_worker_disposition_storage`
+- ergaenzt tenantgebundene Evidence-Worker-APIs fuer Status, manuelle begrenzte Worker-Laeufe und Laufhistorie unter `/api/v1/evidence/integrity/worker*`
+- ergaenzt kontrollierte Disposition-APIs fuer Kandidaten, Preview, Approval, Execute, Cancel und Ereignisse; physische Aussonderung erfolgt nur nach dokumentierter Freigabe, ohne Legal Hold und ueber die sichere Storage-Abstraktion
+- ergaenzt Storage-Backend-Status unter `/api/v1/evidence/storage/backends` mit `local_filesystem` als Default und sicher vorbereiteten `s3_compatible`-Konfigurationssignalen ohne Live-Credentials oder Netzwerkaufrufe
+- erweitert `/evidence/integrity/` um Integritaets-Worker-Status, letzte Worker-Laeufe, Storage-Backend-Status, Disposition-Kandidaten sowie Freigabe-/Aussonderungsaktionen fuer schreibende Rollen
+- erweitert Regulatory Review-Pakete fuer NIS2, DORA, DSGVO und generische Governance um Evidence-Worker-, Storage-/Restore- und kontrollierte Disposition-Signale
+- dokumentiert den lokalen PostgreSQL-Live-Haertungstest fuer Migration `0034_rust_supplier_product_security_governance` als erfolgreich nachgezogenen Preflight-Drill
 - ergaenzt Supplier/Product-Security-Deepening mit tenantgebundenem Governance-Modell fuer Lieferant, Produkt/Service, lokale Advisory-/PSIRT-/CVE-Metadaten, SBOM-/VEX-Bezuege, Review-Status, offene Massnahmen und Management-/Regulatory-Review-Bezug
 - ergaenzt additive Migration `0034_rust_supplier_product_security_governance` fuer Supplier/Product-Security-Datensaetze, Evidence-Links, Ereignis-/Audit-Historie und Vertrags-/Exit-Plan-Historie ohne destruktive Datenbankoperationen
 - ergaenzt API-Pfade fuer Supplier/Product Security unter `/api/v1/suppliers/product-security`, Detail-, Status-, Evidence-, Ereignis- und Supplier-bezogene Contract-/Exit-History-Abfragen
@@ -20,14 +27,14 @@ The project uses release tags for immutable release points. Changes under **Unre
 - ergaenzt kontextsensitive Regulatory Review-Pakete fuer NIS2, DORA, DSGVO/GDPR und generische Security Governance
 - ergaenzt tenantgebundene Regulatory-Review-Pack-APIs fuer Pack-Katalog, Preview, Snapshot-Erzeugung, Snapshot-Liste/-Detail und Markdown/HTML/PDF/JSON-Exporte
 - ergaenzt die Weboberflaeche `/regulatory-review-packs/` mit Pack-Auswahl, Preview, Snapshot-Erzeugung und Snapshot-Liste
-- erweitert Management-/Regulatory-Snapshots um Evidence-Integrity- und Storage-Aggregate zu Re-Hash-Status, Restore-Drill-Abdeckung, Legal Hold und metadata-only Disposition
+- erweitert Management-/Regulatory-Snapshots um Evidence-Integrity-, Worker-, Storage-/Restore-, Legal-Hold- und kontrollierte Disposition-Aggregate
 - ergaenzt aktualisierte GUI-Screenshot-Dokumentation fuer Regulatory Review-Pakete und angrenzende Governance-Module
-- add Evidence Object Storage & Restore Drill Phase 2 with an internal local-filesystem artifact storage abstraction
-- add tenant-scoped Evidence storage overview/detail APIs, bounded storage drill APIs, and storage event filtering without introducing production S3 or cloud credentials
-- extend `/evidence/integrity/` with local storage metadata and administrator/editor Storage-Drill actions
-- add Evidence Integrity & Disposition Phase 1 through additive migration `0033_rust_evidence_integrity_disposition`
-- add tenant-scoped Evidence integrity overview, manual and bounded batch SHA-256 re-check APIs, Legal Hold metadata, disposition decisions, and integrity/disposition audit events
-- add Web UI support under `/evidence/integrity/` for safe Evidence integrity metadata, re-hash actions, Legal Hold set/release, and metadata-only disposition decisions
+- ergaenzt Evidence Object Storage & Restore Drill Phase 2 mit interner lokaler Artefakt-Storage-Abstraktion
+- ergaenzt tenantgebundene Evidence-Storage-Uebersichts-/Detail-APIs, begrenzte Storage-Drill-APIs und Storage-Event-Filter ohne produktive S3-Credentials
+- erweitert `/evidence/integrity/` um lokale Storage-Metadaten und Admin-/Editor-Aktionen fuer Storage-/Restore-Drills
+- ergaenzt Evidence Integrity & Disposition Phase 1 ueber additive Migration `0033_rust_evidence_integrity_disposition`
+- ergaenzt tenantgebundene Evidence-Integrity-Uebersichten, manuelle und begrenzte Batch-SHA-256-Pruefungen, Legal-Hold-Metadaten, Disposition-Entscheidungen und Integritaets-/Disposition-Audit-Events
+- ergaenzt Web-UI-Unterstuetzung unter `/evidence/integrity/` fuer sichere Evidence-Integritaetsmetadaten, Re-Hash-Aktionen, Legal Hold Set/Release und dokumentierte Disposition-Entscheidungen
 - add Management-/Regulatory-Templates for ISO 27001, NIS2, DORA, KRITIS, and generic security governance reviews through additive migration `0032_rust_management_regulatory_templates`
 - extend Management Review snapshots with template metadata, regulatory context, supplier review summaries, source counts, gap summaries, and management decision hints
 - add authenticated template list/detail APIs, regulatory preview API, and Management Review Web UI template selection without creating snapshots during preview
@@ -48,6 +55,10 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- verhindert physische Evidence-Aussonderung vor Approval-/Reason-/Legal-Hold-Pruefung; verweigerte Ausfuehrungen werden sicher auditierbar dokumentiert, ohne Storage-Pfade zu beruehren
+- fuehrt physische Disposition nur ueber canonical-path-gepruefte Storage-Abstraktion aus und speichert Tombstone-Metadaten mit sicherer Fehlerklasse, Backend und Hash statt Rohpfaden oder Dateiinhalten
+- haelt Evidence-Worker-Start, Disposition-Approval und Disposition-Execute auf Administrator-/Editor-Rollen beschraenkt; Read-only-Rollen sehen nur sichere, tenantgebundene Metadaten
+- validiert vorbereitetes Object Storage nur ueber Endpoint-/Bucket-/Region- und Secret-Referenzsignale; echte Cloud-Credentials, Secretwerte und externe Netzwerkaufrufe werden nicht eingefuehrt
 - haelt Supplier/Product-Security-Datensaetze, Evidence-Links, Events und Vertrags-/Exit-Historie tenantgebunden; Admin-/Editor-Rollen duerfen schreiben, Read-only-Rollen sehen nur sichere Metadaten
 - validiert Status-, Severity-, Datums-, CVE-, Score-, Owner-, Supplier-, Evidence- und Referenzfelder mit sicheren 4xx-Fehlern ohne SQL-/Store-Details, Secrets, Rohpayloads oder absolute Dateipfade
 - speichert Advisory-/PSIRT-/CVE-Referenzen nur lokal als Text/URL und fuehrt keine externen Live-Abfragen aus; URL-Ausgabe in API und Web UI bleibt gegen unsichere Schemes und HTML-Injection abgesichert
@@ -55,12 +66,11 @@ The project uses release tags for immutable release points. Changes under **Unre
 - haelt Regulatory-Review-Pack-Filter, Previews, Snapshots und Exporte tenantgebunden; Read-only-Rollen duerfen sichere Inhalte lesen, Snapshot-Erzeugung bleibt schreibenden Rollen vorbehalten
 - validiert Pack-Typ-, Status-, Zeitraum-, Gap- und Limit-Filter mit sicheren 4xx-Fehlern ohne SQL-/Store-Details
 - nutzt die bestehende Management-Review-Snapshot- und Audit-Infrastruktur fuer Regulatory Review-Pakete, ohne zweiten Compliance-Store und ohne Evidence-Pfade, SQL-Details, Secrets oder rohe Evidence-Payloads offenzulegen
-- route Evidence artifact checks through a canonical media-root-contained filesystem backend that blocks traversal, absolute-path references, and symlink escapes
-- audit Evidence storage drills, artifact presence, unreadable/missing artifacts, hash matches, hash mismatches, drill failures, and drill completion without exposing absolute paths, raw payloads, SQL details, or secrets
-- reuse the existing Evidence Integrity metadata and audit table for storage drills, avoiding a new Evidence engine or destructive migration
-- keep Evidence re-hash, Legal Hold, and disposition writes tenant-scoped and restricted to administrator/editor roles while allowing read-only roles to inspect safe metadata
-- audit Evidence integrity checks, hash mismatches, missing artifacts, Legal Hold changes, and disposition decisions without storing raw file payloads, secret values, authorization material, SQL details, or absolute media paths
-- make `disposition_completed_metadata_only` an explicit governance decision state; this release does not physically delete Evidence files or implement data destruction
+- routet Evidence-Artefaktpruefungen ueber ein canonical-media-root-geprueftes Filesystem-Backend, das Traversal, absolute Pfade und Symlink-Flucht blockiert
+- auditiert Evidence-Storage-Drills, Artefaktstatus, Hash-Abweichungen, Drill-Fehler und kontrollierte Disposition ohne absolute Pfade, Rohpayloads, SQL-Details oder Secrets
+- nutzt bestehende Evidence-Integrity-Metadaten und Audit-Tabellen fuer Storage-Drills und Disposition, ohne eine neue Evidence-Engine oder destruktive Migration einzufuehren
+- haelt Evidence-Re-Hash, Legal Hold, Worker-Start und Disposition-Schreibpfade tenantgebunden und auf Admin-/Editor-Rollen beschraenkt
+- macht `disposition_completed_metadata_only` weiterhin als Governance-Entscheidung sichtbar; physische Disposition ist davon getrennt und nur nach expliziter Freigabe ausfuehrbar
 - audit Management Review template previews, snapshot creation, status changes, and exports without storing raw payloads or secret material
 - keep Management-/Regulatory-Template previews and generated snapshots tenant-scoped and enforce read-only versus write-role separation for snapshot creation
 - audit Supplier creation, updates, review decisions, subprocessor changes, and Evidence, Control, and Risk link changes without exposing SQL details or secret payloads
