@@ -8,6 +8,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use iscy_backend::{
     account_store::AccountStore,
     agent_governance_store::AgentGovernanceStore,
+    agent_release_store::AgentReleaseStore,
     agent_store::AgentStore,
     ai_governance_store::AiGovernanceStore,
     app_router, app_router_with_state,
@@ -694,8 +695,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0035_rust_evidence_worker_disposition_storage"));
-    assert!(html.contains("35/35 angewendet"));
+    assert!(html.contains("0036_rust_agent_release_artifact_provenance"));
+    assert!(html.contains("36/36 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -1324,8 +1325,12 @@ async fn zero_trust_agent_flow_records_posture() {
         .await
         .unwrap();
     db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let release_store = AgentReleaseStore::from_sqlite_pool(pool.clone());
+    release_store.refresh_artifacts(1, 1).await.unwrap();
     let app = app_router_with_state(
-        AppState::default().with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_release_store(Some(release_store)),
     );
 
     let response = app
@@ -1976,8 +1981,12 @@ async fn guided_agent_rejects_revoked_expired_untrusted_and_manipulated_inputs()
         .await
         .unwrap();
     db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let release_store = AgentReleaseStore::from_sqlite_pool(pool.clone());
+    release_store.refresh_artifacts(1, 1).await.unwrap();
     let app = app_router_with_state(
-        AppState::default().with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_release_store(Some(release_store)),
     );
     let create_token = |label: &str, mtls: Option<&str>| {
         let mut payload = serde_json::json!({
@@ -2238,8 +2247,12 @@ async fn guided_agent_single_use_token_is_atomic_under_parallel_enrollment() {
         .await
         .unwrap();
     db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let release_store = AgentReleaseStore::from_sqlite_pool(pool.clone());
+    release_store.refresh_artifacts(1, 1).await.unwrap();
     let app = app_router_with_state(
-        AppState::default().with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_release_store(Some(release_store)),
     );
     let response = app
         .clone()
@@ -2324,8 +2337,12 @@ async fn guided_agent_web_onboarding_renders_one_time_platform_instructions() {
         .await
         .unwrap();
     db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let release_store = AgentReleaseStore::from_sqlite_pool(pool.clone());
+    release_store.refresh_artifacts(1, 1).await.unwrap();
     let app = app_router_with_state(
-        AppState::default().with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone()))),
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_release_store(Some(release_store)),
     );
     let response = app
         .clone()
@@ -2420,6 +2437,8 @@ async fn guided_agent_web_onboarding_renders_one_time_platform_instructions() {
         let html = String::from_utf8(body.to_vec()).unwrap();
         assert!(html.contains("Schritt 3 von 3"));
         assert!(html.contains(expected_artifact));
+        assert!(html.contains("Deployment-Artefakte"));
+        assert!(html.contains("SHA-256"));
         let start = html.find("iscy_enroll_").unwrap();
         let token = html[start..]
             .chars()
@@ -2468,6 +2487,260 @@ async fn guided_agent_web_onboarding_renders_one_time_platform_instructions() {
     let denied = String::from_utf8(body.to_vec()).unwrap();
     assert!(denied.contains("Admin-Rolle"));
     assert!(!denied.contains("iscy_enroll_"));
+}
+
+#[tokio::test]
+async fn agent_release_artifacts_enforce_roles_tenants_and_feed_reviews() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let release_store = AgentReleaseStore::from_sqlite_pool(pool.clone());
+    let app = app_router_with_state(
+        AppState::default()
+            .with_agent_store(Some(AgentStore::from_sqlite_pool(pool.clone())))
+            .with_agent_release_store(Some(release_store))
+            .with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/artifacts")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["artifacts"].as_array().unwrap().len(), 0);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/artifacts/refresh")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/artifacts/refresh")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["result"]["refreshed"].as_i64().unwrap() >= 6);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/artifacts?limit=100")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let raw = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!raw.contains("/home/"));
+    assert!(!raw.contains("PRIVATE KEY"));
+    assert!(!raw.contains("iscy_enroll_"));
+    let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let artifacts = payload["artifacts"].as_array().unwrap();
+    assert!(artifacts.iter().any(
+        |artifact| artifact["artifact_id"] == "agent-systemd-service"
+            && artifact["sha256"].as_str().unwrap().len() == 64
+    ));
+    assert!(artifacts
+        .iter()
+        .all(|artifact| !artifact["artifact_reference"]
+            .as_str()
+            .unwrap()
+            .starts_with('/')));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/artifacts/agent-systemd-service")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/artifacts/agent-systemd-service/verify-checksum")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["result"]["status"], "verified");
+
+    sqlx::query(
+        "UPDATE agent_release_artifact SET sha256 = ? WHERE tenant_id = 1 AND artifact_id = 'agent-systemd-service'",
+    )
+    .bind("0000000000000000000000000000000000000000000000000000000000000000")
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/artifacts/agent-systemd-service/verify-checksum")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["result"]["status"], "mismatch");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/artifacts/agent-systemd-service/verify-signature")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["result"]["status"], "not_configured");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/agents/onboarding/artifacts?os_family=LINUX")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let onboarding_artifacts = payload["artifacts"].as_array().unwrap();
+    assert!(onboarding_artifacts
+        .iter()
+        .any(|artifact| artifact["artifact_id"] == "agent-systemd-service"));
+    assert!(!onboarding_artifacts
+        .iter()
+        .any(|artifact| artifact["artifact_id"] == "agent-windows-task-installer"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/zero-trust/?tenant_id=1&user_id=7")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Agent-Artefakte und Release-Provenance"));
+    assert!(html.contains("Pruefsumme"));
+    assert!(html.contains("Nicht konfiguriert") || html.contains("Nicht signiert"));
+    assert!(!html.contains("/home/"));
+
+    let snapshot = ReportStore::from_sqlite_pool(pool.clone())
+        .generate_regulatory_review_pack(
+            1,
+            1,
+            "nis2_management_summary",
+            iscy_backend::report_store::ManagementReviewGenerateRequest {
+                template_type: None,
+                title: Some("NIS2 Agent Supply Chain".to_string()),
+                period_start: None,
+                period_end: None,
+                executive_summary: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        snapshot.agent_posture_json["release_artifact_supply_chain_gaps"]
+            .as_i64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        snapshot.gap_summary_json["unsigned_agent_release_artifacts"]
+            .as_i64()
+            .unwrap()
+            > 0
+    );
 }
 
 #[tokio::test]
@@ -14472,7 +14745,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0032_rust_management_regulatory_templates",
             "0033_rust_evidence_integrity_disposition",
             "0034_rust_supplier_product_security_governance",
-            "0035_rust_evidence_worker_disposition_storage"
+            "0035_rust_evidence_worker_disposition_storage",
+            "0036_rust_agent_release_artifact_provenance"
         ]
     );
     assert!(
@@ -14513,6 +14787,21 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     );
     assert!(
         db_admin::sqlite_table_exists(&pool, "iscy_security_hmac_nonce")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "agent_release_artifact")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "agent_artifact_signature")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "agent_release_provenance")
             .await
             .unwrap()
     );

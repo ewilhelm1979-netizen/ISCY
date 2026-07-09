@@ -234,18 +234,23 @@ Umgesetzt:
 - begrenzter Enrollment-Token-Lifecycle mit sicheren Metadaten, Widerruf, Ablauf, partieller Verwendung und Auditspur
 - transaktionssichere Token-Nutzung mit Policy-Zuordnung und Schutz gegen parallele Limitueberschreitung
 - Flottenansicht mit Rollout-, Policy-, Token- und mTLS-Bindungsstatus
+- additive Migration `0036_rust_agent_release_artifact_provenance` fuer Agent-Release-Artefaktmanifest, Signaturmetadaten, Release-Provenance und Verification-Audit
+- SHA-256-Pruefsummen fuer vorhandene Agent-/Deployment-Artefakte aus einer festen Repo-Allowlist ohne frei waehlbare Dateipfade
+- sichere Agent-Artefakt-APIs fuer Liste, Detail, Refresh, Checksum-Pruefung, Signaturstatuspruefung, Provenance und Onboarding-Artefakte
+- Zero-Trust-Webansicht und Onboarding-Assistent zeigen Artefakte, Pruefsummen, Signaturstatus, Provenance-Status und bekannte Limitierungen ohne produktive Signierung vorzutaueschen
+- Management-/Regulatory-Review-Pakete nehmen Agent-Artefakt-, Signatur-, Pruefsummen- und Provenance-Gaps als Supply-Chain-Signale auf
 
 Offen:
 
-- signierte MSI-/PKG-/deb-/rpm-Pakete und Release-Provenance bereitstellen.
+- echte produktive MSI-/PKG-/deb-/rpm-Signaturen mit freigegebenem Schluesselmanagement separat bereitstellen.
 - lokale CSR-Erzeugung und providerunabhaengige CA-Anbindung als eigener spaeterer Meilenstein untersuchen.
 
 Bewusst nicht Teil der fachuebergreifenden Notifications sind Management-/
 Regulatory-Templates, Evidence Integrity & Disposition als eigener
 Governance-Workflow, kontrollierte physische Loeschung, Re-Hash-Worker,
-Objektspeicher, CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete,
-Release-Provenance sowie Performance-, HA- und visuelle
-Regressionserweiterungen.
+Objektspeicher, CA-/PKI-/CSR-Funktionen, echte produktive
+Code-Signing-Schluessel, externe Attestation-Dienste, GitHub-Release-
+Veroeffentlichung sowie Performance-, HA- und visuelle Regressionserweiterungen.
 
 Erfolgskriterium:
 
@@ -255,7 +260,7 @@ Erfolgskriterium:
 
 1. Review-Pack-Bedienung weiter polishen, z. B. zusaetzliche Filter, Pack-spezifische Gap-Gruppierung und Review-Owner-Hinweise.
 2. Produktiven Object-Storage-Client fuer Evidence nur mit separatem Secret-/SSRF-/Restore-Testkonzept angehen.
-3. Signierte Agent-Pakete, Release-Provenance und eine spaetere getrennte CA-/PKI-Stufe.
+3. Produktive Signierung und eine spaetere getrennte CA-/PKI-Stufe erst nach Review des jetzt vorhandenen Artefakt-/Provenance-Modells angehen.
 
 ## Verbleibende Roadmap
 
@@ -269,6 +274,7 @@ Erfolgskriterium:
 | Unreleased | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
 | Unreleased | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen, Exit-Test-Nachweise und tenantgesicherte Evidence-/Control-/Risk-Links. |
 | Unreleased | Supplier/Product-Security-Deepening | Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs sind tenantgebunden verbunden. |
+| Unreleased | Agent-Artefakte und Release-Provenance | Vorhandene Agent-Deployment-Artefakte sind als Manifest mit SHA-256, Signaturstatus, Provenance und Review-Pack-Gaps sichtbar; echte Produktionssignaturen bleiben ein separater Security-Meilenstein. |
 | Umgesetzt / Vertiefung | Management-/Regulatory-Templates | Wiederholbare ISO-27001-, NIS2-, DORA-, KRITIS- und Governance-Pakete werden aus bestehenden Snapshots erzeugt; feinere Varianten koennen spaeter folgen. |
 | Unreleased | Evidence Integrity & Disposition Phase 1 | Manuelle und begrenzte Batch-Re-Hash-Pruefung, Legal Hold, metadata-only Disposition und auditierbare Integritaetsereignisse sind tenantgebunden verfuegbar. |
 | Unreleased | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |

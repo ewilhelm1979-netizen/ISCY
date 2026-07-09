@@ -2995,7 +2995,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 43 0 R >>
 endobj
 43 0 obj
-<< /Length 4097 >>
+<< /Length 4311 >>
 stream
 BT
 /F1 9 Tf
@@ -3081,6 +3081,22 @@ T*
 T*
 (Security/CVE, Incidents und Roadmap) Tj
 T*
+(- Agent-Artefaktmanifest fuer README, systemd Service/Timer/Environment-Beispiel, NixOS-Modul,) Tj
+T*
+(Windows PowerShell Scheduled Task und macOS LaunchDaemon) Tj
+T*
+(- SHA-256-Pruefsummen, Signaturstatus, Verification-Status und Release-Provenance-Metadaten) Tj
+T*
+(fuer diese Agent-Deployment-Artefakte) Tj
+T*
+(- Zero-Trust-Webansicht und Onboarding-Assistent mit Artefakt-, Pruefsummen-, Signatur- und) Tj
+T*
+(Provenance-Hinweisen) Tj
+T*
+(- Review-Pack-Signale fuer fehlende Pruefsummen, unsignierte Agent-Artefakte, fehlende) Tj
+T*
+(Provenance und unverifizierte Deployment-Artefakte) Tj
+T*
 () Tj
 T*
 (Was als naechstes fachlich am meisten bringt:) Tj
@@ -3109,11 +3125,13 @@ T*
 T*
 (Akzeptierte Abweichungen sollten Owner, Begruendung, Laufzeit und Wiedervorlage haben.) Tj
 T*
-(5. Signierte Agent-Pakete bauen) Tj
+(5. Produktive Signierung getrennt nachziehen) Tj
 T*
-(Die Service-Beispiele sind vorhanden; als naechster Schritt folgen Windows MSI/Intune-Paket,) Tj
+(Das Manifest und die Provenance-Metadaten sind vorbereitet; echte Windows MSI/Intune-, macOS) Tj
 T*
-(macOS PKG/Jamf-Profil und signierte Linux-Pakete.) Tj
+(PKG/Jamf- und Linux-Paket-Signaturen brauchen einen separaten Schluesselmanagement- und) Tj
+T*
+(Release-Prozess.) Tj
 T*
 (6. CA-/PKI-Anbindung separat planen) Tj
 T*
@@ -3127,15 +3145,110 @@ T*
 T*
 (Policy-Schritt kommen.) Tj
 T*
+ET
+endstream
+endobj
+44 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 45 0 R >>
+endobj
+45 0 obj
+<< /Length 4665 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Fachliches Kurzurteil:) Tj
 T*
 (ISCY ist fuer Zero Trust jetzt gut positioniert. Sollabdeckung, aktive) Tj
 T*
-(Policy-Benachrichtigungen und gefuehrtes Onboarding sind vorhanden; die naechste Reife) Tj
+(Policy-Benachrichtigungen, gefuehrtes Onboarding und das Agent-Artefakt-/Provenance-Modell) Tj
 T*
-(entsteht durch Nachweisverknuepfung, Connectoren und sauber signierte Deployment-Pakete.) Tj
+(sind vorhanden; die naechste Reife entsteht durch Nachweisverknuepfung, Connectoren und echte) Tj
+T*
+(produktive Signierprozesse.) Tj
+T*
+() Tj
+T*
+(#### Agent-Artefakte, Pruefsummen und Release-Provenance) Tj
+T*
+() Tj
+T*
+(ISCY modelliert die vorhandenen Agent-Deployment-Artefakte als tenantgebundenes Manifest.) Tj
+T*
+(Erfasst werden Artefaktname, Typ, Zielplattform, Paketformat, Version, Build-Profil,) Tj
+T*
+(Commit-/Branch-Bezug, SHA-256, Groesse, Content-Type, sichere Repo-Referenz, Signaturstatus,) Tj
+T*
+(Verification-Status, Provenance-Status, bekannte Limitierungen und technische Metadaten.) Tj
+T*
+() Tj
+T*
+(Die Plattform berechnet SHA-256-Pruefsummen nur aus einer festen Allowlist der im Repository) Tj
+T*
+(vorhandenen Artefakte. Requests koennen keine beliebigen lokalen Pfade angeben. API, UI, Audit) Tj
+T*
+(und Review-Pakete zeigen keine absoluten Buildpfade, keine Rohdateien, keine Tokens, keine) Tj
+T*
+(privaten Schluessel und keine Zertifikat-Private-Keys.) Tj
+T*
+() Tj
+T*
+(Der Signaturbereich ist bewusst ein Vorbereitungsmodell. Sichtbare Statuswerte wie unsigned,) Tj
+T*
+(notconfigured, signaturepresent, verified, failed, expired, untrusted und keymissing erlauben) Tj
+T*
+(spaetere produktive Signierprozesse, ohne heute eine echte Produktionssignatur vorzutaueschen.) Tj
+T*
+(Dieser PR enthaelt keine echten Code-Signing-Zertifikate, keine privaten Schluessel, keine) Tj
+T*
+(externe PKI/CA, keine CSR-Funktion, keine Sigstore-/Rekor-/Fulcio-Netzwerkaufrufe und keine) Tj
+T*
+(GitHub-Release-Veroeffentlichung.) Tj
+T*
+() Tj
+T*
+(Die wichtigsten API-Pfade:) Tj
+T*
+() Tj
+T*
+(GET /api/v1/agents/artifacts) Tj
+T*
+(GET /api/v1/agents/artifacts/{artifact_id}) Tj
+T*
+(POST /api/v1/agents/artifacts/refresh) Tj
+T*
+(POST /api/v1/agents/artifacts/{artifact_id}/verify-checksum) Tj
+T*
+(POST /api/v1/agents/artifacts/{artifact_id}/verify-signature) Tj
+T*
+(GET /api/v1/agents/artifacts/{artifact_id}/provenance) Tj
+T*
+(GET /api/v1/agents/release-provenance) Tj
+T*
+(GET /api/v1/agents/release-provenance/{provenance_id}) Tj
+T*
+(GET /api/v1/agents/onboarding/artifacts) Tj
+T*
+() Tj
+T*
+(Read-only-Rollen duerfen sichere Artefakt- und Provenance-Metadaten lesen. Schreibende Rollen) Tj
+T*
+(duerfen Manifest-Refresh sowie Checksum- und Signaturstatuspruefungen ausloesen. Jede Aktion) Tj
+T*
+(bleibt tenantgebunden und erzeugt ein Verification-/Audit-Ereignis ohne Secrets, Rohdateien,) Tj
+T*
+(Authorization-Header, SQL-Details oder fremde Tenant-IDs.) Tj
+T*
+() Tj
+T*
+(Management-/Regulatory-Review-Pakete fuer NIS2, DORA, DSGVO und generische Governance nehmen) Tj
+T*
+(diese Signale als Supply-Chain-Gaps auf. Das ist Nachweis- und Governance-Unterstuetzung,) Tj
+T*
+(keine Rechtsberatung, keine Zertifizierung und keine automatische Behoerdenmeldung.) Tj
 T*
 () Tj
 T*
@@ -3145,19 +3258,6 @@ T*
 T*
 (ISCY erweitert den vorhandenen Agent-Notification-Kanalbetrieb, statt eine) Tj
 T*
-ET
-endstream
-endobj
-44 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 45 0 R >>
-endobj
-45 0 obj
-<< /Length 4198 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (zweite Notification-Engine einzufuehren. Dieselben Webhook-Kanaele,) Tj
 T*
 (Production-Allowlist, Redirect-Sperre, Bearer-/HMAC-Secret-Referenzen,) Tj
@@ -3202,6 +3302,19 @@ T*
 T*
 (Delivery-Zeilen additiv um Domaene, Objektbezug, Signaltyp, sichere Fehlerklasse,) Tj
 T*
+ET
+endstream
+endobj
+46 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 47 0 R >>
+endobj
+47 0 obj
+<< /Length 4164 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (letzten Versuch und naechsten moeglichen Zustellzeitpunkt.) Tj
 T*
 () Tj
@@ -3302,19 +3415,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-46 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 47 0 R >>
-endobj
-47 0 obj
-<< /Length 4375 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Die Re-Hash-Pruefung berechnet SHA-256 serverseitig aus dem gespeicherten) Tj
 T*
 (Evidence-Artefakt und vergleicht den Wert mit dem vorhandenen Evidence-Hash.) Tj
@@ -3359,6 +3459,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+48 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 49 0 R >>
+endobj
+49 0 obj
+<< /Length 4303 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Auditereignisse werden fuer gestartete und abgeschlossene Integritaetschecks,) Tj
 T*
 (gueltige Hashes, Mismatches, fehlende Artefakte, Check-Fehler, Legal-Hold-) Tj
@@ -3459,19 +3572,6 @@ T*
 T*
 (Metadaten.) Tj
 T*
-ET
-endstream
-endobj
-48 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 49 0 R >>
-endobj
-49 0 obj
-<< /Length 4242 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Auditereignisse nutzen die bestehende Evidence-Integrity-Ereignistabelle und) Tj
@@ -3516,6 +3616,19 @@ T*
 T*
 (Der aktuelle Unreleased-Stand vertieft die Evidence-Integrity- und) Tj
 T*
+ET
+endstream
+endobj
+50 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 51 0 R >>
+endobj
+51 0 obj
+<< /Length 4127 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Storage-Grundlagen mit Migration) Tj
 T*
 (0035rustevidenceworkerdispositionstorage. Die Migration ist additiv und) Tj
@@ -3616,19 +3729,6 @@ T*
 T*
 (vor jeder Storage-Operation. Wird eine Ausfuehrung verweigert, wird dies als) Tj
 T*
-ET
-endstream
-endobj
-50 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 51 0 R >>
-endobj
-51 0 obj
-<< /Length 4297 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (dispositionexecutiondenied auditierbar dokumentiert, ohne das Artefakt zu) Tj
 T*
 (beruehren. Bei erfolgreicher Aussonderung wird die lokale Datei ueber das) Tj
@@ -3671,8 +3771,21 @@ T*
 T*
 (konfiguriert oder mit sicherer Fehlerklasse nicht bereit ist. Endpoint und) Tj
 T*
-(Bucket werden nur als Statusmerkmale validiert; ISCY fuehrt in diesem PR keine) Tj
+(Bucket werden nur als Statusmerkmale validiert; ISCY fuehrt in diesem Stand keine) Tj
 T*
+ET
+endstream
+endobj
+52 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 53 0 R >>
+endobj
+53 0 obj
+<< /Length 4016 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (externen Netzwerkaufrufe aus und speichert oder zeigt keine Secretwerte.) Tj
 T*
 () Tj
@@ -3773,19 +3886,6 @@ T*
 T*
 (ISCY ersetzt nicht:) Tj
 T*
-ET
-endstream
-endobj
-52 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 53 0 R >>
-endobj
-53 0 obj
-<< /Length 4951 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (- eine Rechtsberatung) Tj
@@ -3830,6 +3930,19 @@ T*
 T*
 (Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil) Tj
 T*
+ET
+endstream
+endobj
+54 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 55 0 R >>
+endobj
+55 0 obj
+<< /Length 4703 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und) Tj
 T*
 (Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks) Tj
@@ -3888,9 +4001,17 @@ T*
 T*
 (kontrollierte physische Disposition mit Tombstone-Metadaten und ein vorbereitetes) Tj
 T*
-(Object-Storage-Statusmodell ohne echte Cloud-Credentials. Die weitere ISCY-Agenda konzentriert) Tj
+(Object-Storage-Statusmodell ohne echte Cloud-Credentials. Migration) Tj
 T*
-(sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche) Tj
+(0036rustagentreleaseartifactprovenance ergaenzt Agent-Artefaktmanifest, SHA-256-Pruefsummen,) Tj
+T*
+(Signaturstatus, Release-Provenance und Verification-Audit fuer vorhandene) Tj
+T*
+(Deployment-Artefakte, ohne echte Produktionsschluessel, externe PKI/CA oder) Tj
+T*
+(GitHub-Release-Veroeffentlichung einzufuehren. Die weitere ISCY-Agenda konzentriert sich) Tj
+T*
+(deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche) Tj
 T*
 (Produktreife.) Tj
 T*
@@ -3910,7 +4031,9 @@ T*
 T*
 (Secret-, SSRF-, Restore- und Regressionstests vorbereiten) Tj
 T*
-(3. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe) Tj
+(3. Produktive Agent-Paketsignierung sowie eine spaetere getrennte CA-/PKI-Stufe auf Basis des) Tj
+T*
+(vorbereiteten Artefakt-/Provenance-Modells) Tj
 T*
 (4. Performance-, HA- und visuelle Regressionstests) Tj
 T*
@@ -3930,19 +4053,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-54 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 55 0 R >>
-endobj
-55 0 obj
-<< /Length 377 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Dieses Handbuch ist bewusst als Markdown-Datei im Repository abgelegt, damit es:) Tj
 T*
 () Tj
@@ -4010,20 +4120,20 @@ xref
 0000068993 00000 n
 0000072376 00000 n
 0000072504 00000 n
-0000076653 00000 n
-0000076781 00000 n
-0000081031 00000 n
-0000081159 00000 n
-0000085586 00000 n
-0000085714 00000 n
-0000090008 00000 n
-0000090136 00000 n
-0000094485 00000 n
-0000094613 00000 n
-0000099616 00000 n
-0000099744 00000 n
+0000076867 00000 n
+0000076995 00000 n
+0000081712 00000 n
+0000081840 00000 n
+0000086056 00000 n
+0000086184 00000 n
+0000090539 00000 n
+0000090667 00000 n
+0000094846 00000 n
+0000094974 00000 n
+0000099042 00000 n
+0000099170 00000 n
 trailer
 << /Size 56 /Root 1 0 R >>
 startxref
-100172
+103925
 %%EOF

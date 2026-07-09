@@ -20,6 +20,10 @@ Diese Screenshots dokumentieren die aktuelle serverseitige ISCY-Weboberflaeche f
 
 ![Zero Trust Desktop](assets/iscy-zero-trust-desktop.png)
 
+Die Zero-Trust-Ansicht enthaelt zusaetzlich Agent-Artefakte und
+Release-Provenance mit SHA-256, Signaturstatus, Verification-Status,
+Provenance-Status und sicheren schreibrollenbasierten Pruefaktionen.
+
 ## Zero Trust Mobile
 
 ![Zero Trust Mobile](assets/iscy-zero-trust-mobile.png)

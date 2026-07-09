@@ -30,6 +30,7 @@ use std::{
 
 pub mod account_store;
 pub mod agent_governance_store;
+pub mod agent_release_store;
 pub mod agent_store;
 pub mod ai_governance_store;
 pub mod assessment_store;
@@ -63,6 +64,7 @@ pub mod wizard_store;
 
 use account_store::AccountStore;
 use agent_governance_store::AgentGovernanceStore;
+use agent_release_store::AgentReleaseStore;
 use agent_store::AgentStore;
 use ai_governance_store::AiGovernanceStore;
 use assessment_store::AssessmentStore;
@@ -102,6 +104,7 @@ pub struct AppState {
     pub account_store: Option<AccountStore>,
     pub ai_governance_store: Option<AiGovernanceStore>,
     pub agent_governance_store: Option<AgentGovernanceStore>,
+    pub agent_release_store: Option<AgentReleaseStore>,
     pub agent_store: Option<AgentStore>,
     pub asset_store: Option<AssetStore>,
     pub assessment_store: Option<AssessmentStore>,
@@ -145,6 +148,7 @@ impl AppState {
             account_store: None,
             ai_governance_store: None,
             agent_governance_store: None,
+            agent_release_store: None,
             agent_store: None,
             asset_store: None,
             assessment_store: None,
@@ -181,6 +185,7 @@ impl AppState {
             account_store: None,
             ai_governance_store: None,
             agent_governance_store: None,
+            agent_release_store: None,
             agent_store: None,
             asset_store: None,
             assessment_store: None,
@@ -245,6 +250,14 @@ impl AppState {
         agent_governance_store: Option<AgentGovernanceStore>,
     ) -> Self {
         self.agent_governance_store = agent_governance_store;
+        self
+    }
+
+    pub fn with_agent_release_store(
+        mut self,
+        agent_release_store: Option<AgentReleaseStore>,
+    ) -> Self {
+        self.agent_release_store = agent_release_store;
         self
     }
 
@@ -597,6 +610,57 @@ pub struct AgentNotificationDispatchResponse {
     pub accepted: bool,
     pub api_version: &'static str,
     pub result: agent_governance_store::AgentNotificationDispatchResult,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AgentArtifactsQuery {
+    pub limit: Option<i64>,
+    pub target_os: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AgentOnboardingArtifactsQuery {
+    pub os_family: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentReleaseArtifactsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub artifacts: Vec<agent_release_store::AgentReleaseArtifact>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentReleaseArtifactResponse {
+    pub api_version: &'static str,
+    pub detail: agent_release_store::AgentReleaseArtifactDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentReleaseArtifactRefreshResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub result: agent_release_store::AgentArtifactRefreshResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentArtifactVerificationResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub result: agent_release_store::AgentArtifactVerificationResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentReleaseProvenanceListResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub provenance: Vec<agent_release_store::AgentReleaseProvenance>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentReleaseProvenanceResponse {
+    pub api_version: &'static str,
+    pub provenance: agent_release_store::AgentReleaseProvenance,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5010,6 +5074,290 @@ async fn agent_notifications_evaluate(
         Err(err) => agent_governance_store_error_response(
             err,
             "Notifications konnten nicht ausgewertet werden",
+        ),
+    }
+}
+
+async fn agent_release_artifacts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentArtifactsQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_release_store else {
+        return api_database_not_configured("Rust-Agent-Release-Store ist nicht konfiguriert.");
+    };
+    match store
+        .list_artifacts(
+            context.tenant_id,
+            query.limit.unwrap_or(50),
+            query.target_os.as_deref(),
+        )
+        .await
+    {
+        Ok(artifacts) => (
+            StatusCode::OK,
+            Json(AgentReleaseArtifactsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                artifacts,
+            }),
+        )
+            .into_response(),
+        Err(_) => api_database_error("Agent-Artefakte konnten nicht gelesen werden.".to_string()),
+    }
+}
+
+async fn agent_release_artifact_detail(
+    Path(artifact_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_release_store else {
+        return api_database_not_configured("Rust-Agent-Release-Store ist nicht konfiguriert.");
+    };
+    match store.artifact_detail(context.tenant_id, &artifact_id).await {
+        Ok(Some(detail)) => (
+            StatusCode::OK,
+            Json(AgentReleaseArtifactResponse {
+                api_version: "v1",
+                detail,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("Agent-Artefakt wurde nicht gefunden."),
+        Err(_) => api_database_error("Agent-Artefakt konnte nicht gelesen werden.".to_string()),
+    }
+}
+
+async fn agent_release_artifacts_refresh(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_release_store else {
+        return api_database_not_configured("Rust-Agent-Release-Store ist nicht konfiguriert.");
+    };
+    match store
+        .refresh_artifacts(context.tenant_id, context.user_id)
+        .await
+    {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(AgentReleaseArtifactRefreshResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Err(_) => api_database_error(
+            "Agent-Artefaktmanifest konnte nicht aktualisiert werden.".to_string(),
+        ),
+    }
+}
+
+async fn agent_release_artifact_verify_checksum(
+    Path(artifact_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_release_store else {
+        return api_database_not_configured("Rust-Agent-Release-Store ist nicht konfiguriert.");
+    };
+    match store
+        .verify_checksum(context.tenant_id, context.user_id, &artifact_id)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(AgentArtifactVerificationResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("Agent-Artefakt wurde nicht gefunden."),
+        Err(_) => api_database_error(
+            "Agent-Artefaktpruefung konnte nicht abgeschlossen werden.".to_string(),
+        ),
+    }
+}
+
+async fn agent_release_artifact_verify_signature(
+    Path(artifact_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_release_store else {
+        return api_database_not_configured("Rust-Agent-Release-Store ist nicht konfiguriert.");
+    };
+    match store
+        .verify_signature(context.tenant_id, context.user_id, &artifact_id)
+        .await
+    {
+        Ok(Some(result)) => (
+            StatusCode::OK,
+            Json(AgentArtifactVerificationResponse {
+                accepted: true,
+                api_version: "v1",
+                result,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("Agent-Artefakt wurde nicht gefunden."),
+        Err(_) => api_database_error(
+            "Agent-Signaturpruefung konnte nicht abgeschlossen werden.".to_string(),
+        ),
+    }
+}
+
+async fn agent_release_artifact_provenance(
+    Path(artifact_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_release_store else {
+        return api_database_not_configured("Rust-Agent-Release-Store ist nicht konfiguriert.");
+    };
+    match store
+        .artifact_provenance(context.tenant_id, &artifact_id)
+        .await
+    {
+        Ok(Some(provenance)) => (
+            StatusCode::OK,
+            Json(AgentReleaseProvenanceResponse {
+                api_version: "v1",
+                provenance,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("Agent-Provenance wurde nicht gefunden."),
+        Err(_) => api_database_error("Agent-Provenance konnte nicht gelesen werden.".to_string()),
+    }
+}
+
+async fn agent_release_provenance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentArtifactsQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_release_store else {
+        return api_database_not_configured("Rust-Agent-Release-Store ist nicht konfiguriert.");
+    };
+    match store
+        .list_provenance(context.tenant_id, query.limit.unwrap_or(50))
+        .await
+    {
+        Ok(provenance) => (
+            StatusCode::OK,
+            Json(AgentReleaseProvenanceListResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                provenance,
+            }),
+        )
+            .into_response(),
+        Err(_) => {
+            api_database_error("Agent-Release-Provenance konnte nicht gelesen werden.".to_string())
+        }
+    }
+}
+
+async fn agent_release_provenance_detail(
+    Path(provenance_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_release_store else {
+        return api_database_not_configured("Rust-Agent-Release-Store ist nicht konfiguriert.");
+    };
+    match store
+        .provenance_detail(context.tenant_id, &provenance_id)
+        .await
+    {
+        Ok(Some(provenance)) => (
+            StatusCode::OK,
+            Json(AgentReleaseProvenanceResponse {
+                api_version: "v1",
+                provenance,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("Agent-Release-Provenance wurde nicht gefunden."),
+        Err(_) => {
+            api_database_error("Agent-Release-Provenance konnte nicht gelesen werden.".to_string())
+        }
+    }
+}
+
+async fn agent_onboarding_artifacts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentOnboardingArtifactsQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_release_store else {
+        return api_database_not_configured("Rust-Agent-Release-Store ist nicht konfiguriert.");
+    };
+    match store
+        .onboarding_artifacts(context.tenant_id, query.os_family.as_deref())
+        .await
+    {
+        Ok(artifacts) => (
+            StatusCode::OK,
+            Json(AgentReleaseArtifactsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                artifacts,
+            }),
+        )
+            .into_response(),
+        Err(_) => api_database_error(
+            "Agent-Onboarding-Artefakte konnten nicht gelesen werden.".to_string(),
         ),
     }
 }
@@ -14284,6 +14632,16 @@ async fn web_zero_trust(
         },
         None => r#"<section class="panel wide"><h2>Agent Governance</h2><p>Agent-Governance-Store ist nicht konfiguriert.</p></section>"#.to_string(),
     };
+    let artifacts_section = match state.agent_release_store.as_ref() {
+        Some(release_store) => match release_store
+            .list_artifacts(context.tenant_id, 20, None)
+            .await
+        {
+            Ok(artifacts) => agent_release_artifacts_web_section(&context, &artifacts, can_write),
+            Err(_) => r#"<section class="panel wide"><h2>Agent-Artefakte</h2><p>Agent-Artefakte sind derzeit nicht verfuegbar.</p></section>"#.to_string(),
+        },
+        None => r#"<section class="panel wide"><h2>Agent-Artefakte</h2><p>Agent-Release-Store ist nicht konfiguriert.</p></section>"#.to_string(),
+    };
     match store.posture_overview(context.tenant_id).await {
         Ok(posture) => {
             let pillar_rows = posture
@@ -14370,6 +14728,7 @@ async fn web_zero_trust(
                 </section>
                 {}
                 {}
+                {}
                 <section class="metrics">
                   {}
                   {}
@@ -14416,6 +14775,7 @@ async fn web_zero_trust(
                 html_escape(&priority_title),
                 html_escape(&priority_detail),
                 governance_section,
+                artifacts_section,
                 onboarding_section,
                 metric_card("ZT Score", posture.average_zero_trust_score),
                 metric_card("Devices", posture.device_count),
@@ -14544,6 +14904,157 @@ fn agent_onboarding_status_section(
             audit_rows
         },
     )
+}
+
+fn agent_release_artifacts_web_section(
+    context: &WebContext,
+    artifacts: &[agent_release_store::AgentReleaseArtifact],
+    can_write: bool,
+) -> String {
+    let refresh_form = if can_write {
+        let action = web_path_with_context("/zero-trust/artifacts/refresh", Some(context));
+        format!(
+            r#"<form method="post" action="{}"><button type="submit">Manifest aktualisieren</button></form>"#,
+            html_escape(&action)
+        )
+    } else {
+        r#"<span class="muted">Nur lesend: sichere Metadaten sichtbar, keine Pruefaktionen.</span>"#
+            .to_string()
+    };
+    let rows = artifacts
+        .iter()
+        .map(|artifact| {
+            let checksum_action = web_path_with_context(
+                &format!(
+                    "/zero-trust/artifacts/{}/verify-checksum",
+                    artifact.artifact_id
+                ),
+                Some(context),
+            );
+            let signature_action = web_path_with_context(
+                &format!(
+                    "/zero-trust/artifacts/{}/verify-signature",
+                    artifact.artifact_id
+                ),
+                Some(context),
+            );
+            let actions = if can_write {
+                format!(
+                    r#"<form method="post" action="{}"><button type="submit">SHA-256 pruefen</button></form><form method="post" action="{}"><button type="submit">Signatur pruefen</button></form>"#,
+                    html_escape(&checksum_action),
+                    html_escape(&signature_action)
+                )
+            } else {
+                "-".to_string()
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td></tr>"#,
+                html_escape(&artifact.artifact_name),
+                html_escape(&artifact.target_os),
+                html_escape(&artifact.artifact_type),
+                html_escape(&artifact.sha256),
+                agent_release_status_badge(&artifact.signature_status),
+                agent_release_status_badge(&artifact.provenance_status),
+                agent_release_status_badge(&artifact.verification_status),
+                html_escape(&short_reference(&artifact.git_commit)),
+                actions,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        r#"
+        <section class="panel wide">
+          <div class="section-heading"><h2>Agent-Artefakte und Release-Provenance</h2>{}</div>
+          <p class="muted">Das Manifest enthaelt nur sichere Metadaten, SHA-256, Signaturstatus und Herkunftsnachweise. Produktive Code-Signing-Schluessel sind nicht konfiguriert.</p>
+          <table>
+            <thead><tr><th>Artefakt</th><th>Plattform</th><th>Typ</th><th>Pruefsumme</th><th>Signatur</th><th>Provenance</th><th>Verifikation</th><th>Commit</th><th>Aktion</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </section>
+        "#,
+        refresh_form,
+        if rows.is_empty() {
+            web_empty_row(
+                9,
+                "Kein Agent-Artefaktmanifest erfasst. Schreibende Rollen koennen das Manifest aktualisieren.",
+            )
+        } else {
+            rows
+        }
+    )
+}
+
+fn agent_release_onboarding_artifact_section(
+    artifacts: &[agent_release_store::AgentReleaseArtifact],
+) -> String {
+    let rows = artifacts
+        .iter()
+        .map(|artifact| {
+            let warning = if matches!(
+                artifact.signature_status.as_str(),
+                "unsigned" | "not_configured" | "key_missing" | "failed" | "untrusted"
+            ) {
+                "Signatur nicht produktiv verifiziert"
+            } else {
+                "Signaturstatus dokumentiert"
+            };
+            format!(
+                r#"<tr><td>{}</td><td><code>{}</code></td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&artifact.artifact_name),
+                html_escape(&artifact.artifact_reference),
+                html_escape(&artifact.sha256),
+                agent_release_status_badge(&artifact.signature_status),
+                agent_release_status_badge(&artifact.provenance_status),
+                html_escape(warning),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Deployment-Artefakte</h2>
+          <p class="muted">Diese Artefakte sind als Release-Metadaten erfasst. Sie sind nicht als produktiv signiert auszuweisen, solange der Signaturstatus dies nicht belegt.</p>
+          <table>
+            <thead><tr><th>Artefakt</th><th>Referenz</th><th>SHA-256</th><th>Signatur</th><th>Provenance</th><th>Hinweis</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </section>
+        "#,
+        if rows.is_empty() {
+            web_empty_row(
+                6,
+                "Noch keine passenden Artefaktmetadaten erfasst. Manifest unter Zero Trust aktualisieren.",
+            )
+        } else {
+            rows
+        }
+    )
+}
+
+fn agent_release_status_badge(status: &str) -> String {
+    match status {
+        "verified" => web_badge("Verifiziert", "ok"),
+        "calculated" => web_badge("Berechnet", "info"),
+        "generated" => web_badge("Erzeugt", "info"),
+        "signature_present" => web_badge("Signatur vorhanden", "info"),
+        "unsigned" => web_badge("Nicht signiert", "warn"),
+        "not_configured" => web_badge("Nicht konfiguriert", "warn"),
+        "incomplete" => web_badge("Unvollstaendig", "warn"),
+        "missing" | "not_available" => web_badge("Nicht verfuegbar", "muted-badge"),
+        "mismatch" | "failed" | "expired" | "untrusted" | "key_missing" => {
+            web_badge("Pruefen", "danger")
+        }
+        _ => web_badge(status, "muted-badge"),
+    }
+}
+
+fn short_reference(value: &str) -> String {
+    if value.trim().is_empty() || value == "unknown" {
+        return "unknown".to_string();
+    }
+    value.chars().take(12).collect()
 }
 
 async fn web_agent_onboarding(
@@ -14781,6 +15292,7 @@ async fn web_agent_onboarding_create(
         )
         .into_response();
     }
+    let release_store = state.agent_release_store.clone();
     let Some(store) = state.agent_store else {
         return web_error_page(
             "Agent hinzufuegen",
@@ -14813,6 +15325,16 @@ async fn web_agent_onboarding_create(
         &result.token,
         form.mtls_fingerprint.as_deref(),
     );
+    let artifact_section = match release_store {
+        Some(store) => match store
+            .onboarding_artifacts(context.tenant_id, Some(&form.os_family))
+            .await
+        {
+            Ok(artifacts) => agent_release_onboarding_artifact_section(&artifacts),
+            Err(_) => r#"<section class="panel wide"><h2>Deployment-Artefakte</h2><p>Artefaktmetadaten sind derzeit nicht verfuegbar.</p></section>"#.to_string(),
+        },
+        None => String::new(),
+    };
     let status_href = web_path_with_context("/zero-trust/", Some(&context));
     let body = format!(
         r#"
@@ -14830,6 +15352,7 @@ async fn web_agent_onboarding_create(
           <p>Erwarteter Status: <strong>pending</strong> bis zum ersten erfolgreichen Enrollment; danach {}.</p>
           <a class="button" href="{}">Flottenstatus pruefen</a>
         </section>
+        {}
         "#,
         html_escape(&result.enrollment.label),
         html_escape(&command),
@@ -14839,6 +15362,7 @@ async fn web_agent_onboarding_create(
             "partially_used beziehungsweise consumed"
         },
         html_escape(&status_href),
+        artifact_section,
     );
     (
         StatusCode::CREATED,
@@ -15646,6 +16170,103 @@ async fn web_agent_notifications_evaluate(
             "/zero-trust/",
             &context,
             "Notification-Auswertung konnte nicht abgeschlossen werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_agent_artifacts_refresh(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Zero Trust", "/zero-trust/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.agent_release_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent Release")
+            .into_response();
+    };
+    match store
+        .refresh_artifacts(auth_context.tenant_id, auth_context.user_id)
+        .await
+    {
+        Ok(_) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Agent-Artefaktmanifest konnte nicht aktualisiert werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_agent_artifact_verify_checksum(
+    Path(artifact_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    web_agent_artifact_verify(state, headers, artifact_id, true).await
+}
+
+async fn web_agent_artifact_verify_signature(
+    Path(artifact_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    web_agent_artifact_verify(state, headers, artifact_id, false).await
+}
+
+async fn web_agent_artifact_verify(
+    state: AppState,
+    headers: HeaderMap,
+    artifact_id: String,
+    checksum: bool,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Zero Trust", "/zero-trust/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.agent_release_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent Release")
+            .into_response();
+    };
+    let result = if checksum {
+        store
+            .verify_checksum(auth_context.tenant_id, auth_context.user_id, &artifact_id)
+            .await
+    } else {
+        store
+            .verify_signature(auth_context.tenant_id, auth_context.user_id, &artifact_id)
+            .await
+    };
+    match result {
+        Ok(Some(_)) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Ok(None) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Agent-Artefakt wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Agent-Artefaktpruefung konnte nicht abgeschlossen werden.",
         )
         .into_response(),
     }
@@ -36990,6 +37611,39 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/agents/notifications/evaluate",
             post(agent_notifications_evaluate),
         )
+        .route("/api/v1/agents/artifacts", get(agent_release_artifacts))
+        .route(
+            "/api/v1/agents/artifacts/refresh",
+            post(agent_release_artifacts_refresh),
+        )
+        .route(
+            "/api/v1/agents/artifacts/{artifact_id}",
+            get(agent_release_artifact_detail),
+        )
+        .route(
+            "/api/v1/agents/artifacts/{artifact_id}/verify-checksum",
+            post(agent_release_artifact_verify_checksum),
+        )
+        .route(
+            "/api/v1/agents/artifacts/{artifact_id}/verify-signature",
+            post(agent_release_artifact_verify_signature),
+        )
+        .route(
+            "/api/v1/agents/artifacts/{artifact_id}/provenance",
+            get(agent_release_artifact_provenance),
+        )
+        .route(
+            "/api/v1/agents/release-provenance",
+            get(agent_release_provenance),
+        )
+        .route(
+            "/api/v1/agents/release-provenance/{provenance_id}",
+            get(agent_release_provenance_detail),
+        )
+        .route(
+            "/api/v1/agents/onboarding/artifacts",
+            get(agent_onboarding_artifacts),
+        )
         .route("/api/v1/agents/devices", get(agent_devices))
         .route(
             "/api/v1/agents/enrollment-tokens",
@@ -37487,6 +38141,18 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/zero-trust/notifications/evaluate",
             post(web_agent_notifications_evaluate),
+        )
+        .route(
+            "/zero-trust/artifacts/refresh",
+            post(web_agent_artifacts_refresh),
+        )
+        .route(
+            "/zero-trust/artifacts/{artifact_id}/verify-checksum",
+            post(web_agent_artifact_verify_checksum),
+        )
+        .route(
+            "/zero-trust/artifacts/{artifact_id}/verify-signature",
+            post(web_agent_artifact_verify_signature),
         )
         .route("/incidents/", get(web_incidents).post(web_incidents_submit))
         .route(

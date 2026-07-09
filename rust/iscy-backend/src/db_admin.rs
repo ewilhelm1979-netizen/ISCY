@@ -237,6 +237,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_EVIDENCE_WORKER_DISPOSITION_STORAGE_SCHEMA,
         postgres_sql: POSTGRES_EVIDENCE_WORKER_DISPOSITION_STORAGE_SCHEMA,
     },
+    Migration {
+        version: "0036_rust_agent_release_artifact_provenance",
+        sqlite_sql: SQLITE_AGENT_RELEASE_ARTIFACT_PROVENANCE_SCHEMA,
+        postgres_sql: POSTGRES_AGENT_RELEASE_ARTIFACT_PROVENANCE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1147,6 +1152,222 @@ CREATE TABLE IF NOT EXISTS evidence_storage_backend_status (
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_status_tenant
     ON evidence_storage_backend_status(tenant_id, backend_type, checked_at);
+"#;
+
+const SQLITE_AGENT_RELEASE_ARTIFACT_PROVENANCE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_release_artifact (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    artifact_id varchar(128) NOT NULL,
+    artifact_name varchar(255) NOT NULL,
+    artifact_type varchar(64) NOT NULL,
+    target_os varchar(32) NOT NULL DEFAULT 'all',
+    target_arch varchar(32) NOT NULL DEFAULT 'any',
+    package_format varchar(64) NOT NULL DEFAULT 'text',
+    version varchar(64) NOT NULL DEFAULT '',
+    build_profile varchar(64) NOT NULL DEFAULT '',
+    git_commit varchar(128) NOT NULL DEFAULT '',
+    source_branch varchar(128) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    sha256 varchar(64) NOT NULL DEFAULT '',
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    content_type varchar(128) NOT NULL DEFAULT 'application/octet-stream',
+    artifact_reference TEXT NOT NULL DEFAULT '',
+    signature_status varchar(32) NOT NULL DEFAULT 'unsigned',
+    provenance_status varchar(32) NOT NULL DEFAULT 'missing',
+    verification_status varchar(32) NOT NULL DEFAULT 'not_available',
+    known_limitations TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    last_checked_at TEXT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, artifact_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_release_artifact_tenant
+    ON agent_release_artifact(tenant_id, target_os, artifact_type);
+CREATE INDEX IF NOT EXISTS idx_agent_release_artifact_status
+    ON agent_release_artifact(tenant_id, signature_status, provenance_status, verification_status);
+
+CREATE TABLE IF NOT EXISTS agent_artifact_signature (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    artifact_id varchar(128) NOT NULL,
+    signature_algorithm varchar(64) NOT NULL DEFAULT '',
+    signature_type varchar(64) NOT NULL DEFAULT 'future_codesign',
+    signature_reference TEXT NOT NULL DEFAULT '',
+    signer_identity varchar(255) NOT NULL DEFAULT '',
+    signer_fingerprint varchar(255) NOT NULL DEFAULT '',
+    signature_created_at TEXT NULL,
+    signature_verified_at TEXT NULL,
+    signature_status varchar(32) NOT NULL DEFAULT 'unsigned',
+    verification_error_class varchar(64) NOT NULL DEFAULT '',
+    verification_summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, artifact_id),
+    FOREIGN KEY (tenant_id, artifact_id)
+        REFERENCES agent_release_artifact(tenant_id, artifact_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_artifact_signature_status
+    ON agent_artifact_signature(tenant_id, signature_status);
+
+CREATE TABLE IF NOT EXISTS agent_release_provenance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    provenance_id varchar(128) NOT NULL,
+    artifact_id varchar(128) NOT NULL,
+    git_commit varchar(128) NOT NULL DEFAULT '',
+    source_repository varchar(255) NOT NULL DEFAULT '',
+    source_branch varchar(128) NOT NULL DEFAULT '',
+    build_workflow varchar(255) NOT NULL DEFAULT '',
+    build_run_id varchar(128) NOT NULL DEFAULT '',
+    build_started_at TEXT NULL,
+    build_finished_at TEXT NULL,
+    builder_identity varchar(255) NOT NULL DEFAULT '',
+    build_environment varchar(255) NOT NULL DEFAULT '',
+    dependency_lock_hash varchar(64) NOT NULL DEFAULT '',
+    cargo_lock_hash varchar(64) NOT NULL DEFAULT '',
+    nix_flake_lock_hash varchar(64) NOT NULL DEFAULT '',
+    source_tree_hash varchar(64) NOT NULL DEFAULT '',
+    ci_status varchar(32) NOT NULL DEFAULT 'not_available',
+    codeql_status varchar(32) NOT NULL DEFAULT 'not_available',
+    cargo_audit_status varchar(32) NOT NULL DEFAULT 'not_available',
+    cargo_deny_status varchar(32) NOT NULL DEFAULT 'not_available',
+    provenance_status varchar(32) NOT NULL DEFAULT 'missing',
+    attestation_reference TEXT NOT NULL DEFAULT '',
+    generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, provenance_id),
+    FOREIGN KEY (tenant_id, artifact_id)
+        REFERENCES agent_release_artifact(tenant_id, artifact_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_release_provenance_artifact
+    ON agent_release_provenance(tenant_id, artifact_id, provenance_status);
+
+CREATE TABLE IF NOT EXISTS agent_artifact_verification_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    artifact_id varchar(128) NOT NULL,
+    event_type varchar(64) NOT NULL,
+    actor_id INTEGER NULL,
+    status varchar(32) NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    error_class varchar(64) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id, artifact_id)
+        REFERENCES agent_release_artifact(tenant_id, artifact_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_artifact_verification_event_tenant
+    ON agent_artifact_verification_event(tenant_id, artifact_id, created_at);
+"#;
+
+const POSTGRES_AGENT_RELEASE_ARTIFACT_PROVENANCE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_release_artifact (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    artifact_id varchar(128) NOT NULL,
+    artifact_name varchar(255) NOT NULL,
+    artifact_type varchar(64) NOT NULL,
+    target_os varchar(32) NOT NULL DEFAULT 'all',
+    target_arch varchar(32) NOT NULL DEFAULT 'any',
+    package_format varchar(64) NOT NULL DEFAULT 'text',
+    version varchar(64) NOT NULL DEFAULT '',
+    build_profile varchar(64) NOT NULL DEFAULT '',
+    git_commit varchar(128) NOT NULL DEFAULT '',
+    source_branch varchar(128) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    sha256 varchar(64) NOT NULL DEFAULT '',
+    size_bytes BIGINT NOT NULL DEFAULT 0,
+    content_type varchar(128) NOT NULL DEFAULT 'application/octet-stream',
+    artifact_reference TEXT NOT NULL DEFAULT '',
+    signature_status varchar(32) NOT NULL DEFAULT 'unsigned',
+    provenance_status varchar(32) NOT NULL DEFAULT 'missing',
+    verification_status varchar(32) NOT NULL DEFAULT 'not_available',
+    known_limitations TEXT NOT NULL DEFAULT '',
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    last_checked_at TEXT NULL,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, artifact_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_release_artifact_tenant
+    ON agent_release_artifact(tenant_id, target_os, artifact_type);
+CREATE INDEX IF NOT EXISTS idx_agent_release_artifact_status
+    ON agent_release_artifact(tenant_id, signature_status, provenance_status, verification_status);
+
+CREATE TABLE IF NOT EXISTS agent_artifact_signature (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    artifact_id varchar(128) NOT NULL,
+    signature_algorithm varchar(64) NOT NULL DEFAULT '',
+    signature_type varchar(64) NOT NULL DEFAULT 'future_codesign',
+    signature_reference TEXT NOT NULL DEFAULT '',
+    signer_identity varchar(255) NOT NULL DEFAULT '',
+    signer_fingerprint varchar(255) NOT NULL DEFAULT '',
+    signature_created_at TEXT NULL,
+    signature_verified_at TEXT NULL,
+    signature_status varchar(32) NOT NULL DEFAULT 'unsigned',
+    verification_error_class varchar(64) NOT NULL DEFAULT '',
+    verification_summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, artifact_id),
+    FOREIGN KEY (tenant_id, artifact_id)
+        REFERENCES agent_release_artifact(tenant_id, artifact_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_artifact_signature_status
+    ON agent_artifact_signature(tenant_id, signature_status);
+
+CREATE TABLE IF NOT EXISTS agent_release_provenance (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    provenance_id varchar(128) NOT NULL,
+    artifact_id varchar(128) NOT NULL,
+    git_commit varchar(128) NOT NULL DEFAULT '',
+    source_repository varchar(255) NOT NULL DEFAULT '',
+    source_branch varchar(128) NOT NULL DEFAULT '',
+    build_workflow varchar(255) NOT NULL DEFAULT '',
+    build_run_id varchar(128) NOT NULL DEFAULT '',
+    build_started_at TEXT NULL,
+    build_finished_at TEXT NULL,
+    builder_identity varchar(255) NOT NULL DEFAULT '',
+    build_environment varchar(255) NOT NULL DEFAULT '',
+    dependency_lock_hash varchar(64) NOT NULL DEFAULT '',
+    cargo_lock_hash varchar(64) NOT NULL DEFAULT '',
+    nix_flake_lock_hash varchar(64) NOT NULL DEFAULT '',
+    source_tree_hash varchar(64) NOT NULL DEFAULT '',
+    ci_status varchar(32) NOT NULL DEFAULT 'not_available',
+    codeql_status varchar(32) NOT NULL DEFAULT 'not_available',
+    cargo_audit_status varchar(32) NOT NULL DEFAULT 'not_available',
+    cargo_deny_status varchar(32) NOT NULL DEFAULT 'not_available',
+    provenance_status varchar(32) NOT NULL DEFAULT 'missing',
+    attestation_reference TEXT NOT NULL DEFAULT '',
+    generated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, provenance_id),
+    FOREIGN KEY (tenant_id, artifact_id)
+        REFERENCES agent_release_artifact(tenant_id, artifact_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_release_provenance_artifact
+    ON agent_release_provenance(tenant_id, artifact_id, provenance_status);
+
+CREATE TABLE IF NOT EXISTS agent_artifact_verification_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    artifact_id varchar(128) NOT NULL,
+    event_type varchar(64) NOT NULL,
+    actor_id BIGINT NULL,
+    status varchar(32) NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    error_class varchar(64) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    FOREIGN KEY (tenant_id, artifact_id)
+        REFERENCES agent_release_artifact(tenant_id, artifact_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_artifact_verification_event_tenant
+    ON agent_artifact_verification_event(tenant_id, artifact_id, created_at);
 "#;
 
 const SQLITE_SUPPLIER_PRODUCT_SECURITY_GOVERNANCE_SCHEMA: &str = r#"
@@ -7032,5 +7253,110 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(index_count, 3);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0036_is_restartable_and_preserves_agent_release_artifacts() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO agent_release_artifact (
+                tenant_id, artifact_id, artifact_name, artifact_type, target_os,
+                target_arch, package_format, version, sha256, size_bytes,
+                content_type, artifact_reference, signature_status,
+                provenance_status, verification_status, known_limitations,
+                metadata_json
+            ) VALUES (
+                99, 'agent-test-fixture', 'Fixture', 'config_template', 'linux',
+                'any', 'text', '0.0.0',
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                42, 'text/plain', 'deploy/agent/systemd/iscy-agent.service',
+                'unsigned', 'incomplete', 'calculated',
+                'Testdaten ohne private Schluessel', '{"fixture":true}'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO agent_artifact_signature (
+                tenant_id, artifact_id, signature_type, signature_status,
+                verification_summary
+            ) VALUES (
+                99, 'agent-test-fixture', 'test_fixture_only', 'signature_present',
+                'Fixture ohne produktive Schluessel'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO agent_release_provenance (
+                tenant_id, provenance_id, artifact_id, git_commit,
+                source_repository, source_branch, build_environment,
+                dependency_lock_hash, cargo_lock_hash, nix_flake_lock_hash,
+                source_tree_hash, provenance_status
+            ) VALUES (
+                99, 'prov-agent-test-fixture', 'agent-test-fixture', 'abc123',
+                'ewilhelm1979-netizen/ISCY', 'main', 'test',
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+                'generated'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0036_rust_agent_release_artifact_provenance'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0036_rust_agent_release_artifact_provenance"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let artifact_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_release_artifact WHERE tenant_id = 99 AND artifact_id = 'agent-test-fixture'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let signature_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_artifact_signature WHERE tenant_id = 99 AND artifact_id = 'agent-test-fixture'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let provenance_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_release_provenance WHERE tenant_id = 99 AND provenance_id = 'prov-agent-test-fixture'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let index_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_agent_release_artifact_tenant','idx_agent_release_artifact_status','idx_agent_artifact_signature_status','idx_agent_release_provenance_artifact','idx_agent_artifact_verification_event_tenant')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(artifact_count, 1);
+        assert_eq!(signature_count, 1);
+        assert_eq!(provenance_count, 1);
+        assert_eq!(index_count, 5);
     }
 }

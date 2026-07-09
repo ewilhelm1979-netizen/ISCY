@@ -1156,6 +1156,10 @@ Was aktuell belastbar vorhanden ist:
 - editierbare Agent-Policy-Profile und erwartete Coverage nach fachlichem Scope
 - sichere Notification-Kanaele mit Cooldown, Delivery-Audit und periodischem Worker
 - gemeinsame fachuebergreifende Notifications fuer Agent/Fleet, Evidence, Product Security/CVE, Incidents und Roadmap
+- Agent-Artefaktmanifest fuer README, systemd Service/Timer/Environment-Beispiel, NixOS-Modul, Windows PowerShell Scheduled Task und macOS LaunchDaemon
+- SHA-256-Pruefsummen, Signaturstatus, Verification-Status und Release-Provenance-Metadaten fuer diese Agent-Deployment-Artefakte
+- Zero-Trust-Webansicht und Onboarding-Assistent mit Artefakt-, Pruefsummen-, Signatur- und Provenance-Hinweisen
+- Review-Pack-Signale fuer fehlende Pruefsummen, unsignierte Agent-Artefakte, fehlende Provenance und unverifizierte Deployment-Artefakte
 
 Was als naechstes fachlich am meisten bringt:
 
@@ -1167,15 +1171,41 @@ Was als naechstes fachlich am meisten bringt:
    Agent- oder MDM-Inventar sollte mit dem CVE-Bereich verbunden werden, damit betroffene Systeme schneller sichtbar sind.
 4. Ausnahme- und Ablaufdatum erzwingen
    Akzeptierte Abweichungen sollten Owner, Begruendung, Laufzeit und Wiedervorlage haben.
-5. Signierte Agent-Pakete bauen
-   Die Service-Beispiele sind vorhanden; als naechster Schritt folgen Windows MSI/Intune-Paket, macOS PKG/Jamf-Profil und signierte Linux-Pakete.
+5. Produktive Signierung getrennt nachziehen
+   Das Manifest und die Provenance-Metadaten sind vorbereitet; echte Windows MSI/Intune-, macOS PKG/Jamf- und Linux-Paket-Signaturen brauchen einen separaten Schluesselmanagement- und Release-Prozess.
 6. CA-/PKI-Anbindung separat planen
    Private Schluessel und CSR sollen lokal auf dem Agent entstehen; Ausstellung, Rotation und Widerruf gehoeren in einen eigenen, providerunabhaengigen Meilenstein.
 7. Remediation getrennt halten  
    Automatische Aenderungen am Endgeraet sollten erst spaeter als signierter, auditierbarer Policy-Schritt kommen.
 
 Fachliches Kurzurteil:
-ISCY ist fuer Zero Trust jetzt gut positioniert. Sollabdeckung, aktive Policy-Benachrichtigungen und gefuehrtes Onboarding sind vorhanden; die naechste Reife entsteht durch Nachweisverknuepfung, Connectoren und sauber signierte Deployment-Pakete.
+ISCY ist fuer Zero Trust jetzt gut positioniert. Sollabdeckung, aktive Policy-Benachrichtigungen, gefuehrtes Onboarding und das Agent-Artefakt-/Provenance-Modell sind vorhanden; die naechste Reife entsteht durch Nachweisverknuepfung, Connectoren und echte produktive Signierprozesse.
+
+#### Agent-Artefakte, Pruefsummen und Release-Provenance
+
+ISCY modelliert die vorhandenen Agent-Deployment-Artefakte als tenantgebundenes Manifest. Erfasst werden Artefaktname, Typ, Zielplattform, Paketformat, Version, Build-Profil, Commit-/Branch-Bezug, SHA-256, Groesse, Content-Type, sichere Repo-Referenz, Signaturstatus, Verification-Status, Provenance-Status, bekannte Limitierungen und technische Metadaten.
+
+Die Plattform berechnet SHA-256-Pruefsummen nur aus einer festen Allowlist der im Repository vorhandenen Artefakte. Requests koennen keine beliebigen lokalen Pfade angeben. API, UI, Audit und Review-Pakete zeigen keine absoluten Buildpfade, keine Rohdateien, keine Tokens, keine privaten Schluessel und keine Zertifikat-Private-Keys.
+
+Der Signaturbereich ist bewusst ein Vorbereitungsmodell. Sichtbare Statuswerte wie `unsigned`, `not_configured`, `signature_present`, `verified`, `failed`, `expired`, `untrusted` und `key_missing` erlauben spaetere produktive Signierprozesse, ohne heute eine echte Produktionssignatur vorzutaueschen. Dieser PR enthaelt keine echten Code-Signing-Zertifikate, keine privaten Schluessel, keine externe PKI/CA, keine CSR-Funktion, keine Sigstore-/Rekor-/Fulcio-Netzwerkaufrufe und keine GitHub-Release-Veroeffentlichung.
+
+Die wichtigsten API-Pfade:
+
+```text
+GET  /api/v1/agents/artifacts
+GET  /api/v1/agents/artifacts/{artifact_id}
+POST /api/v1/agents/artifacts/refresh
+POST /api/v1/agents/artifacts/{artifact_id}/verify-checksum
+POST /api/v1/agents/artifacts/{artifact_id}/verify-signature
+GET  /api/v1/agents/artifacts/{artifact_id}/provenance
+GET  /api/v1/agents/release-provenance
+GET  /api/v1/agents/release-provenance/{provenance_id}
+GET  /api/v1/agents/onboarding/artifacts
+```
+
+Read-only-Rollen duerfen sichere Artefakt- und Provenance-Metadaten lesen. Schreibende Rollen duerfen Manifest-Refresh sowie Checksum- und Signaturstatuspruefungen ausloesen. Jede Aktion bleibt tenantgebunden und erzeugt ein Verification-/Audit-Ereignis ohne Secrets, Rohdateien, Authorization-Header, SQL-Details oder fremde Tenant-IDs.
+
+Management-/Regulatory-Review-Pakete fuer NIS2, DORA, DSGVO und generische Governance nehmen diese Signale als Supply-Chain-Gaps auf. Das ist Nachweis- und Governance-Unterstuetzung, keine Rechtsberatung, keine Zertifizierung und keine automatische Behoerdenmeldung.
 
 ### 6.11 Fachuebergreifende Notifications
 
@@ -1416,7 +1446,7 @@ als Konfigurations- und Statussignal validiert:
 
 `GET /api/v1/evidence/storage/backends` zeigt, ob ein Backend aktiv,
 konfiguriert oder mit sicherer Fehlerklasse nicht bereit ist. Endpoint und
-Bucket werden nur als Statusmerkmale validiert; ISCY fuehrt in diesem PR keine
+Bucket werden nur als Statusmerkmale validiert; ISCY fuehrt in diesem Stand keine
 externen Netzwerkaufrufe aus und speichert oder zeigt keine Secretwerte.
 
 Die Webansicht `/evidence/integrity/` buendelt nun
@@ -1487,13 +1517,13 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews. Kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO nutzen diese bestehende Snapshot-Schicht und nehmen Evidence-Integrity-/Storage-Aggregate auf, ohne ein neues Compliance-Silo oder ein zweites Evidence-System anzulegen. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Evidence Object Storage & Restore Drill Phase 2 nutzt diese bestehenden Metadaten fuer eine interne lokale Storage-Abstraktion, sichere Artefaktreferenzen und tenantgebundene Restore-/Integritaetsdrills ohne neues Speichersystem. Migration `0034_rust_supplier_product_security_governance` verbindet Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs tenantgebunden, ohne externe Live-Feeds einzufuehren. Migration `0035_rust_evidence_worker_disposition_storage` ergaenzt begrenzte Evidence-Worker-Laeufe, kontrollierte physische Disposition mit Tombstone-Metadaten und ein vorbereitetes Object-Storage-Statusmodell ohne echte Cloud-Credentials. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews. Kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO nutzen diese bestehende Snapshot-Schicht und nehmen Evidence-Integrity-/Storage-Aggregate auf, ohne ein neues Compliance-Silo oder ein zweites Evidence-System anzulegen. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Evidence Object Storage & Restore Drill Phase 2 nutzt diese bestehenden Metadaten fuer eine interne lokale Storage-Abstraktion, sichere Artefaktreferenzen und tenantgebundene Restore-/Integritaetsdrills ohne neues Speichersystem. Migration `0034_rust_supplier_product_security_governance` verbindet Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs tenantgebunden, ohne externe Live-Feeds einzufuehren. Migration `0035_rust_evidence_worker_disposition_storage` ergaenzt begrenzte Evidence-Worker-Laeufe, kontrollierte physische Disposition mit Tombstone-Metadaten und ein vorbereitetes Object-Storage-Statusmodell ohne echte Cloud-Credentials. Migration `0036_rust_agent_release_artifact_provenance` ergaenzt Agent-Artefaktmanifest, SHA-256-Pruefsummen, Signaturstatus, Release-Provenance und Verification-Audit fuer vorhandene Deployment-Artefakte, ohne echte Produktionsschluessel, externe PKI/CA oder GitHub-Release-Veroeffentlichung einzufuehren. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
 1. Supplier/Product-Security-Workflow fachlich weiter polishen, z. B. feinere Import-Vorbereitung fuer Hersteller-Advisorys, Contract-/Exit-Reifegrade und Review-Pack-Gliederung
 2. Produktive Object-Storage-Anbindung fuer Evidence nur als separaten Security-PR mit Secret-, SSRF-, Restore- und Regressionstests vorbereiten
-3. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe
+3. Produktive Agent-Paketsignierung sowie eine spaetere getrennte CA-/PKI-Stufe auf Basis des vorbereiteten Artefakt-/Provenance-Modells
 4. Performance-, HA- und visuelle Regressionstests
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
