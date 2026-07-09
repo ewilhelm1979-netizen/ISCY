@@ -43,7 +43,7 @@ use sqlx::{
 };
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -54,6 +54,44 @@ use std::{
 use tower::util::ServiceExt;
 
 type IncidentTimelineRow = (String, Option<String>, Option<String>, Option<i64>);
+
+#[test]
+fn docs_markdown_screenshot_references_resolve() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("repo root");
+    let docs = ["docs/GUI_SCREENSHOTS.md"];
+
+    for doc in docs {
+        let doc_path = repo_root.join(doc);
+        let content = fs::read_to_string(&doc_path).expect("read screenshot markdown");
+        let doc_dir = doc_path.parent().expect("doc dir");
+
+        for line in content.lines().filter(|line| line.contains("![")) {
+            let mut rest = line;
+            while let Some(start) = rest.find("](") {
+                let after_start = &rest[start + 2..];
+                let Some(end) = after_start.find(')') else {
+                    break;
+                };
+                let target = after_start[..end].trim();
+                if !target.is_empty()
+                    && !target.starts_with("http://")
+                    && !target.starts_with("https://")
+                    && !target.starts_with("data:")
+                {
+                    let without_anchor = target.split('#').next().unwrap_or(target);
+                    assert!(
+                        doc_dir.join(without_anchor).exists(),
+                        "missing screenshot reference {target} in {doc}"
+                    );
+                }
+                rest = &after_start[end + 1..];
+            }
+        }
+    }
+}
 
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
@@ -10862,12 +10900,17 @@ async fn management_review_templates_list_detail_and_unknown_are_available() {
     let body = to_bytes(list.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["api_version"], "v1");
-    assert_eq!(payload["templates"].as_array().unwrap().len(), 5);
+    assert_eq!(payload["templates"].as_array().unwrap().len(), 6);
     assert!(payload["templates"]
         .as_array()
         .unwrap()
         .iter()
         .any(|template| template["template_type"] == "nis2_management_summary"));
+    assert!(payload["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|template| { template["template_type"] == "dsgvo_data_protection_review" }));
 
     let detail = app
         .clone()
@@ -11391,6 +11434,278 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
 }
 
 #[tokio::test]
+async fn regulatory_review_pack_endpoints_snapshot_exports_and_security() {
+    let root = test_media_root("regulatory-review-pack-pool");
+    let db_path = root.join("regulatory-review-pack.sqlite3");
+    fs::File::create(&db_path).unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&format!("sqlite:///{}", db_path.display()))
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET integrity_status = 'mismatch',
+            integrity_mismatch = 1,
+            last_integrity_checked_at = CURRENT_TIMESTAMP,
+            last_calculated_sha256 = '0000000000000000000000000000000000000000000000000000000000000000',
+            legal_hold_status = 'active',
+            disposition_status = 'blocked_by_legal_hold',
+            disposition_due_at = date('now', '-1 day'),
+            legal_hold_blocks_disposition = 1,
+            disposal_candidate = 1
+        WHERE tenant_id = 1
+          AND id = (
+              SELECT id FROM evidence_evidenceitem
+              WHERE tenant_id = 1
+              ORDER BY id ASC
+              LIMIT 1
+          )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let packs = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/regulatory/review-packs")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(packs.status(), StatusCode::OK);
+    let body = to_bytes(packs.into_body(), usize::MAX).await.unwrap();
+    let packs_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(packs_payload["packs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|pack| { pack["template_type"] == "dsgvo_data_protection_review" }));
+
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/regulatory/review-packs/dsgvo/preview")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(
+                    r#"{"period_start":"2026-06-01","period_end":"2026-06-30"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let preview_status = preview.status();
+    let body = to_bytes(preview.into_body(), usize::MAX).await.unwrap();
+    let preview_body = String::from_utf8(body.to_vec()).unwrap();
+    assert_eq!(preview_status, StatusCode::OK, "{preview_body}");
+    assert!(!preview_body.contains(db_path.to_string_lossy().as_ref()));
+    assert!(!preview_body.contains("sqlite://"));
+    let preview_payload: serde_json::Value = serde_json::from_str(&preview_body).unwrap();
+    assert_eq!(
+        preview_payload["preview"]["template"]["template_type"],
+        "dsgvo_data_protection_review"
+    );
+    assert!(preview_payload["preview"]["metrics_json"]["evidence_integrity_storage"].is_object());
+    assert!(preview_payload["preview"]["incident_decisions_json"].is_array());
+    assert!(preview_payload["preview"]["supplier_json"].is_object());
+
+    let readonly_snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/regulatory/review-packs/nis2/snapshots")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"title":"Read-only should fail"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly_snapshot.status(), StatusCode::FORBIDDEN);
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/regulatory/review-packs/nis2/snapshots")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"title":"NIS2 Contextual Pack","period_start":"2026-06-01","period_end":"2026-06-30"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let created_status = created.status();
+    let body = to_bytes(created.into_body(), usize::MAX).await.unwrap();
+    let created_body = String::from_utf8(body.to_vec()).unwrap();
+    assert_eq!(created_status, StatusCode::CREATED, "{created_body}");
+    assert!(!created_body.contains(db_path.to_string_lossy().as_ref()));
+    assert!(!created_body.contains("sqlite://"));
+    assert!(!created_body.contains("file://"));
+    let created_payload: serde_json::Value = serde_json::from_str(&created_body).unwrap();
+    assert_eq!(created_payload["accepted"], true);
+    assert_eq!(
+        created_payload["snapshot"]["template_type"],
+        "nis2_management_summary"
+    );
+    assert_eq!(
+        created_payload["snapshot"]["metrics_json"]["evidence_integrity_storage"]["mismatch"],
+        1
+    );
+    assert_eq!(
+        created_payload["snapshot"]["gap_summary_json"]["evidence_disposition_due"],
+        1
+    );
+    let snapshot_id = created_payload["snapshot"]["id"].as_i64().unwrap();
+
+    let nis2_snapshots = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/regulatory/review-packs/nis2/snapshots")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(nis2_snapshots.status(), StatusCode::OK);
+    let body = to_bytes(nis2_snapshots.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|snapshot| { snapshot["template_type"] == "nis2_management_summary" }));
+    assert!(payload["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|snapshot| snapshot["id"] == snapshot_id));
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+
+    let json_export = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}/export?format=json"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json_export.status(), StatusCode::OK);
+    let body = to_bytes(json_export.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["package"]["title"], "NIS2 Contextual Pack");
+
+    let pdf_export = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}/export?format=pdf"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pdf_export.status(), StatusCode::OK);
+    let body = to_bytes(pdf_export.into_body(), usize::MAX).await.unwrap();
+    assert!(body.starts_with(b"%PDF-1.4"));
+
+    let bad_format = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}/export?format=docx"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_format.status(), StatusCode::BAD_REQUEST);
+
+    let foreign_detail = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}"
+                ))
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_detail.status(), StatusCode::NOT_FOUND);
+
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM management_review_audit_event WHERE tenant_id = 1 AND (review_id = ? OR review_id IS NULL)",
+    )
+    .bind(snapshot_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(audit_count >= 4);
+}
+
+#[tokio::test]
 async fn rust_web_surface_routes_return_ok() {
     let paths = vec![
         "/",
@@ -11400,6 +11715,7 @@ async fn rust_web_surface_routes_return_ok() {
         "/zero-trust/",
         "/catalog/",
         "/reports/",
+        "/regulatory-review-packs/",
         "/roadmap/",
         "/evidence/",
         "/assets/",

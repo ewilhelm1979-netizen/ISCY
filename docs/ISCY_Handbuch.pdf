@@ -1111,7 +1111,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 19 0 R >>
 endobj
 19 0 obj
-<< /Length 3298 >>
+<< /Length 3931 >>
 stream
 BT
 /F1 9 Tf
@@ -1177,6 +1177,8 @@ T*
 T*
 (- Management-Review-Pakete unter /management-reviews/) Tj
 T*
+(- kontextsensitive Regulatory Review Packs unter /regulatory-review-packs/) Tj
+T*
 (- Management-Review-Exporte als Markdown, HTML, PDF und JSON) Tj
 T*
 () Tj
@@ -1189,13 +1191,15 @@ T*
 T*
 (- koennen als generisches Security-Governance-Paket oder ueber Templates fuer ISO 27001, NIS2,) Tj
 T*
-(DORA und KRITIS vorbereitet werden) Tj
+(DORA, DSGVO und KRITIS vorbereitet werden) Tj
 T*
-(- speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen,) Tj
+(- speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken,) Tj
 T*
-(Roadmap-Fokus, Product-Security-Lage, Supplier-Review-Summary, Agent-Posture, AI-Governance,) Tj
+(Evidence-Integrity-/Storage-Aggregate, Incident-Entscheidungen, Roadmap-Fokus,) Tj
 T*
-(Quellenzaehlung, Gap-Summary, Management-Hinweise und regulatorischen Kontext als Snapshot) Tj
+(Product-Security-Lage, Supplier-Review-Summary, Agent-Posture, AI-Governance, Quellenzaehlung,) Tj
+T*
+(Gap-Summary, Management-Hinweise und regulatorischen Kontext als Snapshot) Tj
 T*
 (- verlinken Snapshot-Zeilen zurueck zu Risiko, Control, Evidence, Incident und Roadmap) Tj
 T*
@@ -1204,6 +1208,34 @@ T*
 (- dokumentieren Entscheidung, naechste Massnahmen, freigebenden User und Freigabezeitpunkt) Tj
 T*
 (- erlauben eine Template-Vorschau, ohne bereits ein Review-Paket einzufrieren) Tj
+T*
+() Tj
+T*
+(Regulatory Review Packs:) Tj
+T*
+() Tj
+T*
+(- nutzen dieselbe eingefrorene Snapshot-Schicht wie Management Reviews und erzeugen kein) Tj
+T*
+(separates Compliance-Silo) Tj
+T*
+(- bieten fokussierte Pack-Typen fuer NIS2, DORA und DSGVO sowie ein generisches) Tj
+T*
+(Security-Governance-Pack) Tj
+T*
+(- beruecksichtigen Organisationsprofil, Risiken, ISCY-27-Controls, Evidence-Qualitaet,) Tj
+T*
+(Evidence-Integritaet, Storage-/Restore-Drill-Signale, Incidents, Supplier Review, Product) Tj
+T*
+(Security, AI Governance, Roadmap und Agent Posture soweit vorhanden) Tj
+T*
+(- unterscheiden Preview und Snapshot-Erzeugung: Read-only-Rollen koennen Vorschauen lesen,) Tj
+T*
+(aber keine eingefrorenen Snapshots erstellen) Tj
+T*
+(- enthalten Hinweise, dass ISCY Governance- und Evidence-Unterstuetzung liefert, jedoch keine) Tj
+T*
+(Rechtsberatung, Zertifizierung, automatische Meldung oder formale Einreichung ersetzt) Tj
 T*
 () Tj
 T*
@@ -1219,7 +1251,40 @@ T*
 T*
 (- GET und POST /api/v1/management/reviews) Tj
 T*
+(- GET /api/v1/regulatory/review-packs) Tj
+T*
+(- GET /api/v1/regulatory/review-packs/{packtype}) Tj
+T*
+(- POST /api/v1/regulatory/review-packs/{packtype}/preview) Tj
+T*
+(- GET und POST /api/v1/regulatory/review-packs/{packtype}/snapshots) Tj
+T*
+(- GET /api/v1/regulatory/review-pack-snapshots) Tj
+T*
+ET
+endstream
+endobj
+20 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
+endobj
+21 0 obj
+<< /Length 2441 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
+(- GET /api/v1/regulatory/review-pack-snapshots/{snapshotid}) Tj
+T*
+(- GET) Tj
+T*
+(/api/v1/regulatory/review-pack-snapshots/{snapshotid}/export?format=markdown|html|pdf|json) Tj
+T*
 (- Weboberflaeche unter /management-reviews/ mit Template-Auswahl und Preview) Tj
+T*
+(- Weboberflaeche unter /regulatory-review-packs/ mit Pack-Auswahl, Vorschau,) Tj
+T*
+(Snapshot-Erzeugung und Snapshot-Liste) Tj
 T*
 () Tj
 T*
@@ -1236,6 +1301,22 @@ T*
 (- belastbare Vorbereitung von Management Review, Audit und Steering Committee) Tj
 T*
 (- wiederholbare Steuerungspakete, ohne neue Risiko-, Evidence- oder Control-Silos anzulegen) Tj
+T*
+(- regulatorischer Kontext wird aus vorhandenen ISCY-Daten abgeleitet und bleibt als Snapshot) Tj
+T*
+(nachvollziehbar) Tj
+T*
+() Tj
+T*
+(GUI-Nachweis:) Tj
+T*
+() Tj
+T*
+(- Die aktuelle Screenshot-Uebersicht fuer Dashboard, Evidence, Regulatory Review Packs,) Tj
+T*
+(Supplier Review, Product Security, AI Governance und Operations liegt in) Tj
+T*
+(docs/GUI_SCREENSHOTS.md.) Tj
 T*
 () Tj
 T*
@@ -1261,19 +1342,6 @@ T*
 T*
 (- Planliste) Tj
 T*
-ET
-endstream
-endobj
-20 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
-endobj
-21 0 obj
-<< /Length 1959 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Plandetail) Tj
 T*
 (- Kanban-Ansicht) Tj
@@ -1350,6 +1418,19 @@ T*
 T*
 (- weniger manuelle Datenerfassung) Tj
 T*
+ET
+endstream
+endobj
+22 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
+endobj
+23 0 obj
+<< /Length 3452 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- bessere Datenqualitaet durch Mapping) Tj
 T*
 () Tj
@@ -1418,19 +1499,6 @@ T*
 T*
 (- Anbindung von Produktentwicklung und Sicherheitsgovernance) Tj
 T*
-ET
-endstream
-endobj
-22 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
-endobj
-23 0 obj
-<< /Length 3916 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Vorbereitung fuer CRA, IEC 62443, ISO/SAE 21434 oder AI-bezogene Governance) Tj
 T*
 (- Sicht auf Releases, Komponenten und Verwundbarkeit) Tj
@@ -1507,6 +1575,19 @@ T*
 T*
 (Evidence) Tj
 T*
+ET
+endstream
+endobj
+24 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
+endobj
+25 0 obj
+<< /Length 3906 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- Review-Workflow mit Entwurf, Review, Aenderungsanforderung, Freigabe und Archivierung) Tj
 T*
 (- vorbehaltlose Freigabe nur ohne Blocker; bedingte Freigabe nur mit dokumentierter) Tj
@@ -1575,19 +1656,6 @@ T*
 T*
 (Evidence-Stand und Governance-Gaps) Tj
 T*
-ET
-endstream
-endobj
-24 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
-endobj
-25 0 obj
-<< /Length 4458 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- API GET und POST /api/v1/ai-governance/systems) Tj
 T*
 (- API GET und PATCH /api/v1/ai-governance/systems/{id}) Tj
@@ -1664,6 +1732,19 @@ T*
 T*
 (Governance-Objekt sichtbar.) Tj
 T*
+ET
+endstream
+endobj
+26 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
+endobj
+27 0 obj
+<< /Length 4533 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- AI-Act-, ISMS-, Product-Security- und Evidence-Arbeit laufen ueber dasselbe Nachweis- und) Tj
 T*
 (Review-Modell.) Tj
@@ -1732,19 +1813,6 @@ T*
 T*
 (/api/v1/suppliers/{id}/control-links und POST /api/v1/suppliers/{id}/risk-links fuer explizite) Tj
 T*
-ET
-endstream
-endobj
-26 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
-endobj
-27 0 obj
-<< /Length 4009 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Nachweis-, Control- und Risiko-Bezuege) Tj
 T*
 (- Datenfelder fuer Vertrags-/Security-Annex-Bezug, Security-Kontakt, Datenarten, Regionen,) Tj
@@ -1821,6 +1889,19 @@ T*
 T*
 (- Fremde Tenant-Objekte, manipulierte Supplier-IDs sowie fremde Evidence-, Risk- und Owner-IDs) Tj
 T*
+ET
+endstream
+endobj
+28 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
+endobj
+29 0 obj
+<< /Length 2787 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (werden nicht aufgeloest.) Tj
 T*
 (- Interne Store- oder SQL-Fehler werden in API und Web UI nicht als technische Details) Tj
@@ -1889,19 +1970,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-28 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
-endobj
-29 0 obj
-<< /Length 3394 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Fachlicher Nutzen:) Tj
 T*
 () Tj
@@ -1978,6 +2046,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+30 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
+endobj
+31 0 obj
+<< /Length 4994 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (6.4 Produkt- und Schwachstellensteuerung:) Tj
 T*
 () Tj
@@ -2046,19 +2127,6 @@ T*
 T*
 (3. Wahrscheinlich erheblich) Tj
 T*
-ET
-endstream
-endobj
-30 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
-endobj
-31 0 obj
-<< /Length 5182 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (4. Erheblich / NIS2 meldepflichtig) Tj
 T*
 () Tj
@@ -2135,6 +2203,19 @@ T*
 T*
 (/operations/incidents/ als Betriebsuebersicht mit Filtern fuer open, critical und resolved) Tj
 T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 3867 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (sichtbar. Optional kann ISCYALERTMANAGERREQUIRERESOLUTIONREVIEW=1 gesetzt werden, damit) Tj
 T*
 (automatisch geschlossene Alert-Fallakten ohne Lessons Learned als Review-Pflicht fuer Root) Tj
@@ -2203,19 +2284,6 @@ T*
 T*
 (7. Dokumentieren) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 3778 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Nachvollziehbar festhalten, was bekannt ist, was vermutet wird, was getan wurde und warum.) Tj
 T*
 (8. Containment einleiten) Tj
@@ -2292,6 +2360,19 @@ T*
 T*
 (curl -fsS http://127.0.0.1:9000/health/live) Tj
 T*
+ET
+endstream
+endobj
+34 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
+endobj
+35 0 obj
+<< /Length 4882 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (curl -fsS http://127.0.0.1:9000/status/operations.json) Tj
 T*
 (curl -fsS http://127.0.0.1:9000/metrics) Tj
@@ -2360,19 +2441,6 @@ T*
 T*
 (- docs/COMMUNITYREADINESSPHASE0PHASE1.md beschreibt die aktuelle Gap-Liste und den Status) Tj
 T*
-ET
-endstream
-endobj
-34 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
-endobj
-35 0 obj
-<< /Length 4865 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (READY WITH DOCUMENTED LIMITATIONS.) Tj
 T*
 (- docs/CONFIGURATION.md dokumentiert Betriebsmodi, Secrets, Proxy-Grenzen und sichere) Tj
@@ -2449,6 +2517,19 @@ T*
 T*
 (- deploy/monitoring/prometheus/iscy-operations-alerts.yml) Tj
 T*
+ET
+endstream
+endobj
+36 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
+endobj
+37 0 obj
+<< /Length 3916 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- deploy/monitoring/alertmanager/iscy-alertmanager.yml) Tj
 T*
 (- deploy/monitoring/grafana/iscy-operations-dashboard.json) Tj
@@ -2517,19 +2598,6 @@ T*
 T*
 (nix develop --command make rust-smoke) Tj
 T*
-ET
-endstream
-endobj
-36 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
-endobj
-37 0 obj
-<< /Length 3308 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (nix develop --command make rust-restore-smoke) Tj
 T*
 (ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL=postgresql://isms:<password>@localhost:5432/iscy_drill_source) Tj
@@ -2606,6 +2674,19 @@ T*
 T*
 (ISCY_TENANT_ID=1 \\) Tj
 T*
+ET
+endstream
+endobj
+38 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 39 0 R >>
+endobj
+39 0 obj
+<< /Length 3281 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (ISCY_AGENT_ENROLLMENT_TOKEN=<token> \\) Tj
 T*
 (nix run .#iscy-agent) Tj
@@ -2674,19 +2755,6 @@ T*
 T*
 (- Meldepflichten starten ab 11. September 2026.) Tj
 T*
-ET
-endstream
-endobj
-38 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 39 0 R >>
-endobj
-39 0 obj
-<< /Length 3556 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Die wesentlichen Pflichten gelten ab 11. Dezember 2027.) Tj
 T*
 () Tj
@@ -2763,6 +2831,19 @@ T*
 T*
 (- make docker-check ist ohne Fehler durchgelaufen.) Tj
 T*
+ET
+endstream
+endobj
+40 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 41 0 R >>
+endobj
+41 0 obj
+<< /Length 4175 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- make docker-smoke ist ohne Fehler durchgelaufen.) Tj
 T*
 (2. CRA-Readiness sichtbar) Tj
@@ -2831,19 +2912,6 @@ T*
 T*
 (- administrative Agent-Secret-Rotation) Tj
 T*
-ET
-endstream
-endobj
-40 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 41 0 R >>
-endobj
-41 0 obj
-<< /Length 4628 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- systemd-, NixOS-, Windows- und macOS-Betriebsbeispiele) Tj
 T*
 (- Inventar, Heartbeat und lokale OS-/MDM-/EDR-Findings) Tj
@@ -2920,6 +2988,19 @@ T*
 T*
 (entsteht durch Nachweisverknuepfung, Connectoren und sauber signierte Deployment-Pakete.) Tj
 T*
+ET
+endstream
+endobj
+42 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 43 0 R >>
+endobj
+43 0 obj
+<< /Length 4155 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (6.11 Fachuebergreifende Notifications:) Tj
@@ -2988,19 +3069,6 @@ T*
 T*
 (Kanaele und Signalbereiche aendern; authentifizierte Read-only-Rollen sehen nur) Tj
 T*
-ET
-endstream
-endobj
-42 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 43 0 R >>
-endobj
-43 0 obj
-<< /Length 4171 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (sichere tenantgebundene Delivery-Metadaten.) Tj
 T*
 () Tj
@@ -3077,6 +3145,19 @@ T*
 T*
 (setzen oder freigeben und Disposition-Entscheidungen dokumentieren. Read-only-) Tj
 T*
+ET
+endstream
+endobj
+44 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 45 0 R >>
+endobj
+45 0 obj
+<< /Length 4313 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Rollen sehen nur sichere Metadaten und Integritaetsereignisse. Alle Operationen) Tj
 T*
 (bleiben in der Datenbankabfrage tenantgebunden; fremde Evidence-IDs werden nicht) Tj
@@ -3145,19 +3226,6 @@ T*
 T*
 (Bewusst nicht Teil dieser Phase sind ein periodischer Re-Hash-Scheduler,) Tj
 T*
-ET
-endstream
-endobj
-44 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 45 0 R >>
-endobj
-45 0 obj
-<< /Length 4195 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Objektspeicher/S3, kontrollierte physische Loeschung, technische) Tj
 T*
 (Datenvernichtung, eine neue Evidence-, Risk-, Control- oder Notification-Engine) Tj
@@ -3234,6 +3302,19 @@ T*
 T*
 (Die Webansicht /evidence/integrity/ zeigt Storage-Backend, Artefaktstatus,) Tj
 T*
+ET
+endstream
+endobj
+46 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 47 0 R >>
+endobj
+47 0 obj
+<< /Length 4227 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (sichere Fehlerklasse, letzten Drill-/Integritaetszeitpunkt und den vorhandenen) Tj
 T*
 (Integrity-, Legal-Hold- und Disposition-Kontext. Admin- und Editor-Rollen) Tj
@@ -3302,19 +3383,6 @@ T*
 T*
 (- CVE: standardisierte Kennung fuer eine bekannte Schwachstelle) Tj
 T*
-ET
-endstream
-endobj
-46 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 47 0 R >>
-endobj
-47 0 obj
-<< /Length 4494 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- CVSS: Basisscore fuer technische Schwere) Tj
 T*
 (- EPSS: Wahrscheinlichkeitsmodell fuer die Ausnutzung einer Schwachstelle) Tj
@@ -3391,6 +3459,19 @@ T*
 T*
 (Product-Security-Evidence-Pakete. Migration 0027rustaigovernancelinks verbindet AI-Systeme) Tj
 T*
+ET
+endstream
+endobj
+48 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 49 0 R >>
+endobj
+49 0 obj
+<< /Length 2992 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration) Tj
 T*
 (0028rustguidedagentonboarding ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit) Tj
@@ -3405,9 +3486,15 @@ T*
 T*
 (Evidence-/Control-/Risk-Links. Migration 0032rustmanagementregulatorytemplates ergaenzt) Tj
 T*
-(Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, KRITIS und generische) Tj
+(Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische) Tj
 T*
-(Security-Governance-Reviews. Migration 0033rustevidenceintegritydisposition ergaenzt Evidence) Tj
+(Security-Governance-Reviews. Kontextsensitive Regulatory Review Packs fuer NIS2, DORA und) Tj
+T*
+(DSGVO nutzen diese bestehende Snapshot-Schicht und nehmen) Tj
+T*
+(Evidence-Integrity-/Storage-Aggregate auf, ohne ein neues Compliance-Silo oder ein zweites) Tj
+T*
+(Evidence-System anzulegen. Migration 0033rustevidenceintegritydisposition ergaenzt Evidence) Tj
 T*
 (Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung,) Tj
 T*
@@ -3429,7 +3516,9 @@ T*
 T*
 () Tj
 T*
-(1. Feinere Management-/Regulatory-Template-Varianten und kontextsensitive Pruefpakete) Tj
+(1. Review-Pack-Bedienung weiter polishen, z. B. zusaetzliche Filter, Pack-spezifische) Tj
+T*
+(Gap-Gruppierung und Review-Owner-Hinweise) Tj
 T*
 (2. Evidence-Integrity-Worker, kontrollierte physische Disposition und spaeteres produktives) Tj
 T*
@@ -3459,19 +3548,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-48 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 49 0 R >>
-endobj
-49 0 obj
-<< /Length 279 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- versioniert werden kann) Tj
 T*
 (- mit dem Produkt mitwaechst) Tj
@@ -3511,38 +3587,38 @@ xref
 0000019247 00000 n
 0000022672 00000 n
 0000022800 00000 n
-0000026150 00000 n
-0000026278 00000 n
-0000028289 00000 n
-0000028417 00000 n
-0000032385 00000 n
-0000032513 00000 n
-0000037023 00000 n
-0000037151 00000 n
-0000041212 00000 n
-0000041340 00000 n
-0000044786 00000 n
-0000044914 00000 n
-0000050148 00000 n
-0000050276 00000 n
-0000054106 00000 n
-0000054234 00000 n
-0000059151 00000 n
-0000059279 00000 n
-0000062639 00000 n
-0000062767 00000 n
-0000066375 00000 n
-0000066503 00000 n
-0000071183 00000 n
-0000071311 00000 n
-0000075534 00000 n
-0000075662 00000 n
-0000079909 00000 n
-0000080037 00000 n
-0000084583 00000 n
-0000084711 00000 n
+0000026783 00000 n
+0000026911 00000 n
+0000029404 00000 n
+0000029532 00000 n
+0000033036 00000 n
+0000033164 00000 n
+0000037122 00000 n
+0000037250 00000 n
+0000041835 00000 n
+0000041963 00000 n
+0000044802 00000 n
+0000044930 00000 n
+0000049976 00000 n
+0000050104 00000 n
+0000054023 00000 n
+0000054151 00000 n
+0000059085 00000 n
+0000059213 00000 n
+0000063181 00000 n
+0000063309 00000 n
+0000066642 00000 n
+0000066770 00000 n
+0000070997 00000 n
+0000071125 00000 n
+0000075332 00000 n
+0000075460 00000 n
+0000079825 00000 n
+0000079953 00000 n
+0000084232 00000 n
+0000084360 00000 n
 trailer
 << /Size 50 /Root 1 0 R >>
 startxref
-85041
+87404
 %%EOF
