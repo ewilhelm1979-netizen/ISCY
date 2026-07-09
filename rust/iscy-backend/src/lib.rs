@@ -15,7 +15,7 @@ use axum::{
     Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use chrono::{Datelike, Duration as ChronoDuration, Utc};
+use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1611,6 +1611,13 @@ pub struct WebContextQuery {
     pub need_id: Option<i64>,
     pub policy_id: Option<i64>,
     pub channel_id: Option<i64>,
+    pub pack_type: Option<String>,
+    pub status: Option<String>,
+    pub period_start: Option<String>,
+    pub period_end: Option<String>,
+    pub has_open_gaps: Option<String>,
+    pub has_critical_gaps: Option<String>,
+    pub limit: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2072,6 +2079,7 @@ pub struct RegulatoryReviewPackPreviewResponse {
 pub struct RegulatoryReviewPackSnapshotsResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
+    pub filter_summary: Value,
     pub snapshots: Vec<report_store::ManagementReviewPackageSummary>,
 }
 
@@ -2091,6 +2099,17 @@ pub struct RegulatoryReviewPackSnapshotWriteResponse {
 #[derive(Debug, Deserialize)]
 struct RegulatoryReviewPackExportQuery {
     format: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RegulatoryReviewPackSnapshotsQuery {
+    pack_type: Option<String>,
+    status: Option<String>,
+    period_start: Option<String>,
+    period_end: Option<String>,
+    has_open_gaps: Option<String>,
+    has_critical_gaps: Option<String>,
+    limit: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -11544,6 +11563,7 @@ async fn regulatory_review_pack_snapshot_create(
 async fn regulatory_review_pack_snapshots(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<RegulatoryReviewPackSnapshotsQuery>,
 ) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
@@ -11572,8 +11592,23 @@ async fn regulatory_review_pack_snapshots(
         )
             .into_response();
     };
+    let filters = match regulatory_review_snapshot_filters_from_query(&query, None) {
+        Ok(filters) => filters,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_regulatory_review_pack_filter",
+                    message,
+                }),
+            )
+                .into_response();
+        }
+    };
     match store
-        .list_regulatory_review_pack_snapshots(context.tenant_id, 50)
+        .list_regulatory_review_pack_snapshots_filtered(context.tenant_id, filters.clone())
         .await
     {
         Ok(snapshots) => (
@@ -11581,6 +11616,8 @@ async fn regulatory_review_pack_snapshots(
             Json(RegulatoryReviewPackSnapshotsResponse {
                 api_version: "v1",
                 tenant_id: context.tenant_id,
+                filter_summary:
+                    report_store::ReportStore::regulatory_review_snapshot_filter_summary(&filters),
                 snapshots,
             }),
         )
@@ -11603,6 +11640,7 @@ async fn regulatory_review_pack_snapshots_for_pack(
     Path(pack_type): Path<String>,
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<RegulatoryReviewPackSnapshotsQuery>,
 ) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
@@ -11619,21 +11657,18 @@ async fn regulatory_review_pack_snapshots_for_pack(
                 .into_response();
         }
     };
-    let pack = match report_store::ReportStore::regulatory_review_pack(&pack_type) {
-        Ok(pack) => pack,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ApiErrorResponse {
-                    accepted: false,
-                    api_version: "v1",
-                    error_code: "regulatory_review_pack_not_found",
-                    message: format!("Regulatory-Review-Pack {pack_type} wurde nicht gefunden."),
-                }),
-            )
-                .into_response();
-        }
-    };
+    if report_store::ReportStore::regulatory_review_pack(&pack_type).is_err() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "regulatory_review_pack_not_found",
+                message: format!("Regulatory-Review-Pack {pack_type} wurde nicht gefunden."),
+            }),
+        )
+            .into_response();
+    }
     let Some(store) = state.report_store else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -11646,8 +11681,23 @@ async fn regulatory_review_pack_snapshots_for_pack(
         )
             .into_response();
     };
+    let filters = match regulatory_review_snapshot_filters_from_query(&query, Some(&pack_type)) {
+        Ok(filters) => filters,
+        Err(message) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "invalid_regulatory_review_pack_filter",
+                    message,
+                }),
+            )
+                .into_response();
+        }
+    };
     match store
-        .list_regulatory_review_pack_snapshots(context.tenant_id, 50)
+        .list_regulatory_review_pack_snapshots_filtered(context.tenant_id, filters.clone())
         .await
     {
         Ok(snapshots) => (
@@ -11655,10 +11705,9 @@ async fn regulatory_review_pack_snapshots_for_pack(
             Json(RegulatoryReviewPackSnapshotsResponse {
                 api_version: "v1",
                 tenant_id: context.tenant_id,
-                snapshots: snapshots
-                    .into_iter()
-                    .filter(|snapshot| snapshot.template_type == pack.template_type)
-                    .collect(),
+                filter_summary:
+                    report_store::ReportStore::regulatory_review_snapshot_filter_summary(&filters),
+                snapshots,
             }),
         )
             .into_response(),
@@ -17551,21 +17600,32 @@ async fn web_regulatory_review_packs(
     Query(query): Query<WebContextQuery>,
 ) -> Html<String> {
     let Some(context) = web_context_from_request(&query, &headers, &state).await else {
-        return web_missing_context("Regulatory Review Packs", "/regulatory-review-packs/");
+        return web_missing_context("Regulatory Review-Pakete", "/regulatory-review-packs/");
     };
     let can_write = authenticated_tenant_context(&state, &headers)
         .await
         .is_ok_and(|auth_context| auth_context.can_write());
     let Some(store) = state.report_store.as_ref() else {
         return web_store_missing(
-            "Regulatory Review Packs",
+            "Regulatory Review-Pakete",
             "/regulatory-review-packs/",
             &context,
             "Report",
         );
     };
+    let filters = match regulatory_review_snapshot_filters_from_web_query(&query) {
+        Ok(filters) => filters,
+        Err(message) => {
+            return web_error_page(
+                "Regulatory Review-Pakete",
+                "/regulatory-review-packs/",
+                &context,
+                &message,
+            );
+        }
+    };
     match store
-        .list_regulatory_review_pack_snapshots(context.tenant_id, 50)
+        .list_regulatory_review_pack_snapshots_filtered(context.tenant_id, filters.clone())
         .await
     {
         Ok(snapshots) => {
@@ -17573,37 +17633,43 @@ async fn web_regulatory_review_packs(
                 format!(
                     r#"
                     <section class="panel wide">
-                      <h2>Regulatory Pack erzeugen</h2>
+                      <h2>Review-Paket erzeugen</h2>
                       <form method="post" action="{}">
                         <div class="form-grid">
-                          <label>Pack<select name="template_type">{}</select></label>
+                          <label>Review-Paket<select name="template_type">{}</select></label>
                           <label>Titel<input name="title" value="Regulatory Review Pack {}"></label>
-                          <label>Zeitraum Start<input name="period_start" type="date"></label>
-                          <label>Zeitraum Ende<input name="period_end" type="date"></label>
+                          <label>Zeitraum Start<input name="period_start" type="text" inputmode="numeric" pattern="[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}" placeholder="YYYY-MM-DD"></label>
+                          <label>Zeitraum Ende<input name="period_end" type="text" inputmode="numeric" pattern="[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}" placeholder="YYYY-MM-DD"></label>
                         </div>
-                        <label>Executive Summary<textarea name="executive_summary" rows="4"></textarea></label>
+                        <label>Management-Zusammenfassung<textarea name="executive_summary" rows="4"></textarea></label>
                         <button type="submit">Snapshot erzeugen</button>
                       </form>
                     </section>
                     "#,
                     web_path_with_context("/regulatory-review-packs/", Some(&context)),
-                    regulatory_review_pack_options("nis2_management_summary"),
+                    regulatory_review_pack_options(
+                        filters
+                            .template_type
+                            .as_deref()
+                            .unwrap_or("nis2_management_summary")
+                    ),
                     Utc::now().format("%Y-%m-%d"),
                 )
             } else {
-                r#"<section class="panel wide"><h2>Regulatory Pack erzeugen</h2><p>Zum Erzeugen eines eingefrorenen Snapshots wird eine schreibende ISCY-Rolle benoetigt.</p></section>"#.to_string()
+                r#"<section class="panel wide"><h2>Review-Paket erzeugen</h2><p>Zum Erzeugen eines eingefrorenen Snapshots wird eine schreibende ISCY-Rolle benoetigt.</p></section>"#.to_string()
             };
             let body = format!(
                 r#"
-                <section class="hero compact"><h1>Regulatory Review Packs</h1><p>NIS2, DORA und DSGVO aus denselben eingefrorenen ISCY-Snapshots vorbereiten.</p></section>
+                <section class="hero compact"><h1>Regulatory Review-Pakete</h1><p>NIS2, DORA und DSGVO aus denselben eingefrorenen ISCY-Snapshots vorbereiten. Keine Rechtsberatung, keine Zertifizierung und keine automatische Meldung.</p></section>
+                {}
                 {}
                 <section class="panel wide">
                   <h2>Vorschau</h2>
                   <form method="post" action="{}">
                     <div class="form-grid">
-                      <label>Pack<select name="template_type">{}</select></label>
-                      <label>Preview Start<input name="period_start" type="date"></label>
-                      <label>Preview Ende<input name="period_end" type="date"></label>
+                      <label>Review-Paket<select name="template_type">{}</select></label>
+                      <label>Vorschau Start<input name="period_start" type="text" inputmode="numeric" pattern="[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}" placeholder="YYYY-MM-DD" value="{}"></label>
+                      <label>Vorschau Ende<input name="period_end" type="text" inputmode="numeric" pattern="[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}" placeholder="YYYY-MM-DD" value="{}"></label>
                     </div>
                     <button type="submit">Vorschau anzeigen</button>
                   </form>
@@ -17612,26 +17678,34 @@ async fn web_regulatory_review_packs(
                 <section class="panel wide">
                   <h2>Regulatory Snapshots</h2>
                   <table>
-                    <thead><tr><th>Titel</th><th>Pack</th><th>Status</th><th>Start</th><th>Ende</th><th>Erstellt</th><th>Export</th></tr></thead>
+                    <thead><tr><th>Titel</th><th>Review-Paket</th><th>Status</th><th>Start</th><th>Ende</th><th>Erstellt</th><th>Export</th></tr></thead>
                     <tbody>{}</tbody>
                   </table>
                 </section>
                 "#,
                 regulatory_review_pack_cards(),
+                regulatory_review_filter_panel(&context, &filters),
                 web_path_with_context("/regulatory-review-packs/preview", Some(&context)),
-                regulatory_review_pack_options("nis2_management_summary"),
+                regulatory_review_pack_options(
+                    filters
+                        .template_type
+                        .as_deref()
+                        .unwrap_or("nis2_management_summary")
+                ),
+                html_escape(filters.period_start.as_deref().unwrap_or("")),
+                html_escape(filters.period_end.as_deref().unwrap_or("")),
                 generate_panel,
                 regulatory_review_snapshot_rows(&context, &snapshots),
             );
             web_page(
-                "Regulatory Review Packs",
+                "Regulatory Review-Pakete",
                 "/regulatory-review-packs/",
                 Some(&context),
                 &body,
             )
         }
         Err(_) => web_error_page(
-            "Regulatory Review Packs",
+            "Regulatory Review-Pakete",
             "/regulatory-review-packs/",
             &context,
             "Regulatory-Review-Packs konnten nicht gelesen werden.",
@@ -17647,13 +17721,13 @@ async fn web_regulatory_review_pack_preview(
 ) -> Html<String> {
     let Some(context) = web_context_from_request(&query, &headers, &state).await else {
         return web_missing_context(
-            "Regulatory Review Pack Preview",
+            "Regulatory Review-Paket Vorschau",
             "/regulatory-review-packs/",
         );
     };
     let Some(store) = state.report_store.as_ref() else {
         return web_store_missing(
-            "Regulatory Review Pack Preview",
+            "Regulatory Review-Paket Vorschau",
             "/regulatory-review-packs/",
             &context,
             "Report",
@@ -17686,6 +17760,10 @@ async fn web_regulatory_review_pack_preview(
                   {}
                   {}
                   {}
+                  {}
+                  {}
+                  {}
+                  {}
                 </section>
                 "#,
                 html_escape(&preview.title),
@@ -17696,10 +17774,20 @@ async fn web_regulatory_review_pack_preview(
                     &preview.regulatory_context_json
                 ),
                 management_review_object_panel(
-                    "Evidence Integrity & Storage",
+                    "Nachweis-Integritaet und Storage-Drill",
                     &preview.metrics_json["evidence_integrity_storage"]
                 ),
-                management_review_object_panel("Gap-Summary", &preview.gap_summary_json),
+                management_review_object_panel("Lueckenuebersicht", &preview.gap_summary_json),
+                management_review_object_panel(
+                    "Filter-Zusammenfassung",
+                    &preview.filter_summary_json
+                ),
+                management_review_object_panel(
+                    "Datenvollstaendigkeit",
+                    &preview.data_completeness_summary_json
+                ),
+                management_review_gap_group_panel(&preview.gap_groups_json),
+                management_review_owner_hint_panel(&preview.owner_hints_json),
                 management_review_object_panel(
                     "Management-Hinweise",
                     &preview.decision_summary_json
@@ -17709,25 +17797,25 @@ async fn web_regulatory_review_pack_preview(
                     &preview.incident_decisions_json,
                     &[
                         ("title", "Incident"),
-                        ("severity", "Severity"),
+                        ("severity", "Schweregrad"),
                         ("nis2_significance_status", "Erheblichkeit"),
                         ("review_state", "Review"),
                     ],
                     &context,
                 ),
                 management_review_object_panel("Product Security", &preview.product_security_json),
-                management_review_object_panel("Supplier Review", &preview.supplier_json),
+                management_review_object_panel("Supplier-Review", &preview.supplier_json),
                 management_review_object_panel("AI Governance", &preview.ai_governance_json),
             );
             web_page(
-                "Regulatory Review Pack Preview",
+                "Regulatory Review-Paket Vorschau",
                 "/regulatory-review-packs/",
                 Some(&context),
                 &body,
             )
         }
         Err(_) => web_error_page(
-            "Regulatory Review Pack Preview",
+            "Regulatory Review-Paket Vorschau",
             "/regulatory-review-packs/",
             &context,
             "Regulatory-Review-Pack-Vorschau konnte nicht erzeugt werden.",
@@ -17747,14 +17835,14 @@ async fn web_regulatory_review_pack_generate(
         Err(err) => {
             if let Some(context) = display_context.as_ref() {
                 return web_error_page(
-                    "Regulatory Review Packs",
+                    "Regulatory Review-Pakete",
                     "/regulatory-review-packs/",
                     context,
                     err.message(),
                 )
                 .into_response();
             }
-            return web_missing_context("Regulatory Review Packs", "/regulatory-review-packs/")
+            return web_missing_context("Regulatory Review-Pakete", "/regulatory-review-packs/")
                 .into_response();
         }
     };
@@ -17765,7 +17853,7 @@ async fn web_regulatory_review_pack_generate(
     });
     if !auth_context.can_write() {
         return web_error_page(
-            "Regulatory Review Packs",
+            "Regulatory Review-Pakete",
             "/regulatory-review-packs/",
             &context,
             "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
@@ -17774,7 +17862,7 @@ async fn web_regulatory_review_pack_generate(
     }
     let Some(store) = state.report_store else {
         return web_store_missing(
-            "Regulatory Review Packs",
+            "Regulatory Review-Pakete",
             "/regulatory-review-packs/",
             &context,
             "Report",
@@ -17805,7 +17893,7 @@ async fn web_regulatory_review_pack_generate(
         ))
         .into_response(),
         Err(_) => web_error_page(
-            "Regulatory Review Packs",
+            "Regulatory Review-Pakete",
             "/regulatory-review-packs/",
             &context,
             "Regulatory-Review-Pack konnte nicht erzeugt werden.",
@@ -24680,6 +24768,106 @@ fn management_review_export_format_from_value(
     }
 }
 
+fn regulatory_review_snapshot_filters_from_query(
+    query: &RegulatoryReviewPackSnapshotsQuery,
+    fixed_pack_type: Option<&str>,
+) -> Result<report_store::RegulatoryReviewSnapshotFilters, String> {
+    let fixed_pack_type = fixed_pack_type
+        .map(report_store::ReportStore::canonical_regulatory_review_pack_type)
+        .transpose()
+        .map_err(|_| "Der angegebene Review-Paket-Typ ist nicht bekannt.".to_string())?;
+    let query_pack_type = query
+        .pack_type
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(report_store::ReportStore::canonical_regulatory_review_pack_type)
+        .transpose()
+        .map_err(|_| "Der Pack-Typ-Filter ist nicht bekannt.".to_string())?;
+    if let (Some(fixed), Some(query_pack)) = (&fixed_pack_type, &query_pack_type) {
+        if fixed != query_pack {
+            return Err("Der Pack-Typ-Filter passt nicht zum API-Pfad.".to_string());
+        }
+    }
+    let template_type = fixed_pack_type.or(query_pack_type);
+    let status = query
+        .status
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(report_store::ReportStore::normalize_regulatory_review_status_filter)
+        .transpose()
+        .map_err(|_| "Der Statusfilter muss DRAFT, IN_REVIEW oder APPROVED sein.".to_string())?;
+    let period_start = normalized_filter_date(query.period_start.as_deref(), "Zeitraum-Start")?;
+    let period_end = normalized_filter_date(query.period_end.as_deref(), "Zeitraum-Ende")?;
+    if let (Some(start), Some(end)) = (&period_start, &period_end) {
+        if start > end {
+            return Err("Der Zeitraum-Start darf nicht nach dem Zeitraum-Ende liegen.".to_string());
+        }
+    }
+    let limit = normalized_filter_limit(query.limit.as_deref())?;
+    Ok(report_store::RegulatoryReviewSnapshotFilters {
+        template_type,
+        status,
+        period_start,
+        period_end,
+        has_open_gaps: normalized_filter_bool(query.has_open_gaps.as_deref(), "has_open_gaps")?,
+        has_critical_gaps: normalized_filter_bool(
+            query.has_critical_gaps.as_deref(),
+            "has_critical_gaps",
+        )?,
+        limit,
+    })
+}
+
+fn regulatory_review_snapshot_filters_from_web_query(
+    query: &WebContextQuery,
+) -> Result<report_store::RegulatoryReviewSnapshotFilters, String> {
+    regulatory_review_snapshot_filters_from_query(
+        &RegulatoryReviewPackSnapshotsQuery {
+            pack_type: query.pack_type.clone(),
+            status: query.status.clone(),
+            period_start: query.period_start.clone(),
+            period_end: query.period_end.clone(),
+            has_open_gaps: query.has_open_gaps.clone(),
+            has_critical_gaps: query.has_critical_gaps.clone(),
+            limit: query.limit.clone(),
+        },
+        None,
+    )
+}
+
+fn normalized_filter_date(value: Option<&str>, label: &str) -> Result<Option<String>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map(|date| Some(date.to_string()))
+        .map_err(|_| format!("{label} muss dem Format YYYY-MM-DD entsprechen."))
+}
+
+fn normalized_filter_bool(value: Option<&str>, label: &str) -> Result<Option<bool>, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "ja" => Ok(Some(true)),
+        "0" | "false" | "no" | "nein" => Ok(Some(false)),
+        _ => Err(format!("{label} muss true oder false sein.")),
+    }
+}
+
+fn normalized_filter_limit(value: Option<&str>) -> Result<i64, String> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(50);
+    };
+    let limit = value
+        .parse::<i64>()
+        .map_err(|_| "Limit muss eine Zahl zwischen 1 und 100 sein.".to_string())?;
+    if !(1..=100).contains(&limit) {
+        return Err("Limit muss zwischen 1 und 100 liegen.".to_string());
+    }
+    Ok(limit)
+}
+
 fn regulatory_review_pack_error_is_not_found(message: &str) -> bool {
     message.contains("Regulatory-Review-Pack-Typ")
         || message.contains("Management-Review-Template-Typ")
@@ -28943,7 +29131,7 @@ fn web_page(
         ("/roadmap/", "Roadmap"),
         ("/reports/", "Reports"),
         ("/management-reviews/", "Reviews"),
-        ("/regulatory-review-packs/", "Regulatory Packs"),
+        ("/regulatory-review-packs/", "Review-Pakete"),
         ("/assets/", "Assets"),
         ("/suppliers/", "Suppliers"),
         ("/imports/", "Imports"),
@@ -31641,6 +31829,100 @@ fn regulatory_review_pack_cards() -> String {
     format!(r#"<section class="grid">{cards}</section>"#)
 }
 
+fn regulatory_review_filter_panel(
+    context: &WebContext,
+    filters: &report_store::RegulatoryReviewSnapshotFilters,
+) -> String {
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Filter</h2>
+          <form method="get" action="/regulatory-review-packs/">
+            <input type="hidden" name="tenant_id" value="{}">
+            <input type="hidden" name="user_id" value="{}">
+            {}
+            <div class="form-grid">
+              <label>Review-Paket<select name="pack_type"><option value="">Alle Review-Pakete</option>{}</select></label>
+              <label>Status<select name="status"><option value="">Alle Status</option>{}</select></label>
+              <label>Zeitraum Start<input name="period_start" type="text" inputmode="numeric" pattern="[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}" placeholder="YYYY-MM-DD" value="{}"></label>
+              <label>Zeitraum Ende<input name="period_end" type="text" inputmode="numeric" pattern="[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}" placeholder="YYYY-MM-DD" value="{}"></label>
+              <label>Offene Luecken<select name="has_open_gaps"><option value="">Alle</option>{}</select></label>
+              <label>Kritische Luecken<select name="has_critical_gaps"><option value="">Alle</option>{}</select></label>
+              <label>Limit<input name="limit" type="number" min="1" max="100" value="{}"></label>
+            </div>
+            <button type="submit">Filter anwenden</button>
+          </form>
+        </section>
+        "#,
+        context.tenant_id,
+        context.user_id,
+        context
+            .user_email
+            .as_ref()
+            .map(|email| format!(
+                r#"<input type="hidden" name="user_email" value="{}">"#,
+                html_escape(email)
+            ))
+            .unwrap_or_default(),
+        regulatory_review_pack_filter_options(filters.template_type.as_deref()),
+        regulatory_review_status_filter_options(filters.status.as_deref()),
+        html_escape(filters.period_start.as_deref().unwrap_or("")),
+        html_escape(filters.period_end.as_deref().unwrap_or("")),
+        bool_filter_options(filters.has_open_gaps),
+        bool_filter_options(filters.has_critical_gaps),
+        filters.limit,
+    )
+}
+
+fn regulatory_review_pack_filter_options(selected: Option<&str>) -> String {
+    report_store::ReportStore::regulatory_review_packs()
+        .into_iter()
+        .map(|pack| {
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                html_escape(&pack.template_type),
+                selected_attr(selected == Some(pack.template_type.as_str())),
+                html_escape(&pack.name),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn regulatory_review_status_filter_options(selected: Option<&str>) -> String {
+    [
+        ("DRAFT", "Entwurf"),
+        ("IN_REVIEW", "In Review"),
+        ("APPROVED", "Freigegeben"),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            value,
+            selected_attr(selected == Some(*value)),
+            label,
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn bool_filter_options(selected: Option<bool>) -> String {
+    [("true", "Ja", Some(true)), ("false", "Nein", Some(false))]
+        .iter()
+        .map(|(value, label, flag)| {
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                value,
+                selected_attr(selected == *flag),
+                label,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn regulatory_review_snapshot_rows(
     context: &WebContext,
     snapshots: &[report_store::ManagementReviewPackageSummary],
@@ -31676,6 +31958,104 @@ fn regulatory_review_snapshot_rows(
         .join("")
 }
 
+fn management_review_gap_group_panel(value: &Value) -> String {
+    let rows = value
+        .as_array()
+        .map(|groups| {
+            groups
+                .iter()
+                .map(|group| {
+                    let items = group["items"]
+                        .as_array()
+                        .map(|items| {
+                            items
+                                .iter()
+                                .map(|item| {
+                                    format!(
+                                        "{}: {} ({})",
+                                        html_escape(&management_review_json_display(
+                                            &item["label"]
+                                        )),
+                                        html_escape(&management_review_json_display(
+                                            &item["count"]
+                                        )),
+                                        html_escape(&management_review_json_display(
+                                            &item["status"]
+                                        ))
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("<br>")
+                        })
+                        .unwrap_or_else(|| "Keine Daten erfasst".to_string());
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&management_review_json_display(&group["name"])),
+                        html_escape(&management_review_json_display(&group["open_count"])),
+                        html_escape(&management_review_json_display(&group["critical_count"])),
+                        items,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    format!(
+        r#"
+        <article class="panel wide">
+          <h2>Pack-spezifische Lueckengruppen</h2>
+          <table>
+            <thead><tr><th>Gruppe</th><th>Offen</th><th>Kritisch</th><th>Details</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </article>
+        "#,
+        if rows.is_empty() {
+            web_empty_row(4, "Keine Daten erfasst.")
+        } else {
+            rows
+        },
+    )
+}
+
+fn management_review_owner_hint_panel(value: &Value) -> String {
+    let rows = value["areas"]
+        .as_array()
+        .map(|areas| {
+            areas
+                .iter()
+                .map(|area| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        html_escape(&management_review_json_display(&area["area"])),
+                        html_escape(&management_review_json_display(&area["hint"])),
+                        html_escape(&management_review_json_display(&area["owners"])),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    format!(
+        r#"
+        <article class="panel wide">
+          <h2>Owner- und Verantwortlichen-Hinweise</h2>
+          <p>{}</p>
+          <table>
+            <thead><tr><th>Bereich</th><th>Hinweis</th><th>Owner</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+        </article>
+        "#,
+        html_escape(&management_review_json_display(&value["hinweis"])),
+        if rows.is_empty() {
+            web_empty_row(3, "Nicht erfasst.")
+        } else {
+            rows
+        },
+    )
+}
+
 fn management_review_metric_cards(metrics: &Value) -> String {
     [
         ("Risiken", "open_risks"),
@@ -31703,7 +32083,7 @@ fn management_review_object_panel(title: &str, value: &Value) -> String {
                 .map(|(key, value)| {
                     format!(
                         r#"<tr><th>{}</th><td>{}</td></tr>"#,
-                        html_escape(key),
+                        html_escape(&management_review_json_label(key)),
                         html_escape(&management_review_json_display(value)),
                     )
                 })
@@ -31808,6 +32188,67 @@ fn management_review_json_display(value: &Value) -> String {
             .collect::<Vec<_>>()
             .join(", "),
         Value::Object(_) => value.to_string(),
+    }
+}
+
+fn management_review_json_label(key: &str) -> String {
+    match key {
+        "template_type" => "Review-Paket".to_string(),
+        "template_version" => "Template-Version".to_string(),
+        "regulatory_context" => "Regulatorischer Kontext".to_string(),
+        "purpose" => "Zweck".to_string(),
+        "tenant_profile" => "Tenant-Profil".to_string(),
+        "disclaimer" => "Hinweis".to_string(),
+        "open_risks" => "Offene Risiken".to_string(),
+        "critical_open_risks" => "Kritische offene Risiken".to_string(),
+        "open_control_gaps" => "Offene Control-Gaps".to_string(),
+        "missing_control_evidence" => "Fehlende Control-Evidence".to_string(),
+        "open_evidence_needs" => "Offene Evidence Needs".to_string(),
+        "approved_evidence_items" => "Freigegebene Evidence".to_string(),
+        "open_incidents" => "Offene Incidents".to_string(),
+        "unassessed_incidents" => "Nicht bewertete Incidents".to_string(),
+        "open_roadmap_tasks" => "Offene Roadmap-Tasks".to_string(),
+        "critical_suppliers" => "Kritische Supplier".to_string(),
+        "overdue_supplier_reviews" => "Ueberfaellige Supplier-Reviews".to_string(),
+        "evidence_integrity_not_checked" => "Evidence-Integritaet nicht geprueft".to_string(),
+        "evidence_integrity_valid" => "Evidence-Integritaet gueltig".to_string(),
+        "evidence_integrity_mismatch" => "Evidence-Integritaetsabweichungen".to_string(),
+        "evidence_storage_artifact_references" => "Storage-Artefaktreferenzen".to_string(),
+        "evidence_storage_drills_recorded" => "Storage-Drills erfasst".to_string(),
+        "evidence_legal_hold_active" => "Legal Hold / Aufbewahrungssperre aktiv".to_string(),
+        "evidence_disposition_due" => "Disposition faellig".to_string(),
+        "total_items" => "Evidence gesamt".to_string(),
+        "not_checked" => "Nicht geprueft".to_string(),
+        "valid" => "Gueltig".to_string(),
+        "mismatch" => "Abweichung".to_string(),
+        "missing_artifact" => "Artefakt fehlt".to_string(),
+        "check_failed" => "Pruefung fehlgeschlagen".to_string(),
+        "quarantined" => "Quarantaene".to_string(),
+        "artifact_references" => "Artefaktreferenzen".to_string(),
+        "expected_hash_present" => "Erwarteter Hash vorhanden".to_string(),
+        "storage_drills_recorded" => "Storage-Drills erfasst".to_string(),
+        "legal_hold_active" => "Legal Hold / Aufbewahrungssperre aktiv".to_string(),
+        "disposition_due" => "Disposition faellig".to_string(),
+        "disposition_blocked" => "Disposition blockiert".to_string(),
+        "disposal_candidates" => "Aussonderungskandidaten".to_string(),
+        "notes" => "Hinweise".to_string(),
+        "pack_type" => "Review-Paket".to_string(),
+        "status" => "Status".to_string(),
+        "period_start" => "Zeitraum Start".to_string(),
+        "period_end" => "Zeitraum Ende".to_string(),
+        "has_open_gaps" => "Offene Luecken".to_string(),
+        "has_critical_gaps" => "Kritische Luecken".to_string(),
+        "limit" => "Limit".to_string(),
+        "summary" => "Zusammenfassung".to_string(),
+        "areas" => "Bereiche".to_string(),
+        "template_actions" => "Template-Massnahmen".to_string(),
+        "required_management_decisions" => "Erforderliche Management-Entscheidungen".to_string(),
+        "review_hints" => "Review-Hinweise".to_string(),
+        "owner_hints" => "Owner-Hinweise".to_string(),
+        "gap_groups" => "Lueckengruppen".to_string(),
+        "data_completeness_summary" => "Datenvollstaendigkeit".to_string(),
+        "generated_note" => "Erzeugungshinweis".to_string(),
+        other => other.replace('_', " "),
     }
 }
 

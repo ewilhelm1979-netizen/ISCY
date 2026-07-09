@@ -5,7 +5,7 @@ use serde_json::Value;
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
-    Row,
+    Postgres, QueryBuilder, Row, Sqlite,
 };
 
 use crate::cve_store::normalize_database_url;
@@ -127,6 +127,31 @@ pub struct ManagementTemplatePreviewRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RegulatoryReviewSnapshotFilters {
+    pub template_type: Option<String>,
+    pub status: Option<String>,
+    pub period_start: Option<String>,
+    pub period_end: Option<String>,
+    pub has_open_gaps: Option<bool>,
+    pub has_critical_gaps: Option<bool>,
+    pub limit: i64,
+}
+
+impl Default for RegulatoryReviewSnapshotFilters {
+    fn default() -> Self {
+        Self {
+            template_type: None,
+            status: None,
+            period_start: None,
+            period_end: None,
+            has_open_gaps: None,
+            has_critical_gaps: None,
+            limit: 50,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ManagementReviewTemplateSummary {
     pub template_type: String,
     pub template_version: String,
@@ -173,6 +198,10 @@ pub struct ManagementReviewTemplatePreview {
     pub gap_summary_json: Value,
     pub decision_summary_json: Value,
     pub regulatory_context_json: Value,
+    pub owner_hints_json: Value,
+    pub gap_groups_json: Value,
+    pub filter_summary_json: Value,
+    pub data_completeness_summary_json: Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -283,6 +312,22 @@ impl ReportStore {
         Ok(resolve_regulatory_review_pack(pack_type)?.detail())
     }
 
+    pub fn canonical_regulatory_review_pack_type(pack_type: &str) -> anyhow::Result<String> {
+        Ok(resolve_regulatory_review_pack(pack_type)?
+            .template_type
+            .to_string())
+    }
+
+    pub fn normalize_regulatory_review_status_filter(status: &str) -> anyhow::Result<String> {
+        normalize_management_review_status(status)
+    }
+
+    pub fn regulatory_review_snapshot_filter_summary(
+        filters: &RegulatoryReviewSnapshotFilters,
+    ) -> Value {
+        regulatory_review_filter_summary_json(filters)
+    }
+
     pub async fn list_regulatory_review_pack_snapshots(
         &self,
         tenant_id: i64,
@@ -294,6 +339,23 @@ impl ReportStore {
             }
             Self::Sqlite(pool) => {
                 list_regulatory_review_pack_snapshots_sqlite(pool, tenant_id, limit).await
+            }
+        }
+    }
+
+    pub async fn list_regulatory_review_pack_snapshots_filtered(
+        &self,
+        tenant_id: i64,
+        filters: RegulatoryReviewSnapshotFilters,
+    ) -> anyhow::Result<Vec<ManagementReviewPackageSummary>> {
+        match self {
+            Self::Postgres(pool) => {
+                list_regulatory_review_pack_snapshots_filtered_postgres(pool, tenant_id, &filters)
+                    .await
+            }
+            Self::Sqlite(pool) => {
+                list_regulatory_review_pack_snapshots_filtered_sqlite(pool, tenant_id, &filters)
+                    .await
             }
         }
     }
@@ -414,6 +476,11 @@ impl ReportStore {
         template_type: &str,
         export_format: &str,
     ) -> anyhow::Result<()> {
+        let action = if is_regulatory_review_pack_template_type(template_type) {
+            "regulatory_review_pack_export_generated"
+        } else {
+            "management_review_export_generated"
+        };
         match self {
             Self::Postgres(pool) => {
                 audit_management_review_event_postgres(
@@ -421,7 +488,7 @@ impl ReportStore {
                     tenant_id,
                     Some(review_id),
                     template_type,
-                    "management_review_export_generated",
+                    action,
                     Some(user_id),
                     &serde_json::json!({ "format": export_format }),
                 )
@@ -433,7 +500,7 @@ impl ReportStore {
                     tenant_id,
                     Some(review_id),
                     template_type,
-                    "management_review_export_generated",
+                    action,
                     Some(user_id),
                     &serde_json::json!({ "format": export_format }),
                 )
@@ -494,8 +561,8 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
         template_type: "generic_security_governance",
         aliases: &["generic", "security_governance", "governance"],
         template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
-        name: "Generic Security Governance Review",
-        purpose: "Cross-domain security governance package for regular management steering.",
+        name: "Generisches Security-Governance-Review",
+        purpose: "Fachuebergreifendes Governance-Paket fuer regelmaessige Management-Steuerung.",
         regulatory_context: &["ISO 27001", "NIS2", "DORA", "CRA", "EU AI Act", "GDPR", "KRITIS"],
         data_sources: &[
             "risks",
@@ -509,14 +576,14 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "agent posture",
         ],
         sections: &[
-            "Executive summary",
-            "Risk and control posture",
-            "Evidence readiness",
-            "Incident and regulatory decisions",
-            "Supplier and product security",
-            "AI governance",
-            "Roadmap actions",
-            "Management decisions",
+            "Management-Zusammenfassung",
+            "Risiko- und Control-Lage",
+            "Evidence-Reife",
+            "Incident- und Regulierungsentscheidungen",
+            "Supplier und Product Security",
+            "AI Governance",
+            "Roadmap-Massnahmen",
+            "Management-Entscheidungen",
         ],
         snapshot_structure: &[
             "metrics_json",
@@ -531,21 +598,21 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "ai_governance_json",
         ],
         gap_focus: &[
-            "Critical open risks",
-            "Open ISCY-27 control gaps",
-            "Missing or partial evidence",
-            "Unassessed incidents",
-            "Open roadmap work",
+            "Kritische offene Risiken",
+            "Offene ISCY-27-Control-Gaps",
+            "Fehlende oder teilweise Evidence",
+            "Nicht bewertete Incidents",
+            "Offene Roadmap-Arbeit",
         ],
         review_hints: &[
-            "Validate whether the snapshot contains enough evidence for the review period.",
-            "Separate regulatory support from formal legal advice or certification.",
-            "Record decisions and next actions before approval.",
+            "Pruefen, ob der Snapshot genug Evidence fuer den Review-Zeitraum enthaelt.",
+            "Regulatorische Unterstuetzung von Rechtsberatung oder Zertifizierung trennen.",
+            "Entscheidungen und naechste Massnahmen vor der Freigabe dokumentieren.",
         ],
         management_actions: &[
-            "Approve or return the package for rework.",
-            "Assign owners for critical gaps.",
-            "Confirm next review period and escalation path.",
+            "Paket freigeben oder zur Nacharbeit zurueckgeben.",
+            "Owner fuer kritische Luecken festlegen.",
+            "Naechsten Review-Zeitraum und Eskalationspfad bestaetigen.",
         ],
     },
     ManagementReviewTemplateDefinition {
@@ -602,8 +669,9 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
         template_type: "nis2_management_summary",
         aliases: &["nis2", "nis-2"],
         template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
-        name: "NIS2 Management Summary",
-        purpose: "Management summary for NIS2 governance, incident readiness and resilience follow-up.",
+        name: "NIS2-Management-Zusammenfassung",
+        purpose:
+            "Management-Zusammenfassung fuer NIS2-Governance, Incident Readiness und Resilienz-Follow-up.",
         regulatory_context: &[
             "NIS2",
             "Commission Implementing Regulation (EU) 2024/2690 Article 3 best-practice",
@@ -617,12 +685,12 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "agent posture",
         ],
         sections: &[
-            "NIS2 scope hints",
-            "Incident significance and notification readiness",
-            "Control and evidence gaps",
-            "Supplier dependencies",
-            "Operational posture",
-            "Management decisions",
+            "NIS2-Scope-Hinweise",
+            "Incident-Erheblichkeit und Meldebereitschaft",
+            "Control- und Evidence-Luecken",
+            "Supplier-Abhaengigkeiten",
+            "Operative Lage",
+            "Management-Entscheidungen",
         ],
         snapshot_structure: &[
             "regulatory_context_json",
@@ -634,28 +702,28 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "roadmap_json",
         ],
         gap_focus: &[
-            "Unassessed incident significance",
-            "Missing incident response evidence",
-            "Critical supplier exposure",
-            "Stale agent or monitoring posture",
+            "Nicht bewertete Incident-Erheblichkeit",
+            "Fehlende Incident-Response-Evidence",
+            "Kritische Supplier-Exponierung",
+            "Veraltete Agent- oder Monitoring-Lage",
         ],
         review_hints: &[
-            "Distinguish security incidents from significant incidents before notification decisions.",
-            "Use the Article 3 criteria as structured best-practice where applicable.",
-            "Confirm on-call, weekend and escalation responsibilities.",
+            "Security Incidents vor Meldeentscheidungen von erheblichen Sicherheitsvorfaellen trennen.",
+            "Article-3-Kriterien als strukturierte Best Practice nutzen, wo anwendbar.",
+            "Rufbereitschaft, Wochenend- und Eskalationsverantwortung bestaetigen.",
         ],
         management_actions: &[
-            "Confirm incident classification decisions.",
-            "Assign remediation for significant control and supplier gaps.",
-            "Approve notification-readiness actions.",
+            "Incident-Klassifizierungsentscheidungen bestaetigen.",
+            "Remediation fuer wesentliche Control- und Supplier-Luecken zuweisen.",
+            "Massnahmen zur Meldebereitschaft freigeben.",
         ],
     },
     ManagementReviewTemplateDefinition {
         template_type: "dora_ict_risk_supplier_incident_summary",
         aliases: &["dora", "dora_ict", "dora_summary"],
         template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
-        name: "DORA ICT Risk, Supplier and Incident Summary",
-        purpose: "Executive package for ICT risk, third-party dependency and incident steering.",
+        name: "DORA-ICT-Risk-, Supplier- und Incident-Zusammenfassung",
+        purpose: "Steuerungspaket fuer ICT-Risk, Third-Party-Abhaengigkeiten und Incidents.",
         regulatory_context: &["DORA", "ICT risk management", "ICT third-party risk", "incident reporting"],
         data_sources: &[
             "risks",
@@ -666,12 +734,12 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "roadmap",
         ],
         sections: &[
-            "ICT risk profile",
-            "Major incident and review signals",
-            "Supplier and subprocessor exposure",
-            "Evidence and resilience gaps",
-            "Product-security dependencies",
-            "Management decisions",
+            "ICT-Risk-Profil",
+            "Major-Incident- und Review-Signale",
+            "Supplier- und Subprocessor-Exponierung",
+            "Evidence- und Resilienz-Luecken",
+            "Product-Security-Abhaengigkeiten",
+            "Management-Entscheidungen",
         ],
         snapshot_structure: &[
             "metrics_json",
@@ -683,29 +751,29 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "roadmap_json",
         ],
         gap_focus: &[
-            "Critical ICT risks",
-            "Overdue supplier reviews",
-            "Open incident review decisions",
-            "Product-security CVE review backlog",
+            "Kritische ICT-Risiken",
+            "Ueberfaellige Supplier-Reviews",
+            "Offene Incident-Review-Entscheidungen",
+            "Product-Security-CVE-Review-Backlog",
         ],
         review_hints: &[
-            "Validate whether financial-entity or ICT-third-party-provider flags are set correctly.",
-            "Check supplier concentration and exit-test posture.",
-            "Do not treat this package as a formal regulatory filing.",
+            "Pruefen, ob Financial-Entity- oder ICT-Third-Party-Provider-Flags korrekt gesetzt sind.",
+            "Supplier-Konzentration und Exit-Test-Lage pruefen.",
+            "Dieses Paket nicht als formale regulatorische Einreichung behandeln.",
         ],
         management_actions: &[
-            "Approve ICT risk remediation priorities.",
-            "Escalate critical suppliers or missing exit tests.",
-            "Confirm incident follow-up ownership.",
+            "ICT-Risk-Remediation-Prioritaeten freigeben.",
+            "Kritische Supplier oder fehlende Exit-Tests eskalieren.",
+            "Incident-Follow-up-Verantwortung bestaetigen.",
         ],
     },
     ManagementReviewTemplateDefinition {
         template_type: "dsgvo_data_protection_review",
         aliases: &["dsgvo", "gdpr", "data_protection", "privacy_review"],
         template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
-        name: "DSGVO Data Protection Review Pack",
+        name: "DSGVO-Datenschutz-Review-Paket",
         purpose:
-            "Contextual data-protection package for evidence, incident, supplier and AI governance review.",
+            "Kontextuelles Datenschutz-Paket fuer Evidence-, Incident-, Supplier- und AI-Governance-Reviews.",
         regulatory_context: &["DSGVO", "GDPR", "personal data governance", "data breach review"],
         data_sources: &[
             "tenant regulatory profile",
@@ -719,12 +787,12 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "roadmap",
         ],
         sections: &[
-            "Data-protection scope hints",
-            "Personal-data and AI governance signals",
-            "Incident and breach-review readiness",
-            "Evidence integrity, legal hold and disposition",
-            "Supplier and subprocessor follow-up",
-            "Management decisions",
+            "Datenschutz-Scope-Hinweise",
+            "Personenbezogene Daten und AI-Governance-Signale",
+            "Incident- und Data-Breach-Review-Bereitschaft",
+            "Evidence-Integritaet, Legal Hold / Aufbewahrungssperre und Disposition",
+            "Supplier- und Subprocessor-Follow-up",
+            "Management-Entscheidungen",
         ],
         snapshot_structure: &[
             "regulatory_context_json",
@@ -738,21 +806,21 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
             "decision_summary_json",
         ],
         gap_focus: &[
-            "Missing or stale data-protection evidence",
-            "Unassessed incident and breach-review decisions",
-            "Evidence items under legal hold or disposition review",
-            "Supplier reviews without evidence links",
-            "AI systems without risk, evidence or roadmap linkage",
+            "Fehlende oder veraltete Datenschutz-Evidence",
+            "Nicht bewertete Incident- und Breach-Review-Entscheidungen",
+            "Evidence unter Legal Hold / Aufbewahrungssperre oder Disposition-Review",
+            "Supplier-Reviews ohne Evidence-Links",
+            "AI-Systeme ohne Risiko-, Evidence- oder Roadmap-Verknuepfung",
         ],
         review_hints: &[
-            "Confirm whether the tenant profile still reflects personal-data processing.",
-            "Use the package as governance support, not as legal advice or an authority filing.",
-            "Separate evidence-retention decisions from physical file deletion.",
+            "Bestaetigen, ob das Tenant-Profil die Verarbeitung personenbezogener Daten noch korrekt abbildet.",
+            "Das Paket als Governance-Unterstuetzung nutzen, nicht als Rechtsberatung oder Behoerdeneinreichung.",
+            "Evidence-Aufbewahrungsentscheidungen von physischer Dateiloeschung trennen.",
         ],
         management_actions: &[
-            "Assign owners for missing data-protection evidence.",
-            "Confirm incident/breach review responsibilities.",
-            "Approve remediation for supplier, AI and evidence-integrity gaps.",
+            "Owner fuer fehlende Datenschutz-Evidence festlegen.",
+            "Incident-/Breach-Review-Verantwortung bestaetigen.",
+            "Remediation fuer Supplier-, AI- und Evidence-Integritaetsluecken freigeben.",
         ],
     },
     ManagementReviewTemplateDefinition {
@@ -1182,6 +1250,170 @@ async fn list_regulatory_review_pack_snapshots_sqlite(
         .map_err(Into::into)
 }
 
+async fn list_regulatory_review_pack_snapshots_filtered_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    filters: &RegulatoryReviewSnapshotFilters,
+) -> anyhow::Result<Vec<ManagementReviewPackageSummary>> {
+    let mut builder = QueryBuilder::<Postgres>::new(
+        r#"
+        SELECT
+            id, tenant_id, title, period_start::text AS period_start, period_end::text AS period_end,
+            template_type, template_version,
+            status, generated_by_id, approved_by_id, approved_at::text AS approved_at,
+            created_at::text AS created_at, updated_at::text AS updated_at
+        FROM reports_managementreviewpackage
+        WHERE tenant_id = "#,
+    );
+    builder.push_bind(tenant_id);
+    push_regulatory_review_pack_filters(&mut builder, filters, true);
+    builder.push(" ORDER BY created_at DESC, id DESC LIMIT ");
+    builder.push_bind(filters.limit);
+    let rows = builder
+        .build()
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-Regulatory-Review-Pack-Snapshots konnten nicht gelesen werden")?;
+    let summaries = rows
+        .into_iter()
+        .map(management_review_summary_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    apply_regulatory_review_gap_filters_postgres(pool, tenant_id, summaries, filters).await
+}
+
+async fn list_regulatory_review_pack_snapshots_filtered_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    filters: &RegulatoryReviewSnapshotFilters,
+) -> anyhow::Result<Vec<ManagementReviewPackageSummary>> {
+    let mut builder = QueryBuilder::<Sqlite>::new(
+        r#"
+        SELECT
+            id, tenant_id, title, CAST(period_start AS TEXT) AS period_start,
+            template_type, template_version,
+            CAST(period_end AS TEXT) AS period_end, status, generated_by_id, approved_by_id,
+            CAST(approved_at AS TEXT) AS approved_at, CAST(created_at AS TEXT) AS created_at,
+            CAST(updated_at AS TEXT) AS updated_at
+        FROM reports_managementreviewpackage
+        WHERE tenant_id = "#,
+    );
+    builder.push_bind(tenant_id);
+    push_regulatory_review_pack_filters(&mut builder, filters, false);
+    builder.push(" ORDER BY created_at DESC, id DESC LIMIT ");
+    builder.push_bind(filters.limit);
+    let rows = builder
+        .build()
+        .fetch_all(pool)
+        .await
+        .context("SQLite-Regulatory-Review-Pack-Snapshots konnten nicht gelesen werden")?;
+    let summaries = rows
+        .into_iter()
+        .map(management_review_summary_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    apply_regulatory_review_gap_filters_sqlite(pool, tenant_id, summaries, filters).await
+}
+
+fn push_regulatory_review_pack_filters<'a, DB>(
+    builder: &mut QueryBuilder<'a, DB>,
+    filters: &'a RegulatoryReviewSnapshotFilters,
+    postgres: bool,
+) where
+    DB: sqlx::Database,
+    String: sqlx::Encode<'a, DB> + sqlx::Type<DB>,
+{
+    builder.push(
+        r#"
+          AND template_type IN (
+            'generic_security_governance',
+            'nis2_management_summary',
+            'dora_ict_risk_supplier_incident_summary',
+            'dsgvo_data_protection_review'
+          )
+        "#,
+    );
+    if let Some(template_type) = filters.template_type.as_ref() {
+        builder.push(" AND template_type = ");
+        builder.push_bind(template_type.clone());
+    }
+    if let Some(status) = filters.status.as_ref() {
+        builder.push(" AND status = ");
+        builder.push_bind(status.clone());
+    }
+    if let Some(period_start) = filters.period_start.as_ref() {
+        if postgres {
+            builder.push(" AND (period_end IS NULL OR period_end::text >= ");
+        } else {
+            builder.push(" AND (period_end IS NULL OR CAST(period_end AS TEXT) >= ");
+        }
+        builder.push_bind(period_start.clone());
+        builder.push(")");
+    }
+    if let Some(period_end) = filters.period_end.as_ref() {
+        if postgres {
+            builder.push(" AND (period_start IS NULL OR period_start::text <= ");
+        } else {
+            builder.push(" AND (period_start IS NULL OR CAST(period_start AS TEXT) <= ");
+        }
+        builder.push_bind(period_end.clone());
+        builder.push(")");
+    }
+}
+
+async fn apply_regulatory_review_gap_filters_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    summaries: Vec<ManagementReviewPackageSummary>,
+    filters: &RegulatoryReviewSnapshotFilters,
+) -> anyhow::Result<Vec<ManagementReviewPackageSummary>> {
+    if filters.has_open_gaps.is_none() && filters.has_critical_gaps.is_none() {
+        return Ok(summaries);
+    }
+    let mut filtered = Vec::new();
+    for summary in summaries {
+        if let Some(detail) = management_review_detail_postgres(pool, tenant_id, summary.id).await?
+        {
+            if regulatory_review_snapshot_matches_gap_filters(&detail, filters) {
+                filtered.push(summary);
+            }
+        }
+    }
+    Ok(filtered)
+}
+
+async fn apply_regulatory_review_gap_filters_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    summaries: Vec<ManagementReviewPackageSummary>,
+    filters: &RegulatoryReviewSnapshotFilters,
+) -> anyhow::Result<Vec<ManagementReviewPackageSummary>> {
+    if filters.has_open_gaps.is_none() && filters.has_critical_gaps.is_none() {
+        return Ok(summaries);
+    }
+    let mut filtered = Vec::new();
+    for summary in summaries {
+        if let Some(detail) = management_review_detail_sqlite(pool, tenant_id, summary.id).await? {
+            if regulatory_review_snapshot_matches_gap_filters(&detail, filters) {
+                filtered.push(summary);
+            }
+        }
+    }
+    Ok(filtered)
+}
+
+fn regulatory_review_snapshot_matches_gap_filters(
+    detail: &ManagementReviewPackageDetail,
+    filters: &RegulatoryReviewSnapshotFilters,
+) -> bool {
+    let has_open = regulatory_review_has_open_gaps(&detail.gap_summary_json);
+    let has_critical = regulatory_review_has_critical_gaps(&detail.gap_summary_json);
+    filters
+        .has_open_gaps
+        .is_none_or(|expected| expected == has_open)
+        && filters
+            .has_critical_gaps
+            .is_none_or(|expected| expected == has_critical)
+}
+
 async fn management_review_detail_postgres(
     pool: &PgPool,
     tenant_id: i64,
@@ -1230,7 +1462,11 @@ async fn preview_management_review_template_postgres(
         tenant_id,
         None,
         template.template_type,
-        "management_review_template_previewed",
+        if is_regulatory_review_pack_template_type(template.template_type) {
+            "regulatory_review_pack_previewed"
+        } else {
+            "management_review_template_previewed"
+        },
         Some(user_id),
         &serde_json::json!({
             "template_version": template.template_version,
@@ -1264,7 +1500,11 @@ async fn preview_management_review_template_sqlite(
         tenant_id,
         None,
         template.template_type,
-        "management_review_template_previewed",
+        if is_regulatory_review_pack_template_type(template.template_type) {
+            "regulatory_review_pack_previewed"
+        } else {
+            "management_review_template_previewed"
+        },
         Some(user_id),
         &serde_json::json!({
             "template_version": template.template_version,
@@ -1347,7 +1587,11 @@ async fn generate_management_review_postgres(
         tenant_id,
         Some(id),
         template.template_type,
-        "management_review_snapshot_created",
+        if is_regulatory_review_pack_template_type(template.template_type) {
+            "regulatory_review_pack_snapshot_created"
+        } else {
+            "management_review_snapshot_created"
+        },
         Some(user_id),
         &serde_json::json!({
             "template_version": template.template_version,
@@ -1426,7 +1670,11 @@ async fn generate_management_review_sqlite(
         tenant_id,
         Some(id),
         template.template_type,
-        "management_review_snapshot_created",
+        if is_regulatory_review_pack_template_type(template.template_type) {
+            "regulatory_review_pack_snapshot_created"
+        } else {
+            "management_review_snapshot_created"
+        },
         Some(user_id),
         &serde_json::json!({
             "template_version": template.template_version,
@@ -1570,6 +1818,20 @@ struct ManagementReviewItemCounts {
     suppliers: i64,
 }
 
+type ReviewGapItemDefinition = (&'static str, &'static str, bool);
+type ReviewGapGroupDefinition = (&'static str, &'static [ReviewGapItemDefinition]);
+
+struct ManagementReviewDecisionSources<'a> {
+    metrics: &'a Value,
+    product_security: &'a Value,
+    supplier: &'a Value,
+    agent_posture: &'a Value,
+    ai_governance: &'a Value,
+    source_counts: &'a Value,
+    incident_decisions: &'a Value,
+    roadmap: &'a Value,
+}
+
 async fn build_management_review_snapshot_postgres(
     pool: &PgPool,
     tenant_id: i64,
@@ -1610,11 +1872,16 @@ async fn build_management_review_snapshot_postgres(
     );
     let decision_summary_json = management_review_decision_summary(
         template,
-        &metrics_json,
-        &product_security_json,
-        &supplier_json,
-        &agent_posture_json,
-        &ai_governance_json,
+        ManagementReviewDecisionSources {
+            metrics: &metrics_json,
+            product_security: &product_security_json,
+            supplier: &supplier_json,
+            agent_posture: &agent_posture_json,
+            ai_governance: &ai_governance_json,
+            source_counts: &source_counts_json,
+            incident_decisions: &incident_decisions_json,
+            roadmap: &roadmap_json,
+        },
     );
     Ok(ManagementReviewSnapshot {
         metrics_json,
@@ -1674,11 +1941,16 @@ async fn build_management_review_snapshot_sqlite(
     );
     let decision_summary_json = management_review_decision_summary(
         template,
-        &metrics_json,
-        &product_security_json,
-        &supplier_json,
-        &agent_posture_json,
-        &ai_governance_json,
+        ManagementReviewDecisionSources {
+            metrics: &metrics_json,
+            product_security: &product_security_json,
+            supplier: &supplier_json,
+            agent_posture: &agent_posture_json,
+            ai_governance: &ai_governance_json,
+            source_counts: &source_counts_json,
+            incident_decisions: &incident_decisions_json,
+            roadmap: &roadmap_json,
+        },
     );
     Ok(ManagementReviewSnapshot {
         metrics_json,
@@ -1800,8 +2072,8 @@ async fn evidence_integrity_storage_postgres(
         "disposition_blocked": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND legal_hold_blocks_disposition = TRUE", tenant_id).await?,
         "disposal_candidates": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND disposal_candidate = TRUE", tenant_id).await?,
         "notes": [
-            "Aggregated status values only; evidence file names, paths and raw content are excluded.",
-            "Disposition is metadata-only and does not imply physical Evidence deletion."
+            "Nur aggregierte Statuswerte; Evidence-Dateinamen, Pfade und Rohinhalte sind ausgeschlossen.",
+            "Disposition ist metadata-only und bedeutet keine physische Evidence-Loeschung."
         ]
     }))
 }
@@ -1826,8 +2098,8 @@ async fn evidence_integrity_storage_sqlite(
         "disposition_blocked": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND legal_hold_blocks_disposition = 1", tenant_id).await?,
         "disposal_candidates": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND disposal_candidate = 1", tenant_id).await?,
         "notes": [
-            "Aggregated status values only; evidence file names, paths and raw content are excluded.",
-            "Disposition is metadata-only and does not imply physical Evidence deletion."
+            "Nur aggregierte Statuswerte; Evidence-Dateinamen, Pfade und Rohinhalte sind ausgeschlossen.",
+            "Disposition ist metadata-only und bedeutet keine physische Evidence-Loeschung."
         ]
     }))
 }
@@ -2090,9 +2362,9 @@ fn regulatory_context_json(
         "regulatory_context": template.regulatory_context,
         "purpose": template.purpose,
         "tenant_profile": tenant_profile.unwrap_or_else(|| serde_json::json!({
-            "status": "no tenant regulatory profile recorded"
+            "status": "Kein regulatorisches Tenant-Profil erfasst"
         })),
-        "disclaimer": "ISCY provides governance and evidence support; this snapshot is not legal advice, certification, or a formal regulatory filing."
+        "disclaimer": "ISCY unterstuetzt Governance- und Evidence-Vorbereitung; dieser Snapshot ist keine Rechtsberatung, keine Zertifizierung und keine formale regulatorische Einreichung."
     })
 }
 
@@ -2437,57 +2709,580 @@ fn management_review_gap_summary(
     })
 }
 
-fn management_review_decision_summary(
-    template: ManagementReviewTemplateDefinition,
+fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
+    let groups: &[ReviewGapGroupDefinition] = match template_type {
+        "nis2_management_summary" => &[
+            (
+                "Incident- und Meldeentscheidungs-Gaps",
+                &[
+                    ("Nicht bewertete Incidents", "unassessed_incidents", true),
+                    ("Offene Roadmap-Tasks", "open_roadmap_tasks", false),
+                ],
+            ),
+            (
+                "Technische und organisatorische Massnahmen",
+                &[
+                    ("Offene Control-Gaps", "open_control_gaps", true),
+                    (
+                        "Fehlende Control-Evidence",
+                        "missing_control_evidence",
+                        false,
+                    ),
+                    ("Kritische Agent-Findings", "critical_agent_findings", true),
+                ],
+            ),
+            (
+                "Evidence- und Nachweis-Gaps",
+                &[
+                    ("Offene Evidence Needs", "open_evidence_needs", false),
+                    (
+                        "Nicht gepruefte Evidence",
+                        "evidence_integrity_not_checked",
+                        false,
+                    ),
+                    (
+                        "Evidence-Integritaetsabweichungen",
+                        "evidence_integrity_mismatch",
+                        true,
+                    ),
+                ],
+            ),
+            (
+                "Supplier- und Supply-Chain-Gaps",
+                &[
+                    ("Kritische Supplier", "critical_suppliers", true),
+                    (
+                        "Fehlende Supplier-Evidence",
+                        "missing_supplier_evidence",
+                        false,
+                    ),
+                    (
+                        "Ueberfaellige oder nicht bewertete Supplier",
+                        "overdue_or_unreviewed_suppliers",
+                        false,
+                    ),
+                ],
+            ),
+        ],
+        "dora_ict_risk_supplier_incident_summary" => &[
+            (
+                "ICT-Risk-Gaps",
+                &[
+                    ("Kritische offene Risiken", "critical_open_risks", true),
+                    ("Offene Control-Gaps", "open_control_gaps", false),
+                ],
+            ),
+            (
+                "Incident-Gaps",
+                &[
+                    ("Nicht bewertete Incidents", "unassessed_incidents", true),
+                    ("Offene Roadmap-Tasks", "open_roadmap_tasks", false),
+                ],
+            ),
+            (
+                "ICT-Third-Party-Gaps",
+                &[
+                    ("Kritische Supplier", "critical_suppliers", true),
+                    (
+                        "Ueberfaellige oder nicht bewertete Supplier",
+                        "overdue_or_unreviewed_suppliers",
+                        false,
+                    ),
+                    (
+                        "Fehlende Supplier-Evidence",
+                        "missing_supplier_evidence",
+                        false,
+                    ),
+                ],
+            ),
+            (
+                "Exit-, Contract- und Review-Gaps",
+                &[
+                    (
+                        "Ueberfaellige oder nicht bewertete Supplier",
+                        "overdue_or_unreviewed_suppliers",
+                        false,
+                    ),
+                    ("Offene Roadmap-Tasks", "open_roadmap_tasks", false),
+                ],
+            ),
+            (
+                "Evidence-, Integritaets- und Storage-Gaps",
+                &[
+                    ("Offene Evidence Needs", "open_evidence_needs", false),
+                    (
+                        "Evidence-Integritaetsabweichungen",
+                        "evidence_integrity_mismatch",
+                        true,
+                    ),
+                    ("Faellige Disposition", "evidence_disposition_due", false),
+                ],
+            ),
+        ],
+        "dsgvo_data_protection_review" => &[
+            (
+                "Datenschutz- und Rollen-Gaps",
+                &[
+                    ("Offene Control-Gaps", "open_control_gaps", false),
+                    (
+                        "AI-Systeme ohne Risikolink",
+                        "ai_systems_without_risk_links",
+                        true,
+                    ),
+                    (
+                        "AI-Systeme ohne Evidence",
+                        "ai_systems_without_evidence",
+                        false,
+                    ),
+                ],
+            ),
+            (
+                "Incident- und Data-Breach-Gaps",
+                &[
+                    ("Nicht bewertete Incidents", "unassessed_incidents", true),
+                    ("Offene Roadmap-Tasks", "open_roadmap_tasks", false),
+                ],
+            ),
+            (
+                "Retention-, Legal-Hold- und Disposition-Gaps",
+                &[
+                    ("Aktiver Legal Hold", "evidence_legal_hold_active", false),
+                    ("Faellige Disposition", "evidence_disposition_due", false),
+                    (
+                        "Evidence-Integritaetsabweichungen",
+                        "evidence_integrity_mismatch",
+                        true,
+                    ),
+                ],
+            ),
+            (
+                "Supplier mit Datenbezug",
+                &[
+                    ("Kritische Supplier", "critical_suppliers", true),
+                    (
+                        "Fehlende Supplier-Evidence",
+                        "missing_supplier_evidence",
+                        false,
+                    ),
+                    (
+                        "Ueberfaellige oder nicht bewertete Supplier",
+                        "overdue_or_unreviewed_suppliers",
+                        false,
+                    ),
+                ],
+            ),
+            (
+                "Evidence- und Schutzklassen-Gaps",
+                &[
+                    ("Offene Evidence Needs", "open_evidence_needs", false),
+                    (
+                        "Fehlende Control-Evidence",
+                        "missing_control_evidence",
+                        false,
+                    ),
+                ],
+            ),
+        ],
+        _ => &[
+            (
+                "Risk",
+                &[("Kritische offene Risiken", "critical_open_risks", true)],
+            ),
+            (
+                "Control",
+                &[
+                    ("Offene Control-Gaps", "open_control_gaps", true),
+                    (
+                        "Fehlende Control-Evidence",
+                        "missing_control_evidence",
+                        false,
+                    ),
+                ],
+            ),
+            (
+                "Evidence",
+                &[
+                    ("Offene Evidence Needs", "open_evidence_needs", false),
+                    (
+                        "Evidence-Integritaetsabweichungen",
+                        "evidence_integrity_mismatch",
+                        true,
+                    ),
+                ],
+            ),
+            (
+                "Incident",
+                &[("Nicht bewertete Incidents", "unassessed_incidents", true)],
+            ),
+            (
+                "Supplier",
+                &[
+                    ("Kritische Supplier", "critical_suppliers", true),
+                    (
+                        "Fehlende Supplier-Evidence",
+                        "missing_supplier_evidence",
+                        false,
+                    ),
+                ],
+            ),
+            (
+                "Product Security",
+                &[
+                    (
+                        "Kritische offene Schwachstellen",
+                        "critical_open_vulnerabilities",
+                        true,
+                    ),
+                    (
+                        "Offene CVE-Korrelationen",
+                        "open_cve_correlation_reviews",
+                        false,
+                    ),
+                ],
+            ),
+            (
+                "AI Governance",
+                &[
+                    (
+                        "AI-Systeme ohne Risikolink",
+                        "ai_systems_without_risk_links",
+                        true,
+                    ),
+                    (
+                        "AI-Systeme ohne Roadmap-Link",
+                        "ai_systems_without_roadmap_links",
+                        false,
+                    ),
+                ],
+            ),
+            (
+                "Roadmap",
+                &[("Offene Roadmap-Tasks", "open_roadmap_tasks", false)],
+            ),
+            (
+                "Agent / Zero Trust",
+                &[
+                    ("Kritische Agent-Findings", "critical_agent_findings", true),
+                    (
+                        "Offene Agent-Findings",
+                        "stale_or_open_agent_findings",
+                        false,
+                    ),
+                ],
+            ),
+        ],
+    };
+
+    let groups = groups
+        .iter()
+        .map(|(name, items)| {
+            let items_json = items
+                .iter()
+                .map(|(label, key, critical)| {
+                    let count = json_i64(gap_summary, key);
+                    serde_json::json!({
+                        "label": label,
+                        "key": key,
+                        "count": count,
+                        "critical": *critical,
+                        "status": if count > 0 { "Offen" } else { "Keine offenen Luecken" }
+                    })
+                })
+                .collect::<Vec<_>>();
+            let open_count = items_json
+                .iter()
+                .filter_map(|item| item["count"].as_i64())
+                .sum::<i64>();
+            let critical_count = items_json
+                .iter()
+                .filter(|item| item["critical"].as_bool().unwrap_or(false))
+                .filter_map(|item| item["count"].as_i64())
+                .sum::<i64>();
+            serde_json::json!({
+                "name": name,
+                "open_count": open_count,
+                "critical_count": critical_count,
+                "status": if open_count > 0 { "Offen" } else { "Keine offenen Luecken" },
+                "items": items_json
+            })
+        })
+        .collect::<Vec<_>>();
+    Value::Array(groups)
+}
+
+fn review_owner_hints(
     metrics: &Value,
+    incident_decisions: &Value,
+    roadmap: &Value,
     product_security: &Value,
     supplier: &Value,
-    agent_posture: &Value,
     ai_governance: &Value,
 ) -> Value {
+    let roadmap_owners = unique_owner_values(roadmap, "owner_role");
+    let areas = vec![
+        owner_hint(
+            "Risk / Control",
+            if json_i64(metrics, "open_control_gaps") > 0
+                || json_i64(metrics, "critical_open_risks") > 0
+            {
+                "Owner fuer Risiko-/Control-Luecken pruefen"
+            } else {
+                "Keine offenen kritischen Hinweise aus dem Snapshot"
+            },
+            Vec::new(),
+        ),
+        owner_hint(
+            "Incident Response",
+            if incident_decisions
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+            {
+                "Incident-Verantwortung im Incident-Modul pruefen"
+            } else {
+                "Keine offenen Incident-Entscheidungen im Snapshot"
+            },
+            Vec::new(),
+        ),
+        owner_hint(
+            "Roadmap",
+            "Vorhandene Roadmap-Owner-Rollen aus offenen Tasks",
+            roadmap_owners,
+        ),
+        owner_hint(
+            "Supplier",
+            if json_i64(supplier, "supplier_count") > 0 {
+                "Supplier Owner / Security Contact im Supplier-Review pruefen"
+            } else {
+                "Keine Supplier-Daten erfasst"
+            },
+            Vec::new(),
+        ),
+        owner_hint(
+            "Product Security / PSIRT",
+            if json_i64(product_security, "products") > 0 {
+                "PSIRT-/Product-Security-Verantwortung pruefen"
+            } else {
+                "Keine Product-Security-Daten erfasst"
+            },
+            Vec::new(),
+        ),
+        owner_hint(
+            "AI Governance",
+            if json_i64(ai_governance, "system_count") > 0 {
+                "AI-System-Owner im AI-Governance-Register pruefen"
+            } else {
+                "Keine AI-Governance-Systeme erfasst"
+            },
+            Vec::new(),
+        ),
+    ];
+    serde_json::json!({
+        "hinweis": "Es werden nur vorhandene Rollen-/Owner-Hinweise angezeigt; fehlende Verantwortliche werden nicht geraten.",
+        "areas": areas
+    })
+}
+
+fn owner_hint(area: &str, hint: &str, owners: Vec<String>) -> Value {
+    serde_json::json!({
+        "area": area,
+        "hint": hint,
+        "owners": if owners.is_empty() {
+            serde_json::json!(["Nicht erfasst"])
+        } else {
+            serde_json::json!(owners)
+        }
+    })
+}
+
+fn unique_owner_values(value: &Value, key: &str) -> Vec<String> {
+    let mut owners = Vec::new();
+    if let Some(items) = value.as_array() {
+        for item in items {
+            let Some(owner) = item
+                .get(key)
+                .and_then(Value::as_str)
+                .and_then(safe_owner_label)
+            else {
+                continue;
+            };
+            if !owners.iter().any(|existing| existing == &owner) {
+                owners.push(owner);
+            }
+            if owners.len() >= 8 {
+                break;
+            }
+        }
+    }
+    owners
+}
+
+fn safe_owner_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value == "-" {
+        return None;
+    }
+    if value.contains('@') {
+        return Some("Kontakt erfasst (nicht angezeigt)".to_string());
+    }
+    Some(value.chars().take(80).collect())
+}
+
+fn review_data_completeness_summary(source_counts: &Value) -> Value {
+    let areas = [
+        ("Risiken", "risks"),
+        ("Controls", "controls"),
+        ("Evidence", "evidence"),
+        ("Evidence-Integritaet", "evidence_integrity"),
+        ("Incidents", "incidents"),
+        ("Roadmap-Tasks", "roadmap_tasks"),
+        ("Supplier", "suppliers"),
+        ("AI Governance", "ai_governance"),
+    ]
+    .iter()
+    .map(|(label, no_data_key)| {
+        let count_key = match *no_data_key {
+            "evidence_integrity" => "evidence_integrity_items",
+            "roadmap_tasks" => "roadmap_tasks",
+            "ai_governance" => "ai_governance_systems",
+            "controls" => "controls",
+            "suppliers" => "suppliers",
+            key => key,
+        };
+        let count = json_i64(source_counts, count_key);
+        let missing = source_counts["no_data_recorded"]
+            .get(*no_data_key)
+            .and_then(Value::as_bool)
+            .unwrap_or(count == 0);
+        serde_json::json!({
+            "area": label,
+            "count": count,
+            "status": if missing { "Nicht erfasst" } else { "Erfasst" }
+        })
+    })
+    .collect::<Vec<_>>();
+    serde_json::json!({
+        "summary": "Datenvollstaendigkeit wird aus vorhandenen Snapshot-Quellen abgeleitet.",
+        "areas": areas
+    })
+}
+
+fn regulatory_review_has_open_gaps(gap_summary: &Value) -> bool {
+    [
+        "critical_open_risks",
+        "open_control_gaps",
+        "missing_control_evidence",
+        "open_evidence_needs",
+        "unassessed_incidents",
+        "open_roadmap_tasks",
+        "critical_open_vulnerabilities",
+        "open_cve_correlation_reviews",
+        "invalid_product_security_imports",
+        "evidence_integrity_not_checked",
+        "evidence_integrity_mismatch",
+        "evidence_legal_hold_active",
+        "evidence_disposition_due",
+        "critical_suppliers",
+        "missing_supplier_evidence",
+        "overdue_or_unreviewed_suppliers",
+        "critical_agent_findings",
+        "stale_or_open_agent_findings",
+        "ai_systems_without_risk_links",
+        "ai_systems_without_roadmap_links",
+        "ai_systems_without_evidence",
+    ]
+    .iter()
+    .any(|key| json_i64(gap_summary, key) > 0)
+}
+
+fn regulatory_review_has_critical_gaps(gap_summary: &Value) -> bool {
+    [
+        "critical_open_risks",
+        "critical_open_vulnerabilities",
+        "evidence_integrity_mismatch",
+        "critical_suppliers",
+        "critical_agent_findings",
+        "ai_systems_without_risk_links",
+    ]
+    .iter()
+    .any(|key| json_i64(gap_summary, key) > 0)
+}
+
+fn regulatory_review_filter_summary_json(filters: &RegulatoryReviewSnapshotFilters) -> Value {
+    serde_json::json!({
+        "pack_type": filters.template_type.as_deref().unwrap_or("alle Review-Pakete"),
+        "status": filters.status.as_deref().unwrap_or("alle Status"),
+        "period_start": filters.period_start.as_deref().unwrap_or("nicht begrenzt"),
+        "period_end": filters.period_end.as_deref().unwrap_or("nicht begrenzt"),
+        "has_open_gaps": filters.has_open_gaps,
+        "has_critical_gaps": filters.has_critical_gaps,
+        "limit": filters.limit
+    })
+}
+
+fn management_review_decision_summary(
+    template: ManagementReviewTemplateDefinition,
+    sources: ManagementReviewDecisionSources<'_>,
+) -> Value {
     let mut required_decisions = Vec::new();
-    if json_i64(metrics, "critical_open_risks") > 0 {
-        required_decisions.push("Risk treatment or acceptance for critical open risks");
+    if json_i64(sources.metrics, "critical_open_risks") > 0 {
+        required_decisions.push("Risk Treatment oder Akzeptanz fuer kritische offene Risiken");
     }
-    if json_i64(metrics, "open_control_gaps") > 0
-        || json_i64(metrics, "missing_control_evidence") > 0
+    if json_i64(sources.metrics, "open_control_gaps") > 0
+        || json_i64(sources.metrics, "missing_control_evidence") > 0
     {
-        required_decisions.push("Owner and target date for control and evidence gaps");
+        required_decisions.push("Owner und Zieltermin fuer Control- und Evidence-Luecken");
     }
-    if json_i64(metrics, "unassessed_incidents") > 0 {
-        required_decisions.push("Incident significance assessment and notification readiness");
+    if json_i64(sources.metrics, "unassessed_incidents") > 0 {
+        required_decisions.push("Incident-Erheblichkeit und Meldebereitschaft bewerten");
     }
-    if json_i64(product_security, "open_cve_correlation_reviews") > 0
-        || json_i64(product_security, "critical_open_vulnerabilities") > 0
+    if json_i64(sources.product_security, "open_cve_correlation_reviews") > 0
+        || json_i64(sources.product_security, "critical_open_vulnerabilities") > 0
     {
-        required_decisions.push("Product-security CVE review and remediation priority");
+        required_decisions.push("Product-Security-CVE-Review und Remediation-Prioritaet");
     }
-    if json_i64(metrics, "evidence_integrity_mismatch") > 0
-        || json_i64(metrics, "evidence_integrity_not_checked") > 0
-        || json_i64(metrics, "evidence_disposition_due") > 0
+    if json_i64(sources.metrics, "evidence_integrity_mismatch") > 0
+        || json_i64(sources.metrics, "evidence_integrity_not_checked") > 0
+        || json_i64(sources.metrics, "evidence_disposition_due") > 0
     {
         required_decisions
-            .push("Evidence-integrity, legal-hold or metadata-only disposition follow-up");
+            .push("Evidence-Integritaet, Legal Hold / Aufbewahrungssperre oder metadata-only Disposition nachziehen");
     }
-    if json_i64(supplier, "missing_supplier_evidence") > 0
-        || json_i64(supplier, "overdue_or_unreviewed") > 0
+    if json_i64(sources.supplier, "missing_supplier_evidence") > 0
+        || json_i64(sources.supplier, "overdue_or_unreviewed") > 0
     {
-        required_decisions.push("Supplier review follow-up and evidence ownership");
+        required_decisions.push("Supplier-Review-Follow-up und Evidence-Ownership klaeren");
     }
-    if json_i64(agent_posture, "critical_findings") > 0 {
-        required_decisions.push("Agent posture remediation and operational escalation");
+    if json_i64(sources.agent_posture, "critical_findings") > 0 {
+        required_decisions.push("Agent-Posture-Remediation und operative Eskalation");
     }
-    if json_i64(metrics, "ai_systems_without_risk_links") > 0
-        || ai_governance["system_count"].as_i64().unwrap_or(0) > 0
-            && json_i64(metrics, "ai_systems_without_roadmap_links") > 0
+    if json_i64(sources.metrics, "ai_systems_without_risk_links") > 0
+        || sources.ai_governance["system_count"].as_i64().unwrap_or(0) > 0
+            && json_i64(sources.metrics, "ai_systems_without_roadmap_links") > 0
     {
-        required_decisions.push("AI-governance risk, evidence and roadmap linkage");
+        required_decisions.push("AI-Governance-Risiko-, Evidence- und Roadmap-Verknuepfung");
     }
+    let gap_summary = management_review_gap_summary(
+        sources.metrics,
+        sources.product_security,
+        sources.supplier,
+        sources.agent_posture,
+        sources.ai_governance,
+    );
     serde_json::json!({
         "template_actions": template.management_actions,
         "required_management_decisions": required_decisions,
         "review_hints": template.review_hints,
-        "generated_note": "Review hints are derived from existing ISCY tenant data and must be confirmed by responsible owners."
+        "owner_hints": review_owner_hints(
+            sources.metrics,
+            sources.incident_decisions,
+            sources.roadmap,
+            sources.product_security,
+            sources.supplier,
+            sources.ai_governance,
+        ),
+        "gap_groups": review_gap_groups(template.template_type, &gap_summary),
+        "data_completeness_summary": review_data_completeness_summary(sources.source_counts),
+        "generated_note": "Hinweise werden aus vorhandenen tenantgebundenen ISCY-Daten abgeleitet und muessen von verantwortlichen Ownern bestaetigt werden."
     })
 }
 
@@ -2498,6 +3293,28 @@ fn management_review_preview_from_snapshot(
     period_end: Option<String>,
     snapshot: ManagementReviewSnapshot,
 ) -> ManagementReviewTemplatePreview {
+    let owner_hints_json = snapshot
+        .decision_summary_json
+        .get("owner_hints")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let gap_groups_json = snapshot
+        .decision_summary_json
+        .get("gap_groups")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    let data_completeness_summary_json = snapshot
+        .decision_summary_json
+        .get("data_completeness_summary")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let filter_summary_json =
+        regulatory_review_filter_summary_json(&RegulatoryReviewSnapshotFilters {
+            template_type: Some(template.template_type.to_string()),
+            period_start: period_start.clone(),
+            period_end: period_end.clone(),
+            ..RegulatoryReviewSnapshotFilters::default()
+        });
     ManagementReviewTemplatePreview {
         tenant_id,
         template: template.detail(),
@@ -2520,6 +3337,10 @@ fn management_review_preview_from_snapshot(
         gap_summary_json: snapshot.gap_summary_json,
         decision_summary_json: snapshot.decision_summary_json,
         regulatory_context_json: snapshot.regulatory_context_json,
+        owner_hints_json,
+        gap_groups_json,
+        filter_summary_json,
+        data_completeness_summary_json,
     }
 }
 

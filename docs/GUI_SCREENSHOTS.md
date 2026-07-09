@@ -52,21 +52,21 @@ Diese Screenshots dokumentieren die aktuelle serverseitige ISCY-Weboberflaeche f
 
 ![Reports](assets/iscy-reports.png)
 
-## Regulatory Review Packs
+## Regulatory Review-Pakete
 
-![Regulatory Review Packs](assets/iscy-regulatory-review-packs.png)
+![Regulatory Review-Pakete](assets/iscy-regulatory-review-packs.png)
 
-## NIS2 Review Pack Preview
+## NIS2 Review-Paket Vorschau
 
-![NIS2 Review Pack Preview](assets/iscy-regulatory-review-pack-nis2.png)
+![NIS2 Review-Paket Vorschau](assets/iscy-regulatory-review-pack-nis2.png)
 
-## DORA Review Pack Preview
+## DORA Review-Paket Vorschau
 
-![DORA Review Pack Preview](assets/iscy-regulatory-review-pack-dora.png)
+![DORA Review-Paket Vorschau](assets/iscy-regulatory-review-pack-dora.png)
 
-## DSGVO Review Pack Preview
+## DSGVO Review-Paket Vorschau
 
-![DSGVO Review Pack Preview](assets/iscy-regulatory-review-pack-dsgvo.png)
+![DSGVO Review-Paket Vorschau](assets/iscy-regulatory-review-pack-dsgvo.png)
 
 ## Assets
 

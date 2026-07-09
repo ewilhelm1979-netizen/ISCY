@@ -11525,6 +11525,17 @@ async fn regulatory_review_pack_endpoints_snapshot_exports_and_security() {
     assert!(preview_payload["preview"]["metrics_json"]["evidence_integrity_storage"].is_object());
     assert!(preview_payload["preview"]["incident_decisions_json"].is_array());
     assert!(preview_payload["preview"]["supplier_json"].is_object());
+    assert!(preview_payload["preview"]["owner_hints_json"]["areas"].is_array());
+    assert!(preview_payload["preview"]["gap_groups_json"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|group| group["name"] == "Datenschutz- und Rollen-Gaps"));
+    assert_eq!(
+        preview_payload["preview"]["filter_summary_json"]["pack_type"],
+        "dsgvo_data_protection_review"
+    );
+    assert!(preview_payload["preview"]["data_completeness_summary_json"]["areas"].is_array());
 
     let readonly_snapshot = app
         .clone()
@@ -11581,6 +11592,14 @@ async fn regulatory_review_pack_endpoints_snapshot_exports_and_security() {
         created_payload["snapshot"]["gap_summary_json"]["evidence_disposition_due"],
         1
     );
+    assert!(created_payload["snapshot"]["decision_summary_json"]["owner_hints"].is_object());
+    assert!(
+        created_payload["snapshot"]["decision_summary_json"]["gap_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| group["name"] == "Incident- und Meldeentscheidungs-Gaps")
+    );
     let snapshot_id = created_payload["snapshot"]["id"].as_i64().unwrap();
 
     let nis2_snapshots = app
@@ -11610,6 +11629,80 @@ async fn regulatory_review_pack_endpoints_snapshot_exports_and_security() {
         .unwrap()
         .iter()
         .any(|snapshot| snapshot["id"] == snapshot_id));
+    assert_eq!(
+        payload["filter_summary"]["pack_type"],
+        "nis2_management_summary"
+    );
+
+    let filtered_snapshots = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/regulatory/review-pack-snapshots?pack_type=nis2&status=DRAFT&period_start=2026-06-01&period_end=2026-06-30&has_open_gaps=true&has_critical_gaps=true&limit=5")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(filtered_snapshots.status(), StatusCode::OK);
+    let body = to_bytes(filtered_snapshots.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let filtered_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(filtered_payload["filter_summary"]["limit"], 5);
+    assert!(filtered_payload["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|snapshot| snapshot["id"] == snapshot_id));
+    assert!(filtered_payload["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(
+            |snapshot| snapshot["template_type"] == "nis2_management_summary"
+                && snapshot["status"] == "DRAFT"
+        ));
+
+    let limited_snapshots = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/regulatory/review-pack-snapshots?limit=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(limited_snapshots.status(), StatusCode::OK);
+    let body = to_bytes(limited_snapshots.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let limited_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(limited_payload["snapshots"].as_array().unwrap().len() <= 1);
+
+    let bad_filter = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/regulatory/review-pack-snapshots?status=INVALID")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_filter.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(bad_filter.into_body(), usize::MAX).await.unwrap();
+    let bad_filter_body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(bad_filter_body.contains("Statusfilter"));
+    assert!(!bad_filter_body.contains(db_path.to_string_lossy().as_ref()));
+    assert!(!bad_filter_body.contains("sqlite://"));
 
     let detail = app
         .clone()
@@ -11680,7 +11773,27 @@ async fn regulatory_review_pack_endpoints_snapshot_exports_and_security() {
         .unwrap();
     assert_eq!(bad_format.status(), StatusCode::BAD_REQUEST);
 
+    let web_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/regulatory-review-packs/?tenant_id=1&user_id=1&pack_type=nis2&status=DRAFT")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(web_page.status(), StatusCode::OK);
+    let body = to_bytes(web_page.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Regulatory Review-Pakete"));
+    assert!(html.contains("Review-Paket"));
+    assert!(html.contains("Offene Luecken"));
+    assert!(html.contains("Keine Rechtsberatung"));
+    assert!(!html.contains(db_path.to_string_lossy().as_ref()));
+
     let foreign_detail = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri(format!(
@@ -11703,6 +11816,13 @@ async fn regulatory_review_pack_endpoints_snapshot_exports_and_security() {
     .await
     .unwrap();
     assert!(audit_count >= 4);
+    let regulatory_audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM management_review_audit_event WHERE tenant_id = 1 AND action IN ('regulatory_review_pack_snapshot_created', 'regulatory_review_pack_export_generated')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(regulatory_audit_count >= 2);
 }
 
 #[tokio::test]

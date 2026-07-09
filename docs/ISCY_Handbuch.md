@@ -485,7 +485,7 @@ Ausgaben:
 - einfaches PDF
 - audit-faehiges PDF
 - Management-Review-Pakete unter `/management-reviews/`
-- kontextsensitive Regulatory Review Packs unter `/regulatory-review-packs/`
+- kontextsensitive Regulatory Review-Pakete unter `/regulatory-review-packs/`
 - Management-Review-Exporte als Markdown, HTML, PDF und JSON
 
 Management-Review-Pakete:
@@ -498,12 +498,15 @@ Management-Review-Pakete:
 - dokumentieren Entscheidung, naechste Massnahmen, freigebenden User und Freigabezeitpunkt
 - erlauben eine Template-Vorschau, ohne bereits ein Review-Paket einzufrieren
 
-Regulatory Review Packs:
+Regulatory Review-Pakete:
 
 - nutzen dieselbe eingefrorene Snapshot-Schicht wie Management Reviews und erzeugen kein separates Compliance-Silo
 - bieten fokussierte Pack-Typen fuer NIS2, DORA und DSGVO sowie ein generisches Security-Governance-Pack
 - beruecksichtigen Organisationsprofil, Risiken, ISCY-27-Controls, Evidence-Qualitaet, Evidence-Integritaet, Storage-/Restore-Drill-Signale, Incidents, Supplier Review, Product Security, AI Governance, Roadmap und Agent Posture soweit vorhanden
 - unterscheiden Preview und Snapshot-Erzeugung: Read-only-Rollen koennen Vorschauen lesen, aber keine eingefrorenen Snapshots erstellen
+- bieten sichere Filter fuer Pack-Typ, Status, Zeitraum, offene Luecken, kritische Luecken und Limit
+- zeigen Owner-/Verantwortlichen-Hinweise aus vorhandenen Rollen-/Owner-Daten; fehlende Verantwortliche werden als `Nicht erfasst` markiert und nicht geraten
+- gruppieren Luecken pack-spezifisch, z. B. NIS2 nach Incident-/Meldeentscheidungen, TOMs, Evidence und Supplier; DORA nach ICT-Risk, Incident, ICT-Third-Party und Storage; DSGVO nach Datenschutzrollen, Data-Breach, Legal Hold / Aufbewahrungssperre, Disposition und Supplier-Datenbezug
 - enthalten Hinweise, dass ISCY Governance- und Evidence-Unterstuetzung liefert, jedoch keine Rechtsberatung, Zertifizierung, automatische Meldung oder formale Einreichung ersetzt
 
 API- und Web-Pfade:
@@ -516,11 +519,11 @@ API- und Web-Pfade:
 - `GET /api/v1/regulatory/review-packs/{pack_type}`
 - `POST /api/v1/regulatory/review-packs/{pack_type}/preview`
 - `GET` und `POST /api/v1/regulatory/review-packs/{pack_type}/snapshots`
-- `GET /api/v1/regulatory/review-pack-snapshots`
+- `GET /api/v1/regulatory/review-pack-snapshots` mit optionalen Filtern `pack_type`, `status`, `period_start`, `period_end`, `has_open_gaps`, `has_critical_gaps` und `limit`
 - `GET /api/v1/regulatory/review-pack-snapshots/{snapshot_id}`
 - `GET /api/v1/regulatory/review-pack-snapshots/{snapshot_id}/export?format=markdown|html|pdf|json`
 - Weboberflaeche unter `/management-reviews/` mit Template-Auswahl und Preview
-- Weboberflaeche unter `/regulatory-review-packs/` mit Pack-Auswahl, Vorschau, Snapshot-Erzeugung und Snapshot-Liste
+- Weboberflaeche unter `/regulatory-review-packs/` mit Pack-Auswahl, Filterbereich, Vorschau, Owner-Hinweisen, pack-spezifischer Lueckenuebersicht, Snapshot-Erzeugung und Snapshot-Liste
 
 Fachlicher Nutzen:
 
@@ -530,10 +533,11 @@ Fachlicher Nutzen:
 - belastbare Vorbereitung von Management Review, Audit und Steering Committee
 - wiederholbare Steuerungspakete, ohne neue Risiko-, Evidence- oder Control-Silos anzulegen
 - regulatorischer Kontext wird aus vorhandenen ISCY-Daten abgeleitet und bleibt als Snapshot nachvollziehbar
+- deutsche UI-Beschriftungen und Empty States machen die Review-Pakete fuer Management, Fachbereich und Audit leichter nutzbar
 
 GUI-Nachweis:
 
-- Die aktuelle Screenshot-Uebersicht fuer Dashboard, Evidence, Regulatory Review Packs, Supplier Review, Product Security, AI Governance und Operations liegt in [docs/GUI_SCREENSHOTS.md](GUI_SCREENSHOTS.md).
+- Die aktuelle Screenshot-Uebersicht fuer Dashboard, Evidence, Regulatory Review-Pakete, Supplier Review, Product Security, AI Governance und Operations liegt in [docs/GUI_SCREENSHOTS.md](GUI_SCREENSHOTS.md).
 
 Fuer Nicht-Sicherheitsleute:
 Reports sind die offizielle Zusammenfassung des Stands.
