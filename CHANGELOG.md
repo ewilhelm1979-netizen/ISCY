@@ -8,6 +8,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- add Evidence Object Storage & Restore Drill Phase 2 with an internal local-filesystem artifact storage abstraction
+- add tenant-scoped Evidence storage overview/detail APIs, bounded storage drill APIs, and storage event filtering without introducing production S3 or cloud credentials
+- extend `/evidence/integrity/` with local storage metadata and administrator/editor Storage-Drill actions
 - add Evidence Integrity & Disposition Phase 1 through additive migration `0033_rust_evidence_integrity_disposition`
 - add tenant-scoped Evidence integrity overview, manual and bounded batch SHA-256 re-check APIs, Legal Hold metadata, disposition decisions, and integrity/disposition audit events
 - add Web UI support under `/evidence/integrity/` for safe Evidence integrity metadata, re-hash actions, Legal Hold set/release, and metadata-only disposition decisions
@@ -31,6 +34,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- route Evidence artifact checks through a canonical media-root-contained filesystem backend that blocks traversal, absolute-path references, and symlink escapes
+- audit Evidence storage drills, artifact presence, unreadable/missing artifacts, hash matches, hash mismatches, drill failures, and drill completion without exposing absolute paths, raw payloads, SQL details, or secrets
+- reuse the existing Evidence Integrity metadata and audit table for storage drills, avoiding a new Evidence engine or destructive migration
 - keep Evidence re-hash, Legal Hold, and disposition writes tenant-scoped and restricted to administrator/editor roles while allowing read-only roles to inspect safe metadata
 - audit Evidence integrity checks, hash mismatches, missing artifacts, Legal Hold changes, and disposition decisions without storing raw file payloads, secret values, authorization material, SQL details, or absolute media paths
 - make `disposition_completed_metadata_only` an explicit governance decision state; this release does not physically delete Evidence files or implement data destruction

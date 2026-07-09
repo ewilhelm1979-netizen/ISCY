@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
-    path::{Component, Path as FsPath, PathBuf},
+    path::{Path as FsPath, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -41,6 +41,7 @@ pub mod control_store;
 pub mod cve_store;
 pub mod dashboard_store;
 pub mod db_admin;
+pub mod evidence_artifact_storage;
 pub mod evidence_store;
 pub mod hardening;
 pub mod import_preview;
@@ -71,6 +72,10 @@ use change_store::ChangeStore;
 use control_store::ControlStore;
 use cve_store::{CveStore, NvdCveRecord};
 use dashboard_store::DashboardStore;
+use evidence_artifact_storage::{
+    EvidenceArtifactDrill, EvidenceArtifactMetadata, EvidenceArtifactRef,
+    FilesystemEvidenceArtifactStorage,
+};
 use evidence_store::EvidenceStore;
 use hardening::CommunitySecurityConfig;
 use import_preview::{ImportPreview, ImportUploadFile};
@@ -1507,6 +1512,81 @@ pub struct EvidenceIntegrityEventsResponse {
     pub tenant_id: i64,
     pub evidence_id: i64,
     pub events: Vec<evidence_store::EvidenceIntegrityEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceStorageOverview {
+    pub summary: EvidenceStorageSummary,
+    pub items: Vec<EvidenceStorageItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceStorageSummary {
+    pub total_items: i64,
+    pub local_filesystem_items: i64,
+    pub artifact_references: i64,
+    pub artifacts_present: i64,
+    pub artifacts_missing: i64,
+    pub unreadable_artifacts: i64,
+    pub expected_hash_present: i64,
+    pub valid: i64,
+    pub mismatch: i64,
+    pub check_failed: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceStorageItem {
+    pub id: i64,
+    pub title: String,
+    pub evidence_status: String,
+    pub storage_backend: &'static str,
+    pub artifact_reference_present: bool,
+    pub artifact_present: bool,
+    pub readable: bool,
+    pub empty: bool,
+    pub size_bytes: Option<u64>,
+    pub expected_sha256_present: bool,
+    pub last_storage_drill_at: Option<String>,
+    pub drill_status: String,
+    pub safe_error_class: String,
+    pub integrity_status: String,
+    pub integrity_status_label: String,
+    pub legal_hold_status: String,
+    pub legal_hold_status_label: String,
+    pub disposition_status: String,
+    pub disposition_status_label: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceStorageOverviewResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub storage: EvidenceStorageOverview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceStorageItemResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub item: EvidenceStorageItem,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceStorageDrillResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub evidence_id: i64,
+    pub drill: EvidenceArtifactDrill,
+    pub item: EvidenceStorageItem,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceStorageBatchResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub checked: usize,
+    pub results: Vec<EvidenceStorageDrillResponse>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -8903,7 +8983,7 @@ async fn evidence_overview(
         }
     };
 
-    let Some(store) = state.evidence_store else {
+    let Some(store) = state.evidence_store.as_ref() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiErrorResponse {
@@ -8966,7 +9046,7 @@ async fn evidence_quality(
         }
     };
 
-    let Some(store) = state.evidence_store else {
+    let Some(store) = state.evidence_store.as_ref() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(ApiErrorResponse {
@@ -9011,7 +9091,7 @@ async fn evidence_integrity(State(state): State<AppState>, headers: HeaderMap) -
         Ok(context) => context,
         Err(err) => return auth_error_response(err),
     };
-    let Some(store) = state.evidence_store else {
+    let Some(store) = state.evidence_store.as_ref() else {
         return evidence_api_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "database_not_configured",
@@ -9142,7 +9222,7 @@ async fn evidence_integrity_events(
         Ok(context) => context,
         Err(err) => return auth_error_response(err),
     };
-    let Some(store) = state.evidence_store else {
+    let Some(store) = state.evidence_store.as_ref() else {
         return evidence_api_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "database_not_configured",
@@ -9168,6 +9248,223 @@ async fn evidence_integrity_events(
             StatusCode::INTERNAL_SERVER_ERROR,
             "database_error",
             "Evidence-Integrity-Ereignisse konnten nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_storage(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .evidence_integrity_overview(context.tenant_id, 500)
+        .await
+    {
+        Ok(integrity) => (
+            StatusCode::OK,
+            Json(EvidenceStorageOverviewResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                storage: evidence_storage_overview(&state, integrity.items),
+            }),
+        )
+            .into_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Evidence-Storage-Metadaten konnten nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_storage_detail(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .evidence_integrity_item(context.tenant_id, evidence_id)
+        .await
+    {
+        Ok(Some(item)) => (
+            StatusCode::OK,
+            Json(EvidenceStorageItemResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                item: evidence_storage_item(&evidence_artifact_storage(&state), &item),
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Evidence-Storage-Metadaten konnten nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_storage_drill(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match run_evidence_storage_drill(&state, &store, &context, evidence_id).await {
+        Ok(Some((drill, item))) => (
+            StatusCode::OK,
+            Json(EvidenceStorageDrillResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                drill,
+                item,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn evidence_storage_drills(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<evidence_store::EvidenceIntegrityBatchRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    let targets = if let Some(evidence_ids) = payload.evidence_ids {
+        evidence_ids
+            .into_iter()
+            .filter(|id| *id > 0)
+            .take(25)
+            .collect::<Vec<_>>()
+    } else {
+        match store
+            .evidence_integrity_targets(context.tenant_id, payload.limit.unwrap_or(10))
+            .await
+        {
+            Ok(targets) => targets.into_iter().map(|target| target.id).collect(),
+            Err(_) => {
+                return evidence_api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "database_error",
+                    "Evidence-Storage-Targets konnten nicht sicher gelesen werden.",
+                );
+            }
+        }
+    };
+    let mut results = Vec::new();
+    for evidence_id in targets {
+        match run_evidence_storage_drill(&state, &store, &context, evidence_id).await {
+            Ok(Some((drill, item))) => results.push(EvidenceStorageDrillResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                drill,
+                item,
+            }),
+            Ok(None) => {}
+            Err(err) => return err.into_response(),
+        }
+    }
+    (
+        StatusCode::OK,
+        Json(EvidenceStorageBatchResponse {
+            accepted: true,
+            api_version: "v1",
+            checked: results.len(),
+            results,
+        }),
+    )
+        .into_response()
+}
+
+async fn evidence_storage_events(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .evidence_integrity_events(context.tenant_id, evidence_id, 100)
+        .await
+    {
+        Ok(Some(events)) => (
+            StatusCode::OK,
+            Json(EvidenceIntegrityEventsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                events: events
+                    .into_iter()
+                    .filter(|event| event.event_type.starts_with("storage_"))
+                    .collect(),
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Evidence-Storage-Ereignisse konnten nicht sicher gelesen werden.",
         ),
     }
 }
@@ -9358,8 +9655,6 @@ fn evidence_payload_error(err: &anyhow::Error) -> bool {
 #[derive(Debug, Clone, Copy)]
 enum EvidenceIntegrityActionError {
     Database,
-    StorageUnavailable,
-    StorageRead,
 }
 
 impl EvidenceIntegrityActionError {
@@ -9369,16 +9664,6 @@ impl EvidenceIntegrityActionError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "database_error",
                 "Evidence-Integrity konnte nicht sicher gespeichert werden.",
-            ),
-            Self::StorageUnavailable => evidence_api_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "evidence_storage_unavailable",
-                "Evidence-Dateispeicher ist nicht sicher verfuegbar.",
-            ),
-            Self::StorageRead => evidence_api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "evidence_integrity_check_failed",
-                "Evidence-Integritaetscheck konnte nicht sicher ausgefuehrt werden.",
             ),
         }
     }
@@ -9423,71 +9708,10 @@ async fn evidence_integrity_check_update(
     state: &AppState,
     target: &evidence_store::EvidenceIntegrityTarget,
 ) -> Result<evidence_store::EvidenceIntegrityCheckUpdate, EvidenceIntegrityActionError> {
-    let expected = target.expected_sha256.trim().to_ascii_lowercase();
-    let Some(stored_path) = target
-        .file_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(evidence_integrity_update(
-            "",
-            "missing_artifact",
-            false,
-            "none",
-            "Keine Artefaktreferenz gespeichert.",
-            "artifact_reference_missing",
-        ));
-    };
-    let media_root = evidence_media_root(state);
-    let file_path = match resolve_evidence_integrity_path(&media_root, stored_path) {
-        Ok(path) => path,
-        Err(EvidenceIntegrityPathError::Missing | EvidenceIntegrityPathError::Unsafe) => {
-            return Ok(evidence_integrity_update(
-                "",
-                "missing_artifact",
-                false,
-                "none",
-                "Artefakt fehlt oder wurde ausserhalb des sicheren Medienpfads referenziert.",
-                "artifact_missing_or_unsafe",
-            ));
-        }
-        Err(EvidenceIntegrityPathError::Storage) => {
-            return Err(EvidenceIntegrityActionError::StorageUnavailable);
-        }
-    };
-    let calculated = calculate_file_sha256(file_path)
-        .await
-        .map_err(|_| EvidenceIntegrityActionError::StorageRead)?;
-    if expected.is_empty() {
-        return Ok(evidence_integrity_update(
-            &calculated,
-            "check_failed",
-            false,
-            "review_required",
-            "Kein erwarteter SHA-256-Hash gespeichert; manuelle Review erforderlich.",
-            "expected_hash_missing",
-        ));
-    }
-    if calculated == expected {
-        Ok(evidence_integrity_update(
-            &calculated,
-            "valid",
-            false,
-            "none",
-            "Serverseitiger SHA-256-Re-Hash stimmt mit dem gespeicherten Hash ueberein.",
-            "",
-        ))
-    } else {
-        Ok(evidence_integrity_update(
-            &calculated,
-            "mismatch",
-            true,
-            "review_required",
-            "Serverseitiger SHA-256-Re-Hash weicht vom gespeicherten Hash ab.",
-            "hash_mismatch",
-        ))
-    }
+    let storage = evidence_artifact_storage(state);
+    let artifact = EvidenceArtifactRef::new(target.file_name.clone());
+    let drill = storage.drill(&artifact, &target.expected_sha256);
+    Ok(evidence_integrity_update_from_storage_drill(&drill))
 }
 
 fn evidence_integrity_update(
@@ -9509,64 +9733,252 @@ fn evidence_integrity_update(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EvidenceIntegrityPathError {
-    Missing,
-    Unsafe,
-    Storage,
-}
-
-fn resolve_evidence_integrity_path(
-    media_root: &FsPath,
-    stored_path: &str,
-) -> Result<PathBuf, EvidenceIntegrityPathError> {
-    let relative = FsPath::new(stored_path);
-    if relative.is_absolute()
-        || relative
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
-    {
-        return Err(EvidenceIntegrityPathError::Unsafe);
-    }
-    let canonical_root = media_root.canonicalize().map_err(|err| {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            EvidenceIntegrityPathError::Missing
-        } else {
-            EvidenceIntegrityPathError::Storage
-        }
-    })?;
-    let relative = strip_integrity_repeated_root_prefix(media_root, relative);
-    let candidate = canonical_root.join(relative);
-    let canonical_candidate = candidate.canonicalize().map_err(|err| {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            EvidenceIntegrityPathError::Missing
-        } else {
-            EvidenceIntegrityPathError::Storage
-        }
-    })?;
-    if !canonical_candidate.starts_with(&canonical_root) || !canonical_candidate.is_file() {
-        return Err(EvidenceIntegrityPathError::Unsafe);
-    }
-    Ok(canonical_candidate)
-}
-
-fn strip_integrity_repeated_root_prefix<'a>(
-    media_root: &FsPath,
-    relative: &'a FsPath,
-) -> &'a FsPath {
-    let Some(root_name) = media_root.file_name() else {
-        return relative;
+fn evidence_integrity_update_from_storage_drill(
+    drill: &EvidenceArtifactDrill,
+) -> evidence_store::EvidenceIntegrityCheckUpdate {
+    let quarantine_status = if drill.status == "valid" {
+        "none"
+    } else {
+        "review_required"
     };
-    relative.strip_prefix(root_name).unwrap_or(relative)
+    let result = match drill.status.as_str() {
+        "valid" => "Storage-/Restore-Drill: Artefakt vorhanden, lesbar und hash-konsistent.",
+        "mismatch" => "Storage-/Restore-Drill: Artefakt vorhanden und lesbar, Hash weicht ab.",
+        "missing_artifact" => {
+            "Storage-/Restore-Drill: Artefakt fehlt oder Referenz ist nicht sicher pruefbar."
+        }
+        _ if drill.safe_error_class == "expected_hash_missing" => {
+            "Storage-/Restore-Drill: Artefakt ist lesbar, aber erwarteter SHA-256 fehlt."
+        }
+        _ => "Storage-/Restore-Drill konnte nicht sicher abgeschlossen werden.",
+    };
+    evidence_integrity_update(
+        &drill.calculated_sha256,
+        &drill.status,
+        drill.status == "mismatch",
+        quarantine_status,
+        result,
+        &drill.safe_error_class,
+    )
 }
 
-async fn calculate_file_sha256(path: PathBuf) -> Result<String, ()> {
-    tokio::task::spawn_blocking(move || {
-        let bytes = fs::read(path).map_err(|_| ())?;
-        Ok::<_, ()>(format!("{:x}", Sha256::digest(&bytes)))
-    })
-    .await
-    .map_err(|_| ())?
+fn evidence_artifact_storage(state: &AppState) -> FilesystemEvidenceArtifactStorage {
+    FilesystemEvidenceArtifactStorage::new(evidence_media_root(state))
+}
+
+fn evidence_artifact_ref_from_item(
+    item: &evidence_store::EvidenceIntegrityItem,
+) -> EvidenceArtifactRef {
+    EvidenceArtifactRef::new(item.file_name.clone())
+}
+
+fn evidence_storage_overview(
+    state: &AppState,
+    items: Vec<evidence_store::EvidenceIntegrityItem>,
+) -> EvidenceStorageOverview {
+    let storage = evidence_artifact_storage(state);
+    let items = items
+        .iter()
+        .map(|item| evidence_storage_item(&storage, item))
+        .collect::<Vec<_>>();
+    EvidenceStorageOverview {
+        summary: evidence_storage_summary(&items),
+        items,
+    }
+}
+
+fn evidence_storage_summary(items: &[EvidenceStorageItem]) -> EvidenceStorageSummary {
+    EvidenceStorageSummary {
+        total_items: items.len() as i64,
+        local_filesystem_items: items
+            .iter()
+            .filter(|item| item.storage_backend == FilesystemEvidenceArtifactStorage::BACKEND)
+            .count() as i64,
+        artifact_references: items
+            .iter()
+            .filter(|item| item.artifact_reference_present)
+            .count() as i64,
+        artifacts_present: items.iter().filter(|item| item.artifact_present).count() as i64,
+        artifacts_missing: items.iter().filter(|item| !item.artifact_present).count() as i64,
+        unreadable_artifacts: items
+            .iter()
+            .filter(|item| item.artifact_present && !item.readable)
+            .count() as i64,
+        expected_hash_present: items
+            .iter()
+            .filter(|item| item.expected_sha256_present)
+            .count() as i64,
+        valid: items
+            .iter()
+            .filter(|item| item.drill_status == "valid")
+            .count() as i64,
+        mismatch: items
+            .iter()
+            .filter(|item| item.drill_status == "mismatch")
+            .count() as i64,
+        check_failed: items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.drill_status.as_str(),
+                    "check_failed" | "missing_artifact"
+                )
+            })
+            .count() as i64,
+    }
+}
+
+fn evidence_storage_item(
+    storage: &FilesystemEvidenceArtifactStorage,
+    item: &evidence_store::EvidenceIntegrityItem,
+) -> EvidenceStorageItem {
+    let metadata = storage.inspect_metadata(&evidence_artifact_ref_from_item(item));
+    evidence_storage_item_from_metadata(item, metadata)
+}
+
+fn evidence_storage_item_from_metadata(
+    item: &evidence_store::EvidenceIntegrityItem,
+    metadata: EvidenceArtifactMetadata,
+) -> EvidenceStorageItem {
+    EvidenceStorageItem {
+        id: item.id,
+        title: item.title.clone(),
+        evidence_status: item.evidence_status.clone(),
+        storage_backend: metadata.backend,
+        artifact_reference_present: metadata.artifact_reference_present,
+        artifact_present: metadata.artifact_present,
+        readable: metadata.readable,
+        empty: metadata.empty,
+        size_bytes: metadata.size_bytes,
+        expected_sha256_present: item.expected_sha256_present,
+        last_storage_drill_at: item.last_integrity_checked_at.clone(),
+        drill_status: item.integrity_status.clone(),
+        safe_error_class: if metadata.safe_error_class.is_empty() {
+            item.integrity_error_class.clone()
+        } else {
+            metadata.safe_error_class
+        },
+        integrity_status: item.integrity_status.clone(),
+        integrity_status_label: item.integrity_status_label.clone(),
+        legal_hold_status: item.legal_hold_status.clone(),
+        legal_hold_status_label: item.legal_hold_status_label.clone(),
+        disposition_status: item.disposition_status.clone(),
+        disposition_status_label: item.disposition_status_label.clone(),
+    }
+}
+
+async fn run_evidence_storage_drill(
+    state: &AppState,
+    store: &EvidenceStore,
+    context: &AuthenticatedTenantContext,
+    evidence_id: i64,
+) -> Result<Option<(EvidenceArtifactDrill, EvidenceStorageItem)>, EvidenceIntegrityActionError> {
+    let target = store
+        .evidence_integrity_target(context.tenant_id, evidence_id)
+        .await
+        .map_err(|_| EvidenceIntegrityActionError::Database)?;
+    let Some(target) = target else {
+        return Ok(None);
+    };
+    let storage = evidence_artifact_storage(state);
+    let artifact = EvidenceArtifactRef::new(target.file_name.clone());
+    let drill = storage.drill(&artifact, &target.expected_sha256);
+    record_evidence_storage_event(
+        store,
+        context,
+        target.id,
+        "storage_drill_started",
+        &drill,
+        "",
+    )
+    .await?;
+    if drill.artifact_present && drill.readable {
+        record_evidence_storage_event(
+            store,
+            context,
+            target.id,
+            "storage_artifact_found",
+            &drill,
+            "",
+        )
+        .await?;
+    }
+    let outcome_event_type = storage_drill_outcome_event_type(&drill);
+    record_evidence_storage_event(store, context, target.id, outcome_event_type, &drill, "")
+        .await?;
+    if drill.status == "check_failed" && outcome_event_type != "storage_drill_failed" {
+        record_evidence_storage_event(
+            store,
+            context,
+            target.id,
+            "storage_drill_failed",
+            &drill,
+            "",
+        )
+        .await?;
+    }
+    let update = evidence_integrity_update_from_storage_drill(&drill);
+    let item = store
+        .apply_integrity_check_result(context.tenant_id, target.id, context.user_id, update)
+        .await
+        .map_err(|_| EvidenceIntegrityActionError::Database)?;
+    let Some(item) = item else {
+        return Ok(None);
+    };
+    record_evidence_storage_event(
+        store,
+        context,
+        target.id,
+        "storage_drill_completed",
+        &drill,
+        "",
+    )
+    .await?;
+    let storage_item = evidence_storage_item(&storage, &item);
+    Ok(Some((drill, storage_item)))
+}
+
+async fn record_evidence_storage_event(
+    store: &EvidenceStore,
+    context: &AuthenticatedTenantContext,
+    evidence_id: i64,
+    event_type: &str,
+    drill: &EvidenceArtifactDrill,
+    note: &str,
+) -> Result<(), EvidenceIntegrityActionError> {
+    store
+        .record_evidence_integrity_event(
+            context.tenant_id,
+            evidence_id,
+            Some(context.user_id),
+            event_type,
+            serde_json::json!({
+                "storage_backend": drill.backend,
+                "artifact_reference_present": drill.artifact_reference_present,
+                "artifact_present": drill.artifact_present,
+                "readable": drill.readable,
+                "empty": drill.empty,
+                "size_bytes": drill.size_bytes,
+                "expected_sha256_present": drill.expected_sha256_present,
+                "hash_matches": drill.hash_matches,
+                "status": drill.status,
+                "safe_error_class": drill.safe_error_class,
+            }),
+            note,
+        )
+        .await
+        .map_err(|_| EvidenceIntegrityActionError::Database)?;
+    Ok(())
+}
+
+fn storage_drill_outcome_event_type(drill: &EvidenceArtifactDrill) -> &'static str {
+    match drill.status.as_str() {
+        "valid" => "storage_hash_valid",
+        "mismatch" => "storage_hash_mismatch",
+        "missing_artifact" => "storage_artifact_missing",
+        _ if drill.safe_error_class == "artifact_not_readable" => "storage_artifact_not_readable",
+        _ => "storage_drill_failed",
+    }
 }
 
 async fn evidence_need_sync(
@@ -15137,10 +15549,11 @@ async fn web_evidence_integrity(
         .await
     {
         Ok(overview) => {
+            let storage = evidence_artifact_storage(&state);
             let rows = overview
                 .items
                 .iter()
-                .map(|item| evidence_integrity_web_row(&context, item, can_write))
+                .map(|item| evidence_integrity_web_row(&context, &storage, item, can_write))
                 .collect::<Vec<_>>()
                 .join("");
             let body = format!(
@@ -15157,7 +15570,7 @@ async fn web_evidence_integrity(
                 <section class="panel wide">
                   <h2>Integrity & Disposition</h2>
                   <table>
-                    <thead><tr><th>Evidence</th><th>Integrity</th><th>Legal Hold</th><th>Disposition</th><th>Retention</th><th>Letzter Check</th><th>Aktionen</th></tr></thead>
+                    <thead><tr><th>Evidence</th><th>Storage</th><th>Integrity</th><th>Drill</th><th>Legal Hold</th><th>Disposition</th><th>Retention</th><th>Aktionen</th></tr></thead>
                     <tbody>{}</tbody>
                   </table>
                 </section>
@@ -15172,7 +15585,7 @@ async fn web_evidence_integrity(
                 metric_card("Disposition faellig", overview.summary.disposition_due),
                 metric_card("Blockiert", overview.summary.disposition_blocked),
                 if rows.is_empty() {
-                    web_empty_row(7, "Keine Evidence vorhanden.")
+                    web_empty_row(8, "Keine Evidence vorhanden.")
                 } else {
                     rows
                 },
@@ -15190,6 +15603,65 @@ async fn web_evidence_integrity(
             &context,
             &err.to_string(),
         ),
+    }
+}
+
+async fn web_evidence_storage_drill(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(_query): Query<WebContextQuery>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Evidence Integrity", "/evidence/integrity/")
+                .into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Diese Aktion benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return web_store_missing(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Evidence",
+        )
+        .into_response();
+    };
+    match run_evidence_storage_drill(&state, &store, &auth_context, evidence_id).await {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            "/evidence/integrity/",
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Evidence wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(_) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Storage-/Restore-Drill konnte nicht sicher ausgefuehrt werden.",
+        )
+        .into_response(),
     }
 }
 
@@ -15475,6 +15947,7 @@ async fn web_evidence_disposition(
 
 fn evidence_integrity_web_row(
     context: &WebContext,
+    storage: &FilesystemEvidenceArtifactStorage,
     item: &evidence_store::EvidenceIntegrityItem,
     can_write: bool,
 ) -> String {
@@ -15491,9 +15964,29 @@ fn evidence_integrity_web_row(
     } else {
         "-".to_string()
     };
+    let storage_item = evidence_storage_item(storage, item);
+    let storage_state = if storage_item.artifact_present {
+        if storage_item.readable {
+            if storage_item.empty {
+                "vorhanden · leer"
+            } else {
+                "vorhanden"
+            }
+        } else {
+            "nicht lesbar"
+        }
+    } else if storage_item.artifact_reference_present {
+        "fehlt"
+    } else {
+        "keine Referenz"
+    };
     let actions = if can_write {
         let check_action = web_path_with_context(
             &format!("/evidence/{}/integrity-check", item.id),
+            Some(context),
+        );
+        let storage_action = web_path_with_context(
+            &format!("/evidence/{}/storage-drill", item.id),
             Some(context),
         );
         let hold_action =
@@ -15507,6 +16000,7 @@ fn evidence_integrity_web_row(
         format!(
             r#"
             <form method="post" action="{}"><button type="submit">Re-Hash</button></form>
+            <form method="post" action="{}"><button type="submit">Storage-Drill</button></form>
             <details><summary>Legal Hold</summary>
               <form method="post" action="{}">
                 <label>Grund<input name="reason" required></label>
@@ -15533,6 +16027,7 @@ fn evidence_integrity_web_row(
             </details>
             "#,
             html_escape(&check_action),
+            html_escape(&storage_action),
             html_escape(&hold_action),
             html_escape(&release_action),
             html_escape(&disposition_action),
@@ -15547,20 +16042,24 @@ fn evidence_integrity_web_row(
         "Nur Lesen".to_string()
     };
     format!(
-        r#"<tr><td><strong>{}</strong><br><span>{} · {} · Hash {}</span></td><td>{}<br><span>{}</span></td><td>{}<br><span>{}</span></td><td>{}<br><span>{}</span></td><td>{}<br><span>{}</span></td><td>{}</td><td>{}</td></tr>"#,
+        r#"<tr><td><strong>{}</strong><br><span>{} · {} · Hash {}</span></td><td>{}<br><span>{} · {}</span></td><td>{}<br><span>{}</span></td><td>{}<br><span>{}</span></td><td>{}<br><span>{}</span></td><td>{}<br><span>{}</span></td><td>{}<br><span>{}</span></td><td>{}</td></tr>"#,
         html_escape(&item.title),
         html_escape(&item.quality_status_label),
         artifact,
         html_escape(&hash),
+        html_escape(storage_item.storage_backend),
+        storage_state,
+        html_escape(&storage_item.safe_error_class),
         html_escape(&item.integrity_status_label),
         html_escape(&item.integrity_result),
+        html_escape(&storage_item.drill_status),
+        html_escape(item.last_integrity_checked_at.as_deref().unwrap_or("-")),
         html_escape(&item.legal_hold_status_label),
         html_escape(&item.legal_hold_reason),
         html_escape(&item.disposition_status_label),
         html_escape(&item.disposition_reason),
         html_escape(item.retention_until.as_deref().unwrap_or("-")),
         html_escape(item.disposition_due_at.as_deref().unwrap_or("-")),
-        html_escape(item.last_integrity_checked_at.as_deref().unwrap_or("-")),
         actions,
     )
 }
@@ -31989,18 +32488,35 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/evidence", get(evidence_overview))
         .route("/api/v1/evidence/quality", get(evidence_quality))
         .route("/api/v1/evidence/integrity", get(evidence_integrity))
+        .route("/api/v1/evidence/storage", get(evidence_storage))
         .route(
             "/api/v1/evidence/integrity-checks",
             post(evidence_integrity_batch_checks),
         )
+        .route(
+            "/api/v1/evidence/storage-drills",
+            post(evidence_storage_drills),
+        )
         .route("/api/v1/evidence/uploads", post(evidence_upload))
+        .route(
+            "/api/v1/evidence/{evidence_id}/storage",
+            get(evidence_storage_detail),
+        )
         .route(
             "/api/v1/evidence/{evidence_id}/integrity-check",
             post(evidence_integrity_check),
         )
         .route(
+            "/api/v1/evidence/{evidence_id}/storage-drill",
+            post(evidence_storage_drill),
+        )
+        .route(
             "/api/v1/evidence/{evidence_id}/integrity-events",
             get(evidence_integrity_events),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/storage-events",
+            get(evidence_storage_events),
         )
         .route(
             "/api/v1/evidence/{evidence_id}/legal-hold",
@@ -32259,6 +32775,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/evidence/{evidence_id}/integrity-check",
             post(web_evidence_integrity_check),
+        )
+        .route(
+            "/evidence/{evidence_id}/storage-drill",
+            post(web_evidence_storage_drill),
         )
         .route(
             "/evidence/{evidence_id}/legal-hold",
