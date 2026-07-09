@@ -55,6 +55,15 @@ pub struct EvidenceArtifactDrill {
     pub safe_error_class: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceArtifactDisposition {
+    pub backend: &'static str,
+    pub artifact_reference_present: bool,
+    pub artifact_present_before: bool,
+    pub deleted: bool,
+    pub safe_error_class: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvidenceArtifactStorageError {
     MissingReference,
@@ -197,6 +206,44 @@ impl FilesystemEvidenceArtifactStorage {
         }
     }
 
+    pub fn delete_artifact(&self, artifact: &EvidenceArtifactRef) -> EvidenceArtifactDisposition {
+        let path = match self.safe_artifact_path(artifact) {
+            Ok(path) => path,
+            Err(error) => {
+                return EvidenceArtifactDisposition {
+                    backend: Self::BACKEND,
+                    artifact_reference_present: artifact.reference_present(),
+                    artifact_present_before: false,
+                    deleted: false,
+                    safe_error_class: error.safe_error_class().to_string(),
+                };
+            }
+        };
+        match fs::remove_file(&path) {
+            Ok(()) => EvidenceArtifactDisposition {
+                backend: Self::BACKEND,
+                artifact_reference_present: true,
+                artifact_present_before: true,
+                deleted: true,
+                safe_error_class: String::new(),
+            },
+            Err(err) => {
+                let error = if err.kind() == std::io::ErrorKind::NotFound {
+                    EvidenceArtifactStorageError::MissingArtifact
+                } else {
+                    EvidenceArtifactStorageError::NotReadable
+                };
+                EvidenceArtifactDisposition {
+                    backend: Self::BACKEND,
+                    artifact_reference_present: true,
+                    artifact_present_before: false,
+                    deleted: false,
+                    safe_error_class: error.safe_error_class().to_string(),
+                }
+            }
+        }
+    }
+
     fn safe_artifact_path(
         &self,
         artifact: &EvidenceArtifactRef,
@@ -319,6 +366,27 @@ mod tests {
         )));
         assert_eq!(traversal.safe_error_class, "artifact_reference_unsafe");
         assert!(!traversal.artifact_present);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn filesystem_storage_deletes_only_safe_local_artifacts() {
+        let root = temp_media_root("delete");
+        fs::write(root.join("delete-me.txt"), b"delete me").unwrap();
+        let storage = FilesystemEvidenceArtifactStorage::new(root.clone());
+
+        let deleted =
+            storage.delete_artifact(&EvidenceArtifactRef::new(Some("delete-me.txt".to_string())));
+        assert!(deleted.deleted);
+        assert!(deleted.artifact_present_before);
+        assert_eq!(deleted.safe_error_class, "");
+        assert!(!root.join("delete-me.txt").exists());
+
+        let traversal = storage.delete_artifact(&EvidenceArtifactRef::new(Some(
+            "../outside.txt".to_string(),
+        )));
+        assert!(!traversal.deleted);
+        assert_eq!(traversal.safe_error_class, "artifact_reference_unsafe");
         let _ = fs::remove_dir_all(root);
     }
 

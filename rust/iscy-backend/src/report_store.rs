@@ -1996,8 +1996,13 @@ async fn management_review_metrics_postgres(
         "evidence_integrity_mismatch": json_i64(&evidence_integrity_storage, "mismatch"),
         "evidence_storage_artifact_references": json_i64(&evidence_integrity_storage, "artifact_references"),
         "evidence_storage_drills_recorded": json_i64(&evidence_integrity_storage, "storage_drills_recorded"),
+        "evidence_worker_runs_recorded": json_i64(&evidence_integrity_storage, "worker_runs_recorded"),
+        "evidence_worker_missing_runs": if json_i64(&evidence_integrity_storage, "total_items") > 0 && json_i64(&evidence_integrity_storage, "worker_runs_recorded") == 0 { 1 } else { 0 },
+        "evidence_storage_drill_gaps": (json_i64(&evidence_integrity_storage, "total_items") - json_i64(&evidence_integrity_storage, "storage_drills_recorded")).max(0),
         "evidence_legal_hold_active": json_i64(&evidence_integrity_storage, "legal_hold_active"),
         "evidence_disposition_due": json_i64(&evidence_integrity_storage, "disposition_due"),
+        "evidence_disposition_executed": json_i64(&evidence_integrity_storage, "disposition_executed"),
+        "evidence_disposition_failed": json_i64(&evidence_integrity_storage, "disposition_failed"),
         "evidence_integrity_storage": evidence_integrity_storage,
         "snapshot_items": {
             "top_risks": counts.top_risks,
@@ -2037,8 +2042,13 @@ async fn management_review_metrics_sqlite(
         "evidence_integrity_mismatch": json_i64(&evidence_integrity_storage, "mismatch"),
         "evidence_storage_artifact_references": json_i64(&evidence_integrity_storage, "artifact_references"),
         "evidence_storage_drills_recorded": json_i64(&evidence_integrity_storage, "storage_drills_recorded"),
+        "evidence_worker_runs_recorded": json_i64(&evidence_integrity_storage, "worker_runs_recorded"),
+        "evidence_worker_missing_runs": if json_i64(&evidence_integrity_storage, "total_items") > 0 && json_i64(&evidence_integrity_storage, "worker_runs_recorded") == 0 { 1 } else { 0 },
+        "evidence_storage_drill_gaps": (json_i64(&evidence_integrity_storage, "total_items") - json_i64(&evidence_integrity_storage, "storage_drills_recorded")).max(0),
         "evidence_legal_hold_active": json_i64(&evidence_integrity_storage, "legal_hold_active"),
         "evidence_disposition_due": json_i64(&evidence_integrity_storage, "disposition_due"),
+        "evidence_disposition_executed": json_i64(&evidence_integrity_storage, "disposition_executed"),
+        "evidence_disposition_failed": json_i64(&evidence_integrity_storage, "disposition_failed"),
         "evidence_integrity_storage": evidence_integrity_storage,
         "snapshot_items": {
             "top_risks": counts.top_risks,
@@ -2067,13 +2077,16 @@ async fn evidence_integrity_storage_postgres(
         "artifact_references": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND file IS NOT NULL AND BTRIM(file) <> ''", tenant_id).await?,
         "expected_hash_present": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND (BTRIM(file_sha256) <> '' OR BTRIM(last_calculated_sha256) <> '')", tenant_id).await?,
         "storage_drills_recorded": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND last_integrity_checked_at IS NOT NULL AND BTRIM(last_integrity_checked_at::text) <> ''", tenant_id).await?,
+        "worker_runs_recorded": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_integrity_worker_run WHERE tenant_id = $1", tenant_id).await?,
         "legal_hold_active": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND legal_hold_status = 'active'", tenant_id).await?,
         "disposition_due": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND (disposition_status IN ('due', 'approved_for_disposition', 'blocked_by_legal_hold') OR (disposition_due_at IS NOT NULL AND disposition_due_at::text <= CURRENT_DATE::text))", tenant_id).await?,
         "disposition_blocked": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND legal_hold_blocks_disposition = TRUE", tenant_id).await?,
+        "disposition_executed": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND disposition_status = 'disposition_executed'", tenant_id).await?,
+        "disposition_failed": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND disposition_status = 'disposition_failed'", tenant_id).await?,
         "disposal_candidates": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND disposal_candidate = TRUE", tenant_id).await?,
         "notes": [
             "Nur aggregierte Statuswerte; Evidence-Dateinamen, Pfade und Rohinhalte sind ausgeschlossen.",
-            "Disposition ist metadata-only und bedeutet keine physische Evidence-Loeschung."
+            "Physische Disposition erfolgt nur kontrolliert nach Freigabe ueber die Storage-Abstraktion; Tombstone-Metadaten bleiben erhalten."
         ]
     }))
 }
@@ -2093,13 +2106,16 @@ async fn evidence_integrity_storage_sqlite(
         "artifact_references": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND file IS NOT NULL AND TRIM(file) <> ''", tenant_id).await?,
         "expected_hash_present": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND (TRIM(file_sha256) <> '' OR TRIM(last_calculated_sha256) <> '')", tenant_id).await?,
         "storage_drills_recorded": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND last_integrity_checked_at IS NOT NULL AND TRIM(CAST(last_integrity_checked_at AS TEXT)) <> ''", tenant_id).await?,
+        "worker_runs_recorded": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_integrity_worker_run WHERE tenant_id = ?", tenant_id).await?,
         "legal_hold_active": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND legal_hold_status = 'active'", tenant_id).await?,
         "disposition_due": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND (disposition_status IN ('due', 'approved_for_disposition', 'blocked_by_legal_hold') OR (disposition_due_at IS NOT NULL AND CAST(disposition_due_at AS TEXT) <= date('now')))", tenant_id).await?,
         "disposition_blocked": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND legal_hold_blocks_disposition = 1", tenant_id).await?,
+        "disposition_executed": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND disposition_status = 'disposition_executed'", tenant_id).await?,
+        "disposition_failed": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND disposition_status = 'disposition_failed'", tenant_id).await?,
         "disposal_candidates": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND disposal_candidate = 1", tenant_id).await?,
         "notes": [
             "Nur aggregierte Statuswerte; Evidence-Dateinamen, Pfade und Rohinhalte sind ausgeschlossen.",
-            "Disposition ist metadata-only und bedeutet keine physische Evidence-Loeschung."
+            "Physische Disposition erfolgt nur kontrolliert nach Freigabe ueber die Storage-Abstraktion; Tombstone-Metadaten bleiben erhalten."
         ]
     }))
 }
@@ -2669,6 +2685,7 @@ fn management_review_source_counts(
         "evidence": counts.evidence_gaps,
         "evidence_integrity_items": json_i64(&metrics["evidence_integrity_storage"], "total_items"),
         "evidence_storage_drills": json_i64(&metrics["evidence_integrity_storage"], "storage_drills_recorded"),
+        "evidence_worker_runs": json_i64(&metrics["evidence_integrity_storage"], "worker_runs_recorded"),
         "incidents": counts.incidents,
         "roadmap_tasks": counts.roadmap,
         "product_security_products": json_i64(product_security, "products"),
@@ -2722,8 +2739,13 @@ fn management_review_gap_summary(
         "evidence_integrity_mismatch": json_i64(metrics, "evidence_integrity_mismatch"),
         "evidence_storage_artifact_references": json_i64(metrics, "evidence_storage_artifact_references"),
         "evidence_storage_drills_recorded": json_i64(metrics, "evidence_storage_drills_recorded"),
+        "evidence_worker_runs_recorded": json_i64(metrics, "evidence_worker_runs_recorded"),
+        "evidence_worker_missing_runs": json_i64(metrics, "evidence_worker_missing_runs"),
+        "evidence_storage_drill_gaps": json_i64(metrics, "evidence_storage_drill_gaps"),
         "evidence_legal_hold_active": json_i64(metrics, "evidence_legal_hold_active"),
         "evidence_disposition_due": json_i64(metrics, "evidence_disposition_due"),
+        "evidence_disposition_executed": json_i64(metrics, "evidence_disposition_executed"),
+        "evidence_disposition_failed": json_i64(metrics, "evidence_disposition_failed"),
         "critical_suppliers": json_i64(supplier, "critical_suppliers"),
         "missing_supplier_evidence": json_i64(supplier, "missing_supplier_evidence"),
         "overdue_or_unreviewed_suppliers": json_i64(supplier, "overdue_or_unreviewed"),
@@ -2778,6 +2800,16 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         "Evidence-Integritaetsabweichungen",
                         "evidence_integrity_mismatch",
                         true,
+                    ),
+                    (
+                        "Fehlgeschlagene Dispositionen",
+                        "evidence_disposition_failed",
+                        true,
+                    ),
+                    (
+                        "Keine Worker-Laeufe dokumentiert",
+                        "evidence_worker_missing_runs",
+                        false,
                     ),
                 ],
             ),
@@ -2894,6 +2926,16 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         "evidence_integrity_mismatch",
                         true,
                     ),
+                    (
+                        "Offene Storage-/Restore-Pruefungen",
+                        "evidence_storage_drill_gaps",
+                        false,
+                    ),
+                    (
+                        "Fehlgeschlagene Dispositionen",
+                        "evidence_disposition_failed",
+                        true,
+                    ),
                     ("Faellige Disposition", "evidence_disposition_due", false),
                 ],
             ),
@@ -2927,6 +2969,11 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                 &[
                     ("Aktiver Legal Hold", "evidence_legal_hold_active", false),
                     ("Faellige Disposition", "evidence_disposition_due", false),
+                    (
+                        "Fehlgeschlagene Dispositionen",
+                        "evidence_disposition_failed",
+                        true,
+                    ),
                     (
                         "Evidence-Integritaetsabweichungen",
                         "evidence_integrity_mismatch",
@@ -3005,6 +3052,17 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                     (
                         "Evidence-Integritaetsabweichungen",
                         "evidence_integrity_mismatch",
+                        true,
+                    ),
+                    (
+                        "Keine Worker-Laeufe dokumentiert",
+                        "evidence_worker_missing_runs",
+                        false,
+                    ),
+                    ("Faellige Disposition", "evidence_disposition_due", false),
+                    (
+                        "Fehlgeschlagene Dispositionen",
+                        "evidence_disposition_failed",
                         true,
                     ),
                 ],
@@ -3313,8 +3371,11 @@ fn regulatory_review_has_open_gaps(gap_summary: &Value) -> bool {
         "supplier_product_security_overdue_reviews",
         "evidence_integrity_not_checked",
         "evidence_integrity_mismatch",
+        "evidence_worker_missing_runs",
+        "evidence_storage_drill_gaps",
         "evidence_legal_hold_active",
         "evidence_disposition_due",
+        "evidence_disposition_failed",
         "critical_suppliers",
         "missing_supplier_evidence",
         "overdue_or_unreviewed_suppliers",
@@ -3335,6 +3396,7 @@ fn regulatory_review_has_critical_gaps(gap_summary: &Value) -> bool {
         "critical_supplier_product_security_advisories",
         "supplier_product_security_critical_services",
         "evidence_integrity_mismatch",
+        "evidence_disposition_failed",
         "critical_suppliers",
         "critical_agent_findings",
         "ai_systems_without_risk_links",
@@ -3407,10 +3469,14 @@ fn management_review_decision_summary(
     }
     if json_i64(sources.metrics, "evidence_integrity_mismatch") > 0
         || json_i64(sources.metrics, "evidence_integrity_not_checked") > 0
+        || json_i64(sources.metrics, "evidence_worker_missing_runs") > 0
+        || json_i64(sources.metrics, "evidence_storage_drill_gaps") > 0
         || json_i64(sources.metrics, "evidence_disposition_due") > 0
+        || json_i64(sources.metrics, "evidence_disposition_failed") > 0
     {
-        required_decisions
-            .push("Evidence-Integritaet, Legal Hold / Aufbewahrungssperre oder metadata-only Disposition nachziehen");
+        required_decisions.push(
+            "Evidence-Integritaet, Storage-/Restore-Pruefung, Legal Hold oder kontrollierte Disposition nachziehen",
+        );
     }
     if json_i64(sources.supplier, "missing_supplier_evidence") > 0
         || json_i64(sources.supplier, "overdue_or_unreviewed") > 0

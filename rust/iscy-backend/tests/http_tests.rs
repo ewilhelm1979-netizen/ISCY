@@ -694,8 +694,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0034_rust_supplier_product_security_governance"));
-    assert!(html.contains("34/34 angewendet"));
+    assert!(html.contains("0035_rust_evidence_worker_disposition_storage"));
+    assert!(html.contains("35/35 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -9244,7 +9244,9 @@ async fn evidence_integrity_legal_hold_and_disposition_are_tenant_scoped_and_met
     fs::create_dir_all(&evidence_dir).unwrap();
     fs::write(evidence_dir.join("valid.txt"), b"trusted evidence\n").unwrap();
     fs::write(evidence_dir.join("changed.txt"), b"changed evidence\n").unwrap();
+    fs::write(evidence_dir.join("dispose.txt"), b"dispose evidence\n").unwrap();
     let valid_hash = format!("{:x}", Sha256::digest(b"trusted evidence\n"));
+    let dispose_hash = format!("{:x}", Sha256::digest(b"dispose evidence\n"));
     let stale_hash = "0".repeat(64);
     sqlx::query(
         r#"
@@ -9256,11 +9258,13 @@ async fn evidence_integrity_legal_hold_and_disposition_are_tenant_scoped_and_met
             (900, 1, 'Valid integrity evidence', 'Expected hash matches', 'NIS2 21', 'evidence/integrity/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
             (901, 1, 'Mismatch integrity evidence', 'Expected hash is stale', 'NIS2 21', 'evidence/integrity/changed.txt', ?2, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
             (902, 1, 'Missing artifact evidence', 'File is missing', 'NIS2 21', 'evidence/integrity/missing.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
-            (903, 2, 'Foreign tenant evidence', 'Foreign tenant', 'NIS2 21', 'evidence/integrity/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test')
+            (903, 2, 'Foreign tenant evidence', 'Foreign tenant', 'NIS2 21', 'evidence/integrity/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
+            (904, 1, 'Disposable integrity evidence', 'Approved controlled disposition target', 'DSGVO 17', 'evidence/integrity/dispose.txt', ?3, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test')
         "#,
     )
     .bind(&valid_hash)
     .bind(&stale_hash)
+    .bind(&dispose_hash)
     .execute(&pool)
     .await
     .unwrap();
@@ -9294,6 +9298,95 @@ async fn evidence_integrity_legal_hold_and_disposition_are_tenant_scoped_and_met
             .unwrap()
             >= 4
     );
+
+    let backends = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage/backends")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(backends.status(), StatusCode::OK);
+    let body = to_bytes(backends.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert!(payload["backends"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|backend| backend["backend_type"] == "local_filesystem"));
+    assert!(payload["backends"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|backend| backend["backend_type"] == "s3_compatible"));
+
+    let worker_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/integrity/worker")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(worker_status.status(), StatusCode::OK);
+    let body = to_bytes(worker_status.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["worker"]["configured_backend"], "local_filesystem");
+
+    let readonly_worker = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/integrity/worker/run")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"dry_run":true,"batch_size":2}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly_worker.status(), StatusCode::FORBIDDEN);
+
+    let worker_run = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/integrity/worker/run")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"dry_run":true,"batch_size":2,"max_runtime_seconds":5}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(worker_run.status(), StatusCode::OK);
+    let body = to_bytes(worker_run.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["run"]["dry_run"], true);
 
     let readonly_check = app
         .clone()
@@ -9352,6 +9445,114 @@ async fn evidence_integrity_legal_hold_and_disposition_are_tenant_scoped_and_met
         .await
         .unwrap();
     assert_eq!(foreign_check.status(), StatusCode::NOT_FOUND);
+
+    let denied_execute = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/904/disposition/execute")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied_execute.status(), StatusCode::BAD_REQUEST);
+    assert!(media_root.join("evidence/integrity/dispose.txt").exists());
+
+    let foreign_execute = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/904/disposition/execute")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_execute.status(), StatusCode::NOT_FOUND);
+    assert!(media_root.join("evidence/integrity/dispose.txt").exists());
+
+    let approval = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/904/disposition/approve")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"decision":"Kontrollierte Aussonderung freigegeben","reason":"Retention abgelaufen und keine Aufbewahrungssperre aktiv","retention_due_at":"2026-01-01","disposition_due_at":"2026-02-01"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approval.status(), StatusCode::OK);
+    let body = to_bytes(approval.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["item"]["disposition_status"],
+        "approved_for_disposition"
+    );
+
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/904/disposition/preview")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let body = to_bytes(preview.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(payload["preview"]["eligible"], true);
+    assert_eq!(payload["preview"]["storage_backend"], "local_filesystem");
+
+    let execute = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/904/disposition/execute")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(execute.status(), StatusCode::OK);
+    let body = to_bytes(execute.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["disposition"]["deleted"], true);
+    assert_eq!(
+        payload["item"]["disposition_status"],
+        "disposition_executed"
+    );
+    assert!(!media_root.join("evidence/integrity/dispose.txt").exists());
 
     let response = app
         .clone()
@@ -9474,6 +9675,37 @@ async fn evidence_integrity_legal_hold_and_disposition_are_tenant_scoped_and_met
         .iter()
         .any(|event| event["event_type"] == "disposition_decision_recorded"));
     assert!(events.iter().all(|event| event.get("file").is_none()));
+
+    let disposition_events = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/904/disposition/events")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(disposition_events.status(), StatusCode::OK);
+    let body = to_bytes(disposition_events.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    assert!(!body_text.contains("dispose.txt"));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    let event_types = payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["event_type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"disposition_execution_denied"));
+    assert!(event_types.contains(&"disposition_approved"));
+    assert!(event_types.contains(&"disposition_executed"));
 
     let _ = fs::remove_dir_all(media_root);
 }
@@ -14239,7 +14471,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0031_rust_supplier_review_workflow",
             "0032_rust_management_regulatory_templates",
             "0033_rust_evidence_integrity_disposition",
-            "0034_rust_supplier_product_security_governance"
+            "0034_rust_supplier_product_security_governance",
+            "0035_rust_evidence_worker_disposition_storage"
         ]
     );
     assert!(

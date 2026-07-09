@@ -40,9 +40,9 @@ Diese Screenshots dokumentieren die aktuelle serverseitige ISCY-Weboberflaeche f
 
 ![Evidence Quality](assets/iscy-evidence-quality.png)
 
-## Evidence Integrity And Storage
+## Nachweis-Integritaet und Storage
 
-![Evidence Integrity And Storage](assets/iscy-evidence-integrity-storage.png)
+![Nachweis-Integritaet und Storage](assets/iscy-evidence-integrity-storage.png)
 
 ## Roadmap
 
