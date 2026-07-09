@@ -773,10 +773,18 @@ struct WebTenantRegulatoryProfileForm {
 
 #[derive(Debug, Deserialize)]
 struct WebManagementReviewGenerateForm {
+    template_type: Option<String>,
     title: Option<String>,
     period_start: Option<String>,
     period_end: Option<String>,
     executive_summary: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebManagementReviewPreviewForm {
+    template_type: String,
+    period_start: Option<String>,
+    period_end: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1876,6 +1884,24 @@ pub struct ManagementReviewPackagesResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
     pub packages: Vec<report_store::ManagementReviewPackageSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagementReviewTemplatesResponse {
+    pub api_version: &'static str,
+    pub templates: Vec<report_store::ManagementReviewTemplateSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagementReviewTemplateResponse {
+    pub api_version: &'static str,
+    pub template: report_store::ManagementReviewTemplateDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ManagementReviewTemplatePreviewResponse {
+    pub api_version: &'static str,
+    pub preview: report_store::ManagementReviewTemplatePreview,
 }
 
 #[derive(Debug, Serialize)]
@@ -10093,6 +10119,155 @@ async fn management_review_packages(State(state): State<AppState>, headers: Head
     }
 }
 
+async fn management_review_templates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(err) = authenticated_tenant_context(&state, &headers).await {
+        return (
+            err.status_code(),
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: err.error_code(),
+                message: err.message().to_string(),
+            }),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(ManagementReviewTemplatesResponse {
+            api_version: "v1",
+            templates: report_store::ReportStore::management_review_templates(),
+        }),
+    )
+        .into_response()
+}
+
+async fn management_review_template_detail(
+    Path(template_type): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(err) = authenticated_tenant_context(&state, &headers).await {
+        return (
+            err.status_code(),
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: err.error_code(),
+                message: err.message().to_string(),
+            }),
+        )
+            .into_response();
+    }
+    match report_store::ReportStore::management_review_template(&template_type) {
+        Ok(template) => (
+            StatusCode::OK,
+            Json(ManagementReviewTemplateResponse {
+                api_version: "v1",
+                template,
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "management_review_template_not_found",
+                message: format!(
+                    "Management-Review-Template {template_type} wurde nicht gefunden."
+                ),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn management_review_template_preview(
+    Path(template_type): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<report_store::ManagementTemplatePreviewRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .preview_management_review_template(
+            context.tenant_id,
+            context.user_id,
+            &template_type,
+            payload,
+        )
+        .await
+    {
+        Ok(preview) => (
+            StatusCode::OK,
+            Json(ManagementReviewTemplatePreviewResponse {
+                api_version: "v1",
+                preview,
+            }),
+        )
+            .into_response(),
+        Err(err)
+            if err
+                .to_string()
+                .contains("Unbekannter Management-Review-Template-Typ") =>
+        {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "management_review_template_not_found",
+                    message: format!(
+                        "Management-Review-Template {template_type} wurde nicht gefunden."
+                    ),
+                }),
+            )
+                .into_response()
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: "Management-Review-Template-Vorschau konnte nicht erzeugt werden."
+                    .to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn management_review_generate(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -10141,13 +10316,29 @@ async fn management_review_generate(
             }),
         )
             .into_response(),
-        Err(err) => (
+        Err(err)
+            if err
+                .to_string()
+                .contains("Unbekannter Management-Review-Template-Typ") =>
+        {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "management_review_template_not_found",
+                    message: "Management-Review-Template wurde nicht gefunden.".to_string(),
+                }),
+            )
+                .into_response()
+        }
+        Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiErrorResponse {
                 accepted: false,
                 api_version: "v1",
                 error_code: "database_error",
-                message: format!("Management-Review konnte nicht erzeugt werden: {err}"),
+                message: "Management-Review konnte nicht erzeugt werden.".to_string(),
             }),
         )
             .into_response(),
@@ -10381,7 +10572,32 @@ async fn management_review_export_format(
         .management_review_detail(context.tenant_id, review_id)
         .await
     {
-        Ok(Some(package)) => management_review_export_download_response(&package, export_format),
+        Ok(Some(package)) => {
+            if store
+                .audit_management_review_export(
+                    context.tenant_id,
+                    context.user_id,
+                    review_id,
+                    &package.template_type,
+                    export_format.as_str(),
+                )
+                .await
+                .is_err()
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: "database_error",
+                        message: "Management-Review-Export konnte nicht auditiert werden."
+                            .to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+            management_review_export_download_response(&package, export_format)
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(ApiErrorResponse {
@@ -14569,9 +14785,10 @@ async fn web_management_reviews(
                         Some(&context),
                     );
                     format!(
-                        r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                        r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                         detail_href,
                         html_escape(&package.title),
+                        html_escape(&package.template_name),
                         html_escape(&package.status_label),
                         html_escape(package.period_start.as_deref().unwrap_or("-")),
                         html_escape(package.period_end.as_deref().unwrap_or("-")),
@@ -14580,6 +14797,9 @@ async fn web_management_reviews(
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            let template_cards = management_review_template_cards();
+            let template_options =
+                management_review_template_options("generic_security_governance");
             let generate_panel = if can_write {
                 format!(
                     r#"
@@ -14587,6 +14807,7 @@ async fn web_management_reviews(
                       <h2>Paket erzeugen</h2>
                       <form method="post" action="{}">
                         <div class="form-grid">
+                          <label>Template<select name="template_type">{}</select></label>
                           <label>Titel<input name="title" value="Management Review {}"></label>
                           <label>Zeitraum Start<input name="period_start" type="date"></label>
                           <label>Zeitraum Ende<input name="period_end" type="date"></label>
@@ -14594,10 +14815,21 @@ async fn web_management_reviews(
                         <label>Executive Summary<textarea name="executive_summary" rows="4"></textarea></label>
                         <button type="submit">Management-Review-Paket erzeugen</button>
                       </form>
+                      <form method="post" action="{}">
+                        <div class="form-grid">
+                          <label>Preview-Template<select name="template_type">{}</select></label>
+                          <label>Preview Start<input name="period_start" type="date"></label>
+                          <label>Preview Ende<input name="period_end" type="date"></label>
+                        </div>
+                        <button type="submit">Template-Vorschau anzeigen</button>
+                      </form>
                     </section>
                     "#,
                     web_path_with_context("/management-reviews/", Some(&context)),
+                    template_options,
                     Utc::now().format("%Y-%m-%d"),
+                    web_path_with_context("/management-reviews/preview", Some(&context)),
+                    management_review_template_options("generic_security_governance"),
                 )
             } else {
                 r#"<section class="panel wide"><h2>Paket erzeugen</h2><p>Zum Erzeugen oder Freigeben wird eine schreibende ISCY-Rolle benoetigt.</p></section>"#.to_string()
@@ -14606,18 +14838,20 @@ async fn web_management_reviews(
                 r#"
                 <section class="hero compact"><h1>Management Reviews</h1><p>{} Audit-/Review-Pakete</p></section>
                 {}
+                {}
                 <section class="panel wide">
                   <h2>Pakete</h2>
                   <table>
-                    <thead><tr><th>Titel</th><th>Status</th><th>Start</th><th>Ende</th><th>Erstellt</th></tr></thead>
+                    <thead><tr><th>Titel</th><th>Template</th><th>Status</th><th>Start</th><th>Ende</th><th>Erstellt</th></tr></thead>
                     <tbody>{}</tbody>
                   </table>
                 </section>
                 "#,
                 packages.len(),
+                template_cards,
                 generate_panel,
                 if rows.is_empty() {
-                    web_empty_row(5, "Keine Management-Review-Pakete vorhanden.")
+                    web_empty_row(6, "Keine Management-Review-Pakete vorhanden.")
                 } else {
                     rows
                 },
@@ -14685,6 +14919,7 @@ async fn web_management_reviews_generate(
         .into_response();
     };
     let payload = report_store::ManagementReviewGenerateRequest {
+        template_type: normalized_optional_form_text(form.template_type),
         title: normalized_optional_form_text(form.title),
         period_start: normalized_optional_form_text(form.period_start),
         period_end: normalized_optional_form_text(form.period_end),
@@ -14706,6 +14941,78 @@ async fn web_management_reviews_generate(
             &err.to_string(),
         )
         .into_response(),
+    }
+}
+
+async fn web_management_review_preview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebManagementReviewPreviewForm>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Management Review Preview", "/management-reviews/");
+    };
+    let Some(store) = state.report_store.as_ref() else {
+        return web_store_missing(
+            "Management Review Preview",
+            "/management-reviews/",
+            &context,
+            "Report",
+        );
+    };
+    let payload = report_store::ManagementTemplatePreviewRequest {
+        period_start: normalized_optional_form_text(form.period_start),
+        period_end: normalized_optional_form_text(form.period_end),
+    };
+    match store
+        .preview_management_review_template(
+            context.tenant_id,
+            context.user_id,
+            &form.template_type,
+            payload,
+        )
+        .await
+    {
+        Ok(preview) => {
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>{}</h1><p>{}</p></section>
+                <section class="metrics">{}</section>
+                <section class="grid">
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                "#,
+                html_escape(&preview.title),
+                html_escape(&preview.template.name),
+                management_review_metric_cards(&preview.metrics_json),
+                management_review_object_panel("Quellen", &preview.source_counts_json),
+                management_review_object_panel("Gap-Summary", &preview.gap_summary_json),
+                management_review_object_panel(
+                    "Management-Hinweise",
+                    &preview.decision_summary_json
+                ),
+                management_review_object_panel(
+                    "Regulatorischer Kontext",
+                    &preview.regulatory_context_json
+                ),
+            );
+            web_page(
+                "Management Review Preview",
+                "/management-reviews/",
+                Some(&context),
+                &body,
+            )
+        }
+        Err(err) => web_error_page(
+            "Management Review Preview",
+            "/management-reviews/",
+            &context,
+            &err.to_string(),
+        ),
     }
 }
 
@@ -14741,6 +15048,13 @@ async fn web_management_review_detail(
                 <section class="hero compact"><h1>{}</h1><p>{}</p></section>
                 <section class="metrics">{}</section>
                 <section class="panel wide">
+                  <h2>Template</h2>
+                  <table><tbody>
+                    <tr><th>Typ</th><td>{}</td><th>Version</th><td>{}</td></tr>
+                    <tr><th>Name</th><td colspan="3">{}</td></tr>
+                  </tbody></table>
+                </section>
+                <section class="panel wide">
                   <h2>Executive Summary</h2>
                   <p>{}</p>
                 </section>
@@ -14756,11 +15070,19 @@ async fn web_management_review_detail(
                   {}
                   {}
                   {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
                 </section>
                 "#,
                 html_escape(&package.title),
                 html_escape(&package.status_label),
                 management_review_metric_cards(&package.metrics_json),
+                html_escape(&package.template_type),
+                html_escape(&package.template_version),
+                html_escape(&package.template_name),
                 html_escape(&package.executive_summary),
                 status_panel,
                 export_panel,
@@ -14821,7 +15143,18 @@ async fn web_management_review_detail(
                     &context,
                 ),
                 management_review_object_panel("Product Security", &package.product_security_json),
+                management_review_object_panel("Supplier Review", &package.supplier_json),
                 management_review_object_panel("Agent Posture", &package.agent_posture_json),
+                management_review_object_panel("Quellen", &package.source_counts_json),
+                management_review_object_panel("Gap-Summary", &package.gap_summary_json),
+                management_review_object_panel(
+                    "Management-Hinweise",
+                    &package.decision_summary_json
+                ),
+                management_review_object_panel(
+                    "Regulatorischer Kontext",
+                    &package.regulatory_context_json
+                ),
                 management_review_array_panel(
                     "AI Governance",
                     &package.ai_governance_json["systems"],
@@ -15028,7 +15361,28 @@ async fn web_management_review_export_format(
         .management_review_detail(context.tenant_id, review_id)
         .await
     {
-        Ok(Some(package)) => management_review_export_download_response(&package, export_format),
+        Ok(Some(package)) => {
+            if store
+                .audit_management_review_export(
+                    context.tenant_id,
+                    context.user_id,
+                    review_id,
+                    &package.template_type,
+                    export_format.as_str(),
+                )
+                .await
+                .is_err()
+            {
+                return web_error_page(
+                    "Management Review",
+                    "/management-reviews/",
+                    &context,
+                    "Management-Review-Export konnte nicht auditiert werden.",
+                )
+                .into_response();
+            }
+            management_review_export_download_response(&package, export_format)
+        }
         Ok(None) => web_error_page(
             "Management Review",
             "/management-reviews/",
@@ -21883,6 +22237,17 @@ enum ManagementReviewExportFormat {
     Json,
 }
 
+impl ManagementReviewExportFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Markdown => "markdown",
+            Self::Html => "html",
+            Self::Pdf => "pdf",
+            Self::Json => "json",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum IncidentTimelineExportFormat {
     Csv,
@@ -22203,10 +22568,12 @@ fn management_review_export_download_response(
 
 fn management_review_markdown(package: &report_store::ManagementReviewPackageDetail) -> String {
     let mut markdown = format!(
-        "# ISCY Management Review: {}\n\n| Feld | Wert |\n| --- | --- |\n| Review-ID | {} |\n| Tenant-ID | {} |\n| Zeitraum | {} bis {} |\n| Status | {} |\n| Erstellt | {} |\n| Aktualisiert | {} |\n| Freigegeben | {} |\n\n## Executive Summary\n\n{}\n\n## Entscheidung\n\n| Feld | Wert |\n| --- | --- |\n| Entscheidung | {} |\n| Naechste Massnahmen | {} |\n\n## Kennzahlen\n\n{}\n",
+        "# ISCY Management Review: {}\n\n| Feld | Wert |\n| --- | --- |\n| Review-ID | {} |\n| Tenant-ID | {} |\n| Template | {} |\n| Template-Version | {} |\n| Zeitraum | {} bis {} |\n| Status | {} |\n| Erstellt | {} |\n| Aktualisiert | {} |\n| Freigegeben | {} |\n\n## Executive Summary\n\n{}\n\n## Entscheidung\n\n| Feld | Wert |\n| --- | --- |\n| Entscheidung | {} |\n| Naechste Massnahmen | {} |\n\n## Kennzahlen\n\n{}\n",
         md_value(&package.title),
         package.id,
         package.tenant_id,
+        md_value(&package.template_name),
+        md_value(&package.template_version),
         md_optional(package.period_start.as_deref()),
         md_optional(package.period_end.as_deref()),
         md_value(&package.status_label),
@@ -22272,9 +22639,27 @@ fn management_review_markdown(package: &report_store::ManagementReviewPackageDet
     markdown.push_str(&management_review_object_markdown(
         &package.product_security_json,
     ));
+    markdown.push_str("\n## Supplier Review\n\n");
+    markdown.push_str(&management_review_object_markdown(&package.supplier_json));
     markdown.push_str("\n## Agent Posture\n\n");
     markdown.push_str(&management_review_object_markdown(
         &package.agent_posture_json,
+    ));
+    markdown.push_str("\n## Quellen\n\n");
+    markdown.push_str(&management_review_object_markdown(
+        &package.source_counts_json,
+    ));
+    markdown.push_str("\n## Gap-Summary\n\n");
+    markdown.push_str(&management_review_object_markdown(
+        &package.gap_summary_json,
+    ));
+    markdown.push_str("\n## Management-Hinweise\n\n");
+    markdown.push_str(&management_review_object_markdown(
+        &package.decision_summary_json,
+    ));
+    markdown.push_str("\n## Regulatorischer Kontext\n\n");
+    markdown.push_str(&management_review_object_markdown(
+        &package.regulatory_context_json,
     ));
     markdown.push_str(&management_review_array_markdown(
         "AI Governance",
@@ -22299,6 +22684,7 @@ fn management_review_html(package: &report_store::ManagementReviewPackageDetail)
 <body>
 <h1>{}</h1>
 <p><strong>Status:</strong> {} · <strong>Zeitraum:</strong> {} bis {}</p>
+<p><strong>Template:</strong> {} · <strong>Version:</strong> {}</p>
 <h2>Executive Summary</h2>
 <p>{}</p>
 <h2>Entscheidung</h2>
@@ -22316,7 +22702,17 @@ fn management_review_html(package: &report_store::ManagementReviewPackageDetail)
 {}
 <h2>Product Security</h2>
 {}
+<h2>Supplier Review</h2>
+{}
 <h2>Agent Posture</h2>
+{}
+<h2>Quellen</h2>
+{}
+<h2>Gap-Summary</h2>
+{}
+<h2>Management-Hinweise</h2>
+{}
+<h2>Regulatorischer Kontext</h2>
 {}
 {}
 </body>
@@ -22326,6 +22722,8 @@ fn management_review_html(package: &report_store::ManagementReviewPackageDetail)
         html_escape(&package.status_label),
         html_escape(package.period_start.as_deref().unwrap_or("-")),
         html_escape(package.period_end.as_deref().unwrap_or("-")),
+        html_escape(&package.template_name),
+        html_escape(&package.template_version),
         html_escape(&package.executive_summary),
         html_escape(&package.decision_notes),
         html_escape(&package.next_actions),
@@ -22382,7 +22780,12 @@ fn management_review_html(package: &report_store::ManagementReviewPackageDetail)
             ],
         ),
         management_review_object_html(&package.product_security_json),
+        management_review_object_html(&package.supplier_json),
         management_review_object_html(&package.agent_posture_json),
+        management_review_object_html(&package.source_counts_json),
+        management_review_object_html(&package.gap_summary_json),
+        management_review_object_html(&package.decision_summary_json),
+        management_review_object_html(&package.regulatory_context_json),
         management_review_array_html(
             "AI Governance",
             &package.ai_governance_json["systems"],
@@ -22403,6 +22806,8 @@ fn management_review_pdf(package: &report_store::ManagementReviewPackageDetail) 
         format!("ISCY Management Review: {}", package.title),
         format!("Review-ID: {}", package.id),
         format!("Tenant-ID: {}", package.tenant_id),
+        format!("Template: {}", package.template_name),
+        format!("Template-Version: {}", package.template_version),
         format!(
             "Zeitraum: {} bis {}",
             package.period_start.as_deref().unwrap_or("-"),
@@ -22460,6 +22865,31 @@ fn management_review_pdf(package: &report_store::ManagementReviewPackageDetail) 
             "incident_links",
             "change_links",
         ],
+    ));
+    lines.push("Supplier Review:".to_string());
+    lines.extend(wrap_pdf_text(
+        &management_review_object_plain(&package.supplier_json),
+        92,
+    ));
+    lines.push("Quellen:".to_string());
+    lines.extend(wrap_pdf_text(
+        &management_review_object_plain(&package.source_counts_json),
+        92,
+    ));
+    lines.push("Gap-Summary:".to_string());
+    lines.extend(wrap_pdf_text(
+        &management_review_object_plain(&package.gap_summary_json),
+        92,
+    ));
+    lines.push("Management-Hinweise:".to_string());
+    lines.extend(wrap_pdf_text(
+        &management_review_object_plain(&package.decision_summary_json),
+        92,
+    ));
+    lines.push("Regulatorischer Kontext:".to_string());
+    lines.extend(wrap_pdf_text(
+        &management_review_object_plain(&package.regulatory_context_json),
+        92,
     ));
     simple_pdf_document(&lines)
 }
@@ -28699,6 +29129,43 @@ fn management_review_export_panel(
     )
 }
 
+fn management_review_template_options(selected: &str) -> String {
+    report_store::ReportStore::management_review_templates()
+        .into_iter()
+        .map(|template| {
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                html_escape(&template.template_type),
+                selected_attr(template.template_type == selected),
+                html_escape(&template.name),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn management_review_template_cards() -> String {
+    let cards = report_store::ReportStore::management_review_templates()
+        .into_iter()
+        .map(|template| {
+            format!(
+                r#"
+                <article class="panel">
+                  <h2>{}</h2>
+                  <p>{}</p>
+                  <p>{}</p>
+                </article>
+                "#,
+                html_escape(&template.name),
+                html_escape(&template.purpose),
+                html_escape(&template.regulatory_context.join(", ")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(r#"<section class="grid">{cards}</section>"#)
+}
+
 fn management_review_metric_cards(metrics: &Value) -> String {
     [
         ("Risiken", "open_risks"),
@@ -30460,6 +30927,30 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(management_review_packages).post(management_review_generate),
         )
         .route(
+            "/api/v1/management/templates",
+            get(management_review_templates),
+        )
+        .route(
+            "/api/v1/management/templates/{template_type}",
+            get(management_review_template_detail),
+        )
+        .route(
+            "/api/v1/regulatory/templates/{template_type}/preview",
+            post(management_review_template_preview),
+        )
+        .route(
+            "/api/v1/management/reviews",
+            get(management_review_packages).post(management_review_generate),
+        )
+        .route(
+            "/api/v1/management/reviews/{review_id}",
+            get(management_review_detail).patch(management_review_status_update),
+        )
+        .route(
+            "/api/v1/management/reviews/{review_id}/export",
+            get(management_review_export_markdown),
+        )
+        .route(
             "/api/v1/reports/management-reviews/{review_id}",
             get(management_review_detail).patch(management_review_status_update),
         )
@@ -30611,6 +31102,10 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/management-reviews/",
             get(web_management_reviews).post(web_management_reviews_generate),
+        )
+        .route(
+            "/management-reviews/preview",
+            post(web_management_review_preview),
         )
         .route(
             "/management-reviews/{review_id}",

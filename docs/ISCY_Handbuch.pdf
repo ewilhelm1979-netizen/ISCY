@@ -3,7 +3,7 @@
 << /Type /Catalog /Pages 2 0 R >>
 endobj
 2 0 obj
-<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R 40 0 R 42 0 R] /Count 20 >>
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R 40 0 R 42 0 R 44 0 R] /Count 21 >>
 endobj
 3 0 obj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
@@ -1111,7 +1111,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 19 0 R >>
 endobj
 19 0 obj
-<< /Length 2427 >>
+<< /Length 2934 >>
 stream
 BT
 /F1 9 Tf
@@ -1157,15 +1157,39 @@ T*
 T*
 (- werden aus aktuellen ISCY-Daten fuer einen Zeitraum erzeugt) Tj
 T*
+(- koennen als generisches Security-Governance-Paket oder ueber Templates fuer ISO 27001, NIS2,) Tj
+T*
+(DORA und KRITIS vorbereitet werden) Tj
+T*
 (- speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen,) Tj
 T*
-(Roadmap-Fokus, Product-Security-Lage und Agent-Posture als Snapshot) Tj
+(Roadmap-Fokus, Product-Security-Lage, Supplier-Review-Summary, Agent-Posture, AI-Governance,) Tj
+T*
+(Quellenzaehlung, Gap-Summary, Management-Hinweise und regulatorischen Kontext als Snapshot) Tj
 T*
 (- verlinken Snapshot-Zeilen zurueck zu Risiko, Control, Evidence, Incident und Roadmap) Tj
 T*
 (- koennen von Draft ueber In Review bis Approved oder Archived gefuehrt werden) Tj
 T*
 (- dokumentieren Entscheidung, naechste Massnahmen, freigebenden User und Freigabezeitpunkt) Tj
+T*
+(- erlauben eine Template-Vorschau, ohne bereits ein Review-Paket einzufrieren) Tj
+T*
+() Tj
+T*
+(API- und Web-Pfade:) Tj
+T*
+() Tj
+T*
+(- GET /api/v1/management/templates) Tj
+T*
+(- GET /api/v1/management/templates/{templatetype}) Tj
+T*
+(- POST /api/v1/regulatory/templates/{templatetype}/preview) Tj
+T*
+(- GET und POST /api/v1/management/reviews) Tj
+T*
+(- Weboberflaeche unter /management-reviews/ mit Template-Auswahl und Preview) Tj
 T*
 () Tj
 T*
@@ -1180,6 +1204,8 @@ T*
 (- Vorlagen fuer Kunden, Auditoren oder interne Gremien) Tj
 T*
 (- belastbare Vorbereitung von Management Review, Audit und Steering Committee) Tj
+T*
+(- wiederholbare Steuerungspakete, ohne neue Risiko-, Evidence- oder Control-Silos anzulegen) Tj
 T*
 () Tj
 T*
@@ -1235,6 +1261,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+20 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
+endobj
+21 0 obj
+<< /Length 2412 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (5.14 Import Center:) Tj
 T*
 () Tj
@@ -1261,19 +1300,6 @@ T*
 T*
 (Importierbare Inhalte:) Tj
 T*
-ET
-endstream
-endobj
-20 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 21 0 R >>
-endobj
-21 0 obj
-<< /Length 2932 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (- Business Units) Tj
@@ -1392,6 +1418,19 @@ T*
 T*
 (Fuer Nicht-Sicherheitsleute:) Tj
 T*
+ET
+endstream
+endobj
+22 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
+endobj
+23 0 obj
+<< /Length 4012 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Dieser Bereich ist fuer Unternehmen wichtig, die Software, digitale Produkte oder vernetzte) Tj
 T*
 (Systeme bereitstellen.) Tj
@@ -1418,19 +1457,6 @@ T*
 T*
 (Korrelationen) Tj
 T*
-ET
-endstream
-endobj
-22 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 23 0 R >>
-endobj
-23 0 obj
-<< /Length 4027 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Dashboard-Kennzahlen fuer offene CVE-Reviews und fehlende Evidence) Tj
 T*
 (- gebuendelte CVE-Risiko-Review-Queue mit Filtern fuer offene Reviews, fehlende Evidence und) Tj
@@ -1549,6 +1575,19 @@ T*
 T*
 (- kleines allgemeines Change-Register als kanonischer Plattformkern; es ist kein) Tj
 T*
+ET
+endstream
+endobj
+24 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
+endobj
+25 0 obj
+<< /Length 4656 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (AI-spezifisches Ersatzmodell und noch kein vollstaendiger Change-Management-Workflow) Tj
 T*
 (- Link-Audit fuer Anlegen und Entfernen mit Actor, Objekttyp, Objekt-ID und Zeitpunkt) Tj
@@ -1559,7 +1598,9 @@ T*
 T*
 (- Management-Review-Snapshots und Exporte frieren AI-Systeme sowie Linkzaehler fuer Risiko,) Tj
 T*
-(Roadmap, Incident und Change ein) Tj
+(Roadmap, Incident und Change ein; Management-/Regulatory-Templates nehmen diese Daten in den) Tj
+T*
+(passenden Review-Kontext auf) Tj
 T*
 (- Rust-only-Betriebssignale fuer nicht bewertete AI-Systeme, faellige Reviews, fehlende) Tj
 T*
@@ -1575,19 +1616,6 @@ T*
 T*
 (- Schreibende Rollen duerfen Links und Gap-Tasks verwalten.) Tj
 T*
-ET
-endstream
-endobj
-24 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
-endobj
-25 0 obj
-<< /Length 4499 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- AI-System und Zielobjekt werden bereits in der Datenbankabfrage auf denselben Tenant) Tj
 T*
 (eingeschraenkt. Manipulierte oder fremde IDs werden nicht verknuepft und nicht offengelegt.) Tj
@@ -1704,6 +1732,19 @@ T*
 T*
 (- tenantgebundene Validierung fuer Supplier, Subprocessors, Owner, Evidence, Controls und) Tj
 T*
+ET
+endstream
+endobj
+26 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
+endobj
+27 0 obj
+<< /Length 3296 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Risiken) Tj
 T*
 (- auditierbare Erstellung, Aenderung, Statusentscheidung, Subprocessor-Aenderung und) Tj
@@ -1732,19 +1773,6 @@ T*
 T*
 (- Review-Entscheidungen werden nicht nur als aktueller Status gespeichert, sondern als) Tj
 T*
-ET
-endstream
-endobj
-26 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
-endobj
-27 0 obj
-<< /Length 3009 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (nachvollziehbare Freigabehistorie.) Tj
 T*
 (- Vertragsende, automatischer Renew, Kuendigungsfrist und Exit-Test-Status helfen dabei,) Tj
@@ -1782,8 +1810,6 @@ T*
 (- keine neue Control-Bibliothek) Tj
 T*
 (- kein Legal-Hold-, Disposition-, Loesch-, Re-Hash- oder Objektspeichersystem) Tj
-T*
-(- keine Management-/Regulatory-Paketgeneratoren) Tj
 T*
 () Tj
 T*
@@ -1863,6 +1889,19 @@ T*
 T*
 (2. Wizard durchlaufen) Tj
 T*
+ET
+endstream
+endobj
+28 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
+endobj
+29 0 obj
+<< /Length 3729 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (3. Prozesse, Assets und Lieferanten importieren) Tj
 T*
 (4. Requirements und Applicability sichten) Tj
@@ -1889,19 +1928,6 @@ T*
 T*
 (4. SoA pruefen) Tj
 T*
-ET
-endstream
-endobj
-28 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
-endobj
-29 0 obj
-<< /Length 4396 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (5. Audit-Report erzeugen) Tj
 T*
 () Tj
@@ -2020,6 +2046,19 @@ T*
 T*
 (3. Abschlussbericht nach 30 Tagen) Tj
 T*
+ET
+endstream
+endobj
+30 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
+endobj
+31 0 obj
+<< /Length 5024 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Die Uebersicht zeigt offene Faelle, Erheblichkeitsstatus, NIS2-relevante Faelle und) Tj
@@ -2046,19 +2085,6 @@ T*
 T*
 (manuelle Timeline-Notizen und incidentbezogene Evidence-Uploads als Timeline-/Audit-Events mit) Tj
 T*
-ET
-endstream
-endobj
-30 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
-endobj
-31 0 obj
-<< /Length 4373 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Actor, Zeitpunkt, Ereignisart und Detailtext. Ein Incident wird dabei nicht automatisch als) Tj
 T*
 (erheblicher Sicherheitsvorfall behandelt: Wird eine Fallakte als Nicht erheblich bewertet,) Tj
@@ -2177,6 +2203,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 4110 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (cd /home/enricow79/Projekte/ISCY) Tj
 T*
 (./start.sh) Tj
@@ -2203,19 +2242,6 @@ T*
 T*
 (DATABASE_URL=sqlite:///db.sqlite3 RUST_BACKEND_BIND=127.0.0.1:9000 nix run .#iscy-backend) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 4667 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Produktive Erstinitialisierung erfolgt ohne Demo-Seed. Dafuer wird ein eigenes Passwort aus) Tj
@@ -2334,6 +2360,19 @@ T*
 T*
 (x-iscy-user-id oder x-iscy-roles produktiv nicht zur Identitaetssteuerung verwenden; diese) Tj
 T*
+ET
+endstream
+endobj
+34 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
+endobj
+35 0 obj
+<< /Length 4637 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Header werden nur akzeptiert, wenn ein vertrauenswuerdiger Proxy das explizit absichert.) Tj
 T*
 () Tj
@@ -2360,19 +2399,6 @@ T*
 T*
 (Die Tenant-Isolation wird nicht nur auf Listen, sondern auch auf sensible Objektoperationen) Tj
 T*
-ET
-endstream
-endobj
-34 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
-endobj
-35 0 obj
-<< /Length 4291 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (angewendet. Negativtests decken fremde Detail-, Write- und Exportzugriffe fuer Kernobjekte ab,) Tj
 T*
 (darunter Incidents mit NIS2-/DORA-/DSGVO- und Timeline-Exporten sowie) Tj
@@ -2491,6 +2517,19 @@ T*
 T*
 (unveraenderte SHA-256-Pruefsumme. Damit wird nicht nur die Existenz irgendeiner Datei, sondern) Tj
 T*
+ET
+endstream
+endobj
+36 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
+endobj
+37 0 obj
+<< /Length 3187 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (die Integritaet eines zusammengehoerigen Evidence-Artefakts getestet.) Tj
 T*
 () Tj
@@ -2517,19 +2556,6 @@ T*
 T*
 (Agent an eine lokale ISCY-Instanz melden lassen:) Tj
 T*
-ET
-endstream
-endobj
-36 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
-endobj
-37 0 obj
-<< /Length 3186 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (ISCY_BACKEND_URL=http://127.0.0.1:9000 \\) Tj
@@ -2648,6 +2674,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+38 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 39 0 R >>
+endobj
+39 0 obj
+<< /Length 3736 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (#### Windows-Hardening in kurz) Tj
 T*
 () Tj
@@ -2674,19 +2713,6 @@ T*
 T*
 (- Notfall- und Wiederanlaufablaeufe fuer Produktion ueben.) Tj
 T*
-ET
-endstream
-endobj
-38 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 39 0 R >>
-endobj
-39 0 obj
-<< /Length 3928 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- In ISCY als Risiko, Massnahme, Evidenz und Incident-Playbook abbilden.) Tj
 T*
 () Tj
@@ -2805,6 +2831,19 @@ T*
 T*
 (Aus wiederkehrenden High-/Critical-Findings sollten Risiken, Massnahmen und) Tj
 T*
+ET
+endstream
+endobj
+40 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 41 0 R >>
+endobj
+41 0 obj
+<< /Length 4618 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Evidenzanforderungen ableitbar sein.) Tj
 T*
 (2. MDM-/EDR-Integrationen vorbereiten) Tj
@@ -2831,19 +2870,6 @@ T*
 T*
 (6. CA-/PKI-Anbindung separat planen) Tj
 T*
-ET
-endstream
-endobj
-40 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 41 0 R >>
-endobj
-41 0 obj
-<< /Length 4368 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Private Schluessel und CSR sollen lokal auf dem Agent entstehen; Ausstellung, Rotation und) Tj
 T*
 (Widerruf gehoeren in einen eigenen, providerunabhaengigen Meilenstein.) Tj
@@ -2936,13 +2962,13 @@ T*
 T*
 () Tj
 T*
-(Bewusst nicht umgesetzt sind Management-/Regulatory-Templates, Evidence-) Tj
+(Bewusst nicht umgesetzt sind Evidence-Legal-Hold und -Disposition,) Tj
 T*
-(Legal-Hold und -Disposition, kontrollierte Loeschung, Re-Hash-Worker,) Tj
+(kontrollierte Loeschung, Re-Hash-Worker, Objektspeicher, CA-/PKI-/CSR-) Tj
 T*
-(Objektspeicher, CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete, Release-) Tj
+(Funktionen, signierte Agent-Pakete, Release-Provenance sowie Performance-,) Tj
 T*
-(Provenance sowie Performance-, HA- und visuelle Regressionserweiterungen.) Tj
+(HA- und visuelle Regressionserweiterungen.) Tj
 T*
 () Tj
 T*
@@ -2962,6 +2988,19 @@ T*
 T*
 (- Audit: systematische Pruefung) Tj
 T*
+ET
+endstream
+endobj
+42 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 43 0 R >>
+endobj
+43 0 obj
+<< /Length 4224 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- Finding: Feststellung aus einer Pruefung) Tj
 T*
 (- Evidence: Nachweis) Tj
@@ -2988,19 +3027,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-42 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 43 0 R >>
-endobj
-43 0 obj
-<< /Length 3577 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- eine Rechtsberatung) Tj
 T*
 (- eine vollautomatische Sicherheitsbewertung ohne Fachpruefung) Tj
@@ -3069,9 +3095,13 @@ T*
 T*
 (Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten) Tj
 T*
-(Evidence-/Control-/Risk-Links. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr) Tj
+(Evidence-/Control-/Risk-Links. Migration 0032rustmanagementregulatorytemplates ergaenzt) Tj
 T*
-(auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.) Tj
+(Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, KRITIS und generische) Tj
+T*
+(Security-Governance-Reviews. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf) Tj
+T*
+(Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.) Tj
 T*
 () Tj
 T*
@@ -3079,7 +3109,7 @@ T*
 T*
 () Tj
 T*
-(1. Management-/Regulatory-Templates fuer wiederholbare Pruefpakete) Tj
+(1. Feinere Management-/Regulatory-Template-Varianten und kontextsensitive Pruefpakete) Tj
 T*
 (2. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend) Tj
 T*
@@ -3115,6 +3145,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+44 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 45 0 R >>
+endobj
+45 0 obj
+<< /Length 151 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Das PDF-Handbuch docs/ISCYHandbuch.pdf wird reproduzierbar aus Markdown erzeugt:) Tj
 T*
 () Tj
@@ -3125,53 +3168,55 @@ ET
 endstream
 endobj
 xref
-0 44
+0 46
 0000000000 65535 f
 0000000009 00000 n
 0000000058 00000 n
-0000000247 00000 n
-0000000317 00000 n
-0000000443 00000 n
-0000003901 00000 n
-0000004027 00000 n
-0000006790 00000 n
-0000006916 00000 n
-0000009595 00000 n
-0000009723 00000 n
-0000011629 00000 n
-0000011757 00000 n
-0000014783 00000 n
-0000014911 00000 n
-0000019098 00000 n
-0000019226 00000 n
-0000022395 00000 n
-0000022523 00000 n
-0000025002 00000 n
-0000025130 00000 n
-0000028114 00000 n
-0000028242 00000 n
-0000032321 00000 n
-0000032449 00000 n
-0000037000 00000 n
-0000037128 00000 n
-0000040189 00000 n
-0000040317 00000 n
-0000044765 00000 n
-0000044893 00000 n
-0000049318 00000 n
-0000049446 00000 n
-0000054165 00000 n
-0000054293 00000 n
-0000058636 00000 n
-0000058764 00000 n
-0000062002 00000 n
-0000062130 00000 n
-0000066110 00000 n
-0000066238 00000 n
-0000070658 00000 n
-0000070786 00000 n
+0000000254 00000 n
+0000000324 00000 n
+0000000450 00000 n
+0000003908 00000 n
+0000004034 00000 n
+0000006797 00000 n
+0000006923 00000 n
+0000009602 00000 n
+0000009730 00000 n
+0000011636 00000 n
+0000011764 00000 n
+0000014790 00000 n
+0000014918 00000 n
+0000019105 00000 n
+0000019233 00000 n
+0000022402 00000 n
+0000022530 00000 n
+0000025516 00000 n
+0000025644 00000 n
+0000028108 00000 n
+0000028236 00000 n
+0000032300 00000 n
+0000032428 00000 n
+0000037136 00000 n
+0000037264 00000 n
+0000040612 00000 n
+0000040740 00000 n
+0000044521 00000 n
+0000044649 00000 n
+0000049725 00000 n
+0000049853 00000 n
+0000054015 00000 n
+0000054143 00000 n
+0000058832 00000 n
+0000058960 00000 n
+0000062199 00000 n
+0000062327 00000 n
+0000066115 00000 n
+0000066243 00000 n
+0000070913 00000 n
+0000071041 00000 n
+0000075317 00000 n
+0000075445 00000 n
 trailer
-<< /Size 44 /Root 1 0 R >>
+<< /Size 46 /Root 1 0 R >>
 startxref
-74415
+75647
 %%EOF

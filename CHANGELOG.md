@@ -8,6 +8,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- add Management-/Regulatory-Templates for ISO 27001, NIS2, DORA, KRITIS, and generic security governance reviews through additive migration `0032_rust_management_regulatory_templates`
+- extend Management Review snapshots with template metadata, regulatory context, supplier review summaries, source counts, gap summaries, and management decision hints
+- add authenticated template list/detail APIs, regulatory preview API, and Management Review Web UI template selection without creating snapshots during preview
 - add a tenant-scoped Supplier Review Workflow with additive migration `0031_rust_supplier_review_workflow`
 - add Supplier review statuses for draft, in_review, approved, approved_with_conditions, rejected, expired, and archived decisions
 - add Supplier approval history, subprocessor records, contract lifecycle metadata, exit-test status, and explicit Evidence, Control, and Risk links
@@ -25,6 +28,8 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- audit Management Review template previews, snapshot creation, status changes, and exports without storing raw payloads or secret material
+- keep Management-/Regulatory-Template previews and generated snapshots tenant-scoped and enforce read-only versus write-role separation for snapshot creation
 - audit Supplier creation, updates, review decisions, subprocessor changes, and Evidence, Control, and Risk link changes without exposing SQL details or secret payloads
 - enforce tenant-scoped Supplier writes, link validation, owner references, Evidence references, and subprocessor visibility
 - reserve tenant- and channel-scoped notification dispatch claims atomically before webhook delivery through additive migration `0030_rust_notification_dispatch_claim`, preventing duplicate sends from overlapping manual and periodic evaluations

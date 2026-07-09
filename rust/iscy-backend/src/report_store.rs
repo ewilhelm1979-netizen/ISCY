@@ -61,6 +61,9 @@ pub struct ManagementReviewPackageSummary {
     pub id: i64,
     pub tenant_id: i64,
     pub title: String,
+    pub template_type: String,
+    pub template_name: String,
+    pub template_version: String,
     pub period_start: Option<String>,
     pub period_end: Option<String>,
     pub status: String,
@@ -77,6 +80,9 @@ pub struct ManagementReviewPackageDetail {
     pub id: i64,
     pub tenant_id: i64,
     pub title: String,
+    pub template_type: String,
+    pub template_name: String,
+    pub template_version: String,
     pub period_start: Option<String>,
     pub period_end: Option<String>,
     pub status: String,
@@ -96,16 +102,68 @@ pub struct ManagementReviewPackageDetail {
     pub product_security_json: Value,
     pub agent_posture_json: Value,
     pub ai_governance_json: Value,
+    pub supplier_json: Value,
+    pub regulatory_context_json: Value,
+    pub source_counts_json: Value,
+    pub gap_summary_json: Value,
+    pub decision_summary_json: Value,
     pub created_at: String,
     pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ManagementReviewGenerateRequest {
+    pub template_type: Option<String>,
     pub title: Option<String>,
     pub period_start: Option<String>,
     pub period_end: Option<String>,
     pub executive_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ManagementTemplatePreviewRequest {
+    pub period_start: Option<String>,
+    pub period_end: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagementReviewTemplateSummary {
+    pub template_type: String,
+    pub template_version: String,
+    pub name: String,
+    pub purpose: String,
+    pub regulatory_context: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagementReviewTemplateDetail {
+    pub template_type: String,
+    pub template_version: String,
+    pub name: String,
+    pub purpose: String,
+    pub regulatory_context: Vec<String>,
+    pub data_sources: Vec<String>,
+    pub sections: Vec<String>,
+    pub snapshot_structure: Vec<String>,
+    pub gap_focus: Vec<String>,
+    pub review_hints: Vec<String>,
+    pub management_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagementReviewTemplatePreview {
+    pub tenant_id: i64,
+    pub template: ManagementReviewTemplateDetail,
+    pub period_start: Option<String>,
+    pub period_end: Option<String>,
+    pub generated_at: String,
+    pub title: String,
+    pub executive_summary: String,
+    pub metrics_json: Value,
+    pub source_counts_json: Value,
+    pub gap_summary_json: Value,
+    pub decision_summary_json: Value,
+    pub regulatory_context_json: Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -188,6 +246,50 @@ impl ReportStore {
         }
     }
 
+    pub fn management_review_templates() -> Vec<ManagementReviewTemplateSummary> {
+        management_review_template_catalog()
+            .iter()
+            .map(|template| template.summary())
+            .collect()
+    }
+
+    pub fn management_review_template(
+        template_type: &str,
+    ) -> anyhow::Result<ManagementReviewTemplateDetail> {
+        Ok(resolve_management_review_template(template_type)?.detail())
+    }
+
+    pub async fn preview_management_review_template(
+        &self,
+        tenant_id: i64,
+        user_id: i64,
+        template_type: &str,
+        request: ManagementTemplatePreviewRequest,
+    ) -> anyhow::Result<ManagementReviewTemplatePreview> {
+        match self {
+            Self::Postgres(pool) => {
+                preview_management_review_template_postgres(
+                    pool,
+                    tenant_id,
+                    user_id,
+                    template_type,
+                    request,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                preview_management_review_template_sqlite(
+                    pool,
+                    tenant_id,
+                    user_id,
+                    template_type,
+                    request,
+                )
+                .await
+            }
+        }
+    }
+
     pub async fn generate_management_review(
         &self,
         tenant_id: i64,
@@ -224,6 +326,389 @@ impl ReportStore {
             }
         }
     }
+
+    pub async fn audit_management_review_export(
+        &self,
+        tenant_id: i64,
+        user_id: i64,
+        review_id: i64,
+        template_type: &str,
+        export_format: &str,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(pool) => {
+                audit_management_review_event_postgres(
+                    pool,
+                    tenant_id,
+                    Some(review_id),
+                    template_type,
+                    "management_review_export_generated",
+                    Some(user_id),
+                    &serde_json::json!({ "format": export_format }),
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                audit_management_review_event_sqlite(
+                    pool,
+                    tenant_id,
+                    Some(review_id),
+                    template_type,
+                    "management_review_export_generated",
+                    Some(user_id),
+                    &serde_json::json!({ "format": export_format }),
+                )
+                .await
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ManagementReviewTemplateDefinition {
+    template_type: &'static str,
+    aliases: &'static [&'static str],
+    template_version: &'static str,
+    name: &'static str,
+    purpose: &'static str,
+    regulatory_context: &'static [&'static str],
+    data_sources: &'static [&'static str],
+    sections: &'static [&'static str],
+    snapshot_structure: &'static [&'static str],
+    gap_focus: &'static [&'static str],
+    review_hints: &'static [&'static str],
+    management_actions: &'static [&'static str],
+}
+
+impl ManagementReviewTemplateDefinition {
+    fn summary(self) -> ManagementReviewTemplateSummary {
+        ManagementReviewTemplateSummary {
+            template_type: self.template_type.to_string(),
+            template_version: self.template_version.to_string(),
+            name: self.name.to_string(),
+            purpose: self.purpose.to_string(),
+            regulatory_context: strings(self.regulatory_context),
+        }
+    }
+
+    fn detail(self) -> ManagementReviewTemplateDetail {
+        ManagementReviewTemplateDetail {
+            template_type: self.template_type.to_string(),
+            template_version: self.template_version.to_string(),
+            name: self.name.to_string(),
+            purpose: self.purpose.to_string(),
+            regulatory_context: strings(self.regulatory_context),
+            data_sources: strings(self.data_sources),
+            sections: strings(self.sections),
+            snapshot_structure: strings(self.snapshot_structure),
+            gap_focus: strings(self.gap_focus),
+            review_hints: strings(self.review_hints),
+            management_actions: strings(self.management_actions),
+        }
+    }
+}
+
+const MANAGEMENT_REVIEW_TEMPLATE_VERSION: &str = "2026.1";
+
+const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
+    ManagementReviewTemplateDefinition {
+        template_type: "generic_security_governance",
+        aliases: &["generic", "security_governance", "governance"],
+        template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
+        name: "Generic Security Governance Review",
+        purpose: "Cross-domain security governance package for regular management steering.",
+        regulatory_context: &["ISO 27001", "NIS2", "DORA", "CRA", "EU AI Act", "GDPR", "KRITIS"],
+        data_sources: &[
+            "risks",
+            "ISCY-27 controls",
+            "evidence",
+            "incidents",
+            "roadmap",
+            "product security",
+            "supplier reviews",
+            "AI governance",
+            "agent posture",
+        ],
+        sections: &[
+            "Executive summary",
+            "Risk and control posture",
+            "Evidence readiness",
+            "Incident and regulatory decisions",
+            "Supplier and product security",
+            "AI governance",
+            "Roadmap actions",
+            "Management decisions",
+        ],
+        snapshot_structure: &[
+            "metrics_json",
+            "top_risks_json",
+            "control_gaps_json",
+            "evidence_gaps_json",
+            "incident_decisions_json",
+            "roadmap_json",
+            "product_security_json",
+            "supplier_json",
+            "agent_posture_json",
+            "ai_governance_json",
+        ],
+        gap_focus: &[
+            "Critical open risks",
+            "Open ISCY-27 control gaps",
+            "Missing or partial evidence",
+            "Unassessed incidents",
+            "Open roadmap work",
+        ],
+        review_hints: &[
+            "Validate whether the snapshot contains enough evidence for the review period.",
+            "Separate regulatory support from formal legal advice or certification.",
+            "Record decisions and next actions before approval.",
+        ],
+        management_actions: &[
+            "Approve or return the package for rework.",
+            "Assign owners for critical gaps.",
+            "Confirm next review period and escalation path.",
+        ],
+    },
+    ManagementReviewTemplateDefinition {
+        template_type: "iso27001_management_review",
+        aliases: &["iso27001", "iso_27001", "iso-27001"],
+        template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
+        name: "ISO 27001 Management Review",
+        purpose: "Management review package for ISMS steering and continuous improvement.",
+        regulatory_context: &["ISO 27001", "ISO 27001:2022 Clause 9.3"],
+        data_sources: &[
+            "risks",
+            "ISCY-27 controls",
+            "evidence",
+            "incidents",
+            "roadmap",
+            "supplier reviews",
+        ],
+        sections: &[
+            "ISMS context and scope hints",
+            "Risk treatment status",
+            "Control and evidence maturity",
+            "Incident and nonconformity signals",
+            "Supplier assurance",
+            "Improvement actions",
+            "Management decisions",
+        ],
+        snapshot_structure: &[
+            "metrics_json",
+            "top_risks_json",
+            "control_gaps_json",
+            "evidence_gaps_json",
+            "incident_decisions_json",
+            "supplier_json",
+            "roadmap_json",
+        ],
+        gap_focus: &[
+            "Missing evidence",
+            "Open risk treatment",
+            "Controls with partial maturity",
+            "Overdue supplier reviews",
+        ],
+        review_hints: &[
+            "Use the package as review support, not as certification evidence by itself.",
+            "Check whether open gaps need corrective actions or risk acceptance.",
+            "Confirm that previous management actions were followed up.",
+        ],
+        management_actions: &[
+            "Approve ISMS improvement priorities.",
+            "Decide risk acceptance or additional treatment.",
+            "Schedule follow-up evidence collection.",
+        ],
+    },
+    ManagementReviewTemplateDefinition {
+        template_type: "nis2_management_summary",
+        aliases: &["nis2", "nis-2"],
+        template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
+        name: "NIS2 Management Summary",
+        purpose: "Management summary for NIS2 governance, incident readiness and resilience follow-up.",
+        regulatory_context: &[
+            "NIS2",
+            "Commission Implementing Regulation (EU) 2024/2690 Article 3 best-practice",
+        ],
+        data_sources: &[
+            "incidents",
+            "ISCY-27 controls",
+            "evidence",
+            "roadmap",
+            "supplier reviews",
+            "agent posture",
+        ],
+        sections: &[
+            "NIS2 scope hints",
+            "Incident significance and notification readiness",
+            "Control and evidence gaps",
+            "Supplier dependencies",
+            "Operational posture",
+            "Management decisions",
+        ],
+        snapshot_structure: &[
+            "regulatory_context_json",
+            "incident_decisions_json",
+            "control_gaps_json",
+            "evidence_gaps_json",
+            "supplier_json",
+            "agent_posture_json",
+            "roadmap_json",
+        ],
+        gap_focus: &[
+            "Unassessed incident significance",
+            "Missing incident response evidence",
+            "Critical supplier exposure",
+            "Stale agent or monitoring posture",
+        ],
+        review_hints: &[
+            "Distinguish security incidents from significant incidents before notification decisions.",
+            "Use the Article 3 criteria as structured best-practice where applicable.",
+            "Confirm on-call, weekend and escalation responsibilities.",
+        ],
+        management_actions: &[
+            "Confirm incident classification decisions.",
+            "Assign remediation for significant control and supplier gaps.",
+            "Approve notification-readiness actions.",
+        ],
+    },
+    ManagementReviewTemplateDefinition {
+        template_type: "dora_ict_risk_supplier_incident_summary",
+        aliases: &["dora", "dora_ict", "dora_summary"],
+        template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
+        name: "DORA ICT Risk, Supplier and Incident Summary",
+        purpose: "Executive package for ICT risk, third-party dependency and incident steering.",
+        regulatory_context: &["DORA", "ICT risk management", "ICT third-party risk", "incident reporting"],
+        data_sources: &[
+            "risks",
+            "incidents",
+            "supplier reviews",
+            "evidence",
+            "product security",
+            "roadmap",
+        ],
+        sections: &[
+            "ICT risk profile",
+            "Major incident and review signals",
+            "Supplier and subprocessor exposure",
+            "Evidence and resilience gaps",
+            "Product-security dependencies",
+            "Management decisions",
+        ],
+        snapshot_structure: &[
+            "metrics_json",
+            "top_risks_json",
+            "incident_decisions_json",
+            "supplier_json",
+            "product_security_json",
+            "evidence_gaps_json",
+            "roadmap_json",
+        ],
+        gap_focus: &[
+            "Critical ICT risks",
+            "Overdue supplier reviews",
+            "Open incident review decisions",
+            "Product-security CVE review backlog",
+        ],
+        review_hints: &[
+            "Validate whether financial-entity or ICT-third-party-provider flags are set correctly.",
+            "Check supplier concentration and exit-test posture.",
+            "Do not treat this package as a formal regulatory filing.",
+        ],
+        management_actions: &[
+            "Approve ICT risk remediation priorities.",
+            "Escalate critical suppliers or missing exit tests.",
+            "Confirm incident follow-up ownership.",
+        ],
+    },
+    ManagementReviewTemplateDefinition {
+        template_type: "kritis_operational_resilience_summary",
+        aliases: &["kritis", "critical_infrastructure"],
+        template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
+        name: "KRITIS Operational Resilience Summary",
+        purpose: "Operational resilience review for critical services, incidents and continuity-related gaps.",
+        regulatory_context: &["KRITIS", "NIS2", "operational resilience", "BCM"],
+        data_sources: &[
+            "incidents",
+            "risks",
+            "ISCY-27 controls",
+            "evidence",
+            "roadmap",
+            "agent posture",
+            "supplier reviews",
+        ],
+        sections: &[
+            "Critical-service scope hints",
+            "Incident and continuity posture",
+            "Control and evidence gaps",
+            "Supplier resilience",
+            "Operational monitoring posture",
+            "Management actions",
+        ],
+        snapshot_structure: &[
+            "regulatory_context_json",
+            "incident_decisions_json",
+            "top_risks_json",
+            "control_gaps_json",
+            "evidence_gaps_json",
+            "supplier_json",
+            "agent_posture_json",
+            "roadmap_json",
+        ],
+        gap_focus: &[
+            "Critical incidents",
+            "BCM and monitoring evidence gaps",
+            "Critical supplier dependencies",
+            "Open operational roadmap items",
+        ],
+        review_hints: &[
+            "Focus on service continuity, escalation and recovery evidence.",
+            "Confirm whether KRITIS relevance in the tenant profile is current.",
+            "Review supplier dependencies for critical services.",
+        ],
+        management_actions: &[
+            "Approve resilience remediation.",
+            "Confirm escalation and continuity test ownership.",
+            "Schedule follow-up for missing evidence.",
+        ],
+    },
+];
+
+fn management_review_template_catalog() -> &'static [ManagementReviewTemplateDefinition] {
+    MANAGEMENT_REVIEW_TEMPLATES
+}
+
+fn resolve_management_review_template(
+    template_type: &str,
+) -> anyhow::Result<ManagementReviewTemplateDefinition> {
+    let normalized = normalize_template_type(template_type);
+    management_review_template_catalog()
+        .iter()
+        .copied()
+        .find(|template| {
+            template.template_type == normalized
+                || template
+                    .aliases
+                    .iter()
+                    .any(|alias| normalize_template_type(alias) == normalized)
+        })
+        .with_context(|| format!("Unbekannter Management-Review-Template-Typ: {template_type}"))
+}
+
+fn selected_management_review_template(
+    template_type: Option<String>,
+) -> anyhow::Result<ManagementReviewTemplateDefinition> {
+    let template_type = clean_text(template_type, 64)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "generic_security_governance".to_string());
+    resolve_management_review_template(&template_type)
+}
+
+fn normalize_template_type(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace(['-', ' '], "_")
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_string()).collect()
 }
 
 async fn list_snapshots_postgres(
@@ -540,36 +1025,113 @@ async fn management_review_detail_sqlite(
         .map_err(Into::into)
 }
 
+async fn preview_management_review_template_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    user_id: i64,
+    template_type: &str,
+    request: ManagementTemplatePreviewRequest,
+) -> anyhow::Result<ManagementReviewTemplatePreview> {
+    let template = resolve_management_review_template(template_type)?;
+    let snapshot = build_management_review_snapshot_postgres(pool, tenant_id, template).await?;
+    let period_start = management_review_date(request.period_start, "Zeitraum-Start")?;
+    let period_end = management_review_date(request.period_end, "Zeitraum-Ende")?;
+    audit_management_review_event_postgres(
+        pool,
+        tenant_id,
+        None,
+        template.template_type,
+        "management_review_template_previewed",
+        Some(user_id),
+        &serde_json::json!({
+            "template_version": template.template_version,
+            "period_start": period_start.map(|date| date.to_string()),
+            "period_end": period_end.map(|date| date.to_string())
+        }),
+    )
+    .await?;
+    Ok(management_review_preview_from_snapshot(
+        tenant_id,
+        template,
+        period_start.map(|date| date.to_string()),
+        period_end.map(|date| date.to_string()),
+        snapshot,
+    ))
+}
+
+async fn preview_management_review_template_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    user_id: i64,
+    template_type: &str,
+    request: ManagementTemplatePreviewRequest,
+) -> anyhow::Result<ManagementReviewTemplatePreview> {
+    let template = resolve_management_review_template(template_type)?;
+    let snapshot = build_management_review_snapshot_sqlite(pool, tenant_id, template).await?;
+    let period_start = clean_optional_text(request.period_start);
+    let period_end = clean_optional_text(request.period_end);
+    audit_management_review_event_sqlite(
+        pool,
+        tenant_id,
+        None,
+        template.template_type,
+        "management_review_template_previewed",
+        Some(user_id),
+        &serde_json::json!({
+            "template_version": template.template_version,
+            "period_start": period_start.clone(),
+            "period_end": period_end.clone()
+        }),
+    )
+    .await?;
+    Ok(management_review_preview_from_snapshot(
+        tenant_id,
+        template,
+        period_start,
+        period_end,
+        snapshot,
+    ))
+}
+
 async fn generate_management_review_postgres(
     pool: &PgPool,
     tenant_id: i64,
     user_id: i64,
     request: ManagementReviewGenerateRequest,
 ) -> anyhow::Result<ManagementReviewPackageDetail> {
-    let snapshot = build_management_review_snapshot_postgres(pool, tenant_id).await?;
-    let title = review_title(request.title);
+    let template = selected_management_review_template(request.template_type)?;
+    let snapshot = build_management_review_snapshot_postgres(pool, tenant_id, template).await?;
+    let title = review_title(request.title, template);
     let executive_summary = review_executive_summary(request.executive_summary, &snapshot);
     let period_start = management_review_date(request.period_start, "Zeitraum-Start")?;
     let period_end = management_review_date(request.period_end, "Zeitraum-Ende")?;
     let id: i64 = sqlx::query_scalar(
         r#"
         INSERT INTO reports_managementreviewpackage (
-            tenant_id, title, period_start, period_end, status, generated_by_id,
+            tenant_id, title, template_type, template_version, period_start, period_end,
+            status, generated_by_id,
             executive_summary, decision_notes, next_actions, metrics_json, top_risks_json,
             control_gaps_json, evidence_gaps_json, incident_decisions_json, roadmap_json,
-            product_security_json, agent_posture_json, ai_governance_json, created_at, updated_at
+            product_security_json, agent_posture_json, ai_governance_json, supplier_json,
+            regulatory_context_json, source_counts_json, gap_summary_json, decision_summary_json,
+            created_at, updated_at
         )
         VALUES (
-            $1, $2, $3, $4, 'DRAFT', $5,
-            $6, '', '', $7, $8,
-            $9, $10, $11, $12,
-            $13, $14, $15, NOW()::text, NOW()::text
+            $1, $2, $3, $4, $5, $6,
+            'DRAFT', $7,
+            $8, '', '', $9, $10,
+            $11, $12, $13, $14,
+            $15, $16, $17, $18,
+            $19, $20, $21, $22,
+            NOW()::text, NOW()::text
         )
         RETURNING id
         "#,
     )
     .bind(tenant_id)
     .bind(&title)
+    .bind(template.template_type)
+    .bind(template.template_version)
     .bind(period_start)
     .bind(period_end)
     .bind(user_id)
@@ -583,9 +1145,28 @@ async fn generate_management_review_postgres(
     .bind(snapshot.product_security_json.to_string())
     .bind(snapshot.agent_posture_json.to_string())
     .bind(sqlx::types::Json(snapshot.ai_governance_json.clone()))
+    .bind(sqlx::types::Json(snapshot.supplier_json.clone()))
+    .bind(sqlx::types::Json(snapshot.regulatory_context_json.clone()))
+    .bind(sqlx::types::Json(snapshot.source_counts_json.clone()))
+    .bind(sqlx::types::Json(snapshot.gap_summary_json.clone()))
+    .bind(sqlx::types::Json(snapshot.decision_summary_json.clone()))
     .fetch_one(pool)
     .await
     .context("PostgreSQL-Management-Review konnte nicht erzeugt werden")?;
+    audit_management_review_event_postgres(
+        pool,
+        tenant_id,
+        Some(id),
+        template.template_type,
+        "management_review_snapshot_created",
+        Some(user_id),
+        &serde_json::json!({
+            "template_version": template.template_version,
+            "period_start": period_start.map(|date| date.to_string()),
+            "period_end": period_end.map(|date| date.to_string())
+        }),
+    )
+    .await?;
     management_review_detail_postgres(pool, tenant_id, id)
         .await?
         .context("Neu erzeugtes Management-Review wurde nicht gefunden")
@@ -597,30 +1178,41 @@ async fn generate_management_review_sqlite(
     user_id: i64,
     request: ManagementReviewGenerateRequest,
 ) -> anyhow::Result<ManagementReviewPackageDetail> {
-    let snapshot = build_management_review_snapshot_sqlite(pool, tenant_id).await?;
-    let title = review_title(request.title);
+    let template = selected_management_review_template(request.template_type)?;
+    let snapshot = build_management_review_snapshot_sqlite(pool, tenant_id, template).await?;
+    let title = review_title(request.title, template);
+    let period_start = clean_optional_text(request.period_start);
+    let period_end = clean_optional_text(request.period_end);
     let executive_summary = review_executive_summary(request.executive_summary, &snapshot);
     let id: i64 = sqlx::query_scalar(
         r#"
         INSERT INTO reports_managementreviewpackage (
-            tenant_id, title, period_start, period_end, status, generated_by_id,
+            tenant_id, title, template_type, template_version, period_start, period_end,
+            status, generated_by_id,
             executive_summary, decision_notes, next_actions, metrics_json, top_risks_json,
             control_gaps_json, evidence_gaps_json, incident_decisions_json, roadmap_json,
-            product_security_json, agent_posture_json, ai_governance_json, created_at, updated_at
+            product_security_json, agent_posture_json, ai_governance_json, supplier_json,
+            regulatory_context_json, source_counts_json, gap_summary_json, decision_summary_json,
+            created_at, updated_at
         )
         VALUES (
-            ?, ?, ?, ?, 'DRAFT', ?,
+            ?, ?, ?, ?, ?, ?,
+            'DRAFT', ?,
             ?, '', '', ?, ?,
             ?, ?, ?, ?,
-            ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
         )
         RETURNING id
         "#,
     )
     .bind(tenant_id)
     .bind(&title)
-    .bind(clean_optional_text(request.period_start))
-    .bind(clean_optional_text(request.period_end))
+    .bind(template.template_type)
+    .bind(template.template_version)
+    .bind(period_start.as_deref())
+    .bind(period_end.as_deref())
     .bind(user_id)
     .bind(&executive_summary)
     .bind(snapshot.metrics_json.to_string())
@@ -632,9 +1224,28 @@ async fn generate_management_review_sqlite(
     .bind(snapshot.product_security_json.to_string())
     .bind(snapshot.agent_posture_json.to_string())
     .bind(snapshot.ai_governance_json.to_string())
+    .bind(snapshot.supplier_json.to_string())
+    .bind(snapshot.regulatory_context_json.to_string())
+    .bind(snapshot.source_counts_json.to_string())
+    .bind(snapshot.gap_summary_json.to_string())
+    .bind(snapshot.decision_summary_json.to_string())
     .fetch_one(pool)
     .await
     .context("SQLite-Management-Review konnte nicht erzeugt werden")?;
+    audit_management_review_event_sqlite(
+        pool,
+        tenant_id,
+        Some(id),
+        template.template_type,
+        "management_review_snapshot_created",
+        Some(user_id),
+        &serde_json::json!({
+            "template_version": template.template_version,
+            "period_start": period_start.clone(),
+            "period_end": period_end.clone()
+        }),
+    )
+    .await?;
     management_review_detail_sqlite(pool, tenant_id, id)
         .await?
         .context("Neu erzeugtes Management-Review wurde nicht gefunden")
@@ -675,6 +1286,18 @@ async fn update_management_review_status_postgres(
     if result.rows_affected() == 0 {
         return Ok(None);
     }
+    audit_management_review_event_postgres(
+        pool,
+        tenant_id,
+        Some(review_id),
+        "",
+        "management_review_status_changed",
+        Some(user_id),
+        &serde_json::json!({
+            "status": status
+        }),
+    )
+    .await?;
     management_review_detail_postgres(pool, tenant_id, review_id).await
 }
 
@@ -715,6 +1338,18 @@ async fn update_management_review_status_sqlite(
     if result.rows_affected() == 0 {
         return Ok(None);
     }
+    audit_management_review_event_sqlite(
+        pool,
+        tenant_id,
+        Some(review_id),
+        "",
+        "management_review_status_changed",
+        Some(user_id),
+        &serde_json::json!({
+            "status": status
+        }),
+    )
+    .await?;
     management_review_detail_sqlite(pool, tenant_id, review_id).await
 }
 
@@ -728,6 +1363,11 @@ struct ManagementReviewSnapshot {
     product_security_json: Value,
     agent_posture_json: Value,
     ai_governance_json: Value,
+    supplier_json: Value,
+    regulatory_context_json: Value,
+    source_counts_json: Value,
+    gap_summary_json: Value,
+    decision_summary_json: Value,
 }
 
 #[derive(Clone, Copy)]
@@ -738,11 +1378,13 @@ struct ManagementReviewItemCounts {
     incidents: i64,
     roadmap: i64,
     ai_governance: i64,
+    suppliers: i64,
 }
 
 async fn build_management_review_snapshot_postgres(
     pool: &PgPool,
     tenant_id: i64,
+    template: ManagementReviewTemplateDefinition,
 ) -> anyhow::Result<ManagementReviewSnapshot> {
     let top_risks_json = top_risks_postgres(pool, tenant_id).await?;
     let control_gaps_json = control_gaps_postgres(pool, tenant_id).await?;
@@ -750,21 +1392,37 @@ async fn build_management_review_snapshot_postgres(
     let incident_decisions_json = incident_decisions_postgres(pool, tenant_id).await?;
     let roadmap_json = roadmap_items_postgres(pool, tenant_id).await?;
     let product_security_json = product_security_postgres(pool, tenant_id).await?;
+    let supplier_json = supplier_review_postgres(pool, tenant_id).await?;
     let agent_posture_json = agent_posture_postgres(pool, tenant_id).await?;
     let ai_governance_json = ai_governance_postgres(pool, tenant_id).await?;
-    let metrics_json = management_review_metrics_postgres(
-        pool,
-        tenant_id,
-        ManagementReviewItemCounts {
-            top_risks: top_risks_json.as_array().map_or(0, Vec::len) as i64,
-            control_gaps: control_gaps_json.as_array().map_or(0, Vec::len) as i64,
-            evidence_gaps: evidence_gaps_json.as_array().map_or(0, Vec::len) as i64,
-            incidents: incident_decisions_json.as_array().map_or(0, Vec::len) as i64,
-            roadmap: roadmap_json.as_array().map_or(0, Vec::len) as i64,
-            ai_governance: ai_governance_json["systems"].as_array().map_or(0, Vec::len) as i64,
-        },
-    )
-    .await?;
+    let regulatory_context_json = regulatory_context_postgres(pool, tenant_id, template).await?;
+    let counts = ManagementReviewItemCounts {
+        top_risks: top_risks_json.as_array().map_or(0, Vec::len) as i64,
+        control_gaps: control_gaps_json.as_array().map_or(0, Vec::len) as i64,
+        evidence_gaps: evidence_gaps_json.as_array().map_or(0, Vec::len) as i64,
+        incidents: incident_decisions_json.as_array().map_or(0, Vec::len) as i64,
+        roadmap: roadmap_json.as_array().map_or(0, Vec::len) as i64,
+        ai_governance: ai_governance_json["systems"].as_array().map_or(0, Vec::len) as i64,
+        suppliers: supplier_json["suppliers"].as_array().map_or(0, Vec::len) as i64,
+    };
+    let metrics_json = management_review_metrics_postgres(pool, tenant_id, counts).await?;
+    let source_counts_json =
+        management_review_source_counts(&counts, &product_security_json, &agent_posture_json);
+    let gap_summary_json = management_review_gap_summary(
+        &metrics_json,
+        &product_security_json,
+        &supplier_json,
+        &agent_posture_json,
+        &ai_governance_json,
+    );
+    let decision_summary_json = management_review_decision_summary(
+        template,
+        &metrics_json,
+        &product_security_json,
+        &supplier_json,
+        &agent_posture_json,
+        &ai_governance_json,
+    );
     Ok(ManagementReviewSnapshot {
         metrics_json,
         top_risks_json,
@@ -775,12 +1433,18 @@ async fn build_management_review_snapshot_postgres(
         product_security_json,
         agent_posture_json,
         ai_governance_json,
+        supplier_json,
+        regulatory_context_json,
+        source_counts_json,
+        gap_summary_json,
+        decision_summary_json,
     })
 }
 
 async fn build_management_review_snapshot_sqlite(
     pool: &SqlitePool,
     tenant_id: i64,
+    template: ManagementReviewTemplateDefinition,
 ) -> anyhow::Result<ManagementReviewSnapshot> {
     let top_risks_json = top_risks_sqlite(pool, tenant_id).await?;
     let control_gaps_json = control_gaps_sqlite(pool, tenant_id).await?;
@@ -788,21 +1452,37 @@ async fn build_management_review_snapshot_sqlite(
     let incident_decisions_json = incident_decisions_sqlite(pool, tenant_id).await?;
     let roadmap_json = roadmap_items_sqlite(pool, tenant_id).await?;
     let product_security_json = product_security_sqlite(pool, tenant_id).await?;
+    let supplier_json = supplier_review_sqlite(pool, tenant_id).await?;
     let agent_posture_json = agent_posture_sqlite(pool, tenant_id).await?;
     let ai_governance_json = ai_governance_sqlite(pool, tenant_id).await?;
-    let metrics_json = management_review_metrics_sqlite(
-        pool,
-        tenant_id,
-        ManagementReviewItemCounts {
-            top_risks: top_risks_json.as_array().map_or(0, Vec::len) as i64,
-            control_gaps: control_gaps_json.as_array().map_or(0, Vec::len) as i64,
-            evidence_gaps: evidence_gaps_json.as_array().map_or(0, Vec::len) as i64,
-            incidents: incident_decisions_json.as_array().map_or(0, Vec::len) as i64,
-            roadmap: roadmap_json.as_array().map_or(0, Vec::len) as i64,
-            ai_governance: ai_governance_json["systems"].as_array().map_or(0, Vec::len) as i64,
-        },
-    )
-    .await?;
+    let regulatory_context_json = regulatory_context_sqlite(pool, tenant_id, template).await?;
+    let counts = ManagementReviewItemCounts {
+        top_risks: top_risks_json.as_array().map_or(0, Vec::len) as i64,
+        control_gaps: control_gaps_json.as_array().map_or(0, Vec::len) as i64,
+        evidence_gaps: evidence_gaps_json.as_array().map_or(0, Vec::len) as i64,
+        incidents: incident_decisions_json.as_array().map_or(0, Vec::len) as i64,
+        roadmap: roadmap_json.as_array().map_or(0, Vec::len) as i64,
+        ai_governance: ai_governance_json["systems"].as_array().map_or(0, Vec::len) as i64,
+        suppliers: supplier_json["suppliers"].as_array().map_or(0, Vec::len) as i64,
+    };
+    let metrics_json = management_review_metrics_sqlite(pool, tenant_id, counts).await?;
+    let source_counts_json =
+        management_review_source_counts(&counts, &product_security_json, &agent_posture_json);
+    let gap_summary_json = management_review_gap_summary(
+        &metrics_json,
+        &product_security_json,
+        &supplier_json,
+        &agent_posture_json,
+        &ai_governance_json,
+    );
+    let decision_summary_json = management_review_decision_summary(
+        template,
+        &metrics_json,
+        &product_security_json,
+        &supplier_json,
+        &agent_posture_json,
+        &ai_governance_json,
+    );
     Ok(ManagementReviewSnapshot {
         metrics_json,
         top_risks_json,
@@ -813,6 +1493,11 @@ async fn build_management_review_snapshot_sqlite(
         product_security_json,
         agent_posture_json,
         ai_governance_json,
+        supplier_json,
+        regulatory_context_json,
+        source_counts_json,
+        gap_summary_json,
+        decision_summary_json,
     })
 }
 
@@ -831,6 +1516,8 @@ async fn management_review_metrics_postgres(
         "open_incidents": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM incidents_incident WHERE tenant_id = $1 AND status NOT IN ('RESOLVED', 'CLOSED')", tenant_id).await?,
         "unassessed_incidents": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM incidents_incident WHERE tenant_id = $1 AND nis2_significance_status = 'NOT_ASSESSED' AND status NOT IN ('RESOLVED', 'CLOSED')", tenant_id).await?,
         "open_roadmap_tasks": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON task.phase_id = phase.id JOIN roadmap_roadmapplan plan ON phase.plan_id = plan.id WHERE plan.tenant_id = $1 AND task.status <> 'DONE'", tenant_id).await?,
+        "critical_suppliers": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM organizations_supplier WHERE tenant_id = $1 AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH')", tenant_id).await?,
+        "overdue_supplier_reviews": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM organizations_supplier WHERE tenant_id = $1 AND evidence_required = TRUE AND (next_review_due_at IS NULL OR next_review_due_at::text < CURRENT_DATE::text)", tenant_id).await?,
         "ai_governance_systems": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM ai_governance_system WHERE tenant_id = $1", tenant_id).await?,
         "ai_systems_without_risk_links": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM ai_governance_system system WHERE system.tenant_id = $1 AND NOT EXISTS (SELECT 1 FROM ai_governance_system_risk link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
         "ai_systems_without_roadmap_links": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM ai_governance_system system WHERE system.tenant_id = $1 AND NOT EXISTS (SELECT 1 FROM ai_governance_system_roadmap_task link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
@@ -840,7 +1527,8 @@ async fn management_review_metrics_postgres(
             "evidence_gaps": counts.evidence_gaps,
             "incidents": counts.incidents,
             "roadmap": counts.roadmap,
-            "ai_governance": counts.ai_governance
+            "ai_governance": counts.ai_governance,
+            "suppliers": counts.suppliers
         }
     }))
 }
@@ -860,6 +1548,8 @@ async fn management_review_metrics_sqlite(
         "open_incidents": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM incidents_incident WHERE tenant_id = ? AND status NOT IN ('RESOLVED', 'CLOSED')", tenant_id).await?,
         "unassessed_incidents": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM incidents_incident WHERE tenant_id = ? AND nis2_significance_status = 'NOT_ASSESSED' AND status NOT IN ('RESOLVED', 'CLOSED')", tenant_id).await?,
         "open_roadmap_tasks": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM roadmap_roadmaptask task JOIN roadmap_roadmapphase phase ON task.phase_id = phase.id JOIN roadmap_roadmapplan plan ON phase.plan_id = plan.id WHERE plan.tenant_id = ? AND task.status <> 'DONE'", tenant_id).await?,
+        "critical_suppliers": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM organizations_supplier WHERE tenant_id = ? AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH')", tenant_id).await?,
+        "overdue_supplier_reviews": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM organizations_supplier WHERE tenant_id = ? AND evidence_required = 1 AND (next_review_due_at IS NULL OR CAST(next_review_due_at AS TEXT) < date('now'))", tenant_id).await?,
         "ai_governance_systems": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM ai_governance_system WHERE tenant_id = ?", tenant_id).await?,
         "ai_systems_without_risk_links": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM ai_governance_system system WHERE system.tenant_id = ? AND NOT EXISTS (SELECT 1 FROM ai_governance_system_risk link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
         "ai_systems_without_roadmap_links": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM ai_governance_system system WHERE system.tenant_id = ? AND NOT EXISTS (SELECT 1 FROM ai_governance_system_roadmap_task link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
@@ -869,7 +1559,8 @@ async fn management_review_metrics_sqlite(
             "evidence_gaps": counts.evidence_gaps,
             "incidents": counts.incidents,
             "roadmap": counts.roadmap,
-            "ai_governance": counts.ai_governance
+            "ai_governance": counts.ai_governance,
+            "suppliers": counts.suppliers
         }
     }))
 }
@@ -990,6 +1681,193 @@ async fn product_security_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::R
         "critical_open_vulnerabilities": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM product_security_vulnerability WHERE tenant_id = ? AND severity = 'CRITICAL' AND status NOT IN ('FIXED', 'CLOSED', 'RESOLVED')", tenant_id).await?,
         "open_cve_correlation_reviews": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM product_security_cvecorrelation WHERE tenant_id = ? AND status = 'SUGGESTED'", tenant_id).await?,
         "invalid_imports": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM product_security_importartifact WHERE tenant_id = ? AND validation_status NOT IN ('VALID', 'VALIDATED')", tenant_id).await?
+    }))
+}
+
+async fn supplier_review_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result<Value> {
+    let rows = sqlx::query(supplier_review_postgres_sql())
+        .bind(tenant_id)
+        .fetch_all(pool)
+        .await?;
+    let suppliers = rows
+        .into_iter()
+        .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
+            Ok(serde_json::json!({
+                "id": id,
+                "entity_type": "supplier",
+                "href": format!("/suppliers/{id}/"),
+                "name": row.try_get::<String, _>("name")?,
+                "criticality": row.try_get::<String, _>("criticality")?,
+                "review_status": row.try_get::<String, _>("review_status")?,
+                "approval_status": row.try_get::<String, _>("approval_status")?,
+                "next_review_due_at": row.try_get::<String, _>("next_review_due_at")?,
+                "evidence_required": row.try_get::<bool, _>("evidence_required")?,
+                "regulatory_scope": row.try_get::<String, _>("regulatory_scope")?,
+                "evidence_links": row.try_get::<i64, _>("evidence_links")?,
+                "subprocessors": row.try_get::<i64, _>("subprocessors")?,
+                "open_risk_links": row.try_get::<i64, _>("open_risk_links")?
+            }))
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    Ok(supplier_review_snapshot_json(suppliers))
+}
+
+async fn supplier_review_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Result<Value> {
+    let rows = sqlx::query(supplier_review_sqlite_sql())
+        .bind(tenant_id)
+        .fetch_all(pool)
+        .await?;
+    let suppliers = rows
+        .into_iter()
+        .map(|row| {
+            let id = row.try_get::<i64, _>("id")?;
+            Ok(serde_json::json!({
+                "id": id,
+                "entity_type": "supplier",
+                "href": format!("/suppliers/{id}/"),
+                "name": row.try_get::<String, _>("name")?,
+                "criticality": row.try_get::<String, _>("criticality")?,
+                "review_status": row.try_get::<String, _>("review_status")?,
+                "approval_status": row.try_get::<String, _>("approval_status")?,
+                "next_review_due_at": row.try_get::<String, _>("next_review_due_at")?,
+                "evidence_required": row.try_get::<bool, _>("evidence_required")?,
+                "regulatory_scope": row.try_get::<String, _>("regulatory_scope")?,
+                "evidence_links": row.try_get::<i64, _>("evidence_links")?,
+                "subprocessors": row.try_get::<i64, _>("subprocessors")?,
+                "open_risk_links": row.try_get::<i64, _>("open_risk_links")?
+            }))
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    Ok(supplier_review_snapshot_json(suppliers))
+}
+
+fn supplier_review_snapshot_json(suppliers: Vec<Value>) -> Value {
+    let critical = suppliers
+        .iter()
+        .filter(|supplier| {
+            supplier["criticality"]
+                .as_str()
+                .map(|value| {
+                    matches!(
+                        value.to_ascii_uppercase().as_str(),
+                        "CRITICAL" | "VERY_HIGH" | "HIGH"
+                    )
+                })
+                .unwrap_or(false)
+        })
+        .count() as i64;
+    let missing_evidence = suppliers
+        .iter()
+        .filter(|supplier| {
+            supplier["evidence_required"].as_bool().unwrap_or(false)
+                && supplier["evidence_links"].as_i64().unwrap_or(0) == 0
+        })
+        .count() as i64;
+    let overdue_or_unreviewed = suppliers
+        .iter()
+        .filter(|supplier| {
+            let status = supplier["review_status"]
+                .as_str()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            status == "not_reviewed" || status == "expired" || status == "draft"
+        })
+        .count() as i64;
+    serde_json::json!({
+        "supplier_count": suppliers.len(),
+        "critical_suppliers": critical,
+        "missing_supplier_evidence": missing_evidence,
+        "overdue_or_unreviewed": overdue_or_unreviewed,
+        "suppliers": suppliers
+    })
+}
+
+async fn regulatory_context_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    template: ManagementReviewTemplateDefinition,
+) -> anyhow::Result<Value> {
+    let row = sqlx::query(regulatory_context_postgres_sql())
+        .bind(tenant_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(regulatory_context_json(
+        template,
+        row.map(regulatory_context_pg_row_to_json).transpose()?,
+    ))
+}
+
+async fn regulatory_context_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    template: ManagementReviewTemplateDefinition,
+) -> anyhow::Result<Value> {
+    let row = sqlx::query(regulatory_context_sqlite_sql())
+        .bind(tenant_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(regulatory_context_json(
+        template,
+        row.map(regulatory_context_sqlite_row_to_json).transpose()?,
+    ))
+}
+
+fn regulatory_context_json(
+    template: ManagementReviewTemplateDefinition,
+    tenant_profile: Option<Value>,
+) -> Value {
+    serde_json::json!({
+        "template_type": template.template_type,
+        "template_version": template.template_version,
+        "regulatory_context": template.regulatory_context,
+        "purpose": template.purpose,
+        "tenant_profile": tenant_profile.unwrap_or_else(|| serde_json::json!({
+            "status": "no tenant regulatory profile recorded"
+        })),
+        "disclaimer": "ISCY provides governance and evidence support; this snapshot is not legal advice, certification, or a formal regulatory filing."
+    })
+}
+
+fn regulatory_context_pg_row_to_json(row: PgRow) -> Result<Value, sqlx::Error> {
+    Ok(serde_json::json!({
+        "name": row.try_get::<String, _>("name")?,
+        "country": row.try_get::<String, _>("country")?,
+        "sector": row.try_get::<String, _>("sector")?,
+        "nis2_relevant": row.try_get::<bool, _>("nis2_relevant")?,
+        "kritis_relevant": row.try_get::<bool, _>("kritis_relevant")?,
+        "dora_relevant": row.try_get::<bool, _>("dora_relevant")?,
+        "dora_financial_entity": row.try_get::<bool, _>("dora_financial_entity")?,
+        "dora_ict_third_party_provider": row.try_get::<bool, _>("dora_ict_third_party_provider")?,
+        "develops_digital_products": row.try_get::<bool, _>("develops_digital_products")?,
+        "processes_personal_data": row.try_get::<bool, _>("processes_personal_data")?,
+        "uses_ai_systems": row.try_get::<bool, _>("uses_ai_systems")?,
+        "ai_act_profile": row.try_get::<String, _>("ai_act_profile")?,
+        "ai_act_high_risk": row.try_get::<bool, _>("ai_act_high_risk")?,
+        "tisax_relevant": row.try_get::<bool, _>("tisax_relevant")?,
+        "iso27001_target": row.try_get::<String, _>("iso27001_target")?,
+        "product_security_scope": row.try_get::<String, _>("product_security_scope")?
+    }))
+}
+
+fn regulatory_context_sqlite_row_to_json(row: SqliteRow) -> Result<Value, sqlx::Error> {
+    Ok(serde_json::json!({
+        "name": row.try_get::<String, _>("name")?,
+        "country": row.try_get::<String, _>("country")?,
+        "sector": row.try_get::<String, _>("sector")?,
+        "nis2_relevant": row.try_get::<bool, _>("nis2_relevant")?,
+        "kritis_relevant": row.try_get::<bool, _>("kritis_relevant")?,
+        "dora_relevant": row.try_get::<bool, _>("dora_relevant")?,
+        "dora_financial_entity": row.try_get::<bool, _>("dora_financial_entity")?,
+        "dora_ict_third_party_provider": row.try_get::<bool, _>("dora_ict_third_party_provider")?,
+        "develops_digital_products": row.try_get::<bool, _>("develops_digital_products")?,
+        "processes_personal_data": row.try_get::<bool, _>("processes_personal_data")?,
+        "uses_ai_systems": row.try_get::<bool, _>("uses_ai_systems")?,
+        "ai_act_profile": row.try_get::<String, _>("ai_act_profile")?,
+        "ai_act_high_risk": row.try_get::<bool, _>("ai_act_high_risk")?,
+        "tisax_relevant": row.try_get::<bool, _>("tisax_relevant")?,
+        "iso27001_target": row.try_get::<String, _>("iso27001_target")?,
+        "product_security_scope": row.try_get::<String, _>("product_security_scope")?
     }))
 }
 
@@ -1160,10 +2038,207 @@ async fn count_sqlite(pool: &SqlitePool, sql: &str, tenant_id: i64) -> anyhow::R
     Ok(row.try_get("count_value")?)
 }
 
+async fn audit_management_review_event_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    review_id: Option<i64>,
+    template_type: &str,
+    action: &str,
+    actor_id: Option<i64>,
+    detail: &Value,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO management_review_audit_event (
+            tenant_id, review_id, template_type, action, actor_id, detail, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, NOW()::text)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(review_id)
+    .bind(template_type)
+    .bind(action)
+    .bind(actor_id)
+    .bind(detail.to_string())
+    .execute(pool)
+    .await
+    .context("PostgreSQL-Management-Review-Audit konnte nicht geschrieben werden")?;
+    Ok(())
+}
+
+async fn audit_management_review_event_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    review_id: Option<i64>,
+    template_type: &str,
+    action: &str,
+    actor_id: Option<i64>,
+    detail: &Value,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO management_review_audit_event (
+            tenant_id, review_id, template_type, action, actor_id, detail, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(review_id)
+    .bind(template_type)
+    .bind(action)
+    .bind(actor_id)
+    .bind(detail.to_string())
+    .execute(pool)
+    .await
+    .context("SQLite-Management-Review-Audit konnte nicht geschrieben werden")?;
+    Ok(())
+}
+
+fn management_review_source_counts(
+    counts: &ManagementReviewItemCounts,
+    product_security: &Value,
+    agent_posture: &Value,
+) -> Value {
+    serde_json::json!({
+        "risks": counts.top_risks,
+        "controls": counts.control_gaps,
+        "evidence": counts.evidence_gaps,
+        "incidents": counts.incidents,
+        "roadmap_tasks": counts.roadmap,
+        "product_security_products": json_i64(product_security, "products"),
+        "product_security_open_vulnerabilities": json_i64(product_security, "open_vulnerabilities"),
+        "suppliers": counts.suppliers,
+        "agent_devices": json_i64(agent_posture, "devices"),
+        "ai_governance_systems": counts.ai_governance,
+        "no_data_recorded": {
+            "risks": counts.top_risks == 0,
+            "controls": counts.control_gaps == 0,
+            "evidence": counts.evidence_gaps == 0,
+            "incidents": counts.incidents == 0,
+            "roadmap_tasks": counts.roadmap == 0,
+            "suppliers": counts.suppliers == 0,
+            "ai_governance": counts.ai_governance == 0
+        }
+    })
+}
+
+fn management_review_gap_summary(
+    metrics: &Value,
+    product_security: &Value,
+    supplier: &Value,
+    agent_posture: &Value,
+    ai_governance: &Value,
+) -> Value {
+    serde_json::json!({
+        "critical_open_risks": json_i64(metrics, "critical_open_risks"),
+        "open_control_gaps": json_i64(metrics, "open_control_gaps"),
+        "missing_control_evidence": json_i64(metrics, "missing_control_evidence"),
+        "open_evidence_needs": json_i64(metrics, "open_evidence_needs"),
+        "unassessed_incidents": json_i64(metrics, "unassessed_incidents"),
+        "open_roadmap_tasks": json_i64(metrics, "open_roadmap_tasks"),
+        "critical_open_vulnerabilities": json_i64(product_security, "critical_open_vulnerabilities"),
+        "open_cve_correlation_reviews": json_i64(product_security, "open_cve_correlation_reviews"),
+        "invalid_product_security_imports": json_i64(product_security, "invalid_imports"),
+        "critical_suppliers": json_i64(supplier, "critical_suppliers"),
+        "missing_supplier_evidence": json_i64(supplier, "missing_supplier_evidence"),
+        "overdue_or_unreviewed_suppliers": json_i64(supplier, "overdue_or_unreviewed"),
+        "critical_agent_findings": json_i64(agent_posture, "critical_findings"),
+        "stale_or_open_agent_findings": json_i64(agent_posture, "open_findings"),
+        "ai_systems_without_risk_links": json_i64(metrics, "ai_systems_without_risk_links"),
+        "ai_systems_without_roadmap_links": json_i64(metrics, "ai_systems_without_roadmap_links"),
+        "ai_systems_without_evidence": ai_governance["systems"]
+            .as_array()
+            .map(|systems| {
+                systems
+                    .iter()
+                    .filter(|system| system["evidence_count"].as_i64().unwrap_or(0) == 0)
+                    .count() as i64
+            })
+            .unwrap_or(0)
+    })
+}
+
+fn management_review_decision_summary(
+    template: ManagementReviewTemplateDefinition,
+    metrics: &Value,
+    product_security: &Value,
+    supplier: &Value,
+    agent_posture: &Value,
+    ai_governance: &Value,
+) -> Value {
+    let mut required_decisions = Vec::new();
+    if json_i64(metrics, "critical_open_risks") > 0 {
+        required_decisions.push("Risk treatment or acceptance for critical open risks");
+    }
+    if json_i64(metrics, "open_control_gaps") > 0
+        || json_i64(metrics, "missing_control_evidence") > 0
+    {
+        required_decisions.push("Owner and target date for control and evidence gaps");
+    }
+    if json_i64(metrics, "unassessed_incidents") > 0 {
+        required_decisions.push("Incident significance assessment and notification readiness");
+    }
+    if json_i64(product_security, "open_cve_correlation_reviews") > 0
+        || json_i64(product_security, "critical_open_vulnerabilities") > 0
+    {
+        required_decisions.push("Product-security CVE review and remediation priority");
+    }
+    if json_i64(supplier, "missing_supplier_evidence") > 0
+        || json_i64(supplier, "overdue_or_unreviewed") > 0
+    {
+        required_decisions.push("Supplier review follow-up and evidence ownership");
+    }
+    if json_i64(agent_posture, "critical_findings") > 0 {
+        required_decisions.push("Agent posture remediation and operational escalation");
+    }
+    if json_i64(metrics, "ai_systems_without_risk_links") > 0
+        || ai_governance["system_count"].as_i64().unwrap_or(0) > 0
+            && json_i64(metrics, "ai_systems_without_roadmap_links") > 0
+    {
+        required_decisions.push("AI-governance risk, evidence and roadmap linkage");
+    }
+    serde_json::json!({
+        "template_actions": template.management_actions,
+        "required_management_decisions": required_decisions,
+        "review_hints": template.review_hints,
+        "generated_note": "Review hints are derived from existing ISCY tenant data and must be confirmed by responsible owners."
+    })
+}
+
+fn management_review_preview_from_snapshot(
+    tenant_id: i64,
+    template: ManagementReviewTemplateDefinition,
+    period_start: Option<String>,
+    period_end: Option<String>,
+    snapshot: ManagementReviewSnapshot,
+) -> ManagementReviewTemplatePreview {
+    ManagementReviewTemplatePreview {
+        tenant_id,
+        template: template.detail(),
+        period_start,
+        period_end,
+        generated_at: Utc::now().to_rfc3339(),
+        title: review_title(None, template),
+        executive_summary: review_executive_summary(None, &snapshot),
+        metrics_json: snapshot.metrics_json,
+        source_counts_json: snapshot.source_counts_json,
+        gap_summary_json: snapshot.gap_summary_json,
+        decision_summary_json: snapshot.decision_summary_json,
+        regulatory_context_json: snapshot.regulatory_context_json,
+    }
+}
+
+fn json_i64(value: &Value, key: &str) -> i64 {
+    value.get(key).and_then(Value::as_i64).unwrap_or(0)
+}
+
 fn management_review_list_postgres_sql() -> &'static str {
     r#"
     SELECT
         id, tenant_id, title, period_start::text AS period_start, period_end::text AS period_end,
+        template_type, template_version,
         status, generated_by_id, approved_by_id, approved_at::text AS approved_at,
         created_at::text AS created_at, updated_at::text AS updated_at
     FROM reports_managementreviewpackage
@@ -1177,6 +2252,7 @@ fn management_review_list_sqlite_sql() -> &'static str {
     r#"
     SELECT
         id, tenant_id, title, CAST(period_start AS TEXT) AS period_start,
+        template_type, template_version,
         CAST(period_end AS TEXT) AS period_end, status, generated_by_id, approved_by_id,
         CAST(approved_at AS TEXT) AS approved_at, CAST(created_at AS TEXT) AS created_at,
         CAST(updated_at AS TEXT) AS updated_at
@@ -1191,6 +2267,7 @@ fn management_review_detail_postgres_sql() -> &'static str {
     r#"
     SELECT
         id, tenant_id, title, period_start::text AS period_start, period_end::text AS period_end,
+        template_type, template_version,
         status, generated_by_id, approved_by_id, approved_at::text AS approved_at,
         executive_summary, decision_notes, next_actions,
         COALESCE(metrics_json::text, '{}') AS metrics_json_text,
@@ -1202,6 +2279,11 @@ fn management_review_detail_postgres_sql() -> &'static str {
         COALESCE(product_security_json::text, '{}') AS product_security_json_text,
         COALESCE(agent_posture_json::text, '{}') AS agent_posture_json_text,
         COALESCE(ai_governance_json::text, '{}') AS ai_governance_json_text,
+        COALESCE(supplier_json::text, '{}') AS supplier_json_text,
+        COALESCE(regulatory_context_json::text, '{}') AS regulatory_context_json_text,
+        COALESCE(source_counts_json::text, '{}') AS source_counts_json_text,
+        COALESCE(gap_summary_json::text, '{}') AS gap_summary_json_text,
+        COALESCE(decision_summary_json::text, '{}') AS decision_summary_json_text,
         created_at::text AS created_at,
         updated_at::text AS updated_at
     FROM reports_managementreviewpackage
@@ -1213,6 +2295,7 @@ fn management_review_detail_sqlite_sql() -> &'static str {
     r#"
     SELECT
         id, tenant_id, title, CAST(period_start AS TEXT) AS period_start,
+        template_type, template_version,
         CAST(period_end AS TEXT) AS period_end, status, generated_by_id, approved_by_id,
         CAST(approved_at AS TEXT) AS approved_at, executive_summary, decision_notes, next_actions,
         COALESCE(CAST(metrics_json AS TEXT), '{}') AS metrics_json_text,
@@ -1224,6 +2307,11 @@ fn management_review_detail_sqlite_sql() -> &'static str {
         COALESCE(CAST(product_security_json AS TEXT), '{}') AS product_security_json_text,
         COALESCE(CAST(agent_posture_json AS TEXT), '{}') AS agent_posture_json_text,
         COALESCE(CAST(ai_governance_json AS TEXT), '{}') AS ai_governance_json_text,
+        COALESCE(CAST(supplier_json AS TEXT), '{}') AS supplier_json_text,
+        COALESCE(CAST(regulatory_context_json AS TEXT), '{}') AS regulatory_context_json_text,
+        COALESCE(CAST(source_counts_json AS TEXT), '{}') AS source_counts_json_text,
+        COALESCE(CAST(gap_summary_json AS TEXT), '{}') AS gap_summary_json_text,
+        COALESCE(CAST(decision_summary_json AS TEXT), '{}') AS decision_summary_json_text,
         CAST(created_at AS TEXT) AS created_at,
         CAST(updated_at AS TEXT) AS updated_at
     FROM reports_managementreviewpackage
@@ -1344,6 +2432,116 @@ fn roadmap_items_sqlite_sql() -> &'static str {
     ORDER BY CASE task.priority WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END,
              task.due_date ASC, task.id DESC
     LIMIT 10
+    "#
+}
+
+fn supplier_review_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        supplier.id,
+        supplier.name,
+        supplier.criticality,
+        supplier.review_status,
+        supplier.approval_status,
+        COALESCE(supplier.next_review_due_at::text, '') AS next_review_due_at,
+        supplier.evidence_required,
+        COALESCE(supplier.regulatory_scope, '') AS regulatory_scope,
+        (SELECT COUNT(*)::bigint FROM supplier_evidence_link link
+         WHERE link.tenant_id = supplier.tenant_id AND link.supplier_id = supplier.id) AS evidence_links,
+        (SELECT COUNT(*)::bigint FROM supplier_subprocessor subprocessor
+         WHERE subprocessor.tenant_id = supplier.tenant_id AND subprocessor.supplier_id = supplier.id) AS subprocessors,
+        (SELECT COUNT(*)::bigint FROM supplier_risk_link link
+         JOIN risks_risk risk ON risk.tenant_id = link.tenant_id AND risk.id = link.risk_id
+         WHERE link.tenant_id = supplier.tenant_id
+           AND link.supplier_id = supplier.id
+           AND risk.status <> 'CLOSED') AS open_risk_links
+    FROM organizations_supplier supplier
+    WHERE supplier.tenant_id = $1
+    ORDER BY CASE UPPER(supplier.criticality)
+             WHEN 'CRITICAL' THEN 1 WHEN 'VERY_HIGH' THEN 2 WHEN 'HIGH' THEN 3
+             WHEN 'MEDIUM' THEN 4 ELSE 5 END,
+             supplier.next_review_due_at ASC NULLS FIRST,
+             supplier.id DESC
+    LIMIT 10
+    "#
+}
+
+fn supplier_review_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        supplier.id,
+        supplier.name,
+        supplier.criticality,
+        supplier.review_status,
+        supplier.approval_status,
+        COALESCE(CAST(supplier.next_review_due_at AS TEXT), '') AS next_review_due_at,
+        supplier.evidence_required,
+        COALESCE(supplier.regulatory_scope, '') AS regulatory_scope,
+        (SELECT COUNT(*) FROM supplier_evidence_link link
+         WHERE link.tenant_id = supplier.tenant_id AND link.supplier_id = supplier.id) AS evidence_links,
+        (SELECT COUNT(*) FROM supplier_subprocessor subprocessor
+         WHERE subprocessor.tenant_id = supplier.tenant_id AND subprocessor.supplier_id = supplier.id) AS subprocessors,
+        (SELECT COUNT(*) FROM supplier_risk_link link
+         JOIN risks_risk risk ON risk.tenant_id = link.tenant_id AND risk.id = link.risk_id
+         WHERE link.tenant_id = supplier.tenant_id
+           AND link.supplier_id = supplier.id
+           AND risk.status <> 'CLOSED') AS open_risk_links
+    FROM organizations_supplier supplier
+    WHERE supplier.tenant_id = ?
+    ORDER BY CASE UPPER(supplier.criticality)
+             WHEN 'CRITICAL' THEN 1 WHEN 'VERY_HIGH' THEN 2 WHEN 'HIGH' THEN 3
+             WHEN 'MEDIUM' THEN 4 ELSE 5 END,
+             supplier.next_review_due_at ASC,
+             supplier.id DESC
+    LIMIT 10
+    "#
+}
+
+fn regulatory_context_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        name,
+        country,
+        sector,
+        nis2_relevant,
+        kritis_relevant,
+        dora_relevant,
+        dora_financial_entity,
+        dora_ict_third_party_provider,
+        develops_digital_products,
+        processes_personal_data,
+        uses_ai_systems,
+        ai_act_profile,
+        ai_act_high_risk,
+        tisax_relevant,
+        iso27001_target,
+        product_security_scope
+    FROM organizations_tenant
+    WHERE id = $1
+    "#
+}
+
+fn regulatory_context_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        name,
+        country,
+        sector,
+        nis2_relevant,
+        kritis_relevant,
+        dora_relevant,
+        dora_financial_entity,
+        dora_ict_third_party_provider,
+        develops_digital_products,
+        processes_personal_data,
+        uses_ai_systems,
+        ai_act_profile,
+        ai_act_high_risk,
+        tisax_relevant,
+        iso27001_target,
+        product_security_scope
+    FROM organizations_tenant
+    WHERE id = ?
     "#
 }
 
@@ -1577,10 +2775,14 @@ fn management_review_summary_from_pg_row(
     row: PgRow,
 ) -> Result<ManagementReviewPackageSummary, sqlx::Error> {
     let status: String = row.try_get("status")?;
+    let template_type: String = row.try_get("template_type")?;
     Ok(ManagementReviewPackageSummary {
         id: row.try_get("id")?,
         tenant_id: row.try_get("tenant_id")?,
         title: row.try_get("title")?,
+        template_name: management_review_template_name(&template_type),
+        template_version: row.try_get("template_version")?,
+        template_type,
         period_start: row.try_get("period_start")?,
         period_end: row.try_get("period_end")?,
         status_label: management_review_status_label(&status).to_string(),
@@ -1597,10 +2799,14 @@ fn management_review_summary_from_sqlite_row(
     row: SqliteRow,
 ) -> Result<ManagementReviewPackageSummary, sqlx::Error> {
     let status: String = row.try_get("status")?;
+    let template_type: String = row.try_get("template_type")?;
     Ok(ManagementReviewPackageSummary {
         id: row.try_get("id")?,
         tenant_id: row.try_get("tenant_id")?,
         title: row.try_get("title")?,
+        template_name: management_review_template_name(&template_type),
+        template_version: row.try_get("template_version")?,
+        template_type,
         period_start: row.try_get("period_start")?,
         period_end: row.try_get("period_end")?,
         status_label: management_review_status_label(&status).to_string(),
@@ -1617,10 +2823,14 @@ fn management_review_detail_from_pg_row(
     row: PgRow,
 ) -> Result<ManagementReviewPackageDetail, sqlx::Error> {
     let status: String = row.try_get("status")?;
+    let template_type: String = row.try_get("template_type")?;
     Ok(ManagementReviewPackageDetail {
         id: row.try_get("id")?,
         tenant_id: row.try_get("tenant_id")?,
         title: row.try_get("title")?,
+        template_name: management_review_template_name(&template_type),
+        template_version: row.try_get("template_version")?,
+        template_type,
         period_start: row.try_get("period_start")?,
         period_end: row.try_get("period_end")?,
         status_label: management_review_status_label(&status).to_string(),
@@ -1640,6 +2850,11 @@ fn management_review_detail_from_pg_row(
         product_security_json: parse_json_object(row.try_get("product_security_json_text")?),
         agent_posture_json: parse_json_object(row.try_get("agent_posture_json_text")?),
         ai_governance_json: parse_json_object(row.try_get("ai_governance_json_text")?),
+        supplier_json: parse_json_object(row.try_get("supplier_json_text")?),
+        regulatory_context_json: parse_json_object(row.try_get("regulatory_context_json_text")?),
+        source_counts_json: parse_json_object(row.try_get("source_counts_json_text")?),
+        gap_summary_json: parse_json_object(row.try_get("gap_summary_json_text")?),
+        decision_summary_json: parse_json_object(row.try_get("decision_summary_json_text")?),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -1649,10 +2864,14 @@ fn management_review_detail_from_sqlite_row(
     row: SqliteRow,
 ) -> Result<ManagementReviewPackageDetail, sqlx::Error> {
     let status: String = row.try_get("status")?;
+    let template_type: String = row.try_get("template_type")?;
     Ok(ManagementReviewPackageDetail {
         id: row.try_get("id")?,
         tenant_id: row.try_get("tenant_id")?,
         title: row.try_get("title")?,
+        template_name: management_review_template_name(&template_type),
+        template_version: row.try_get("template_version")?,
+        template_type,
         period_start: row.try_get("period_start")?,
         period_end: row.try_get("period_end")?,
         status_label: management_review_status_label(&status).to_string(),
@@ -1672,15 +2891,26 @@ fn management_review_detail_from_sqlite_row(
         product_security_json: parse_json_object(row.try_get("product_security_json_text")?),
         agent_posture_json: parse_json_object(row.try_get("agent_posture_json_text")?),
         ai_governance_json: parse_json_object(row.try_get("ai_governance_json_text")?),
+        supplier_json: parse_json_object(row.try_get("supplier_json_text")?),
+        regulatory_context_json: parse_json_object(row.try_get("regulatory_context_json_text")?),
+        source_counts_json: parse_json_object(row.try_get("source_counts_json_text")?),
+        gap_summary_json: parse_json_object(row.try_get("gap_summary_json_text")?),
+        decision_summary_json: parse_json_object(row.try_get("decision_summary_json_text")?),
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
 }
 
-fn review_title(title: Option<String>) -> String {
+fn management_review_template_name(template_type: &str) -> String {
+    resolve_management_review_template(template_type)
+        .map(|template| template.name.to_string())
+        .unwrap_or_else(|_| template_type.to_string())
+}
+
+fn review_title(title: Option<String>, template: ManagementReviewTemplateDefinition) -> String {
     clean_text(title, 255)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| format!("Management Review {}", Utc::now().format("%Y-%m-%d")))
+        .unwrap_or_else(|| format!("{} {}", template.name, Utc::now().format("%Y-%m-%d")))
 }
 
 fn review_executive_summary(
@@ -1700,8 +2930,17 @@ fn review_executive_summary(
     let evidence_gaps = snapshot.metrics_json["open_evidence_needs"]
         .as_i64()
         .unwrap_or(0);
+    let supplier_gaps = snapshot.supplier_json["missing_supplier_evidence"]
+        .as_i64()
+        .unwrap_or(0);
+    let cve_reviews = snapshot.product_security_json["open_cve_correlation_reviews"]
+        .as_i64()
+        .unwrap_or(0);
+    let ai_systems = snapshot.ai_governance_json["system_count"]
+        .as_i64()
+        .unwrap_or(0);
     format!(
-        "Automatisch erzeugtes Management-Review-Paket: {open_risks} offene Risiken, {control_gaps} offene ISCY-27-Control-Gaps, {evidence_gaps} offene Evidence-Luecken und {open_tasks} offene Roadmap-Tasks sind fuer die Review-Entscheidung zusammengefasst."
+        "Automatisch erzeugtes Management-Review-Paket: {open_risks} offene Risiken, {control_gaps} offene ISCY-27-Control-Gaps, {evidence_gaps} offene Evidence-Luecken, {supplier_gaps} Supplier-Nachweisluecken, {cve_reviews} offene CVE-Reviews, {ai_systems} AI-Governance-Systeme und {open_tasks} offene Roadmap-Tasks sind fuer die Review-Entscheidung zusammengefasst. Diese Zusammenfassung unterstuetzt Governance-Reviews und ersetzt keine Rechtsberatung, Zertifizierung oder formale Meldung."
     )
 }
 

@@ -479,10 +479,20 @@ Ausgaben:
 Management-Review-Pakete:
 
 - werden aus aktuellen ISCY-Daten fuer einen Zeitraum erzeugt
-- speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage und Agent-Posture als Snapshot
+- koennen als generisches Security-Governance-Paket oder ueber Templates fuer ISO 27001, NIS2, DORA und KRITIS vorbereitet werden
+- speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage, Supplier-Review-Summary, Agent-Posture, AI-Governance, Quellenzaehlung, Gap-Summary, Management-Hinweise und regulatorischen Kontext als Snapshot
 - verlinken Snapshot-Zeilen zurueck zu Risiko, Control, Evidence, Incident und Roadmap
 - koennen von Draft ueber In Review bis Approved oder Archived gefuehrt werden
 - dokumentieren Entscheidung, naechste Massnahmen, freigebenden User und Freigabezeitpunkt
+- erlauben eine Template-Vorschau, ohne bereits ein Review-Paket einzufrieren
+
+API- und Web-Pfade:
+
+- `GET /api/v1/management/templates`
+- `GET /api/v1/management/templates/{template_type}`
+- `POST /api/v1/regulatory/templates/{template_type}/preview`
+- `GET` und `POST /api/v1/management/reviews`
+- Weboberflaeche unter `/management-reviews/` mit Template-Auswahl und Preview
 
 Fachlicher Nutzen:
 
@@ -490,6 +500,7 @@ Fachlicher Nutzen:
 - Dokumentationsstand
 - Vorlagen fuer Kunden, Auditoren oder interne Gremien
 - belastbare Vorbereitung von Management Review, Audit und Steering Committee
+- wiederholbare Steuerungspakete, ohne neue Risiko-, Evidence- oder Control-Silos anzulegen
 
 Fuer Nicht-Sicherheitsleute:
 Reports sind die offizielle Zusammenfassung des Stands.
@@ -642,7 +653,7 @@ Aktueller Rust-Funktionsumfang:
 - kleines allgemeines Change-Register als kanonischer Plattformkern; es ist kein AI-spezifisches Ersatzmodell und noch kein vollstaendiger Change-Management-Workflow
 - Link-Audit fuer Anlegen und Entfernen mit Actor, Objekttyp, Objekt-ID und Zeitpunkt
 - Roadmap-Tasks aus offenen Governance-Gaps nur nach Nutzeraktion; `origin_key` und Unique-Index verhindern Duplikate auch bei Wiederholung
-- Management-Review-Snapshots und Exporte frieren AI-Systeme sowie Linkzaehler fuer Risiko, Roadmap, Incident und Change ein
+- Management-Review-Snapshots und Exporte frieren AI-Systeme sowie Linkzaehler fuer Risiko, Roadmap, Incident und Change ein; Management-/Regulatory-Templates nehmen diese Daten in den passenden Review-Kontext auf
 - Rust-only-Betriebssignale fuer nicht bewertete AI-Systeme, faellige Reviews, fehlende Evidence und offene Governance-Gaps
 
 Tenant- und Berechtigungsgrenzen:
@@ -710,7 +721,6 @@ Bewusst nicht Teil dieses Moduls:
 - keine neue Risiko-Engine
 - keine neue Control-Bibliothek
 - kein Legal-Hold-, Disposition-, Loesch-, Re-Hash- oder Objektspeichersystem
-- keine Management-/Regulatory-Paketgeneratoren
 
 Fuer Nicht-Sicherheitsleute:
 Dieser Bereich beantwortet: Von welchen externen Parteien haengt unser Betrieb ab, wie kritisch sind sie, welche Nachweise fehlen und wo entsteht daraus Risiko?
@@ -1141,10 +1151,10 @@ Responses noch in der Read-only-Ansicht ausgegeben. Administratoren duerfen
 Kanaele und Signalbereiche aendern; authentifizierte Read-only-Rollen sehen nur
 sichere tenantgebundene Delivery-Metadaten.
 
-Bewusst nicht umgesetzt sind Management-/Regulatory-Templates, Evidence-
-Legal-Hold und -Disposition, kontrollierte Loeschung, Re-Hash-Worker,
-Objektspeicher, CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete, Release-
-Provenance sowie Performance-, HA- und visuelle Regressionserweiterungen.
+Bewusst nicht umgesetzt sind Evidence-Legal-Hold und -Disposition,
+kontrollierte Loeschung, Re-Hash-Worker, Objektspeicher, CA-/PKI-/CSR-
+Funktionen, signierte Agent-Pakete, Release-Provenance sowie Performance-,
+HA- und visuelle Regressionserweiterungen.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
@@ -1186,11 +1196,11 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, KRITIS und generische Security-Governance-Reviews. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
-1. Management-/Regulatory-Templates fuer wiederholbare Pruefpakete
+1. Feinere Management-/Regulatory-Template-Varianten und kontextsensitive Pruefpakete
 2. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
 3. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe
 4. Performance-, HA- und visuelle Regressionstests

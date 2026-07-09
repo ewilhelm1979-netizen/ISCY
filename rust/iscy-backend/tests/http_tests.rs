@@ -655,8 +655,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0031_rust_supplier_review_workflow"));
-    assert!(html.contains("31/31 angewendet"));
+    assert!(html.contains("0032_rust_management_regulatory_templates"));
+    assert!(html.contains("32/32 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -10329,7 +10329,73 @@ async fn management_review_packages_return_tenant_reviews_from_database() {
     assert_eq!(payload["packages"].as_array().unwrap().len(), 1);
     assert_eq!(payload["packages"][0]["id"], 21);
     assert_eq!(payload["packages"][0]["title"], "Q2 Steering Review");
+    assert_eq!(
+        payload["packages"][0]["template_type"],
+        "generic_security_governance"
+    );
     assert_eq!(payload["packages"][0]["status"], "IN_REVIEW");
+}
+
+#[tokio::test]
+async fn management_review_templates_list_detail_and_unknown_are_available() {
+    let app = app_router_with_state(AppState::default());
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/management/templates")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["templates"].as_array().unwrap().len(), 5);
+    assert!(payload["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|template| template["template_type"] == "nis2_management_summary"));
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/management/templates/iso27001")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["template"]["template_type"],
+        "iso27001_management_review"
+    );
+    assert!(payload["template"]["sections"].is_array());
+
+    let unknown = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/management/templates/nope")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -10564,6 +10630,66 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
         AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
     );
 
+    let packages_before_preview: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM reports_managementreviewpackage")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/regulatory/templates/dora/preview")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(
+                    r#"{"period_start":"2026-06-01","period_end":"2026-06-30"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let preview_status = preview.status();
+    let body = to_bytes(preview.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+        preview_status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let preview_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        preview_payload["preview"]["template"]["template_type"],
+        "dora_ict_risk_supplier_incident_summary"
+    );
+    assert!(preview_payload["preview"]["gap_summary_json"].is_object());
+    let packages_after_preview: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM reports_managementreviewpackage")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(packages_after_preview, packages_before_preview);
+
+    let readonly_generate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/reports/management-reviews")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"template_type":"iso27001"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly_generate.status(), StatusCode::FORBIDDEN);
+
     let response = app
         .clone()
         .oneshot(
@@ -10575,7 +10701,7 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
                 .header("x-iscy-user-id", "1")
                 .header("x-iscy-roles", "ADMIN")
                 .body(Body::from(
-                    r#"{"title":"June Steering Package","period_start":"2026-06-01","period_end":"2026-06-30"}"#,
+                    r#"{"template_type":"nis2","title":"June Steering Package","period_start":"2026-06-01","period_end":"2026-06-30"}"#,
                 ))
                 .unwrap(),
         )
@@ -10587,6 +10713,11 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["accepted"], true);
     assert_eq!(payload["package"]["title"], "June Steering Package");
+    assert_eq!(
+        payload["package"]["template_type"],
+        "nis2_management_summary"
+    );
+    assert_eq!(payload["package"]["template_version"], "2026.1");
     assert_eq!(payload["package"]["status"], "DRAFT");
     assert_eq!(payload["package"]["generated_by_id"], 1);
     assert!(
@@ -10614,6 +10745,21 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
             .as_i64()
             .unwrap()
             >= 1
+    );
+    assert!(
+        payload["package"]["supplier_json"]["supplier_count"]
+            .as_i64()
+            .unwrap()
+            >= 1
+    );
+    assert!(payload["package"]["source_counts_json"]["risks"].is_number());
+    assert!(payload["package"]["gap_summary_json"]["open_control_gaps"].is_number());
+    assert!(
+        payload["package"]["decision_summary_json"]["required_management_decisions"].is_array()
+    );
+    assert_eq!(
+        payload["package"]["regulatory_context_json"]["template_type"],
+        "nis2_management_summary"
     );
     assert!(
         payload["package"]["ai_governance_json"]["system_count"]
@@ -10701,6 +10847,15 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
             "{content_type}"
         );
     }
+
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM management_review_audit_event WHERE tenant_id = 1 AND review_id = ?",
+    )
+    .bind(review_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(audit_count >= 5);
 
     let new_review = app
         .oneshot(
@@ -12701,7 +12856,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0028_rust_guided_agent_onboarding",
             "0029_rust_cross_domain_notifications",
             "0030_rust_notification_dispatch_claim",
-            "0031_rust_supplier_review_workflow"
+            "0031_rust_supplier_review_workflow",
+            "0032_rust_management_regulatory_templates"
         ]
     );
     assert!(
@@ -12867,6 +13023,22 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
     assert!(review_columns
         .iter()
         .any(|name| name == "ai_governance_json"));
+    for column in [
+        "template_type",
+        "template_version",
+        "regulatory_context_json",
+        "supplier_json",
+        "source_counts_json",
+        "gap_summary_json",
+        "decision_summary_json",
+    ] {
+        assert!(review_columns.iter().any(|name| name == column));
+    }
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "management_review_audit_event")
+            .await
+            .unwrap()
+    );
     assert!(
         db_admin::sqlite_table_exists(&pool, "zero_trust_agent_policy_profile")
             .await
@@ -19119,6 +19291,8 @@ async fn create_management_review_table(pool: &SqlitePool) {
             id INTEGER PRIMARY KEY,
             tenant_id INTEGER NOT NULL,
             title varchar(255) NOT NULL,
+            template_type varchar(64) NOT NULL DEFAULT 'generic_security_governance',
+            template_version varchar(32) NOT NULL DEFAULT '2026.1',
             period_start date NULL,
             period_end date NULL,
             status varchar(24) NOT NULL DEFAULT 'DRAFT',
@@ -19137,8 +19311,30 @@ async fn create_management_review_table(pool: &SqlitePool) {
             product_security_json TEXT NOT NULL DEFAULT '{}',
             agent_posture_json TEXT NOT NULL DEFAULT '{}',
             ai_governance_json TEXT NOT NULL DEFAULT '{}',
+            supplier_json TEXT NOT NULL DEFAULT '{}',
+            regulatory_context_json TEXT NOT NULL DEFAULT '{}',
+            source_counts_json TEXT NOT NULL DEFAULT '{}',
+            gap_summary_json TEXT NOT NULL DEFAULT '{}',
+            decision_summary_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE management_review_audit_event (
+            id INTEGER PRIMARY KEY,
+            tenant_id INTEGER NOT NULL,
+            review_id INTEGER NULL,
+            template_type varchar(64) NOT NULL DEFAULT '',
+            action varchar(64) NOT NULL,
+            actor_id INTEGER NULL,
+            detail TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         "#,
     )
