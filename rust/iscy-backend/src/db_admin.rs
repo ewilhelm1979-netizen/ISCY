@@ -212,6 +212,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_NOTIFICATION_DISPATCH_CLAIM_SCHEMA,
         postgres_sql: POSTGRES_NOTIFICATION_DISPATCH_CLAIM_SCHEMA,
     },
+    Migration {
+        version: "0031_rust_supplier_review_workflow",
+        sqlite_sql: SQLITE_SUPPLIER_REVIEW_WORKFLOW_SCHEMA,
+        postgres_sql: POSTGRES_SUPPLIER_REVIEW_WORKFLOW_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -979,6 +984,234 @@ SET regulatory_scope = CASE
     exit_dependency = CASE
         WHEN exit_dependency = '' AND UPPER(criticality) IN ('CRITICAL', 'VERY_HIGH', 'HIGH') THEN 'Exit-Strategie und Ersatzlieferant bewerten'
         ELSE exit_dependency
+    END;
+"#;
+
+const SQLITE_SUPPLIER_REVIEW_WORKFLOW_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS supplier_review_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    old_status varchar(32) NOT NULL DEFAULT '',
+    new_status varchar(32) NOT NULL,
+    actor_id INTEGER NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    risk_level varchar(32) NOT NULL DEFAULT '',
+    evidence_refs TEXT NOT NULL DEFAULT '[]',
+    control_refs TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS supplier_subprocessor (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    name varchar(255) NOT NULL,
+    purpose TEXT NOT NULL DEFAULT '',
+    country_region varchar(128) NOT NULL DEFAULT '',
+    data_relationship varchar(128) NOT NULL DEFAULT '',
+    criticality varchar(32) NOT NULL DEFAULT 'medium',
+    approval_status varchar(32) NOT NULL DEFAULT 'draft',
+    review_due_at TEXT NULL,
+    created_by_id INTEGER NULL,
+    updated_by_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS supplier_evidence_link (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    evidence_id INTEGER NOT NULL,
+    link_type varchar(64) NOT NULL DEFAULT 'review',
+    created_by_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, supplier_id, evidence_id)
+);
+CREATE TABLE IF NOT EXISTS supplier_control_link (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    control_id INTEGER NOT NULL,
+    created_by_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, supplier_id, control_id)
+);
+CREATE TABLE IF NOT EXISTS supplier_risk_link (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    risk_id INTEGER NOT NULL,
+    created_by_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, supplier_id, risk_id)
+);
+CREATE TABLE IF NOT EXISTS supplier_audit_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    supplier_id INTEGER NOT NULL,
+    event_type varchar(64) NOT NULL,
+    actor_id INTEGER NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_review_event_tenant_supplier
+    ON supplier_review_event(tenant_id, supplier_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_supplier_subprocessor_tenant_supplier
+    ON supplier_subprocessor(tenant_id, supplier_id, approval_status);
+CREATE INDEX IF NOT EXISTS idx_supplier_evidence_link_tenant_supplier
+    ON supplier_evidence_link(tenant_id, supplier_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_control_link_tenant_supplier
+    ON supplier_control_link(tenant_id, supplier_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_risk_link_tenant_supplier
+    ON supplier_risk_link(tenant_id, supplier_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_audit_event_tenant_supplier
+    ON supplier_audit_event(tenant_id, supplier_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_supplier_workflow_status
+    ON organizations_supplier(tenant_id, review_status, next_review_due_at);
+UPDATE organizations_supplier
+SET review_status = CASE
+        WHEN LOWER(review_status) IN ('draft', 'in_review', 'approved', 'approved_with_conditions', 'rejected', 'expired', 'archived') THEN LOWER(review_status)
+        WHEN UPPER(review_status) IN ('APPROVED', 'REVIEWED') THEN 'approved'
+        WHEN UPPER(review_status) = 'IN_REVIEW' THEN 'in_review'
+        WHEN UPPER(review_status) = 'REJECTED' THEN 'rejected'
+        ELSE 'draft'
+    END,
+    approval_status = CASE
+        WHEN approval_status = '' THEN CASE
+            WHEN UPPER(review_status) IN ('APPROVED', 'REVIEWED') THEN 'approved'
+            WHEN UPPER(review_status) = 'REJECTED' THEN 'rejected'
+            ELSE 'draft'
+        END
+        ELSE approval_status
+    END,
+    risk_assessment = CASE
+        WHEN risk_assessment = '' THEN LOWER(criticality)
+        ELSE risk_assessment
+    END;
+"#;
+
+const POSTGRES_SUPPLIER_REVIEW_WORKFLOW_SCHEMA: &str = r#"
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS approval_status varchar(32) NOT NULL DEFAULT 'draft';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS risk_assessment varchar(32) NOT NULL DEFAULT 'medium';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS service_product_reference TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS data_access BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS system_access BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS ot_access BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS exit_relevant BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS responsible_role varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS responsible_user_id BIGINT NULL;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS contract_start_at TEXT NULL;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS contract_end_at TEXT NULL;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS contract_notice_period TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS contract_auto_renews BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS next_contract_review_at TEXT NULL;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS contract_evidence_id BIGINT NULL;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS exit_test_required BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS exit_test_status varchar(24) NOT NULL DEFAULT 'not_required';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS last_exit_test_at TEXT NULL;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS next_exit_test_at TEXT NULL;
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS exit_test_result TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS exit_test_open_actions TEXT NOT NULL DEFAULT '';
+ALTER TABLE organizations_supplier ADD COLUMN IF NOT EXISTS exit_test_evidence_id BIGINT NULL;
+CREATE TABLE IF NOT EXISTS supplier_review_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    supplier_id BIGINT NOT NULL,
+    old_status varchar(32) NOT NULL DEFAULT '',
+    new_status varchar(32) NOT NULL,
+    actor_id BIGINT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    risk_level varchar(32) NOT NULL DEFAULT '',
+    evidence_refs TEXT NOT NULL DEFAULT '[]',
+    control_refs TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS supplier_subprocessor (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    supplier_id BIGINT NOT NULL,
+    name varchar(255) NOT NULL,
+    purpose TEXT NOT NULL DEFAULT '',
+    country_region varchar(128) NOT NULL DEFAULT '',
+    data_relationship varchar(128) NOT NULL DEFAULT '',
+    criticality varchar(32) NOT NULL DEFAULT 'medium',
+    approval_status varchar(32) NOT NULL DEFAULT 'draft',
+    review_due_at TEXT NULL,
+    created_by_id BIGINT NULL,
+    updated_by_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS supplier_evidence_link (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    supplier_id BIGINT NOT NULL,
+    evidence_id BIGINT NOT NULL,
+    link_type varchar(64) NOT NULL DEFAULT 'review',
+    created_by_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, supplier_id, evidence_id)
+);
+CREATE TABLE IF NOT EXISTS supplier_control_link (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    supplier_id BIGINT NOT NULL,
+    control_id BIGINT NOT NULL,
+    created_by_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, supplier_id, control_id)
+);
+CREATE TABLE IF NOT EXISTS supplier_risk_link (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    supplier_id BIGINT NOT NULL,
+    risk_id BIGINT NOT NULL,
+    created_by_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, supplier_id, risk_id)
+);
+CREATE TABLE IF NOT EXISTS supplier_audit_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    supplier_id BIGINT NOT NULL,
+    event_type varchar(64) NOT NULL,
+    actor_id BIGINT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_supplier_review_event_tenant_supplier
+    ON supplier_review_event(tenant_id, supplier_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_supplier_subprocessor_tenant_supplier
+    ON supplier_subprocessor(tenant_id, supplier_id, approval_status);
+CREATE INDEX IF NOT EXISTS idx_supplier_evidence_link_tenant_supplier
+    ON supplier_evidence_link(tenant_id, supplier_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_control_link_tenant_supplier
+    ON supplier_control_link(tenant_id, supplier_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_risk_link_tenant_supplier
+    ON supplier_risk_link(tenant_id, supplier_id);
+CREATE INDEX IF NOT EXISTS idx_supplier_audit_event_tenant_supplier
+    ON supplier_audit_event(tenant_id, supplier_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_supplier_workflow_status
+    ON organizations_supplier(tenant_id, review_status, next_review_due_at);
+UPDATE organizations_supplier
+SET review_status = CASE
+        WHEN LOWER(review_status) IN ('draft', 'in_review', 'approved', 'approved_with_conditions', 'rejected', 'expired', 'archived') THEN LOWER(review_status)
+        WHEN UPPER(review_status) IN ('APPROVED', 'REVIEWED') THEN 'approved'
+        WHEN UPPER(review_status) = 'IN_REVIEW' THEN 'in_review'
+        WHEN UPPER(review_status) = 'REJECTED' THEN 'rejected'
+        ELSE 'draft'
+    END,
+    approval_status = CASE
+        WHEN approval_status = '' THEN CASE
+            WHEN UPPER(review_status) IN ('APPROVED', 'REVIEWED') THEN 'approved'
+            WHEN UPPER(review_status) = 'REJECTED' THEN 'rejected'
+            ELSE 'draft'
+        END
+        ELSE approval_status
+    END,
+    risk_assessment = CASE
+        WHEN risk_assessment = '' THEN LOWER(criticality)
+        ELSE risk_assessment
     END;
 "#;
 
@@ -3019,6 +3252,37 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'st
                     definition,
                 )
                 .await?;
+            }
+        }
+        if migration.version == "0031_rust_supplier_review_workflow" {
+            for (column, definition) in [
+                ("approval_status", "varchar(32) NOT NULL DEFAULT 'draft'"),
+                ("risk_assessment", "varchar(32) NOT NULL DEFAULT 'medium'"),
+                ("service_product_reference", "TEXT NOT NULL DEFAULT ''"),
+                ("data_access", "bool NOT NULL DEFAULT 0"),
+                ("system_access", "bool NOT NULL DEFAULT 0"),
+                ("ot_access", "bool NOT NULL DEFAULT 0"),
+                ("exit_relevant", "bool NOT NULL DEFAULT 0"),
+                ("responsible_role", "varchar(64) NOT NULL DEFAULT ''"),
+                ("responsible_user_id", "INTEGER NULL"),
+                ("contract_start_at", "TEXT NULL"),
+                ("contract_end_at", "TEXT NULL"),
+                ("contract_notice_period", "TEXT NOT NULL DEFAULT ''"),
+                ("contract_auto_renews", "bool NOT NULL DEFAULT 0"),
+                ("next_contract_review_at", "TEXT NULL"),
+                ("contract_evidence_id", "INTEGER NULL"),
+                ("exit_test_required", "bool NOT NULL DEFAULT 0"),
+                (
+                    "exit_test_status",
+                    "varchar(24) NOT NULL DEFAULT 'not_required'",
+                ),
+                ("last_exit_test_at", "TEXT NULL"),
+                ("next_exit_test_at", "TEXT NULL"),
+                ("exit_test_result", "TEXT NOT NULL DEFAULT ''"),
+                ("exit_test_open_actions", "TEXT NOT NULL DEFAULT ''"),
+                ("exit_test_evidence_id", "INTEGER NULL"),
+            ] {
+                ensure_sqlite_column(pool, "organizations_supplier", column, definition).await?;
             }
         }
         execute_sqlite_script(pool, migration.sqlite_sql)
@@ -5439,9 +5703,24 @@ ON CONFLICT (id) DO NOTHING;
 
 #[cfg(test)]
 mod tests {
-    use sqlx::{sqlite::SqlitePoolOptions, Row};
+    use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 
     use super::{execute_sqlite_script, run_sqlite_migrations, split_sql_script, MIGRATIONS};
+
+    async fn mark_sqlite_migrations_applied_except(pool: &SqlitePool, skipped: &[&str]) {
+        for migration in MIGRATIONS {
+            if skipped.contains(&migration.version) {
+                continue;
+            }
+            sqlx::query(
+                "INSERT INTO iscy_schema_migrations (version, applied_at) VALUES (?1, '2026-01-01T00:00:00Z')",
+            )
+            .bind(migration.version)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
 
     #[test]
     fn split_sql_script_keeps_semicolons_inside_strings() {
@@ -5630,15 +5909,14 @@ mod tests {
         )
         .await
         .unwrap();
-        for migration in MIGRATIONS.iter().take(28) {
-            sqlx::query(
-                "INSERT INTO iscy_schema_migrations (version, applied_at) VALUES (?1, '2026-01-01T00:00:00Z')",
-            )
-            .bind(migration.version)
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
+        mark_sqlite_migrations_applied_except(
+            &pool,
+            &[
+                "0029_rust_cross_domain_notifications",
+                "0030_rust_notification_dispatch_claim",
+            ],
+        )
+        .await;
         sqlx::query(
             r#"
             INSERT INTO zero_trust_agent_notification_delivery (
@@ -5715,15 +5993,8 @@ mod tests {
         )
         .await
         .unwrap();
-        for migration in MIGRATIONS.iter().take(29) {
-            sqlx::query(
-                "INSERT INTO iscy_schema_migrations (version, applied_at) VALUES (?1, '2026-01-01T00:00:00Z')",
-            )
-            .bind(migration.version)
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
+        mark_sqlite_migrations_applied_except(&pool, &["0030_rust_notification_dispatch_claim"])
+            .await;
 
         let applied = run_sqlite_migrations(&pool).await.unwrap();
         assert_eq!(applied, vec!["0030_rust_notification_dispatch_claim"]);
@@ -5744,5 +6015,70 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(index_exists, 1);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0031_is_restartable_and_preserves_existing_supplier_reviews() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO organizations_supplier (
+                id, tenant_id, name, service_description, criticality, review_status,
+                approval_status, risk_assessment, created_at, updated_at
+            ) VALUES (
+                9901, 99, 'Existing Supplier', 'Existing review data', 'HIGH',
+                'APPROVED', '', '', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0031_rust_supplier_review_workflow'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        execute_sqlite_script(
+            &pool,
+            r#"
+            DROP TABLE IF EXISTS supplier_review_event;
+            DROP TABLE IF EXISTS supplier_subprocessor;
+            DROP TABLE IF EXISTS supplier_evidence_link;
+            DROP TABLE IF EXISTS supplier_control_link;
+            DROP TABLE IF EXISTS supplier_risk_link;
+            DROP TABLE IF EXISTS supplier_audit_event;
+            "#,
+        )
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0031_rust_supplier_review_workflow"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let supplier = sqlx::query(
+            "SELECT name, review_status, approval_status, risk_assessment FROM organizations_supplier WHERE id = 9901",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(supplier.get::<String, _>("name"), "Existing Supplier");
+        assert_eq!(supplier.get::<String, _>("review_status"), "approved");
+        assert_eq!(supplier.get::<String, _>("approval_status"), "approved");
+        assert_eq!(supplier.get::<String, _>("risk_assessment"), "high");
+        let tables: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('supplier_review_event','supplier_subprocessor','supplier_evidence_link','supplier_control_link','supplier_risk_link','supplier_audit_event')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tables, 6);
     }
 }
