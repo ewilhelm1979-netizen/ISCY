@@ -45,7 +45,7 @@ Erfolgskriterium:
 
 Ziel: ISCY soll aus vorhandenen Daten automatisch ein Management-Review- und Audit-Paket erzeugen.
 
-Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt; V23.7.21 ergaenzt Exporte und Snapshot-Ruecklinks. Im Unreleased-Stand kommen Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews sowie kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO hinzu.
+Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt; V23.7.21 ergaenzt Exporte und Snapshot-Ruecklinks. Im Unreleased-Stand kommen Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews sowie kontextsensitive Regulatory Review-Pakete fuer NIS2, DORA und DSGVO hinzu. Der Review-Pack-Polish ergaenzt Filter, Owner-Hinweise, pack-spezifische Lueckengruppen und deutsch konsistente UI-Beschriftungen.
 
 Umgesetzt:
 
@@ -60,14 +60,15 @@ Umgesetzt:
 - Additive Migration `0032_rust_management_regulatory_templates` ergaenzt Template-Typ, Template-Version, regulatorischen Kontext, Supplier-Summary, Source Counts, Gap-Summary, Decision-Summary und eine Management-Review-Auditspur.
 - API-Pfade `GET /api/v1/management/templates`, `GET /api/v1/management/templates/{template_type}`, `POST /api/v1/regulatory/templates/{template_type}/preview` sowie Alias-Pfade unter `/api/v1/management/reviews`.
 - Regulatory-Review-Pack-API-Pfade `GET /api/v1/regulatory/review-packs`, `GET /api/v1/regulatory/review-packs/{pack_type}`, `POST /api/v1/regulatory/review-packs/{pack_type}/preview`, `GET` und `POST /api/v1/regulatory/review-packs/{pack_type}/snapshots`, `GET /api/v1/regulatory/review-pack-snapshots/{snapshot_id}` und `GET /api/v1/regulatory/review-pack-snapshots/{snapshot_id}/export?format=markdown|html|pdf|json`.
+- Snapshot-Listen koennen sicher nach Pack-Typ, Status, Zeitraum, offenen Luecken, kritischen Luecken und Limit gefiltert werden.
 - Weboberflaeche mit Template-Auswahl, Preview vor Snapshot-Erzeugung und Detailansicht fuer Quellen, Gaps, Management-Hinweise, Supplier Review und regulatorischen Kontext.
-- Weboberflaeche `/regulatory-review-packs/` mit NIS2-, DORA- und DSGVO-Auswahl, Preview, Snapshot-Erzeugung und Snapshot-Liste.
+- Weboberflaeche `/regulatory-review-packs/` mit NIS2-, DORA- und DSGVO-Auswahl, Filterbereich, Preview, Owner-/Verantwortlichen-Hinweisen, pack-spezifischer Lueckenuebersicht, Snapshot-Erzeugung und Snapshot-Liste.
 - Preview erzeugt keinen Review-Snapshot; Snapshot-Erzeugung bleibt schreibenden Rollen vorbehalten.
-- Regulatory Review Packs liefern Governance- und Evidence-Unterstuetzung, aber keine Rechtsberatung, Zertifizierung, automatische Meldung oder formale Einreichung.
+- Regulatory Review-Pakete liefern Governance- und Evidence-Unterstuetzung, aber keine Rechtsberatung, Zertifizierung, automatische Meldung oder formale Einreichung.
 
 Naechste Vertiefung:
 
-- Review-Pack-Bedienung weiter polishen, z. B. zusaetzliche Filter, Pack-spezifische Gap-Gruppierung und Review-Owner-Hinweise.
+- Review-Pack-Bedienung fachlich weiter vertiefen, z. B. Review-Owner aus kuenftigen kanonischen Owner-Feldern, bessere Pack-spezifische Exportgliederung und spaetere visuelle Regression.
 
 Erfolgskriterium:
 

@@ -8,11 +8,15 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
-- add contextual Regulatory Review Packs for NIS2, DORA, DSGVO/GDPR, and generic security governance
-- add tenant-scoped Regulatory Review Pack APIs for pack catalog, preview, snapshot creation, snapshot listing/detail, and Markdown/HTML/PDF/JSON exports
-- add `/regulatory-review-packs/` Web UI with pack selection, preview, snapshot creation, and snapshot list
-- extend Management/Regulatory snapshots with Evidence Integrity & Storage aggregate metrics covering re-hash status, restore-drill coverage, Legal Hold, and metadata-only disposition signals
-- add updated GUI screenshot documentation entries for Regulatory Review Packs and adjacent governance modules
+- ergaenzt Review-Pack-Filter fuer Pack-Typ, Status, Zeitraum, offene/kritische Luecken und sichere Limits
+- ergaenzt Owner-/Verantwortlichen-Hinweise in Regulatory Review Pack Previews, ohne fehlende Verantwortliche zu erfinden oder Kontaktdaten unnoetig auszugeben
+- ergaenzt pack-spezifische Lueckengruppierung fuer NIS2, DORA, DSGVO/GDPR und generische Security Governance
+- verbessert die deutsche UI-/Doku-Sprachkonsistenz der Regulatory Review-Pakete und aktualisiert die zugehoerigen Screenshots
+- ergaenzt kontextsensitive Regulatory Review-Pakete fuer NIS2, DORA, DSGVO/GDPR und generische Security Governance
+- ergaenzt tenantgebundene Regulatory-Review-Pack-APIs fuer Pack-Katalog, Preview, Snapshot-Erzeugung, Snapshot-Liste/-Detail und Markdown/HTML/PDF/JSON-Exporte
+- ergaenzt die Weboberflaeche `/regulatory-review-packs/` mit Pack-Auswahl, Preview, Snapshot-Erzeugung und Snapshot-Liste
+- erweitert Management-/Regulatory-Snapshots um Evidence-Integrity- und Storage-Aggregate zu Re-Hash-Status, Restore-Drill-Abdeckung, Legal Hold und metadata-only Disposition
+- ergaenzt aktualisierte GUI-Screenshot-Dokumentation fuer Regulatory Review-Pakete und angrenzende Governance-Module
 - add Evidence Object Storage & Restore Drill Phase 2 with an internal local-filesystem artifact storage abstraction
 - add tenant-scoped Evidence storage overview/detail APIs, bounded storage drill APIs, and storage event filtering without introducing production S3 or cloud credentials
 - extend `/evidence/integrity/` with local storage metadata and administrator/editor Storage-Drill actions
@@ -39,8 +43,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
-- keep Regulatory Review Pack previews and snapshots tenant-scoped while allowing read-only roles to preview and reserving snapshot creation for write roles
-- reuse Management Review snapshot and audit infrastructure for Regulatory Review Packs without adding a second compliance-store or leaking Evidence paths, SQL details, secrets, or raw Evidence payloads
+- haelt Regulatory-Review-Pack-Filter, Previews, Snapshots und Exporte tenantgebunden; Read-only-Rollen duerfen sichere Inhalte lesen, Snapshot-Erzeugung bleibt schreibenden Rollen vorbehalten
+- validiert Pack-Typ-, Status-, Zeitraum-, Gap- und Limit-Filter mit sicheren 4xx-Fehlern ohne SQL-/Store-Details
+- nutzt die bestehende Management-Review-Snapshot- und Audit-Infrastruktur fuer Regulatory Review-Pakete, ohne zweiten Compliance-Store und ohne Evidence-Pfade, SQL-Details, Secrets oder rohe Evidence-Payloads offenzulegen
 - route Evidence artifact checks through a canonical media-root-contained filesystem backend that blocks traversal, absolute-path references, and symlink escapes
 - audit Evidence storage drills, artifact presence, unreadable/missing artifacts, hash matches, hash mismatches, drill failures, and drill completion without exposing absolute paths, raw payloads, SQL details, or secrets
 - reuse the existing Evidence Integrity metadata and audit table for storage drills, avoiding a new Evidence engine or destructive migration
