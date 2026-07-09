@@ -8,6 +8,11 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- add contextual Regulatory Review Packs for NIS2, DORA, DSGVO/GDPR, and generic security governance
+- add tenant-scoped Regulatory Review Pack APIs for pack catalog, preview, snapshot creation, snapshot listing/detail, and Markdown/HTML/PDF/JSON exports
+- add `/regulatory-review-packs/` Web UI with pack selection, preview, snapshot creation, and snapshot list
+- extend Management/Regulatory snapshots with Evidence Integrity & Storage aggregate metrics covering re-hash status, restore-drill coverage, Legal Hold, and metadata-only disposition signals
+- add updated GUI screenshot documentation entries for Regulatory Review Packs and adjacent governance modules
 - add Evidence Object Storage & Restore Drill Phase 2 with an internal local-filesystem artifact storage abstraction
 - add tenant-scoped Evidence storage overview/detail APIs, bounded storage drill APIs, and storage event filtering without introducing production S3 or cloud credentials
 - extend `/evidence/integrity/` with local storage metadata and administrator/editor Storage-Drill actions
@@ -34,6 +39,8 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- keep Regulatory Review Pack previews and snapshots tenant-scoped while allowing read-only roles to preview and reserving snapshot creation for write roles
+- reuse Management Review snapshot and audit infrastructure for Regulatory Review Packs without adding a second compliance-store or leaking Evidence paths, SQL details, secrets, or raw Evidence payloads
 - route Evidence artifact checks through a canonical media-root-contained filesystem backend that blocks traversal, absolute-path references, and symlink escapes
 - audit Evidence storage drills, artifact presence, unreadable/missing artifacts, hash matches, hash mismatches, drill failures, and drill completion without exposing absolute paths, raw payloads, SQL details, or secrets
 - reuse the existing Evidence Integrity metadata and audit table for storage drills, avoiding a new Evidence engine or destructive migration

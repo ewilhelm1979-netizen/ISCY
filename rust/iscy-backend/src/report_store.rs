@@ -160,6 +160,15 @@ pub struct ManagementReviewTemplatePreview {
     pub title: String,
     pub executive_summary: String,
     pub metrics_json: Value,
+    pub top_risks_json: Value,
+    pub control_gaps_json: Value,
+    pub evidence_gaps_json: Value,
+    pub incident_decisions_json: Value,
+    pub roadmap_json: Value,
+    pub product_security_json: Value,
+    pub agent_posture_json: Value,
+    pub ai_governance_json: Value,
+    pub supplier_json: Value,
     pub source_counts_json: Value,
     pub gap_summary_json: Value,
     pub decision_summary_json: Value,
@@ -253,10 +262,55 @@ impl ReportStore {
             .collect()
     }
 
+    pub fn regulatory_review_packs() -> Vec<ManagementReviewTemplateSummary> {
+        management_review_template_catalog()
+            .iter()
+            .copied()
+            .filter(|template| is_regulatory_review_pack_template_type(template.template_type))
+            .map(|template| template.summary())
+            .collect()
+    }
+
     pub fn management_review_template(
         template_type: &str,
     ) -> anyhow::Result<ManagementReviewTemplateDetail> {
         Ok(resolve_management_review_template(template_type)?.detail())
+    }
+
+    pub fn regulatory_review_pack(
+        pack_type: &str,
+    ) -> anyhow::Result<ManagementReviewTemplateDetail> {
+        Ok(resolve_regulatory_review_pack(pack_type)?.detail())
+    }
+
+    pub async fn list_regulatory_review_pack_snapshots(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<ManagementReviewPackageSummary>> {
+        match self {
+            Self::Postgres(pool) => {
+                list_regulatory_review_pack_snapshots_postgres(pool, tenant_id, limit).await
+            }
+            Self::Sqlite(pool) => {
+                list_regulatory_review_pack_snapshots_sqlite(pool, tenant_id, limit).await
+            }
+        }
+    }
+
+    pub async fn regulatory_review_pack_snapshot_detail(
+        &self,
+        tenant_id: i64,
+        review_id: i64,
+    ) -> anyhow::Result<Option<ManagementReviewPackageDetail>> {
+        let Some(package) = self.management_review_detail(tenant_id, review_id).await? else {
+            return Ok(None);
+        };
+        if is_regulatory_review_pack_template_type(&package.template_type) {
+            Ok(Some(package))
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn preview_management_review_template(
@@ -290,6 +344,18 @@ impl ReportStore {
         }
     }
 
+    pub async fn preview_regulatory_review_pack(
+        &self,
+        tenant_id: i64,
+        user_id: i64,
+        pack_type: &str,
+        request: ManagementTemplatePreviewRequest,
+    ) -> anyhow::Result<ManagementReviewTemplatePreview> {
+        let template = resolve_regulatory_review_pack(pack_type)?;
+        self.preview_management_review_template(tenant_id, user_id, template.template_type, request)
+            .await
+    }
+
     pub async fn generate_management_review(
         &self,
         tenant_id: i64,
@@ -304,6 +370,19 @@ impl ReportStore {
                 generate_management_review_sqlite(pool, tenant_id, user_id, request).await
             }
         }
+    }
+
+    pub async fn generate_regulatory_review_pack(
+        &self,
+        tenant_id: i64,
+        user_id: i64,
+        pack_type: &str,
+        mut request: ManagementReviewGenerateRequest,
+    ) -> anyhow::Result<ManagementReviewPackageDetail> {
+        let template = resolve_regulatory_review_pack(pack_type)?;
+        request.template_type = Some(template.template_type.to_string());
+        self.generate_management_review(tenant_id, user_id, request)
+            .await
     }
 
     pub async fn update_management_review_status(
@@ -621,6 +700,62 @@ const MANAGEMENT_REVIEW_TEMPLATES: &[ManagementReviewTemplateDefinition] = &[
         ],
     },
     ManagementReviewTemplateDefinition {
+        template_type: "dsgvo_data_protection_review",
+        aliases: &["dsgvo", "gdpr", "data_protection", "privacy_review"],
+        template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
+        name: "DSGVO Data Protection Review Pack",
+        purpose:
+            "Contextual data-protection package for evidence, incident, supplier and AI governance review.",
+        regulatory_context: &["DSGVO", "GDPR", "personal data governance", "data breach review"],
+        data_sources: &[
+            "tenant regulatory profile",
+            "risks",
+            "ISCY-27 controls",
+            "evidence",
+            "evidence integrity and disposition",
+            "incidents",
+            "supplier reviews",
+            "AI governance",
+            "roadmap",
+        ],
+        sections: &[
+            "Data-protection scope hints",
+            "Personal-data and AI governance signals",
+            "Incident and breach-review readiness",
+            "Evidence integrity, legal hold and disposition",
+            "Supplier and subprocessor follow-up",
+            "Management decisions",
+        ],
+        snapshot_structure: &[
+            "regulatory_context_json",
+            "metrics_json",
+            "evidence_gaps_json",
+            "incident_decisions_json",
+            "supplier_json",
+            "ai_governance_json",
+            "roadmap_json",
+            "gap_summary_json",
+            "decision_summary_json",
+        ],
+        gap_focus: &[
+            "Missing or stale data-protection evidence",
+            "Unassessed incident and breach-review decisions",
+            "Evidence items under legal hold or disposition review",
+            "Supplier reviews without evidence links",
+            "AI systems without risk, evidence or roadmap linkage",
+        ],
+        review_hints: &[
+            "Confirm whether the tenant profile still reflects personal-data processing.",
+            "Use the package as governance support, not as legal advice or an authority filing.",
+            "Separate evidence-retention decisions from physical file deletion.",
+        ],
+        management_actions: &[
+            "Assign owners for missing data-protection evidence.",
+            "Confirm incident/breach review responsibilities.",
+            "Approve remediation for supplier, AI and evidence-integrity gaps.",
+        ],
+    },
+    ManagementReviewTemplateDefinition {
         template_type: "kritis_operational_resilience_summary",
         aliases: &["kritis", "critical_infrastructure"],
         template_version: MANAGEMENT_REVIEW_TEMPLATE_VERSION,
@@ -677,6 +812,16 @@ fn management_review_template_catalog() -> &'static [ManagementReviewTemplateDef
     MANAGEMENT_REVIEW_TEMPLATES
 }
 
+fn is_regulatory_review_pack_template_type(template_type: &str) -> bool {
+    matches!(
+        template_type,
+        "generic_security_governance"
+            | "nis2_management_summary"
+            | "dora_ict_risk_supplier_incident_summary"
+            | "dsgvo_data_protection_review"
+    )
+}
+
 fn resolve_management_review_template(
     template_type: &str,
 ) -> anyhow::Result<ManagementReviewTemplateDefinition> {
@@ -692,6 +837,16 @@ fn resolve_management_review_template(
                     .any(|alias| normalize_template_type(alias) == normalized)
         })
         .with_context(|| format!("Unbekannter Management-Review-Template-Typ: {template_type}"))
+}
+
+fn resolve_regulatory_review_pack(
+    pack_type: &str,
+) -> anyhow::Result<ManagementReviewTemplateDefinition> {
+    let template = resolve_management_review_template(pack_type)?;
+    if is_regulatory_review_pack_template_type(template.template_type) {
+        return Ok(template);
+    }
+    bail!("Unbekannter Regulatory-Review-Pack-Typ: {pack_type}")
 }
 
 fn selected_management_review_template(
@@ -987,6 +1142,40 @@ async fn list_management_reviews_sqlite(
         .fetch_all(pool)
         .await
         .context("SQLite-Management-Reviews konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(management_review_summary_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn list_regulatory_review_pack_snapshots_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<ManagementReviewPackageSummary>> {
+    let rows = sqlx::query(regulatory_review_pack_snapshot_list_postgres_sql())
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-Regulatory-Review-Packs konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(management_review_summary_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn list_regulatory_review_pack_snapshots_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<ManagementReviewPackageSummary>> {
+    let rows = sqlx::query(regulatory_review_pack_snapshot_list_sqlite_sql())
+        .bind(tenant_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("SQLite-Regulatory-Review-Packs konnten nicht gelesen werden")?;
     rows.into_iter()
         .map(management_review_summary_from_sqlite_row)
         .collect::<Result<Vec<_>, _>>()
@@ -1406,8 +1595,12 @@ async fn build_management_review_snapshot_postgres(
         suppliers: supplier_json["suppliers"].as_array().map_or(0, Vec::len) as i64,
     };
     let metrics_json = management_review_metrics_postgres(pool, tenant_id, counts).await?;
-    let source_counts_json =
-        management_review_source_counts(&counts, &product_security_json, &agent_posture_json);
+    let source_counts_json = management_review_source_counts(
+        &counts,
+        &metrics_json,
+        &product_security_json,
+        &agent_posture_json,
+    );
     let gap_summary_json = management_review_gap_summary(
         &metrics_json,
         &product_security_json,
@@ -1466,8 +1659,12 @@ async fn build_management_review_snapshot_sqlite(
         suppliers: supplier_json["suppliers"].as_array().map_or(0, Vec::len) as i64,
     };
     let metrics_json = management_review_metrics_sqlite(pool, tenant_id, counts).await?;
-    let source_counts_json =
-        management_review_source_counts(&counts, &product_security_json, &agent_posture_json);
+    let source_counts_json = management_review_source_counts(
+        &counts,
+        &metrics_json,
+        &product_security_json,
+        &agent_posture_json,
+    );
     let gap_summary_json = management_review_gap_summary(
         &metrics_json,
         &product_security_json,
@@ -1506,6 +1703,7 @@ async fn management_review_metrics_postgres(
     tenant_id: i64,
     counts: ManagementReviewItemCounts,
 ) -> anyhow::Result<Value> {
+    let evidence_integrity_storage = evidence_integrity_storage_postgres(pool, tenant_id).await?;
     Ok(serde_json::json!({
         "open_risks": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM risks_risk WHERE tenant_id = $1 AND status <> 'CLOSED'", tenant_id).await?,
         "critical_open_risks": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM risks_risk WHERE tenant_id = $1 AND status <> 'CLOSED' AND impact * likelihood >= 16", tenant_id).await?,
@@ -1521,6 +1719,14 @@ async fn management_review_metrics_postgres(
         "ai_governance_systems": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM ai_governance_system WHERE tenant_id = $1", tenant_id).await?,
         "ai_systems_without_risk_links": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM ai_governance_system system WHERE system.tenant_id = $1 AND NOT EXISTS (SELECT 1 FROM ai_governance_system_risk link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
         "ai_systems_without_roadmap_links": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM ai_governance_system system WHERE system.tenant_id = $1 AND NOT EXISTS (SELECT 1 FROM ai_governance_system_roadmap_task link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
+        "evidence_integrity_not_checked": json_i64(&evidence_integrity_storage, "not_checked"),
+        "evidence_integrity_valid": json_i64(&evidence_integrity_storage, "valid"),
+        "evidence_integrity_mismatch": json_i64(&evidence_integrity_storage, "mismatch"),
+        "evidence_storage_artifact_references": json_i64(&evidence_integrity_storage, "artifact_references"),
+        "evidence_storage_drills_recorded": json_i64(&evidence_integrity_storage, "storage_drills_recorded"),
+        "evidence_legal_hold_active": json_i64(&evidence_integrity_storage, "legal_hold_active"),
+        "evidence_disposition_due": json_i64(&evidence_integrity_storage, "disposition_due"),
+        "evidence_integrity_storage": evidence_integrity_storage,
         "snapshot_items": {
             "top_risks": counts.top_risks,
             "control_gaps": counts.control_gaps,
@@ -1538,6 +1744,7 @@ async fn management_review_metrics_sqlite(
     tenant_id: i64,
     counts: ManagementReviewItemCounts,
 ) -> anyhow::Result<Value> {
+    let evidence_integrity_storage = evidence_integrity_storage_sqlite(pool, tenant_id).await?;
     Ok(serde_json::json!({
         "open_risks": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM risks_risk WHERE tenant_id = ? AND status <> 'CLOSED'", tenant_id).await?,
         "critical_open_risks": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM risks_risk WHERE tenant_id = ? AND status <> 'CLOSED' AND impact * likelihood >= 16", tenant_id).await?,
@@ -1553,6 +1760,14 @@ async fn management_review_metrics_sqlite(
         "ai_governance_systems": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM ai_governance_system WHERE tenant_id = ?", tenant_id).await?,
         "ai_systems_without_risk_links": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM ai_governance_system system WHERE system.tenant_id = ? AND NOT EXISTS (SELECT 1 FROM ai_governance_system_risk link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
         "ai_systems_without_roadmap_links": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM ai_governance_system system WHERE system.tenant_id = ? AND NOT EXISTS (SELECT 1 FROM ai_governance_system_roadmap_task link WHERE link.tenant_id = system.tenant_id AND link.system_id = system.id)", tenant_id).await?,
+        "evidence_integrity_not_checked": json_i64(&evidence_integrity_storage, "not_checked"),
+        "evidence_integrity_valid": json_i64(&evidence_integrity_storage, "valid"),
+        "evidence_integrity_mismatch": json_i64(&evidence_integrity_storage, "mismatch"),
+        "evidence_storage_artifact_references": json_i64(&evidence_integrity_storage, "artifact_references"),
+        "evidence_storage_drills_recorded": json_i64(&evidence_integrity_storage, "storage_drills_recorded"),
+        "evidence_legal_hold_active": json_i64(&evidence_integrity_storage, "legal_hold_active"),
+        "evidence_disposition_due": json_i64(&evidence_integrity_storage, "disposition_due"),
+        "evidence_integrity_storage": evidence_integrity_storage,
         "snapshot_items": {
             "top_risks": counts.top_risks,
             "control_gaps": counts.control_gaps,
@@ -1562,6 +1777,58 @@ async fn management_review_metrics_sqlite(
             "ai_governance": counts.ai_governance,
             "suppliers": counts.suppliers
         }
+    }))
+}
+
+async fn evidence_integrity_storage_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<Value> {
+    Ok(serde_json::json!({
+        "total_items": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1", tenant_id).await?,
+        "not_checked": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND integrity_status = 'not_checked'", tenant_id).await?,
+        "valid": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND integrity_status = 'valid'", tenant_id).await?,
+        "mismatch": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND integrity_status = 'mismatch'", tenant_id).await?,
+        "missing_artifact": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND integrity_status = 'missing_artifact'", tenant_id).await?,
+        "check_failed": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND integrity_status = 'check_failed'", tenant_id).await?,
+        "quarantined": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND quarantine_status <> 'none'", tenant_id).await?,
+        "artifact_references": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND file IS NOT NULL AND BTRIM(file) <> ''", tenant_id).await?,
+        "expected_hash_present": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND (BTRIM(file_sha256) <> '' OR BTRIM(last_calculated_sha256) <> '')", tenant_id).await?,
+        "storage_drills_recorded": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND last_integrity_checked_at IS NOT NULL AND BTRIM(last_integrity_checked_at::text) <> ''", tenant_id).await?,
+        "legal_hold_active": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND legal_hold_status = 'active'", tenant_id).await?,
+        "disposition_due": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND (disposition_status IN ('due', 'approved_for_disposition', 'blocked_by_legal_hold') OR (disposition_due_at IS NOT NULL AND disposition_due_at::text <= CURRENT_DATE::text))", tenant_id).await?,
+        "disposition_blocked": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND legal_hold_blocks_disposition = TRUE", tenant_id).await?,
+        "disposal_candidates": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND disposal_candidate = TRUE", tenant_id).await?,
+        "notes": [
+            "Aggregated status values only; evidence file names, paths and raw content are excluded.",
+            "Disposition is metadata-only and does not imply physical Evidence deletion."
+        ]
+    }))
+}
+
+async fn evidence_integrity_storage_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<Value> {
+    Ok(serde_json::json!({
+        "total_items": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ?", tenant_id).await?,
+        "not_checked": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND integrity_status = 'not_checked'", tenant_id).await?,
+        "valid": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND integrity_status = 'valid'", tenant_id).await?,
+        "mismatch": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND integrity_status = 'mismatch'", tenant_id).await?,
+        "missing_artifact": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND integrity_status = 'missing_artifact'", tenant_id).await?,
+        "check_failed": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND integrity_status = 'check_failed'", tenant_id).await?,
+        "quarantined": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND quarantine_status <> 'none'", tenant_id).await?,
+        "artifact_references": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND file IS NOT NULL AND TRIM(file) <> ''", tenant_id).await?,
+        "expected_hash_present": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND (TRIM(file_sha256) <> '' OR TRIM(last_calculated_sha256) <> '')", tenant_id).await?,
+        "storage_drills_recorded": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND last_integrity_checked_at IS NOT NULL AND TRIM(CAST(last_integrity_checked_at AS TEXT)) <> ''", tenant_id).await?,
+        "legal_hold_active": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND legal_hold_status = 'active'", tenant_id).await?,
+        "disposition_due": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND (disposition_status IN ('due', 'approved_for_disposition', 'blocked_by_legal_hold') OR (disposition_due_at IS NOT NULL AND CAST(disposition_due_at AS TEXT) <= date('now')))", tenant_id).await?,
+        "disposition_blocked": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND legal_hold_blocks_disposition = 1", tenant_id).await?,
+        "disposal_candidates": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND disposal_candidate = 1", tenant_id).await?,
+        "notes": [
+            "Aggregated status values only; evidence file names, paths and raw content are excluded.",
+            "Disposition is metadata-only and does not imply physical Evidence deletion."
+        ]
     }))
 }
 
@@ -2098,6 +2365,7 @@ async fn audit_management_review_event_sqlite(
 
 fn management_review_source_counts(
     counts: &ManagementReviewItemCounts,
+    metrics: &Value,
     product_security: &Value,
     agent_posture: &Value,
 ) -> Value {
@@ -2105,6 +2373,8 @@ fn management_review_source_counts(
         "risks": counts.top_risks,
         "controls": counts.control_gaps,
         "evidence": counts.evidence_gaps,
+        "evidence_integrity_items": json_i64(&metrics["evidence_integrity_storage"], "total_items"),
+        "evidence_storage_drills": json_i64(&metrics["evidence_integrity_storage"], "storage_drills_recorded"),
         "incidents": counts.incidents,
         "roadmap_tasks": counts.roadmap,
         "product_security_products": json_i64(product_security, "products"),
@@ -2116,6 +2386,7 @@ fn management_review_source_counts(
             "risks": counts.top_risks == 0,
             "controls": counts.control_gaps == 0,
             "evidence": counts.evidence_gaps == 0,
+            "evidence_integrity": json_i64(&metrics["evidence_integrity_storage"], "total_items") == 0,
             "incidents": counts.incidents == 0,
             "roadmap_tasks": counts.roadmap == 0,
             "suppliers": counts.suppliers == 0,
@@ -2141,6 +2412,12 @@ fn management_review_gap_summary(
         "critical_open_vulnerabilities": json_i64(product_security, "critical_open_vulnerabilities"),
         "open_cve_correlation_reviews": json_i64(product_security, "open_cve_correlation_reviews"),
         "invalid_product_security_imports": json_i64(product_security, "invalid_imports"),
+        "evidence_integrity_not_checked": json_i64(metrics, "evidence_integrity_not_checked"),
+        "evidence_integrity_mismatch": json_i64(metrics, "evidence_integrity_mismatch"),
+        "evidence_storage_artifact_references": json_i64(metrics, "evidence_storage_artifact_references"),
+        "evidence_storage_drills_recorded": json_i64(metrics, "evidence_storage_drills_recorded"),
+        "evidence_legal_hold_active": json_i64(metrics, "evidence_legal_hold_active"),
+        "evidence_disposition_due": json_i64(metrics, "evidence_disposition_due"),
         "critical_suppliers": json_i64(supplier, "critical_suppliers"),
         "missing_supplier_evidence": json_i64(supplier, "missing_supplier_evidence"),
         "overdue_or_unreviewed_suppliers": json_i64(supplier, "overdue_or_unreviewed"),
@@ -2185,6 +2462,13 @@ fn management_review_decision_summary(
     {
         required_decisions.push("Product-security CVE review and remediation priority");
     }
+    if json_i64(metrics, "evidence_integrity_mismatch") > 0
+        || json_i64(metrics, "evidence_integrity_not_checked") > 0
+        || json_i64(metrics, "evidence_disposition_due") > 0
+    {
+        required_decisions
+            .push("Evidence-integrity, legal-hold or metadata-only disposition follow-up");
+    }
     if json_i64(supplier, "missing_supplier_evidence") > 0
         || json_i64(supplier, "overdue_or_unreviewed") > 0
     {
@@ -2223,6 +2507,15 @@ fn management_review_preview_from_snapshot(
         title: review_title(None, template),
         executive_summary: review_executive_summary(None, &snapshot),
         metrics_json: snapshot.metrics_json,
+        top_risks_json: snapshot.top_risks_json,
+        control_gaps_json: snapshot.control_gaps_json,
+        evidence_gaps_json: snapshot.evidence_gaps_json,
+        incident_decisions_json: snapshot.incident_decisions_json,
+        roadmap_json: snapshot.roadmap_json,
+        product_security_json: snapshot.product_security_json,
+        agent_posture_json: snapshot.agent_posture_json,
+        ai_governance_json: snapshot.ai_governance_json,
+        supplier_json: snapshot.supplier_json,
         source_counts_json: snapshot.source_counts_json,
         gap_summary_json: snapshot.gap_summary_json,
         decision_summary_json: snapshot.decision_summary_json,
@@ -2258,6 +2551,47 @@ fn management_review_list_sqlite_sql() -> &'static str {
         CAST(updated_at AS TEXT) AS updated_at
     FROM reports_managementreviewpackage
     WHERE tenant_id = ?
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?
+    "#
+}
+
+fn regulatory_review_pack_snapshot_list_postgres_sql() -> &'static str {
+    r#"
+    SELECT
+        id, tenant_id, title, period_start::text AS period_start, period_end::text AS period_end,
+        template_type, template_version,
+        status, generated_by_id, approved_by_id, approved_at::text AS approved_at,
+        created_at::text AS created_at, updated_at::text AS updated_at
+    FROM reports_managementreviewpackage
+    WHERE tenant_id = $1
+      AND template_type IN (
+        'generic_security_governance',
+        'nis2_management_summary',
+        'dora_ict_risk_supplier_incident_summary',
+        'dsgvo_data_protection_review'
+      )
+    ORDER BY created_at DESC, id DESC
+    LIMIT $2
+    "#
+}
+
+fn regulatory_review_pack_snapshot_list_sqlite_sql() -> &'static str {
+    r#"
+    SELECT
+        id, tenant_id, title, CAST(period_start AS TEXT) AS period_start,
+        template_type, template_version,
+        CAST(period_end AS TEXT) AS period_end, status, generated_by_id, approved_by_id,
+        CAST(approved_at AS TEXT) AS approved_at, CAST(created_at AS TEXT) AS created_at,
+        CAST(updated_at AS TEXT) AS updated_at
+    FROM reports_managementreviewpackage
+    WHERE tenant_id = ?
+      AND template_type IN (
+        'generic_security_governance',
+        'nis2_management_summary',
+        'dora_ict_risk_supplier_incident_summary',
+        'dsgvo_data_protection_review'
+      )
     ORDER BY created_at DESC, id DESC
     LIMIT ?
     "#

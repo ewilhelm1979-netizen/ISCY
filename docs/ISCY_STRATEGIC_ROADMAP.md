@@ -45,7 +45,7 @@ Erfolgskriterium:
 
 Ziel: ISCY soll aus vorhandenen Daten automatisch ein Management-Review- und Audit-Paket erzeugen.
 
-Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt; V23.7.21 ergaenzt Exporte und Snapshot-Ruecklinks. Im Unreleased-Stand kommen Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, KRITIS und generische Security-Governance-Reviews hinzu.
+Status: In V23.7.20 als Rust-Web-/API-Pfad und persistierter Audit-Snapshot umgesetzt; V23.7.21 ergaenzt Exporte und Snapshot-Ruecklinks. Im Unreleased-Stand kommen Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews sowie kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO hinzu.
 
 Umgesetzt:
 
@@ -53,18 +53,21 @@ Umgesetzt:
 - API-Pfade `GET` und `POST /api/v1/reports/management-reviews`.
 - API-Pfade `GET` und `PATCH /api/v1/reports/management-reviews/{review_id}` fuer Detail und Status.
 - Persistierte Review-Pakete mit Zeitraum, Status, Executive Summary, Entscheidung, naechsten Massnahmen, freigebendem User und Freigabezeitpunkt.
-- Automatisch erzeugter Snapshot mit Kennzahlen, Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage und Agent-Posture.
+- Automatisch erzeugter Snapshot mit Kennzahlen, Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Evidence-Integrity-/Storage-Aggregaten, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage, Supplier Review, AI Governance und Agent-Posture.
 - Direkte Ruecklinks aus Snapshot-Zeilen zu Risiken, Controls, Evidence, Incidents und Roadmap.
 - Export als Markdown, HTML, PDF und JSON.
 - Demo-Seed und Migration `0019_rust_management_review_packages`.
 - Additive Migration `0032_rust_management_regulatory_templates` ergaenzt Template-Typ, Template-Version, regulatorischen Kontext, Supplier-Summary, Source Counts, Gap-Summary, Decision-Summary und eine Management-Review-Auditspur.
 - API-Pfade `GET /api/v1/management/templates`, `GET /api/v1/management/templates/{template_type}`, `POST /api/v1/regulatory/templates/{template_type}/preview` sowie Alias-Pfade unter `/api/v1/management/reviews`.
+- Regulatory-Review-Pack-API-Pfade `GET /api/v1/regulatory/review-packs`, `GET /api/v1/regulatory/review-packs/{pack_type}`, `POST /api/v1/regulatory/review-packs/{pack_type}/preview`, `GET` und `POST /api/v1/regulatory/review-packs/{pack_type}/snapshots`, `GET /api/v1/regulatory/review-pack-snapshots/{snapshot_id}` und `GET /api/v1/regulatory/review-pack-snapshots/{snapshot_id}/export?format=markdown|html|pdf|json`.
 - Weboberflaeche mit Template-Auswahl, Preview vor Snapshot-Erzeugung und Detailansicht fuer Quellen, Gaps, Management-Hinweise, Supplier Review und regulatorischen Kontext.
+- Weboberflaeche `/regulatory-review-packs/` mit NIS2-, DORA- und DSGVO-Auswahl, Preview, Snapshot-Erzeugung und Snapshot-Liste.
 - Preview erzeugt keinen Review-Snapshot; Snapshot-Erzeugung bleibt schreibenden Rollen vorbehalten.
+- Regulatory Review Packs liefern Governance- und Evidence-Unterstuetzung, aber keine Rechtsberatung, Zertifizierung, automatische Meldung oder formale Einreichung.
 
 Naechste Vertiefung:
 
-- Optional feinere Template-Varianten fuer internes Audit, Quartalslenkung und regulatorische Board-Pakete, wenn sich in der Praxis wiederkehrende Review-Formate zeigen.
+- Review-Pack-Bedienung weiter polishen, z. B. zusaetzliche Filter, Pack-spezifische Gap-Gruppierung und Review-Owner-Hinweise.
 
 Erfolgskriterium:
 
@@ -235,7 +238,7 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Feinere Template-Varianten und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete auf Basis der neuen Management-/Regulatory-Template-Schicht.
+1. Review-Pack-Bedienung weiter polishen, z. B. zusaetzliche Filter, Pack-spezifische Gap-Gruppierung und Review-Owner-Hinweise.
 2. Evidence-Integrity-Worker, kontrollierte physische Disposition und optionales produktives Objektspeicher-Backend.
 3. Signierte Agent-Pakete, Release-Provenance und eine spaetere getrennte CA-/PKI-Stufe.
 

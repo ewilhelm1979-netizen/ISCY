@@ -2051,6 +2051,49 @@ pub struct ManagementReviewPackageWriteResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct RegulatoryReviewPacksResponse {
+    pub api_version: &'static str,
+    pub packs: Vec<report_store::ManagementReviewTemplateSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegulatoryReviewPackResponse {
+    pub api_version: &'static str,
+    pub pack: report_store::ManagementReviewTemplateDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegulatoryReviewPackPreviewResponse {
+    pub api_version: &'static str,
+    pub preview: report_store::ManagementReviewTemplatePreview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegulatoryReviewPackSnapshotsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub snapshots: Vec<report_store::ManagementReviewPackageSummary>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegulatoryReviewPackSnapshotResponse {
+    pub api_version: &'static str,
+    pub snapshot: report_store::ManagementReviewPackageDetail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RegulatoryReviewPackSnapshotWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub snapshot: report_store::ManagementReviewPackageDetail,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegulatoryReviewPackExportQuery {
+    format: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RequirementLibraryResponse {
     pub api_version: &'static str,
     #[serde(flatten)]
@@ -11296,6 +11339,513 @@ async fn management_review_template_preview(
     }
 }
 
+async fn regulatory_review_packs(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(err) = authenticated_tenant_context(&state, &headers).await {
+        return (
+            err.status_code(),
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: err.error_code(),
+                message: err.message().to_string(),
+            }),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(RegulatoryReviewPacksResponse {
+            api_version: "v1",
+            packs: report_store::ReportStore::regulatory_review_packs(),
+        }),
+    )
+        .into_response()
+}
+
+async fn regulatory_review_pack_detail(
+    Path(pack_type): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(err) = authenticated_tenant_context(&state, &headers).await {
+        return (
+            err.status_code(),
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: err.error_code(),
+                message: err.message().to_string(),
+            }),
+        )
+            .into_response();
+    }
+    match report_store::ReportStore::regulatory_review_pack(&pack_type) {
+        Ok(pack) => (
+            StatusCode::OK,
+            Json(RegulatoryReviewPackResponse {
+                api_version: "v1",
+                pack,
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "regulatory_review_pack_not_found",
+                message: format!("Regulatory-Review-Pack {pack_type} wurde nicht gefunden."),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn regulatory_review_pack_preview(
+    Path(pack_type): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<report_store::ManagementTemplatePreviewRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .preview_regulatory_review_pack(context.tenant_id, context.user_id, &pack_type, payload)
+        .await
+    {
+        Ok(preview) => (
+            StatusCode::OK,
+            Json(RegulatoryReviewPackPreviewResponse {
+                api_version: "v1",
+                preview,
+            }),
+        )
+            .into_response(),
+        Err(err) if regulatory_review_pack_error_is_not_found(&err.to_string()) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "regulatory_review_pack_not_found",
+                message: format!("Regulatory-Review-Pack {pack_type} wurde nicht gefunden."),
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: "Regulatory-Review-Pack-Vorschau konnte nicht erzeugt werden.".to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn regulatory_review_pack_snapshot_create(
+    Path(pack_type): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<report_store::ManagementReviewGenerateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .generate_regulatory_review_pack(context.tenant_id, context.user_id, &pack_type, payload)
+        .await
+    {
+        Ok(snapshot) => (
+            StatusCode::CREATED,
+            Json(RegulatoryReviewPackSnapshotWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                snapshot,
+            }),
+        )
+            .into_response(),
+        Err(err) if regulatory_review_pack_error_is_not_found(&err.to_string()) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "regulatory_review_pack_not_found",
+                message: format!("Regulatory-Review-Pack {pack_type} wurde nicht gefunden."),
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: "Regulatory-Review-Pack-Snapshot konnte nicht erzeugt werden.".to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn regulatory_review_pack_snapshots(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .list_regulatory_review_pack_snapshots(context.tenant_id, 50)
+        .await
+    {
+        Ok(snapshots) => (
+            StatusCode::OK,
+            Json(RegulatoryReviewPackSnapshotsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                snapshots,
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: "Regulatory-Review-Pack-Snapshots konnten nicht gelesen werden."
+                    .to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn regulatory_review_pack_snapshots_for_pack(
+    Path(pack_type): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let pack = match report_store::ReportStore::regulatory_review_pack(&pack_type) {
+        Ok(pack) => pack,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "regulatory_review_pack_not_found",
+                    message: format!("Regulatory-Review-Pack {pack_type} wurde nicht gefunden."),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .list_regulatory_review_pack_snapshots(context.tenant_id, 50)
+        .await
+    {
+        Ok(snapshots) => (
+            StatusCode::OK,
+            Json(RegulatoryReviewPackSnapshotsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                snapshots: snapshots
+                    .into_iter()
+                    .filter(|snapshot| snapshot.template_type == pack.template_type)
+                    .collect(),
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: "Regulatory-Review-Pack-Snapshots konnten nicht gelesen werden."
+                    .to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn regulatory_review_pack_snapshot_detail(
+    Path(snapshot_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .regulatory_review_pack_snapshot_detail(context.tenant_id, snapshot_id)
+        .await
+    {
+        Ok(Some(snapshot)) => (
+            StatusCode::OK,
+            Json(RegulatoryReviewPackSnapshotResponse {
+                api_version: "v1",
+                snapshot,
+            }),
+        )
+            .into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "regulatory_review_pack_snapshot_not_found",
+                message: format!(
+                    "Regulatory-Review-Pack-Snapshot {snapshot_id} wurde nicht gefunden."
+                ),
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: "Regulatory-Review-Pack-Snapshot konnte nicht gelesen werden.".to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+async fn regulatory_review_pack_snapshot_export(
+    Path(snapshot_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<RegulatoryReviewPackExportQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            return (
+                err.status_code(),
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: err.error_code(),
+                    message: err.message().to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+    let Some(export_format) = management_review_export_format_from_value(query.format.as_deref())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "unsupported_export_format",
+                message: "Unterstuetzte Formate: markdown, html, pdf, json.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    let Some(store) = state.report_store else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_not_configured",
+                message: "Rust-Report-Store ist nicht konfiguriert.".to_string(),
+            }),
+        )
+            .into_response();
+    };
+    match store
+        .regulatory_review_pack_snapshot_detail(context.tenant_id, snapshot_id)
+        .await
+    {
+        Ok(Some(snapshot)) => {
+            if store
+                .audit_management_review_export(
+                    context.tenant_id,
+                    context.user_id,
+                    snapshot_id,
+                    &snapshot.template_type,
+                    export_format.as_str(),
+                )
+                .await
+                .is_err()
+            {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: "audit_error",
+                        message: "Regulatory-Review-Pack-Export konnte nicht auditiert werden."
+                            .to_string(),
+                    }),
+                )
+                    .into_response();
+            }
+            management_review_export_download_response(&snapshot, export_format)
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "regulatory_review_pack_snapshot_not_found",
+                message: format!(
+                    "Regulatory-Review-Pack-Snapshot {snapshot_id} wurde nicht gefunden."
+                ),
+            }),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "database_error",
+                message: "Regulatory-Review-Pack-Export konnte nicht erzeugt werden.".to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
 async fn management_review_generate(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -16994,6 +17544,276 @@ async fn web_management_review_export_format(
         .into_response(),
     }
 }
+
+async fn web_regulatory_review_packs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Regulatory Review Packs", "/regulatory-review-packs/");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    let Some(store) = state.report_store.as_ref() else {
+        return web_store_missing(
+            "Regulatory Review Packs",
+            "/regulatory-review-packs/",
+            &context,
+            "Report",
+        );
+    };
+    match store
+        .list_regulatory_review_pack_snapshots(context.tenant_id, 50)
+        .await
+    {
+        Ok(snapshots) => {
+            let generate_panel = if can_write {
+                format!(
+                    r#"
+                    <section class="panel wide">
+                      <h2>Regulatory Pack erzeugen</h2>
+                      <form method="post" action="{}">
+                        <div class="form-grid">
+                          <label>Pack<select name="template_type">{}</select></label>
+                          <label>Titel<input name="title" value="Regulatory Review Pack {}"></label>
+                          <label>Zeitraum Start<input name="period_start" type="date"></label>
+                          <label>Zeitraum Ende<input name="period_end" type="date"></label>
+                        </div>
+                        <label>Executive Summary<textarea name="executive_summary" rows="4"></textarea></label>
+                        <button type="submit">Snapshot erzeugen</button>
+                      </form>
+                    </section>
+                    "#,
+                    web_path_with_context("/regulatory-review-packs/", Some(&context)),
+                    regulatory_review_pack_options("nis2_management_summary"),
+                    Utc::now().format("%Y-%m-%d"),
+                )
+            } else {
+                r#"<section class="panel wide"><h2>Regulatory Pack erzeugen</h2><p>Zum Erzeugen eines eingefrorenen Snapshots wird eine schreibende ISCY-Rolle benoetigt.</p></section>"#.to_string()
+            };
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Regulatory Review Packs</h1><p>NIS2, DORA und DSGVO aus denselben eingefrorenen ISCY-Snapshots vorbereiten.</p></section>
+                {}
+                <section class="panel wide">
+                  <h2>Vorschau</h2>
+                  <form method="post" action="{}">
+                    <div class="form-grid">
+                      <label>Pack<select name="template_type">{}</select></label>
+                      <label>Preview Start<input name="period_start" type="date"></label>
+                      <label>Preview Ende<input name="period_end" type="date"></label>
+                    </div>
+                    <button type="submit">Vorschau anzeigen</button>
+                  </form>
+                </section>
+                {}
+                <section class="panel wide">
+                  <h2>Regulatory Snapshots</h2>
+                  <table>
+                    <thead><tr><th>Titel</th><th>Pack</th><th>Status</th><th>Start</th><th>Ende</th><th>Erstellt</th><th>Export</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                regulatory_review_pack_cards(),
+                web_path_with_context("/regulatory-review-packs/preview", Some(&context)),
+                regulatory_review_pack_options("nis2_management_summary"),
+                generate_panel,
+                regulatory_review_snapshot_rows(&context, &snapshots),
+            );
+            web_page(
+                "Regulatory Review Packs",
+                "/regulatory-review-packs/",
+                Some(&context),
+                &body,
+            )
+        }
+        Err(_) => web_error_page(
+            "Regulatory Review Packs",
+            "/regulatory-review-packs/",
+            &context,
+            "Regulatory-Review-Packs konnten nicht gelesen werden.",
+        ),
+    }
+}
+
+async fn web_regulatory_review_pack_preview(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebManagementReviewPreviewForm>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context(
+            "Regulatory Review Pack Preview",
+            "/regulatory-review-packs/",
+        );
+    };
+    let Some(store) = state.report_store.as_ref() else {
+        return web_store_missing(
+            "Regulatory Review Pack Preview",
+            "/regulatory-review-packs/",
+            &context,
+            "Report",
+        );
+    };
+    let payload = report_store::ManagementTemplatePreviewRequest {
+        period_start: normalized_optional_form_text(form.period_start),
+        period_end: normalized_optional_form_text(form.period_end),
+    };
+    match store
+        .preview_regulatory_review_pack(
+            context.tenant_id,
+            context.user_id,
+            &form.template_type,
+            payload,
+        )
+        .await
+    {
+        Ok(preview) => {
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>{}</h1><p>{}</p></section>
+                <section class="metrics">{}</section>
+                <section class="grid">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                "#,
+                html_escape(&preview.title),
+                html_escape(&preview.template.purpose),
+                management_review_metric_cards(&preview.metrics_json),
+                management_review_object_panel(
+                    "Regulatorischer Kontext",
+                    &preview.regulatory_context_json
+                ),
+                management_review_object_panel(
+                    "Evidence Integrity & Storage",
+                    &preview.metrics_json["evidence_integrity_storage"]
+                ),
+                management_review_object_panel("Gap-Summary", &preview.gap_summary_json),
+                management_review_object_panel(
+                    "Management-Hinweise",
+                    &preview.decision_summary_json
+                ),
+                management_review_array_panel(
+                    "Incident-Entscheidungen",
+                    &preview.incident_decisions_json,
+                    &[
+                        ("title", "Incident"),
+                        ("severity", "Severity"),
+                        ("nis2_significance_status", "Erheblichkeit"),
+                        ("review_state", "Review"),
+                    ],
+                    &context,
+                ),
+                management_review_object_panel("Product Security", &preview.product_security_json),
+                management_review_object_panel("Supplier Review", &preview.supplier_json),
+                management_review_object_panel("AI Governance", &preview.ai_governance_json),
+            );
+            web_page(
+                "Regulatory Review Pack Preview",
+                "/regulatory-review-packs/",
+                Some(&context),
+                &body,
+            )
+        }
+        Err(_) => web_error_page(
+            "Regulatory Review Pack Preview",
+            "/regulatory-review-packs/",
+            &context,
+            "Regulatory-Review-Pack-Vorschau konnte nicht erzeugt werden.",
+        ),
+    }
+}
+
+async fn web_regulatory_review_pack_generate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebManagementReviewGenerateForm>,
+) -> Response {
+    let display_context = web_context_from_request(&query, &headers, &state).await;
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => {
+            if let Some(context) = display_context.as_ref() {
+                return web_error_page(
+                    "Regulatory Review Packs",
+                    "/regulatory-review-packs/",
+                    context,
+                    err.message(),
+                )
+                .into_response();
+            }
+            return web_missing_context("Regulatory Review Packs", "/regulatory-review-packs/")
+                .into_response();
+        }
+    };
+    let context = display_context.unwrap_or_else(|| WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    });
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Regulatory Review Packs",
+            "/regulatory-review-packs/",
+            &context,
+            "Diese Rust-Webroute benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.report_store else {
+        return web_store_missing(
+            "Regulatory Review Packs",
+            "/regulatory-review-packs/",
+            &context,
+            "Report",
+        )
+        .into_response();
+    };
+    let pack_type = normalized_optional_form_text(form.template_type)
+        .unwrap_or_else(|| "nis2_management_summary".to_string());
+    let payload = report_store::ManagementReviewGenerateRequest {
+        template_type: None,
+        title: normalized_optional_form_text(form.title),
+        period_start: normalized_optional_form_text(form.period_start),
+        period_end: normalized_optional_form_text(form.period_end),
+        executive_summary: normalized_optional_form_text(form.executive_summary),
+    };
+    match store
+        .generate_regulatory_review_pack(
+            auth_context.tenant_id,
+            auth_context.user_id,
+            &pack_type,
+            payload,
+        )
+        .await
+    {
+        Ok(package) => Redirect::to(&web_path_with_context(
+            &format!("/management-reviews/{}", package.id),
+            Some(&context),
+        ))
+        .into_response(),
+        Err(_) => web_error_page(
+            "Regulatory Review Packs",
+            "/regulatory-review-packs/",
+            &context,
+            "Regulatory-Review-Pack konnte nicht erzeugt werden.",
+        )
+        .into_response(),
+    }
+}
+
 async fn web_roadmap(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -23843,6 +24663,28 @@ impl ManagementReviewExportFormat {
     }
 }
 
+fn management_review_export_format_from_value(
+    value: Option<&str>,
+) -> Option<ManagementReviewExportFormat> {
+    match value
+        .unwrap_or("markdown")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "markdown" | "md" => Some(ManagementReviewExportFormat::Markdown),
+        "html" => Some(ManagementReviewExportFormat::Html),
+        "pdf" => Some(ManagementReviewExportFormat::Pdf),
+        "json" => Some(ManagementReviewExportFormat::Json),
+        _ => None,
+    }
+}
+
+fn regulatory_review_pack_error_is_not_found(message: &str) -> bool {
+    message.contains("Regulatory-Review-Pack-Typ")
+        || message.contains("Management-Review-Template-Typ")
+}
+
 #[derive(Debug, Clone, Copy)]
 enum IncidentTimelineExportFormat {
     Csv,
@@ -28101,6 +28943,7 @@ fn web_page(
         ("/roadmap/", "Roadmap"),
         ("/reports/", "Reports"),
         ("/management-reviews/", "Reviews"),
+        ("/regulatory-review-packs/", "Regulatory Packs"),
         ("/assets/", "Assets"),
         ("/suppliers/", "Suppliers"),
         ("/imports/", "Imports"),
@@ -30739,6 +31582,21 @@ fn management_review_template_options(selected: &str) -> String {
         .join("")
 }
 
+fn regulatory_review_pack_options(selected: &str) -> String {
+    report_store::ReportStore::regulatory_review_packs()
+        .into_iter()
+        .map(|pack| {
+            format!(
+                r#"<option value="{}"{}>{}</option>"#,
+                html_escape(&pack.template_type),
+                selected_attr(pack.template_type == selected),
+                html_escape(&pack.name),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn management_review_template_cards() -> String {
     let cards = report_store::ReportStore::management_review_templates()
         .into_iter()
@@ -30759,6 +31617,63 @@ fn management_review_template_cards() -> String {
         .collect::<Vec<_>>()
         .join("");
     format!(r#"<section class="grid">{cards}</section>"#)
+}
+
+fn regulatory_review_pack_cards() -> String {
+    let cards = report_store::ReportStore::regulatory_review_packs()
+        .into_iter()
+        .map(|pack| {
+            format!(
+                r#"
+                <article class="panel">
+                  <h2>{}</h2>
+                  <p>{}</p>
+                  <p>{}</p>
+                </article>
+                "#,
+                html_escape(&pack.name),
+                html_escape(&pack.purpose),
+                html_escape(&pack.regulatory_context.join(", ")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(r#"<section class="grid">{cards}</section>"#)
+}
+
+fn regulatory_review_snapshot_rows(
+    context: &WebContext,
+    snapshots: &[report_store::ManagementReviewPackageSummary],
+) -> String {
+    if snapshots.is_empty() {
+        return web_empty_row(7, "Keine Regulatory-Review-Pack-Snapshots vorhanden.");
+    }
+    snapshots
+        .iter()
+        .map(|snapshot| {
+            let detail_href =
+                web_path_with_context(&format!("/management-reviews/{}", snapshot.id), Some(context));
+            let export_href = web_path_with_context(
+                &format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{}/export?format=markdown",
+                    snapshot.id
+                ),
+                Some(context),
+            );
+            format!(
+                r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}">Markdown</a></td></tr>"#,
+                html_escape(&detail_href),
+                html_escape(&snapshot.title),
+                html_escape(&snapshot.template_name),
+                html_escape(&snapshot.status_label),
+                html_escape(snapshot.period_start.as_deref().unwrap_or("-")),
+                html_escape(snapshot.period_end.as_deref().unwrap_or("-")),
+                html_escape(&snapshot.created_at),
+                html_escape(&export_href),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn management_review_metric_cards(metrics: &Value) -> String {
@@ -32576,6 +33491,35 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(management_review_template_preview),
         )
         .route(
+            "/api/v1/regulatory/review-packs",
+            get(regulatory_review_packs),
+        )
+        .route(
+            "/api/v1/regulatory/review-packs/{pack_type}",
+            get(regulatory_review_pack_detail),
+        )
+        .route(
+            "/api/v1/regulatory/review-packs/{pack_type}/preview",
+            post(regulatory_review_pack_preview),
+        )
+        .route(
+            "/api/v1/regulatory/review-packs/{pack_type}/snapshots",
+            get(regulatory_review_pack_snapshots_for_pack)
+                .post(regulatory_review_pack_snapshot_create),
+        )
+        .route(
+            "/api/v1/regulatory/review-pack-snapshots",
+            get(regulatory_review_pack_snapshots),
+        )
+        .route(
+            "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}",
+            get(regulatory_review_pack_snapshot_detail),
+        )
+        .route(
+            "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}/export",
+            get(regulatory_review_pack_snapshot_export),
+        )
+        .route(
             "/api/v1/management/reviews",
             get(management_review_packages).post(management_review_generate),
         )
@@ -32767,6 +33711,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/management-reviews/{review_id}/export.json",
             get(web_management_review_export_json),
+        )
+        .route(
+            "/regulatory-review-packs/",
+            get(web_regulatory_review_packs).post(web_regulatory_review_pack_generate),
+        )
+        .route(
+            "/regulatory-review-packs/preview",
+            post(web_regulatory_review_pack_preview),
         )
         .route("/roadmap/", get(web_roadmap))
         .route("/evidence/", get(web_evidence).post(web_evidence_upload))
