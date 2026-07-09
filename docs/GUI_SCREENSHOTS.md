@@ -76,6 +76,10 @@ Diese Screenshots dokumentieren die aktuelle serverseitige ISCY-Weboberflaeche f
 
 ![Supplier Review](assets/iscy-supplier-review.png)
 
+## Supplier/Product Security
+
+![Supplier/Product Security](assets/iscy-supplier-product-security.png)
+
 ## Imports
 
 ![Imports](assets/iscy-imports.png)
