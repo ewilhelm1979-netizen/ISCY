@@ -2588,20 +2588,102 @@ fn ai_governance_snapshot_json(systems: Vec<Value>) -> Value {
 }
 
 async fn agent_posture_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result<Value> {
+    let release_artifacts = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_release_artifact WHERE tenant_id = $1",
+        tenant_id,
+    )
+    .await?;
+    let release_artifacts_without_checksum = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_release_artifact WHERE tenant_id = $1 AND (sha256 = '' OR verification_status IN ('not_available', 'failed', 'mismatch'))",
+        tenant_id,
+    )
+    .await?;
+    let unsigned_release_artifacts = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_release_artifact WHERE tenant_id = $1 AND signature_status IN ('unsigned', 'not_configured', 'failed', 'expired', 'untrusted', 'key_missing')",
+        tenant_id,
+    )
+    .await?;
+    let release_artifacts_missing_provenance = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_release_artifact WHERE tenant_id = $1 AND provenance_status IN ('missing', 'incomplete', 'failed')",
+        tenant_id,
+    )
+    .await?;
+    let release_artifacts_unverified = count_postgres(
+        pool,
+        "SELECT COUNT(*)::bigint AS count_value FROM agent_release_artifact WHERE tenant_id = $1 AND verification_status <> 'verified'",
+        tenant_id,
+    )
+    .await?;
     Ok(serde_json::json!({
         "devices": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_device WHERE tenant_id = $1", tenant_id).await?,
         "active_devices": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_device WHERE tenant_id = $1 AND enrollment_status = 'ACTIVE'", tenant_id).await?,
         "open_findings": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_finding WHERE tenant_id = $1 AND status = 'OPEN'", tenant_id).await?,
-        "critical_findings": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_finding WHERE tenant_id = $1 AND status = 'OPEN' AND severity = 'CRITICAL'", tenant_id).await?
+        "critical_findings": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_finding WHERE tenant_id = $1 AND status = 'OPEN' AND severity = 'CRITICAL'", tenant_id).await?,
+        "release_artifacts": release_artifacts,
+        "release_artifact_manifest_missing": if release_artifacts == 0 { 1 } else { 0 },
+        "release_artifacts_without_checksum": release_artifacts_without_checksum,
+        "unsigned_release_artifacts": unsigned_release_artifacts,
+        "release_artifacts_missing_provenance": release_artifacts_missing_provenance,
+        "release_artifacts_unverified": release_artifacts_unverified,
+        "release_artifact_supply_chain_gaps": (if release_artifacts == 0 { 1 } else { 0 })
+            + release_artifacts_without_checksum
+            + unsigned_release_artifacts
+            + release_artifacts_missing_provenance
+            + release_artifacts_unverified
     }))
 }
 
 async fn agent_posture_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Result<Value> {
+    let release_artifacts = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_release_artifact WHERE tenant_id = ?",
+        tenant_id,
+    )
+    .await?;
+    let release_artifacts_without_checksum = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_release_artifact WHERE tenant_id = ? AND (sha256 = '' OR verification_status IN ('not_available', 'failed', 'mismatch'))",
+        tenant_id,
+    )
+    .await?;
+    let unsigned_release_artifacts = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_release_artifact WHERE tenant_id = ? AND signature_status IN ('unsigned', 'not_configured', 'failed', 'expired', 'untrusted', 'key_missing')",
+        tenant_id,
+    )
+    .await?;
+    let release_artifacts_missing_provenance = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_release_artifact WHERE tenant_id = ? AND provenance_status IN ('missing', 'incomplete', 'failed')",
+        tenant_id,
+    )
+    .await?;
+    let release_artifacts_unverified = count_sqlite(
+        pool,
+        "SELECT COUNT(*) AS count_value FROM agent_release_artifact WHERE tenant_id = ? AND verification_status <> 'verified'",
+        tenant_id,
+    )
+    .await?;
     Ok(serde_json::json!({
         "devices": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM zero_trust_agent_device WHERE tenant_id = ?", tenant_id).await?,
         "active_devices": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM zero_trust_agent_device WHERE tenant_id = ? AND enrollment_status = 'ACTIVE'", tenant_id).await?,
         "open_findings": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM zero_trust_agent_finding WHERE tenant_id = ? AND status = 'OPEN'", tenant_id).await?,
-        "critical_findings": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM zero_trust_agent_finding WHERE tenant_id = ? AND status = 'OPEN' AND severity = 'CRITICAL'", tenant_id).await?
+        "critical_findings": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM zero_trust_agent_finding WHERE tenant_id = ? AND status = 'OPEN' AND severity = 'CRITICAL'", tenant_id).await?,
+        "release_artifacts": release_artifacts,
+        "release_artifact_manifest_missing": if release_artifacts == 0 { 1 } else { 0 },
+        "release_artifacts_without_checksum": release_artifacts_without_checksum,
+        "unsigned_release_artifacts": unsigned_release_artifacts,
+        "release_artifacts_missing_provenance": release_artifacts_missing_provenance,
+        "release_artifacts_unverified": release_artifacts_unverified,
+        "release_artifact_supply_chain_gaps": (if release_artifacts == 0 { 1 } else { 0 })
+            + release_artifacts_without_checksum
+            + unsigned_release_artifacts
+            + release_artifacts_missing_provenance
+            + release_artifacts_unverified
     }))
 }
 
@@ -2693,6 +2775,7 @@ fn management_review_source_counts(
         "supplier_product_security_records": json_i64(product_security, "supplier_product_security_records"),
         "suppliers": counts.suppliers,
         "agent_devices": json_i64(agent_posture, "devices"),
+        "agent_release_artifacts": json_i64(agent_posture, "release_artifacts"),
         "ai_governance_systems": counts.ai_governance,
         "no_data_recorded": {
             "risks": counts.top_risks == 0,
@@ -2703,6 +2786,7 @@ fn management_review_source_counts(
             "roadmap_tasks": counts.roadmap == 0,
             "suppliers": counts.suppliers == 0,
             "supplier_product_security": json_i64(product_security, "supplier_product_security_records") == 0,
+            "agent_release_artifacts": json_i64(agent_posture, "release_artifacts") == 0,
             "ai_governance": counts.ai_governance == 0
         }
     })
@@ -2715,7 +2799,7 @@ fn management_review_gap_summary(
     agent_posture: &Value,
     ai_governance: &Value,
 ) -> Value {
-    serde_json::json!({
+    let mut summary = serde_json::json!({
         "critical_open_risks": json_i64(metrics, "critical_open_risks"),
         "open_control_gaps": json_i64(metrics, "open_control_gaps"),
         "missing_control_evidence": json_i64(metrics, "missing_control_evidence"),
@@ -2762,7 +2846,38 @@ fn management_review_gap_summary(
                     .count() as i64
             })
             .unwrap_or(0)
-    })
+    });
+    if let Some(object) = summary.as_object_mut() {
+        for (key, value) in [
+            (
+                "agent_release_artifact_manifest_missing",
+                json_i64(agent_posture, "release_artifact_manifest_missing"),
+            ),
+            (
+                "agent_release_artifacts_without_checksum",
+                json_i64(agent_posture, "release_artifacts_without_checksum"),
+            ),
+            (
+                "unsigned_agent_release_artifacts",
+                json_i64(agent_posture, "unsigned_release_artifacts"),
+            ),
+            (
+                "agent_release_artifacts_missing_provenance",
+                json_i64(agent_posture, "release_artifacts_missing_provenance"),
+            ),
+            (
+                "agent_release_artifacts_unverified",
+                json_i64(agent_posture, "release_artifacts_unverified"),
+            ),
+            (
+                "agent_release_artifact_supply_chain_gaps",
+                json_i64(agent_posture, "release_artifact_supply_chain_gaps"),
+            ),
+        ] {
+            object.insert(key.to_string(), serde_json::json!(value));
+        }
+    }
+    summary
 }
 
 fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
@@ -2811,6 +2926,21 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         "evidence_worker_missing_runs",
                         false,
                     ),
+                    (
+                        "Agent-Artefaktmanifest fehlt",
+                        "agent_release_artifact_manifest_missing",
+                        false,
+                    ),
+                    (
+                        "Unsignierte Agent-Artefakte",
+                        "unsigned_agent_release_artifacts",
+                        true,
+                    ),
+                    (
+                        "Agent-Artefakte ohne Provenance",
+                        "agent_release_artifacts_missing_provenance",
+                        false,
+                    ),
                 ],
             ),
             (
@@ -2845,6 +2975,11 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                     (
                         "Fehlende Supplier/Product-Security-Owner",
                         "supplier_product_security_missing_owner",
+                        false,
+                    ),
+                    (
+                        "Agent-Release-Supply-Chain-Gaps",
+                        "agent_release_artifact_supply_chain_gaps",
                         false,
                     ),
                     (
@@ -2937,6 +3072,11 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         true,
                     ),
                     ("Faellige Disposition", "evidence_disposition_due", false),
+                    (
+                        "Agent-Artefakte ohne verifizierte Provenance",
+                        "agent_release_artifacts_missing_provenance",
+                        false,
+                    ),
                 ],
             ),
         ],
@@ -3006,6 +3146,11 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         false,
                     ),
                     (
+                        "Unverifizierte Agent-Deployment-Artefakte",
+                        "agent_release_artifacts_unverified",
+                        false,
+                    ),
+                    (
                         "Fehlende Owner oder Reviews",
                         "supplier_product_security_missing_owner",
                         false,
@@ -3057,6 +3202,11 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                     (
                         "Keine Worker-Laeufe dokumentiert",
                         "evidence_worker_missing_runs",
+                        false,
+                    ),
+                    (
+                        "Agent-Artefaktmanifest fehlt",
+                        "agent_release_artifact_manifest_missing",
                         false,
                     ),
                     ("Faellige Disposition", "evidence_disposition_due", false),
@@ -3148,6 +3298,26 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                     (
                         "Offene Agent-Findings",
                         "stale_or_open_agent_findings",
+                        false,
+                    ),
+                    (
+                        "Agent-Artefakte ohne Pruefsumme",
+                        "agent_release_artifacts_without_checksum",
+                        true,
+                    ),
+                    (
+                        "Unsignierte Agent-Artefakte",
+                        "unsigned_agent_release_artifacts",
+                        true,
+                    ),
+                    (
+                        "Agent-Artefakte ohne Provenance",
+                        "agent_release_artifacts_missing_provenance",
+                        false,
+                    ),
+                    (
+                        "Unverifizierte Agent-Artefakte",
+                        "agent_release_artifacts_unverified",
                         false,
                     ),
                 ],
@@ -3321,6 +3491,7 @@ fn review_data_completeness_summary(source_counts: &Value) -> Value {
         ("Roadmap-Tasks", "roadmap_tasks"),
         ("Supplier", "suppliers"),
         ("Supplier/Product Security", "supplier_product_security"),
+        ("Agent-Artefakte", "agent_release_artifacts"),
         ("AI Governance", "ai_governance"),
     ]
     .iter()

@@ -8,6 +8,10 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- ergaenzt Agent-Release-Artefakte und Release-Provenance ueber additive Migration `0036_rust_agent_release_artifact_provenance`
+- ergaenzt tenantgebundene Agent-Artefakt-APIs fuer Manifestliste/-detail, Refresh, SHA-256-Pruefung, Signaturstatuspruefung, Provenance-Liste/-detail und Onboarding-Artefakte unter `/api/v1/agents/artifacts*`, `/api/v1/agents/release-provenance*` und `/api/v1/agents/onboarding/artifacts`
+- erweitert `/zero-trust/` und den gefuehrten Agent-Onboarding-Assistenten um deutsche Artefakt-/Pruefsummen-/Signatur-/Provenance-Hinweise fuer systemd, NixOS, Windows Scheduled Task, PowerShell, macOS LaunchDaemon und Konfigurationsbeispiele
+- erweitert Management-/Regulatory-Review-Pakete fuer NIS2, DORA, DSGVO und generische Governance um Agent-Artefakt-, Signatur-, Pruefsummen- und Release-Provenance-Gaps
 - ergaenzt Evidence-Worker, kontrollierte physische Disposition und vorbereitetes Object-Storage-Backend ueber additive Migration `0035_rust_evidence_worker_disposition_storage`
 - ergaenzt tenantgebundene Evidence-Worker-APIs fuer Status, manuelle begrenzte Worker-Laeufe und Laufhistorie unter `/api/v1/evidence/integrity/worker*`
 - ergaenzt kontrollierte Disposition-APIs fuer Kandidaten, Preview, Approval, Execute, Cancel und Ereignisse; physische Aussonderung erfolgt nur nach dokumentierter Freigabe, ohne Legal Hold und ueber die sichere Storage-Abstraktion
@@ -55,6 +59,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- berechnet Agent-Artefakt-SHA-256 nur aus einer festen Repo-Artefakt-Allowlist und gibt keine Rohdateien, absoluten lokalen Pfade, Tokens, privaten Schluessel, Zertifikate oder Build-Secrets ueber API, UI oder Audit aus
+- modelliert Signaturstatus und Provenance ohne produktive Code-Signing-Zertifikate, private Schluessel, externe PKI/CA, Sigstore-/Rekor-/Fulcio-Netzwerkaufrufe oder GitHub-Release-Veroeffentlichung
+- haelt Agent-Artefakt-Refresh, Checksum-Verify und Signature-Verify auf schreibende Rollen beschraenkt; Read-only-Rollen sehen nur sichere tenantgebundene Metadaten
 - verhindert physische Evidence-Aussonderung vor Approval-/Reason-/Legal-Hold-Pruefung; verweigerte Ausfuehrungen werden sicher auditierbar dokumentiert, ohne Storage-Pfade zu beruehren
 - fuehrt physische Disposition nur ueber canonical-path-gepruefte Storage-Abstraktion aus und speichert Tombstone-Metadaten mit sicherer Fehlerklasse, Backend und Hash statt Rohpfaden oder Dateiinhalten
 - haelt Evidence-Worker-Start, Disposition-Approval und Disposition-Execute auf Administrator-/Editor-Rollen beschraenkt; Read-only-Rollen sehen nur sichere, tenantgebundene Metadaten

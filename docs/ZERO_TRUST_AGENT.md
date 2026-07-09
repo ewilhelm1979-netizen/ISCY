@@ -115,6 +115,43 @@ Anweisung vermeidet einen weiteren sensitiven Download-Endpunkt. Das Token steht
 nicht in einer URL und wird nicht dauerhaft im HTML oder in der Datenbank
 gespeichert.
 
+### Agent-Artefakte und Release-Provenance
+
+ISCY kann die vorhandenen Agent-Deployment-Artefakte als Manifest erfassen:
+
+- `deploy/agent/README.md`
+- `deploy/agent/systemd/iscy-agent.service`
+- `deploy/agent/systemd/iscy-agent.timer`
+- `deploy/agent/systemd/iscy-agent.env.example`
+- `deploy/agent/nixos/iscy-agent.nix`
+- `deploy/agent/windows/install-iscy-agent-task.ps1`
+- `deploy/agent/macos/com.iscy.agent.plist`
+
+Das Manifest enthaelt sichere Metadaten, SHA-256, Signaturstatus,
+Verification-Status, Release-Provenance und bekannte Limitierungen. Die
+Pruefsummen werden aus einer festen Repo-Allowlist berechnet; Requests koennen
+keine beliebigen lokalen Pfade angeben. API, UI und Audit geben keine
+Rohdateien, absoluten Buildpfade, Tokens, Authorization-Header, privaten
+Schluessel oder Zertifikat-Private-Keys aus.
+
+Die wichtigsten Pfade:
+
+```text
+GET  /api/v1/agents/artifacts
+POST /api/v1/agents/artifacts/refresh
+POST /api/v1/agents/artifacts/{artifact_id}/verify-checksum
+POST /api/v1/agents/artifacts/{artifact_id}/verify-signature
+GET  /api/v1/agents/release-provenance
+GET  /api/v1/agents/onboarding/artifacts
+```
+
+Read-only-Rollen sehen sichere Metadaten. Schreibende Rollen duerfen Manifest-
+Refresh, SHA-256-Pruefung und Signaturstatuspruefung ausloesen. Das Signaturmodell
+ist in diesem Stand bewusst vorbereitend: Es enthaelt keine produktiven
+Code-Signing-Zertifikate, keine privaten Schluessel, keine externe PKI/CA, keine
+CSR-Funktion, keine Sigstore-/Rekor-/Fulcio-Netzwerkaufrufe und keine automatische
+GitHub-Release-Veroeffentlichung.
+
 ### Token-Lifecycle
 
 Neue Tokens sind immer begrenzt und beginnen in `pending`. Nach einer von mehreren
