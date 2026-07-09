@@ -9003,6 +9003,209 @@ async fn evidence_integrity_legal_hold_and_disposition_are_tenant_scoped_and_met
 }
 
 #[tokio::test]
+async fn evidence_storage_drill_uses_local_backend_and_keeps_tenant_boundaries() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let media_root = test_media_root("evidence-storage-drill");
+    let evidence_dir = media_root.join("evidence/storage");
+    fs::create_dir_all(&evidence_dir).unwrap();
+    fs::write(
+        evidence_dir.join("valid.txt"),
+        b"trusted storage evidence\n",
+    )
+    .unwrap();
+    fs::write(
+        evidence_dir.join("changed.txt"),
+        b"changed storage evidence\n",
+    )
+    .unwrap();
+    fs::write(evidence_dir.join("empty.txt"), b"").unwrap();
+    let valid_hash = format!("{:x}", Sha256::digest(b"trusted storage evidence\n"));
+    let stale_hash = "1".repeat(64);
+    let empty_hash = format!("{:x}", Sha256::digest(b""));
+    let absolute_path = media_root.join("evidence/storage/valid.txt");
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (
+            id, tenant_id, title, description, linked_requirement, file,
+            file_sha256, status, owner_id, valid_until, retention_until,
+            retention_reason
+        ) VALUES
+            (920, 1, 'Storage valid evidence', 'Expected hash matches', 'NIS2 21', 'evidence/storage/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (921, 1, 'Storage mismatch evidence', 'Expected hash is stale', 'NIS2 21', 'evidence/storage/changed.txt', ?2, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (922, 1, 'Storage missing evidence', 'File is missing', 'NIS2 21', 'evidence/storage/missing.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (923, 1, 'Storage missing hash evidence', 'No expected hash', 'NIS2 21', 'evidence/storage/valid.txt', '', 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (924, 1, 'Storage empty evidence', 'Empty but valid file', 'NIS2 21', 'evidence/storage/empty.txt', ?3, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (925, 2, 'Foreign storage evidence', 'Foreign tenant', 'NIS2 21', 'evidence/storage/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (926, 1, 'Unsafe absolute storage evidence', 'Absolute path must not resolve', 'NIS2 21', ?4, ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test')
+        "#,
+    )
+    .bind(&valid_hash)
+    .bind(&stale_hash)
+    .bind(&empty_hash)
+    .bind(absolute_path.display().to_string())
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(
+        payload["storage"]["items"][0]["storage_backend"],
+        "local_filesystem"
+    );
+    assert!(
+        payload["storage"]["summary"]["artifact_references"]
+            .as_i64()
+            .unwrap()
+            >= 6
+    );
+
+    let readonly = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/920/storage-drill")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly.status(), StatusCode::FORBIDDEN);
+
+    let foreign = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/925/storage")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+
+    for (evidence_id, expected_status, expected_error, expected_match) in [
+        (920, "valid", "", true),
+        (921, "mismatch", "hash_mismatch", false),
+        (922, "missing_artifact", "artifact_missing", false),
+        (923, "check_failed", "expected_hash_missing", false),
+        (924, "valid", "", true),
+        (926, "missing_artifact", "artifact_reference_unsafe", false),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/evidence/{evidence_id}/storage-drill"))
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!body_text.contains(&media_root.display().to_string()));
+        let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+        assert_eq!(payload["drill"]["status"], expected_status);
+        assert_eq!(payload["drill"]["safe_error_class"], expected_error);
+        assert_eq!(payload["drill"]["hash_matches"], expected_match);
+    }
+
+    let batch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/storage-drills")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"evidence_ids":[920,921,925],"limit":50}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(batch.status(), StatusCode::OK);
+    let body = to_bytes(batch.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["checked"], 2);
+
+    let events = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/920/storage-events")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(events.status(), StatusCode::OK);
+    let body = to_bytes(events.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    assert!(!body_text.contains("valid.txt"));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    let event_types = payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["event_type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"storage_drill_started"));
+    assert!(event_types.contains(&"storage_artifact_found"));
+    assert!(event_types.contains(&"storage_hash_valid"));
+    assert!(event_types.contains(&"storage_drill_completed"));
+    assert!(media_root.join("evidence/storage/valid.txt").exists());
+    assert!(media_root.join("evidence/storage/changed.txt").exists());
+    assert!(media_root.join("evidence/storage/empty.txt").exists());
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
 async fn rust_web_evidence_accepts_file_upload_from_form() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -9155,6 +9358,7 @@ async fn rust_web_evidence_integrity_renders_safe_metadata_and_write_actions_by_
     assert!(html.contains("MFA rollout evidence"));
     assert!(html.contains("Nur Lesen"));
     assert!(!html.contains("Re-Hash"));
+    assert!(!html.contains("Storage-Drill"));
 
     let admin = app
         .oneshot(
@@ -9174,6 +9378,7 @@ async fn rust_web_evidence_integrity_renders_safe_metadata_and_write_actions_by_
     assert!(html.contains("Evidence Integrity"));
     assert!(html.contains("MFA rollout evidence"));
     assert!(html.contains("Re-Hash"));
+    assert!(html.contains("Storage-Drill"));
     assert!(html.contains("Legal Hold"));
     assert!(html.contains("Disposition"));
 }

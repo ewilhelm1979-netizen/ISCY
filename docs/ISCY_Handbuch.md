@@ -456,6 +456,9 @@ Typische Funktionen:
 - Legal Hold mit Begruendung setzen oder freigeben
 - Disposition-/Retention-Entscheidungen als Governance-Metadaten dokumentieren
 - Integritaets-, Legal-Hold- und Disposition-Ereignisse auditierbar nachvollziehen
+- lokale Evidence-Artefakte ueber eine interne Storage-Abstraktion pruefen
+- Storage-/Restore-Drills fuer Vorhandensein, Lesbarkeit und SHA-256-Konsistenz ausloesen
+- sichere Storage-Fehlerklassen sehen, ohne absolute Dateipfade oder Rohpayloads offenzulegen
 
 Fachlicher Nutzen:
 
@@ -466,6 +469,7 @@ Fachlicher Nutzen:
 - belastbarere Aussage, ob Nachweise nur vorhanden oder wirklich reviewt und verwertbar sind
 - nachvollziehbare Integritaet und Lifecycle-Steuerung ohne pauschal fest codierte gesetzliche Aufbewahrungsfrist
 - klare Trennung zwischen Nachweisqualitaet, Integritaetspruefung, Legal Hold und metadata-only Disposition
+- belastbarer Restore-/Integrity-Nachweis fuer lokal referenzierte Artefakte, ohne produktives Cloud-Storage vorauszusetzen
 
 Fuer Nicht-Sicherheitsleute:
 Evidence ist der Ordner mit den Belegen, aber strukturiert und auswertbar.
@@ -1232,6 +1236,63 @@ Objektspeicher/S3, kontrollierte physische Loeschung, technische
 Datenvernichtung, eine neue Evidence-, Risk-, Control- oder Notification-Engine
 sowie Plattform-, Docker-, Postgres-, nginx-, Nix- oder Dependency-Upgrades.
 
+### 6.13 Evidence Object Storage & Restore Drill Phase 2
+
+Phase 2 fuehrt eine interne Storage-Abstraktion fuer Evidence-Artefakte ein,
+ohne produktives S3, Cloud-Credentials oder ein neues Speichersystem
+einzufuehren. Das erste Backend ist bewusst nur `local_filesystem` und nutzt
+weiter den bestehenden Media Root. Bestehende Uploads und gespeicherte
+Evidence-Pfade bleiben kompatibel.
+
+Die Storage-Schicht kapselt:
+
+- sichere Artefaktreferenzen
+- canonical path containment unterhalb des Media Root
+- Blockade von absoluten Pfaden, Directory Traversal und Symlink-Flucht
+- sichere Metadaten wie Backend, Referenz vorhanden, Artefakt vorhanden,
+  lesbar, leer und Groesse
+- serverseitige SHA-256-Berechnung fuer Drills
+- sichere Fehlerklassen ohne absolute Pfade
+
+Die API ergaenzt:
+
+- `GET /api/v1/evidence/storage`
+- `GET /api/v1/evidence/{evidence_id}/storage`
+- `POST /api/v1/evidence/{evidence_id}/storage-drill`
+- `POST /api/v1/evidence/storage-drills`
+- `GET /api/v1/evidence/{evidence_id}/storage-events`
+
+Der Storage-/Restore-Drill prueft, ob der Evidence-Datensatz tenantgebunden
+existiert, ob eine Artefaktreferenz vorhanden ist, ob das lokale Artefakt sicher
+unterhalb des Media Root erreichbar und lesbar ist und ob der serverseitig
+berechnete SHA-256 mit dem gespeicherten Evidence-Hash uebereinstimmt.
+Fehlende Artefakte, unsichere Referenzen, fehlende erwartete Hashes und
+Hash-Mismatches werden mit sicheren Fehlerklassen klassifiziert.
+
+Die Webansicht `/evidence/integrity/` zeigt Storage-Backend, Artefaktstatus,
+sichere Fehlerklasse, letzten Drill-/Integritaetszeitpunkt und den vorhandenen
+Integrity-, Legal-Hold- und Disposition-Kontext. Admin- und Editor-Rollen
+duerfen Storage-Drills ausloesen. Read-only-Rollen sehen nur sichere
+Metadaten.
+
+Auditereignisse nutzen die bestehende Evidence-Integrity-Ereignistabelle und
+werden als `storage_*` Events geschrieben, darunter Start, Artefakt gefunden,
+Artefakt fehlt, Artefakt nicht lesbar, Hash gueltig, Hash-Mismatch, Drill
+fehlgeschlagen und Drill abgeschlossen. Auditdetails enthalten keine Secrets,
+Tokens, Authorization Header, Rohpayloads, vertraulichen Dateiinhalte,
+SQL-Details, fremden Tenant-IDs oder absoluten Dateipfade.
+
+Fuer Phase 2 ist keine neue Datenbankmigration noetig: Die bestehenden
+Integrity-Felder aus Migration `0033_rust_evidence_integrity_disposition`
+speichern letzten Pruefzeitpunkt, Status, berechneten Hash und sichere
+Fehlerklasse bereits ausreichend. Storage-Events werden in der bestehenden
+Ereignistabelle auditierbar gefuehrt.
+
+Bewusst nicht umgesetzt sind produktives S3/Object Storage, Cloud-Credentials,
+physische Loeschung, technische Datenvernichtung, Backup-Restore aus externem
+Storage, komplexer Scheduler, neue Evidence-/Risk-/Control-/Notification-
+Engines sowie Docker-, Postgres-, nginx-, Nix- oder Dependency-Upgrades.
+
 ## 7. Was die wichtigsten Begriffe bedeuten
 
 - ISO 27001: internationaler Standard fuer Informationssicherheits-Managementsysteme
@@ -1272,12 +1333,12 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, KRITIS und generische Security-Governance-Reviews. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, KRITIS und generische Security-Governance-Reviews. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Evidence Object Storage & Restore Drill Phase 2 nutzt diese bestehenden Metadaten fuer eine interne lokale Storage-Abstraktion, sichere Artefaktreferenzen und tenantgebundene Restore-/Integritaetsdrills ohne neues Speichersystem. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
 1. Feinere Management-/Regulatory-Template-Varianten und kontextsensitive Pruefpakete
-2. Evidence-Integrity-Worker, kontrollierte physische Disposition und optionales Objektspeicher-Backend
+2. Evidence-Integrity-Worker, kontrollierte physische Disposition und spaeteres produktives Objektspeicher-Backend
 3. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe
 4. Performance-, HA- und visuelle Regressionstests
 

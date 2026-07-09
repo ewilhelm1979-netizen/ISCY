@@ -1679,6 +1679,21 @@ impl EvidenceStore {
         }
     }
 
+    pub async fn evidence_integrity_item(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+    ) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+        match self {
+            Self::Postgres(pool) => {
+                evidence_integrity_item_by_id_postgres(pool, tenant_id, evidence_id).await
+            }
+            Self::Sqlite(pool) => {
+                evidence_integrity_item_by_id_sqlite(pool, tenant_id, evidence_id).await
+            }
+        }
+    }
+
     pub async fn evidence_integrity_targets(
         &self,
         tenant_id: i64,

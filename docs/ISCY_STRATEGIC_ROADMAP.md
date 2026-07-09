@@ -74,7 +74,7 @@ Erfolgskriterium:
 
 Ziel: Evidence soll nicht nur vorhanden sein, sondern belastbar bewertet werden.
 
-Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert. Im Unreleased-Stand kommt Evidence Integrity & Disposition Phase 1 hinzu.
+Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert. Im Unreleased-Stand kommen Evidence Integrity & Disposition Phase 1 sowie Evidence Object Storage & Restore Drill Phase 2 hinzu.
 
 Umgesetzt:
 
@@ -95,12 +95,17 @@ Umgesetzt:
 - Serverseitige SHA-256-Neuberechnung vorhandener Evidence-Artefakte mit Status `valid`, `mismatch`, `missing_artifact` oder `check_failed`.
 - Legal Hold kann Disposition-Entscheidungen blockieren und wird mit Begruendung, Akteurreferenz und Zeitpunkt auditierbar gefuehrt.
 - Disposition bleibt in Phase 1 ein Governance-/Audit-Metadatenmodell; `disposition_completed_metadata_only` loescht keine Dateien.
+- Interne Storage-Abstraktion fuer Evidence-Artefakte mit erstem Backend `local_filesystem`.
+- Storage-API-Pfade fuer Uebersicht, Detail, einzelne Drills, begrenzte Batch-Drills und Storage-Events.
+- Die bestehende Weboberflaeche `/evidence/integrity/` zeigt lokale Storage-Metadaten und bietet fuer Admin/Editor einen Storage-/Restore-Drill an.
+- Filesystem-Backend prueft Artefaktreferenzen ueber canonical path containment, blockiert Traversal, absolute Pfade und Symlink-Flucht aus dem Media Root und gibt nur sichere Fehlerklassen zurueck.
+- Restore-/Integrity-Drill belegt, dass referenzierte Artefakte am erwarteten lokalen Storage-Ort vorhanden, lesbar und SHA-256-konsistent sind; Ergebnisse werden in den bestehenden Evidence-Integrity-Feldern und `storage_*` Audit-Events dokumentiert.
 
 Naechste Vertiefung:
 
 - Periodischen Re-Hash-Worker mit Betriebssignalen und Queue-Steuerung ergaenzen.
 - Kontrollierte physische Loeschung/Datenvernichtung als getrennten, spaeteren Meilenstein entwerfen.
-- Optionales S3-/Objektspeicher-Backend inklusive Restore- und Integritaetsdrill.
+- Optionales produktives S3-/Objektspeicher-Backend inklusive Restore- und Integritaetsdrill als spaeteren, separaten Meilenstein pruefen.
 
 Erfolgskriterium:
 
@@ -231,7 +236,7 @@ Erfolgskriterium:
 ## Empfohlene Umsetzungsreihenfolge
 
 1. Feinere Template-Varianten und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete auf Basis der neuen Management-/Regulatory-Template-Schicht.
-2. Evidence-Integrity-Worker, kontrollierte physische Disposition und optionales Objektspeicher-Backend.
+2. Evidence-Integrity-Worker, kontrollierte physische Disposition und optionales produktives Objektspeicher-Backend.
 3. Signierte Agent-Pakete, Release-Provenance und eine spaetere getrennte CA-/PKI-Stufe.
 
 ## Verbleibende Roadmap
@@ -247,7 +252,8 @@ Erfolgskriterium:
 | Unreleased | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen, Exit-Test-Nachweise und tenantgesicherte Evidence-/Control-/Risk-Links. |
 | Umgesetzt / Vertiefung | Management-/Regulatory-Templates | Wiederholbare ISO-27001-, NIS2-, DORA-, KRITIS- und Governance-Pakete werden aus bestehenden Snapshots erzeugt; feinere Varianten koennen spaeter folgen. |
 | Unreleased | Evidence Integrity & Disposition Phase 1 | Manuelle und begrenzte Batch-Re-Hash-Pruefung, Legal Hold, metadata-only Disposition und auditierbare Integritaetsereignisse sind tenantgebunden verfuegbar. |
-| Reifegrad | Evidence-Worker, physische Disposition und Objektspeicher | Periodische Integritaetspruefung, kontrollierte Datenvernichtung und Storage-Restore sind auditierbar. |
+| Unreleased | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |
+| Reifegrad | Evidence-Worker, physische Disposition und produktiver Objektspeicher | Periodische Integritaetspruefung, kontrollierte Datenvernichtung und Storage-Restore sind auditierbar. |
 | Reifegrad | Performance, HA und visuelle Regression | Lastgrenzen, Mehrinstanzbetrieb und UI-Regressionen sind messbar abgesichert. |
 
 ## Abgrenzung
