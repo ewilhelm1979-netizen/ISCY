@@ -242,6 +242,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AGENT_RELEASE_ARTIFACT_PROVENANCE_SCHEMA,
         postgres_sql: POSTGRES_AGENT_RELEASE_ARTIFACT_PROVENANCE_SCHEMA,
     },
+    Migration {
+        version: "0037_rust_agent_pki_csr_governance",
+        sqlite_sql: SQLITE_AGENT_PKI_CSR_GOVERNANCE_SCHEMA,
+        postgres_sql: POSTGRES_AGENT_PKI_CSR_GOVERNANCE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1368,6 +1373,258 @@ CREATE TABLE IF NOT EXISTS agent_artifact_verification_event (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_artifact_verification_event_tenant
     ON agent_artifact_verification_event(tenant_id, artifact_id, created_at);
+"#;
+
+const SQLITE_AGENT_PKI_CSR_GOVERNANCE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_pki_provider (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    ca_provider_id varchar(128) NOT NULL,
+    provider_name varchar(255) NOT NULL,
+    provider_type varchar(64) NOT NULL DEFAULT 'not_configured',
+    provider_status varchar(64) NOT NULL DEFAULT 'not_configured',
+    trust_domain varchar(255) NOT NULL DEFAULT '',
+    issuing_policy TEXT NOT NULL DEFAULT '',
+    allowed_agent_profiles_json TEXT NOT NULL DEFAULT '[]',
+    certificate_lifetime_days INTEGER NOT NULL DEFAULT 90,
+    renewal_window_days INTEGER NOT NULL DEFAULT 30,
+    revocation_mode varchar(64) NOT NULL DEFAULT 'metadata_only',
+    crl_or_ocsp_reference TEXT NOT NULL DEFAULT '',
+    key_storage_policy TEXT NOT NULL DEFAULT '',
+    secret_reference_status varchar(64) NOT NULL DEFAULT 'no_secret_configured',
+    known_limitations TEXT NOT NULL DEFAULT '',
+    created_by_id INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_validation_at TEXT NULL,
+    UNIQUE (tenant_id, ca_provider_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_pki_provider_tenant
+    ON agent_pki_provider(tenant_id, provider_status, provider_type);
+CREATE INDEX IF NOT EXISTS idx_agent_pki_provider_trust_domain
+    ON agent_pki_provider(tenant_id, trust_domain);
+
+CREATE TABLE IF NOT EXISTS agent_certificate_request (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    csr_id varchar(128) NOT NULL,
+    agent_id INTEGER NULL,
+    agent_ref varchar(255) NOT NULL DEFAULT '',
+    asset_id INTEGER NULL,
+    asset_ref varchar(255) NOT NULL DEFAULT '',
+    subject_common_name varchar(255) NOT NULL,
+    subject_alt_names_json TEXT NOT NULL DEFAULT '[]',
+    key_algorithm varchar(64) NOT NULL DEFAULT '',
+    key_size_or_curve varchar(64) NOT NULL DEFAULT '',
+    requested_usages_json TEXT NOT NULL DEFAULT '[]',
+    requested_lifetime_days INTEGER NOT NULL DEFAULT 90,
+    csr_status varchar(64) NOT NULL DEFAULT 'pending_review',
+    csr_fingerprint varchar(128) NOT NULL DEFAULT '',
+    csr_pem_redacted_or_hash varchar(255) NOT NULL DEFAULT '',
+    public_key_fingerprint varchar(128) NOT NULL DEFAULT '',
+    requested_by INTEGER NULL,
+    requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    approved_by INTEGER NULL,
+    approved_at TEXT NULL,
+    rejected_by INTEGER NULL,
+    rejected_at TEXT NULL,
+    rejection_reason TEXT NOT NULL DEFAULT '',
+    ca_provider_id varchar(128) NOT NULL DEFAULT '',
+    certificate_id varchar(128) NOT NULL DEFAULT '',
+    audit_summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, csr_id),
+    FOREIGN KEY (agent_id)
+        REFERENCES zero_trust_agent_device(id)
+        ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_request_tenant
+    ON agent_certificate_request(tenant_id, csr_status, requested_at);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_request_agent
+    ON agent_certificate_request(tenant_id, agent_id, csr_status);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_request_provider
+    ON agent_certificate_request(tenant_id, ca_provider_id, csr_status);
+
+CREATE TABLE IF NOT EXISTS agent_certificate_status (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    certificate_id varchar(128) NOT NULL,
+    agent_id INTEGER NULL,
+    ca_provider_id varchar(128) NOT NULL DEFAULT '',
+    serial_number_hash varchar(128) NOT NULL DEFAULT '',
+    serial_reference varchar(255) NOT NULL DEFAULT '',
+    subject_summary varchar(255) NOT NULL DEFAULT '',
+    san_summary TEXT NOT NULL DEFAULT '',
+    issuer_summary varchar(255) NOT NULL DEFAULT '',
+    not_before TEXT NULL,
+    not_after TEXT NULL,
+    fingerprint_sha256 varchar(128) NOT NULL DEFAULT '',
+    certificate_status varchar(64) NOT NULL DEFAULT 'not_configured',
+    mtls_binding_status varchar(64) NOT NULL DEFAULT 'not_configured',
+    rotation_status varchar(64) NOT NULL DEFAULT 'not_configured',
+    revocation_status varchar(64) NOT NULL DEFAULT 'not_applicable',
+    last_seen_at TEXT NULL,
+    last_validation_at TEXT NULL,
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, certificate_id),
+    FOREIGN KEY (agent_id)
+        REFERENCES zero_trust_agent_device(id)
+        ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_status_agent
+    ON agent_certificate_status(tenant_id, agent_id, certificate_status);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_status_lifecycle
+    ON agent_certificate_status(tenant_id, certificate_status, mtls_binding_status, rotation_status, revocation_status);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_status_expiry
+    ON agent_certificate_status(tenant_id, not_after);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_status_provider
+    ON agent_certificate_status(tenant_id, ca_provider_id);
+
+CREATE TABLE IF NOT EXISTS agent_pki_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    object_type varchar(64) NOT NULL,
+    object_id varchar(128) NOT NULL,
+    event_type varchar(64) NOT NULL,
+    actor_id INTEGER NULL,
+    status varchar(64) NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    error_class varchar(64) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_pki_event_tenant
+    ON agent_pki_event(tenant_id, object_type, object_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_pki_event_type
+    ON agent_pki_event(tenant_id, event_type, created_at);
+"#;
+
+const POSTGRES_AGENT_PKI_CSR_GOVERNANCE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_pki_provider (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    ca_provider_id varchar(128) NOT NULL,
+    provider_name varchar(255) NOT NULL,
+    provider_type varchar(64) NOT NULL DEFAULT 'not_configured',
+    provider_status varchar(64) NOT NULL DEFAULT 'not_configured',
+    trust_domain varchar(255) NOT NULL DEFAULT '',
+    issuing_policy TEXT NOT NULL DEFAULT '',
+    allowed_agent_profiles_json TEXT NOT NULL DEFAULT '[]',
+    certificate_lifetime_days BIGINT NOT NULL DEFAULT 90,
+    renewal_window_days BIGINT NOT NULL DEFAULT 30,
+    revocation_mode varchar(64) NOT NULL DEFAULT 'metadata_only',
+    crl_or_ocsp_reference TEXT NOT NULL DEFAULT '',
+    key_storage_policy TEXT NOT NULL DEFAULT '',
+    secret_reference_status varchar(64) NOT NULL DEFAULT 'no_secret_configured',
+    known_limitations TEXT NOT NULL DEFAULT '',
+    created_by_id BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    last_validation_at TEXT NULL,
+    UNIQUE (tenant_id, ca_provider_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_pki_provider_tenant
+    ON agent_pki_provider(tenant_id, provider_status, provider_type);
+CREATE INDEX IF NOT EXISTS idx_agent_pki_provider_trust_domain
+    ON agent_pki_provider(tenant_id, trust_domain);
+
+CREATE TABLE IF NOT EXISTS agent_certificate_request (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    csr_id varchar(128) NOT NULL,
+    agent_id BIGINT NULL,
+    agent_ref varchar(255) NOT NULL DEFAULT '',
+    asset_id BIGINT NULL,
+    asset_ref varchar(255) NOT NULL DEFAULT '',
+    subject_common_name varchar(255) NOT NULL,
+    subject_alt_names_json TEXT NOT NULL DEFAULT '[]',
+    key_algorithm varchar(64) NOT NULL DEFAULT '',
+    key_size_or_curve varchar(64) NOT NULL DEFAULT '',
+    requested_usages_json TEXT NOT NULL DEFAULT '[]',
+    requested_lifetime_days BIGINT NOT NULL DEFAULT 90,
+    csr_status varchar(64) NOT NULL DEFAULT 'pending_review',
+    csr_fingerprint varchar(128) NOT NULL DEFAULT '',
+    csr_pem_redacted_or_hash varchar(255) NOT NULL DEFAULT '',
+    public_key_fingerprint varchar(128) NOT NULL DEFAULT '',
+    requested_by BIGINT NULL,
+    requested_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    approved_by BIGINT NULL,
+    approved_at TEXT NULL,
+    rejected_by BIGINT NULL,
+    rejected_at TEXT NULL,
+    rejection_reason TEXT NOT NULL DEFAULT '',
+    ca_provider_id varchar(128) NOT NULL DEFAULT '',
+    certificate_id varchar(128) NOT NULL DEFAULT '',
+    audit_summary TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, csr_id),
+    FOREIGN KEY (agent_id)
+        REFERENCES zero_trust_agent_device(id)
+        ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_request_tenant
+    ON agent_certificate_request(tenant_id, csr_status, requested_at);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_request_agent
+    ON agent_certificate_request(tenant_id, agent_id, csr_status);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_request_provider
+    ON agent_certificate_request(tenant_id, ca_provider_id, csr_status);
+
+CREATE TABLE IF NOT EXISTS agent_certificate_status (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    certificate_id varchar(128) NOT NULL,
+    agent_id BIGINT NULL,
+    ca_provider_id varchar(128) NOT NULL DEFAULT '',
+    serial_number_hash varchar(128) NOT NULL DEFAULT '',
+    serial_reference varchar(255) NOT NULL DEFAULT '',
+    subject_summary varchar(255) NOT NULL DEFAULT '',
+    san_summary TEXT NOT NULL DEFAULT '',
+    issuer_summary varchar(255) NOT NULL DEFAULT '',
+    not_before TEXT NULL,
+    not_after TEXT NULL,
+    fingerprint_sha256 varchar(128) NOT NULL DEFAULT '',
+    certificate_status varchar(64) NOT NULL DEFAULT 'not_configured',
+    mtls_binding_status varchar(64) NOT NULL DEFAULT 'not_configured',
+    rotation_status varchar(64) NOT NULL DEFAULT 'not_configured',
+    revocation_status varchar(64) NOT NULL DEFAULT 'not_applicable',
+    last_seen_at TEXT NULL,
+    last_validation_at TEXT NULL,
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, certificate_id),
+    FOREIGN KEY (agent_id)
+        REFERENCES zero_trust_agent_device(id)
+        ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_status_agent
+    ON agent_certificate_status(tenant_id, agent_id, certificate_status);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_status_lifecycle
+    ON agent_certificate_status(tenant_id, certificate_status, mtls_binding_status, rotation_status, revocation_status);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_status_expiry
+    ON agent_certificate_status(tenant_id, not_after);
+CREATE INDEX IF NOT EXISTS idx_agent_certificate_status_provider
+    ON agent_certificate_status(tenant_id, ca_provider_id);
+
+CREATE TABLE IF NOT EXISTS agent_pki_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    object_type varchar(64) NOT NULL,
+    object_id varchar(128) NOT NULL,
+    event_type varchar(64) NOT NULL,
+    actor_id BIGINT NULL,
+    status varchar(64) NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    error_class varchar(64) NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text
+);
+CREATE INDEX IF NOT EXISTS idx_agent_pki_event_tenant
+    ON agent_pki_event(tenant_id, object_type, object_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_pki_event_type
+    ON agent_pki_event(tenant_id, event_type, created_at);
 "#;
 
 const SQLITE_SUPPLIER_PRODUCT_SECURITY_GOVERNANCE_SCHEMA: &str = r#"
@@ -7358,5 +7615,156 @@ mod tests {
         assert_eq!(signature_count, 1);
         assert_eq!(provenance_count, 1);
         assert_eq!(index_count, 5);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0037_is_restartable_and_preserves_agent_pki_governance() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO zero_trust_agent_device (
+                tenant_id, stable_device_id, hostname, os_family,
+                enrollment_status, zero_trust_score
+            ) VALUES (
+                101, 'zt-agent-pki-fixture', 'zt-agent-pki-fixture', 'LINUX',
+                'ACTIVE', 96
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let agent_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM zero_trust_agent_device WHERE tenant_id = 101 AND stable_device_id = 'zt-agent-pki-fixture'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO agent_pki_provider (
+                tenant_id, ca_provider_id, provider_name, provider_type,
+                provider_status, trust_domain, issuing_policy,
+                key_storage_policy, secret_reference_status, known_limitations
+            ) VALUES (
+                101, 'pki-test-provider', 'Test PKI Provider',
+                'internal_placeholder', 'configured_metadata_only',
+                'agent.local', 'Metadata-only Test',
+                'Private Schluessel bleiben auf dem Agent',
+                'no_secret_configured',
+                'Fixture ohne produktive CA-Secrets'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO agent_certificate_request (
+                tenant_id, csr_id, agent_id, agent_ref, subject_common_name,
+                csr_status, csr_fingerprint, public_key_fingerprint,
+                requested_by, ca_provider_id, audit_summary
+            ) VALUES (
+                101, 'csr-test-agent', ?1, 'zt-agent-pki-fixture',
+                'zt-agent-pki-fixture.agent.local', 'pending_review',
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                7, 'pki-test-provider',
+                'CSR metadata-only Fixture ohne private Schluessel'
+            )
+            "#,
+        )
+        .bind(agent_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO agent_certificate_status (
+                tenant_id, certificate_id, agent_id, ca_provider_id,
+                serial_number_hash, subject_summary, fingerprint_sha256,
+                certificate_status, mtls_binding_status, rotation_status,
+                revocation_status
+            ) VALUES (
+                101, 'cert-test-agent', ?1, 'pki-test-provider',
+                'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                'zt-agent-pki-fixture.agent.local',
+                'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                'issued_metadata_only', 'pending', 'not_required', 'not_revoked'
+            )
+            "#,
+        )
+        .bind(agent_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO agent_pki_event (
+                tenant_id, object_type, object_id, event_type, actor_id,
+                status, summary
+            ) VALUES (
+                101, 'certificate', 'cert-test-agent',
+                'certificate_status_updated', 7,
+                'issued_metadata_only',
+                'Audit ohne Secrets oder private Schluessel'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0037_rust_agent_pki_csr_governance'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0037_rust_agent_pki_csr_governance"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let provider_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_pki_provider WHERE tenant_id = 101 AND ca_provider_id = 'pki-test-provider'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let csr_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_certificate_request WHERE tenant_id = 101 AND csr_id = 'csr-test-agent'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let certificate_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_certificate_status WHERE tenant_id = 101 AND certificate_id = 'cert-test-agent'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM agent_pki_event WHERE tenant_id = 101 AND object_id = 'cert-test-agent'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let index_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_agent_pki_provider_tenant','idx_agent_pki_provider_trust_domain','idx_agent_certificate_request_tenant','idx_agent_certificate_request_agent','idx_agent_certificate_request_provider','idx_agent_certificate_status_agent','idx_agent_certificate_status_lifecycle','idx_agent_certificate_status_expiry','idx_agent_certificate_status_provider','idx_agent_pki_event_tenant','idx_agent_pki_event_type')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(provider_count, 1);
+        assert_eq!(csr_count, 1);
+        assert_eq!(certificate_count, 1);
+        assert_eq!(event_count, 1);
+        assert_eq!(index_count, 11);
     }
 }

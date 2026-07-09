@@ -239,16 +239,20 @@ Umgesetzt:
 - sichere Agent-Artefakt-APIs fuer Liste, Detail, Refresh, Checksum-Pruefung, Signaturstatuspruefung, Provenance und Onboarding-Artefakte
 - Zero-Trust-Webansicht und Onboarding-Assistent zeigen Artefakte, Pruefsummen, Signaturstatus, Provenance-Status und bekannte Limitierungen ohne produktive Signierung vorzutaueschen
 - Management-/Regulatory-Review-Pakete nehmen Agent-Artefakt-, Signatur-, Pruefsummen- und Provenance-Gaps als Supply-Chain-Signale auf
+- additive Migration `0037_rust_agent_pki_csr_governance` fuer Agent-PKI-Provider, CSR-/Certificate-Request-Lifecycle, Zertifikatsstatus, mTLS-Bindung, Rotation, Widerruf und PKI-Audit
+- sichere Agent-PKI-APIs fuer Provider, CSR-Review, Zertifikatsstatus, agentbezogene PKI-Uebersicht und Onboarding-PKI-Status
+- Zero-Trust-Webansicht und Onboarding-Assistent zeigen PKI-/CSR-/mTLS-Governance als Metadata-only-Betriebscheck ohne produktive CA-Ausstellung
+- Management-/Regulatory-Review-Pakete nehmen Agent-PKI-, CSR-, Zertifikats-, mTLS-, Rotations- und Widerruf-Gaps als Governance-Signale auf
 
 Offen:
 
 - echte produktive MSI-/PKG-/deb-/rpm-Signaturen mit freigegebenem Schluesselmanagement separat bereitstellen.
-- lokale CSR-Erzeugung und providerunabhaengige CA-Anbindung als eigener spaeterer Meilenstein untersuchen.
+- produktive lokale CSR-Erzeugung, Provider-Adapter und CA-Anbindung als eigener spaeterer Security-Meilenstein untersuchen.
 
 Bewusst nicht Teil der fachuebergreifenden Notifications sind Management-/
 Regulatory-Templates, Evidence Integrity & Disposition als eigener
 Governance-Workflow, kontrollierte physische Loeschung, Re-Hash-Worker,
-Objektspeicher, CA-/PKI-/CSR-Funktionen, echte produktive
+Objektspeicher, echte produktive CA-/PKI-Ausstellung, echte produktive
 Code-Signing-Schluessel, externe Attestation-Dienste, GitHub-Release-
 Veroeffentlichung sowie Performance-, HA- und visuelle Regressionserweiterungen.
 
@@ -260,7 +264,7 @@ Erfolgskriterium:
 
 1. Review-Pack-Bedienung weiter polishen, z. B. zusaetzliche Filter, Pack-spezifische Gap-Gruppierung und Review-Owner-Hinweise.
 2. Produktiven Object-Storage-Client fuer Evidence nur mit separatem Secret-/SSRF-/Restore-Testkonzept angehen.
-3. Produktive Signierung und eine spaetere getrennte CA-/PKI-Stufe erst nach Review des jetzt vorhandenen Artefakt-/Provenance-Modells angehen.
+3. Produktive Signierung und eine spaetere produktive CA-/PKI-Stufe erst nach Review des jetzt vorhandenen Artefakt-/Provenance- und PKI-/CSR-Governance-Modells angehen.
 
 ## Verbleibende Roadmap
 
@@ -275,6 +279,7 @@ Erfolgskriterium:
 | Unreleased | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen, Exit-Test-Nachweise und tenantgesicherte Evidence-/Control-/Risk-Links. |
 | Unreleased | Supplier/Product-Security-Deepening | Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs sind tenantgebunden verbunden. |
 | Unreleased | Agent-Artefakte und Release-Provenance | Vorhandene Agent-Deployment-Artefakte sind als Manifest mit SHA-256, Signaturstatus, Provenance und Review-Pack-Gaps sichtbar; echte Produktionssignaturen bleiben ein separater Security-Meilenstein. |
+| Unreleased | Agent-PKI, CSR und mTLS-Governance | CA-Provider, CSR-Review, Zertifikatsstatus, mTLS-Bindung, Rotation und Widerruf sind tenantgebunden als Metadata-only-Governance sichtbar; echte CA-Ausstellung bleibt ein separater Security-Meilenstein. |
 | Umgesetzt / Vertiefung | Management-/Regulatory-Templates | Wiederholbare ISO-27001-, NIS2-, DORA-, KRITIS- und Governance-Pakete werden aus bestehenden Snapshots erzeugt; feinere Varianten koennen spaeter folgen. |
 | Unreleased | Evidence Integrity & Disposition Phase 1 | Manuelle und begrenzte Batch-Re-Hash-Pruefung, Legal Hold, metadata-only Disposition und auditierbare Integritaetsereignisse sind tenantgebunden verfuegbar. |
 | Unreleased | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |

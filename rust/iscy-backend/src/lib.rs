@@ -30,6 +30,7 @@ use std::{
 
 pub mod account_store;
 pub mod agent_governance_store;
+pub mod agent_pki_store;
 pub mod agent_release_store;
 pub mod agent_store;
 pub mod ai_governance_store;
@@ -64,6 +65,7 @@ pub mod wizard_store;
 
 use account_store::AccountStore;
 use agent_governance_store::AgentGovernanceStore;
+use agent_pki_store::AgentPkiStore;
 use agent_release_store::AgentReleaseStore;
 use agent_store::AgentStore;
 use ai_governance_store::AiGovernanceStore;
@@ -104,6 +106,7 @@ pub struct AppState {
     pub account_store: Option<AccountStore>,
     pub ai_governance_store: Option<AiGovernanceStore>,
     pub agent_governance_store: Option<AgentGovernanceStore>,
+    pub agent_pki_store: Option<AgentPkiStore>,
     pub agent_release_store: Option<AgentReleaseStore>,
     pub agent_store: Option<AgentStore>,
     pub asset_store: Option<AssetStore>,
@@ -148,6 +151,7 @@ impl AppState {
             account_store: None,
             ai_governance_store: None,
             agent_governance_store: None,
+            agent_pki_store: None,
             agent_release_store: None,
             agent_store: None,
             asset_store: None,
@@ -185,6 +189,7 @@ impl AppState {
             account_store: None,
             ai_governance_store: None,
             agent_governance_store: None,
+            agent_pki_store: None,
             agent_release_store: None,
             agent_store: None,
             asset_store: None,
@@ -250,6 +255,11 @@ impl AppState {
         agent_governance_store: Option<AgentGovernanceStore>,
     ) -> Self {
         self.agent_governance_store = agent_governance_store;
+        self
+    }
+
+    pub fn with_agent_pki_store(mut self, agent_pki_store: Option<AgentPkiStore>) -> Self {
+        self.agent_pki_store = agent_pki_store;
         self
     }
 
@@ -578,6 +588,72 @@ pub struct AgentFleetGovernanceResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct AgentPkiOverviewResponse {
+    pub api_version: &'static str,
+    pub pki: agent_pki_store::AgentPkiOverview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentPkiProvidersResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub providers: Vec<agent_pki_store::AgentPkiProvider>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentPkiProviderResponse {
+    pub api_version: &'static str,
+    pub provider: agent_pki_store::AgentPkiProvider,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentPkiProviderWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub provider: agent_pki_store::AgentPkiProvider,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentCertificateRequestsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub csrs: Vec<agent_pki_store::AgentCertificateRequest>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentCertificateRequestResponse {
+    pub api_version: &'static str,
+    pub csr: agent_pki_store::AgentCertificateRequest,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentCertificateRequestWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub csr: agent_pki_store::AgentCertificateRequest,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentCertificateStatusesResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub certificates: Vec<agent_pki_store::AgentCertificateStatus>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentCertificateStatusResponse {
+    pub api_version: &'static str,
+    pub certificate: agent_pki_store::AgentCertificateStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AgentCertificateStatusWriteResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub certificate: agent_pki_store::AgentCertificateStatus,
+}
+
+#[derive(Debug, Serialize)]
 pub struct AgentPolicyWriteResponse {
     pub accepted: bool,
     pub api_version: &'static str,
@@ -700,6 +776,67 @@ struct WebAgentNotificationChannelForm {
     secret_env_name: String,
     cooldown_minutes: i64,
     enabled: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentPkiProviderForm {
+    ca_provider_id: Option<String>,
+    provider_name: Option<String>,
+    provider_type: Option<String>,
+    provider_status: Option<String>,
+    trust_domain: Option<String>,
+    issuing_policy: Option<String>,
+    allowed_agent_profiles: Option<String>,
+    certificate_lifetime_days: Option<i64>,
+    renewal_window_days: Option<i64>,
+    revocation_mode: Option<String>,
+    crl_or_ocsp_reference: Option<String>,
+    key_storage_policy: Option<String>,
+    secret_reference_status: Option<String>,
+    known_limitations: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentPkiCsrForm {
+    csr_id: Option<String>,
+    agent_id: Option<i64>,
+    agent_ref: Option<String>,
+    subject_common_name: String,
+    subject_alt_names: Option<String>,
+    key_algorithm: Option<String>,
+    key_size_or_curve: Option<String>,
+    requested_usages: Option<String>,
+    requested_lifetime_days: Option<i64>,
+    csr_fingerprint: Option<String>,
+    csr_pem_redacted_or_hash: Option<String>,
+    public_key_fingerprint: Option<String>,
+    ca_provider_id: Option<String>,
+    audit_summary: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentPkiCsrRejectForm {
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentPkiCertificateForm {
+    certificate_id: String,
+    agent_id: Option<i64>,
+    ca_provider_id: Option<String>,
+    serial_number_hash: Option<String>,
+    serial_reference: Option<String>,
+    subject_summary: Option<String>,
+    san_summary: Option<String>,
+    issuer_summary: Option<String>,
+    not_before: Option<String>,
+    not_after: Option<String>,
+    fingerprint_sha256: Option<String>,
+    certificate_status: Option<String>,
+    mtls_binding_status: Option<String>,
+    rotation_status: Option<String>,
+    revocation_status: Option<String>,
+    evidence_ids: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3659,6 +3796,19 @@ fn api_not_found(message: &str) -> Response {
         .into_response()
 }
 
+fn api_bad_request(error_code: &'static str, message: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: message.to_string(),
+        }),
+    )
+        .into_response()
+}
+
 fn context_is_admin(context: &AuthenticatedTenantContext) -> bool {
     context.is_superuser || context.is_staff || context.has_role("ADMIN")
 }
@@ -5362,6 +5512,512 @@ async fn agent_onboarding_artifacts(
     }
 }
 
+async fn agent_pki_providers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentArtifactsQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store
+        .list_providers(context.tenant_id, query.limit.unwrap_or(50))
+        .await
+    {
+        Ok(providers) => (
+            StatusCode::OK,
+            Json(AgentPkiProvidersResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                providers,
+            }),
+        )
+            .into_response(),
+        Err(_) => {
+            api_database_error("Agent-PKI-Provider konnten nicht gelesen werden.".to_string())
+        }
+    }
+}
+
+async fn agent_pki_provider_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_pki_store::AgentPkiProviderWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store
+        .create_provider(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(provider) => (
+            StatusCode::CREATED,
+            Json(AgentPkiProviderWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                provider,
+            }),
+        )
+            .into_response(),
+        Err(_) => api_bad_request(
+            "invalid_agent_pki_provider",
+            "PKI-Provider-Metadaten konnten nicht validiert werden.",
+        ),
+    }
+}
+
+async fn agent_pki_provider_detail(
+    Path(provider_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store.provider_detail(context.tenant_id, &provider_id).await {
+        Ok(Some(provider)) => (
+            StatusCode::OK,
+            Json(AgentPkiProviderResponse {
+                api_version: "v1",
+                provider,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("PKI-Provider wurde fuer diesen Tenant nicht gefunden."),
+        Err(_) => api_database_error("PKI-Provider konnte nicht gelesen werden.".to_string()),
+    }
+}
+
+async fn agent_pki_provider_update(
+    Path(provider_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_pki_store::AgentPkiProviderWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store
+        .update_provider(context.tenant_id, context.user_id, &provider_id, payload)
+        .await
+    {
+        Ok(Some(provider)) => (
+            StatusCode::OK,
+            Json(AgentPkiProviderWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                provider,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("PKI-Provider wurde fuer diesen Tenant nicht gefunden."),
+        Err(_) => api_bad_request(
+            "invalid_agent_pki_provider",
+            "PKI-Provider-Metadaten konnten nicht validiert werden.",
+        ),
+    }
+}
+
+async fn agent_pki_csrs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentArtifactsQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store
+        .list_csrs(context.tenant_id, query.limit.unwrap_or(50))
+        .await
+    {
+        Ok(csrs) => (
+            StatusCode::OK,
+            Json(AgentCertificateRequestsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                csrs,
+            }),
+        )
+            .into_response(),
+        Err(_) => api_database_error("Agent-CSRs konnten nicht gelesen werden.".to_string()),
+    }
+}
+
+async fn agent_pki_csr_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_pki_store::AgentCertificateRequestCreateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store
+        .create_csr(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(csr) => (
+            StatusCode::CREATED,
+            Json(AgentCertificateRequestWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                csr,
+            }),
+        )
+            .into_response(),
+        Err(_) => api_bad_request(
+            "invalid_agent_csr",
+            "CSR-Metadaten konnten nicht validiert werden.",
+        ),
+    }
+}
+
+async fn agent_pki_csr_detail(
+    Path(csr_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store.csr_detail(context.tenant_id, &csr_id).await {
+        Ok(Some(csr)) => (
+            StatusCode::OK,
+            Json(AgentCertificateRequestResponse {
+                api_version: "v1",
+                csr,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("CSR wurde fuer diesen Tenant nicht gefunden."),
+        Err(_) => api_database_error("CSR konnte nicht gelesen werden.".to_string()),
+    }
+}
+
+async fn agent_pki_csr_approve(
+    Path(csr_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    agent_pki_csr_transition(state, headers, csr_id, "approve", None).await
+}
+
+async fn agent_pki_csr_reject(
+    Path(csr_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_pki_store::AgentCertificateRequestDecisionRequest>,
+) -> Response {
+    agent_pki_csr_transition(state, headers, csr_id, "reject", payload.reason).await
+}
+
+async fn agent_pki_csr_cancel(
+    Path(csr_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    agent_pki_csr_transition(state, headers, csr_id, "cancel", None).await
+}
+
+async fn agent_pki_csr_transition(
+    state: AppState,
+    headers: HeaderMap,
+    csr_id: String,
+    action: &str,
+    reason: Option<String>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    let result = match action {
+        "approve" => {
+            store
+                .approve_csr(context.tenant_id, context.user_id, &csr_id)
+                .await
+        }
+        "reject" => {
+            store
+                .reject_csr(
+                    context.tenant_id,
+                    context.user_id,
+                    &csr_id,
+                    reason.as_deref().unwrap_or(""),
+                )
+                .await
+        }
+        "cancel" => {
+            store
+                .cancel_csr(context.tenant_id, context.user_id, &csr_id)
+                .await
+        }
+        _ => unreachable!("interner CSR-Statuswechsel ist unbekannt"),
+    };
+    match result {
+        Ok(Some(csr)) => (
+            StatusCode::OK,
+            Json(AgentCertificateRequestWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                csr,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("CSR wurde fuer diesen Tenant nicht gefunden."),
+        Err(_) => api_bad_request(
+            "invalid_agent_csr_transition",
+            "CSR-Status konnte nicht validiert werden.",
+        ),
+    }
+}
+
+async fn agent_pki_certificates(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentArtifactsQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store
+        .list_certificates(context.tenant_id, query.limit.unwrap_or(50))
+        .await
+    {
+        Ok(certificates) => (
+            StatusCode::OK,
+            Json(AgentCertificateStatusesResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                certificates,
+            }),
+        )
+            .into_response(),
+        Err(_) => {
+            api_database_error("Agent-Zertifikatsstatus konnte nicht gelesen werden.".to_string())
+        }
+    }
+}
+
+async fn agent_pki_certificate_detail(
+    Path(certificate_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store
+        .certificate_detail(context.tenant_id, &certificate_id)
+        .await
+    {
+        Ok(Some(certificate)) => (
+            StatusCode::OK,
+            Json(AgentCertificateStatusResponse {
+                api_version: "v1",
+                certificate,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("Agent-Zertifikat wurde fuer diesen Tenant nicht gefunden."),
+        Err(_) => {
+            api_database_error("Agent-Zertifikatsstatus konnte nicht gelesen werden.".to_string())
+        }
+    }
+}
+
+async fn agent_pki_certificate_status_update(
+    Path(certificate_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<agent_pki_store::AgentCertificateStatusUpdateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store
+        .update_certificate_status(context.tenant_id, context.user_id, &certificate_id, payload)
+        .await
+    {
+        Ok(certificate) => (
+            StatusCode::OK,
+            Json(AgentCertificateStatusWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                certificate,
+            }),
+        )
+            .into_response(),
+        Err(_) => api_bad_request(
+            "invalid_agent_certificate_status",
+            "Zertifikatsstatus konnte nicht validiert werden.",
+        ),
+    }
+}
+
+async fn agent_pki_certificate_rotation_required(
+    Path(certificate_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    agent_pki_certificate_flag(state, headers, certificate_id, true).await
+}
+
+async fn agent_pki_certificate_revocation_request(
+    Path(certificate_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    agent_pki_certificate_flag(state, headers, certificate_id, false).await
+}
+
+async fn agent_pki_certificate_flag(
+    state: AppState,
+    headers: HeaderMap,
+    certificate_id: String,
+    rotation: bool,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    let result = if rotation {
+        store
+            .mark_rotation_required(context.tenant_id, context.user_id, &certificate_id)
+            .await
+    } else {
+        store
+            .request_revocation(context.tenant_id, context.user_id, &certificate_id)
+            .await
+    };
+    match result {
+        Ok(Some(certificate)) => (
+            StatusCode::OK,
+            Json(AgentCertificateStatusWriteResponse {
+                accepted: true,
+                api_version: "v1",
+                certificate,
+            }),
+        )
+            .into_response(),
+        Ok(None) => api_not_found("Agent-Zertifikat wurde fuer diesen Tenant nicht gefunden."),
+        Err(_) => api_database_error(
+            "Zertifikats-Governance-Status konnte nicht gesetzt werden.".to_string(),
+        ),
+    }
+}
+
+async fn agent_pki_for_agent(
+    Path(agent_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store.agent_overview(context.tenant_id, agent_id).await {
+        Ok(pki) => (
+            StatusCode::OK,
+            Json(AgentPkiOverviewResponse {
+                api_version: "v1",
+                pki,
+            }),
+        )
+            .into_response(),
+        Err(_) => api_database_error("Agent-PKI-Status konnte nicht gelesen werden.".to_string()),
+    }
+}
+
+async fn agent_pki_onboarding(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return required_context_error_response(err),
+    };
+    let Some(store) = state.agent_pki_store else {
+        return api_database_not_configured("Rust-Agent-PKI-Store ist nicht konfiguriert.");
+    };
+    match store.overview(context.tenant_id, 20).await {
+        Ok(pki) => (
+            StatusCode::OK,
+            Json(AgentPkiOverviewResponse {
+                api_version: "v1",
+                pki,
+            }),
+        )
+            .into_response(),
+        Err(_) => api_database_error(
+            "Agent-Onboarding-PKI-Status konnte nicht gelesen werden.".to_string(),
+        ),
+    }
+}
+
 async fn agent_devices(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let context = match authenticated_tenant_context(&state, &headers).await {
         Ok(context) => context,
@@ -5459,7 +6115,7 @@ async fn agent_enrollment_tokens(State(state): State<AppState>, headers: HeaderM
         Ok(context) => context,
         Err(err) => return required_context_error_response(err),
     };
-    let Some(store) = state.agent_store else {
+    let Some(store) = state.agent_store.clone() else {
         return api_database_not_configured("Rust-Agent-Store ist nicht konfiguriert.");
     };
     let tokens = match store.list_enrollment_tokens(context.tenant_id, 200).await {
@@ -14642,6 +15298,13 @@ async fn web_zero_trust(
         },
         None => r#"<section class="panel wide"><h2>Agent-Artefakte</h2><p>Agent-Release-Store ist nicht konfiguriert.</p></section>"#.to_string(),
     };
+    let pki_section = match state.agent_pki_store.as_ref() {
+        Some(pki_store) => match pki_store.overview(context.tenant_id, 20).await {
+            Ok(pki) => agent_pki_web_section(&context, &pki, can_write),
+            Err(_) => r#"<section class="panel wide"><h2>Agent-PKI, CSR und mTLS-Governance</h2><p>Agent-PKI-Daten sind derzeit nicht verfuegbar.</p></section>"#.to_string(),
+        },
+        None => r#"<section class="panel wide"><h2>Agent-PKI, CSR und mTLS-Governance</h2><p>Agent-PKI-Store ist nicht konfiguriert.</p></section>"#.to_string(),
+    };
     match store.posture_overview(context.tenant_id).await {
         Ok(posture) => {
             let pillar_rows = posture
@@ -14729,6 +15392,7 @@ async fn web_zero_trust(
                 {}
                 {}
                 {}
+                {}
                 <section class="metrics">
                   {}
                   {}
@@ -14776,6 +15440,7 @@ async fn web_zero_trust(
                 html_escape(&priority_detail),
                 governance_section,
                 artifacts_section,
+                pki_section,
                 onboarding_section,
                 metric_card("ZT Score", posture.average_zero_trust_score),
                 metric_card("Devices", posture.device_count),
@@ -14985,6 +15650,546 @@ fn agent_release_artifacts_web_section(
     )
 }
 
+fn agent_pki_web_section(
+    context: &WebContext,
+    pki: &agent_pki_store::AgentPkiOverview,
+    can_write: bool,
+) -> String {
+    let provider_rows = pki
+        .providers
+        .iter()
+        .map(|provider| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&provider.provider_name),
+                html_escape(&provider.ca_provider_id),
+                html_escape(&provider.provider_type),
+                agent_pki_status_badge(&provider.provider_status),
+                html_escape(&provider.trust_domain),
+                html_escape(&format!(
+                    "{} Tage / Renewal {} Tage",
+                    provider.certificate_lifetime_days, provider.renewal_window_days
+                )),
+                html_escape(&provider.known_limitations),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let csr_rows = pki
+        .csrs
+        .iter()
+        .map(|csr| {
+            let approve_action = web_path_with_context(
+                &format!("/zero-trust/pki/csrs/{}/approve", csr.csr_id),
+                Some(context),
+            );
+            let reject_action = web_path_with_context(
+                &format!("/zero-trust/pki/csrs/{}/reject", csr.csr_id),
+                Some(context),
+            );
+            let cancel_action = web_path_with_context(
+                &format!("/zero-trust/pki/csrs/{}/cancel", csr.csr_id),
+                Some(context),
+            );
+            let actions = if can_write {
+                format!(
+                    r#"<form method="post" action="{}"><button type="submit">Genehmigen</button></form><details><summary>Ablehnen</summary><form method="post" action="{}"><label>Grund<input name="reason" maxlength="512" required></label><button type="submit" class="danger">Ablehnung speichern</button></form></details><form method="post" action="{}"><button type="submit">Abbrechen</button></form>"#,
+                    html_escape(&approve_action),
+                    html_escape(&reject_action),
+                    html_escape(&cancel_action)
+                )
+            } else {
+                "-".to_string()
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&csr.csr_id),
+                html_escape(&csr.subject_common_name),
+                html_escape(&csr.agent_ref),
+                agent_pki_status_badge(&csr.csr_status),
+                html_escape(&short_reference(&csr.csr_fingerprint)),
+                html_escape(&csr.audit_summary),
+                actions,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let certificate_rows = pki
+        .certificates
+        .iter()
+        .map(|certificate| {
+            let rotation_action = web_path_with_context(
+                &format!(
+                    "/zero-trust/pki/certificates/{}/rotation-required",
+                    certificate.certificate_id
+                ),
+                Some(context),
+            );
+            let revocation_action = web_path_with_context(
+                &format!(
+                    "/zero-trust/pki/certificates/{}/revocation-request",
+                    certificate.certificate_id
+                ),
+                Some(context),
+            );
+            let actions = if can_write {
+                format!(
+                    r#"<form method="post" action="{}"><button type="submit">Rotation markieren</button></form><form method="post" action="{}"><button type="submit" class="danger">Widerruf anfordern</button></form>"#,
+                    html_escape(&rotation_action),
+                    html_escape(&revocation_action)
+                )
+            } else {
+                "-".to_string()
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&certificate.certificate_id),
+                certificate.agent_id.map(|id| id.to_string()).unwrap_or_else(|| "-".to_string()),
+                agent_pki_status_badge(&certificate.certificate_status),
+                agent_pki_status_badge(&certificate.mtls_binding_status),
+                agent_pki_status_badge(&certificate.rotation_status),
+                agent_pki_status_badge(&certificate.revocation_status),
+                html_escape(certificate.not_after.as_deref().unwrap_or("-")),
+                html_escape(&short_reference(&certificate.fingerprint_sha256)),
+                actions,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let forms = if can_write {
+        format!(
+            r#"
+            <section class="grid">
+              {}
+              {}
+              {}
+            </section>
+            "#,
+            agent_pki_provider_form(context),
+            agent_pki_csr_form(context, &pki.providers),
+            agent_pki_certificate_form(context, &pki.providers),
+        )
+    } else {
+        r#"<p class="muted">Nur lesend: sichere PKI-/CSR-/mTLS-Metadaten sichtbar, keine Statusaenderungen.</p>"#.to_string()
+    };
+    let warning = if pki.configured_provider_count == 0 {
+        r#"<p class="warning">Keine produktive CA aktiv: ISCY zeigt in diesem PR nur Governance- und Statusmetadaten. Es werden keine privaten Schluessel, CA-Secrets oder echten Zertifikate ausgestellt.</p>"#
+    } else {
+        r#"<p class="muted">PKI ist als Governance-Modell erfasst. Produktive CA-/mTLS-Aktivierung bleibt bewusst ausserhalb dieses PRs.</p>"#
+    };
+    format!(
+        r#"
+        <section class="panel wide">
+          <div class="section-heading"><h2>Agent-PKI, CSR und mTLS-Governance</h2><span class="muted">Nur Metadaten, keine produktive CA-Ausstellung.</span></div>
+          {}
+          <section class="metrics">
+            {}
+            {}
+            {}
+            {}
+            {}
+            {}
+            {}
+          </section>
+          <h3>PKI-Provider</h3>
+          <table>
+            <thead><tr><th>Name</th><th>ID</th><th>Typ</th><th>Status</th><th>Trust Domain</th><th>Lifetime</th><th>Limitierung</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+          <h3>Zertifikatsanforderungen / CSR</h3>
+          <table>
+            <thead><tr><th>CSR</th><th>Subject</th><th>Agent</th><th>Status</th><th>Fingerprint</th><th>Audit</th><th>Aktion</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+          <h3>Zertifikatsstatus</h3>
+          <table>
+            <thead><tr><th>Zertifikat</th><th>Agent</th><th>Status</th><th>mTLS</th><th>Rotation</th><th>Widerruf</th><th>Ablauf</th><th>SHA-256</th><th>Aktion</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+          {}
+        </section>
+        "#,
+        warning,
+        metric_card("Provider", pki.provider_count),
+        metric_card("Offene CSR", pki.pending_csr_count),
+        metric_card(
+            "Ohne Zertifikatsstatus",
+            pki.agents_without_certificate_status
+        ),
+        metric_card("Ablaufend", pki.expiring_certificate_count),
+        metric_card("Abgelaufen", pki.expired_certificate_count),
+        metric_card("mTLS-Gaps", pki.mtls_gap_count),
+        metric_card(
+            "Rotation/Widerruf",
+            pki.rotation_required_count + pki.revocation_requested_count
+        ),
+        if provider_rows.is_empty() {
+            web_empty_row(7, "Keine PKI-Provider erfasst.")
+        } else {
+            provider_rows
+        },
+        if csr_rows.is_empty() {
+            web_empty_row(7, "Keine CSR-Metadaten erfasst.")
+        } else {
+            csr_rows
+        },
+        if certificate_rows.is_empty() {
+            web_empty_row(9, "Keine Zertifikatsstatus-Metadaten erfasst.")
+        } else {
+            certificate_rows
+        },
+        forms,
+    )
+}
+
+fn agent_pki_provider_form(context: &WebContext) -> String {
+    let action = web_path_with_context("/zero-trust/pki/providers/", Some(context));
+    format!(
+        r#"
+        <article class="panel">
+          <h3>PKI-Provider pflegen</h3>
+          <form method="post" action="{}" class="form-grid">
+            <label>Provider-ID<input name="ca_provider_id" maxlength="128" placeholder="pki-provider-demo"></label>
+            <label>Name<input name="provider_name" maxlength="255" placeholder="Agent PKI Governance"></label>
+            <label>Typ<select name="provider_type">{}</select></label>
+            <label>Status<select name="provider_status">{}</select></label>
+            <label>Trust Domain<input name="trust_domain" maxlength="255" placeholder="agent.local"></label>
+            <label>Agent-Profile<input name="allowed_agent_profiles" placeholder="linux, windows"></label>
+            <label>Lifetime Tage<input type="number" min="1" max="825" name="certificate_lifetime_days" value="90"></label>
+            <label>Renewal-Fenster Tage<input type="number" min="1" max="825" name="renewal_window_days" value="30"></label>
+            <label>Revocation-Modus<input name="revocation_mode" maxlength="64" value="metadata_only"></label>
+            <label>Key-Storage-Policy<input name="key_storage_policy" maxlength="512" value="Private Schluessel bleiben auf dem Agent."></label>
+            <label>Secret-Status<input name="secret_reference_status" maxlength="64" value="no_secret_configured"></label>
+            <label>Limitierungen<textarea name="known_limitations" maxlength="1000">Vorbereitendes Governance-Modell ohne produktive CA, Secrets oder externe Ausstellung.</textarea></label>
+            <button type="submit">Provider-Metadaten speichern</button>
+          </form>
+        </article>
+        "#,
+        html_escape(&action),
+        pki_select_options(
+            "not_configured",
+            &[
+                ("internal_placeholder", "Interner Platzhalter"),
+                ("external_ca_placeholder", "Externe CA Platzhalter"),
+                ("step_ca_future", "Step-CA zukuenftig"),
+                ("vault_pki_future", "Vault PKI zukuenftig"),
+                ("microsoft_ca_future", "Microsoft CA zukuenftig"),
+                ("acme_future", "ACME zukuenftig"),
+                ("manual_import", "Manueller Import"),
+                ("not_configured", "Nicht konfiguriert"),
+            ],
+        ),
+        pki_select_options(
+            "configured_metadata_only",
+            &[
+                ("not_configured", "Nicht konfiguriert"),
+                ("configured_metadata_only", "Nur Metadaten"),
+                ("validation_required", "Validierung erforderlich"),
+                ("ready_for_test", "Testbereit"),
+                ("disabled", "Deaktiviert"),
+                ("error", "Fehler"),
+            ],
+        ),
+    )
+}
+
+fn agent_pki_csr_form(
+    context: &WebContext,
+    providers: &[agent_pki_store::AgentPkiProvider],
+) -> String {
+    let action = web_path_with_context("/zero-trust/pki/csrs/", Some(context));
+    format!(
+        r#"
+        <article class="panel">
+          <h3>CSR metadata-only anlegen</h3>
+          <form method="post" action="{}" class="form-grid">
+            <label>CSR-ID<input name="csr_id" maxlength="128" placeholder="csr-agent-01"></label>
+            <label>Agent-ID<input type="number" min="1" name="agent_id"></label>
+            <label>Agent-Referenz<input name="agent_ref" maxlength="255" placeholder="agent-01"></label>
+            <label>Subject CN<input name="subject_common_name" maxlength="255" required></label>
+            <label>SANs<input name="subject_alt_names" placeholder="agent-01.local, agent-01"></label>
+            <label>Algorithmus<input name="key_algorithm" maxlength="64" value="ECDSA"></label>
+            <label>Kurve/Groesse<input name="key_size_or_curve" maxlength="64" value="P-256"></label>
+            <label>Usages<input name="requested_usages" placeholder="clientAuth"></label>
+            <label>Lifetime Tage<input type="number" min="1" max="825" name="requested_lifetime_days" value="90"></label>
+            <label>CSR-Fingerprint<input name="csr_fingerprint" maxlength="128"></label>
+            <label>Public-Key-Fingerprint<input name="public_key_fingerprint" maxlength="128"></label>
+            <label>Provider<select name="ca_provider_id">{}</select></label>
+            <label>Audit-Zusammenfassung<textarea name="audit_summary" maxlength="1000">CSR metadata-only erfasst; keine CA-Ausstellung ausgeloest.</textarea></label>
+            <button type="submit">CSR-Metadaten speichern</button>
+          </form>
+        </article>
+        "#,
+        html_escape(&action),
+        provider_select_options(providers),
+    )
+}
+
+fn agent_pki_certificate_form(
+    context: &WebContext,
+    providers: &[agent_pki_store::AgentPkiProvider],
+) -> String {
+    let action = web_path_with_context("/zero-trust/pki/certificates/", Some(context));
+    format!(
+        r#"
+        <article class="panel">
+          <h3>Zertifikatsstatus metadata-only</h3>
+          <form method="post" action="{}" class="form-grid">
+            <label>Zertifikat-ID<input name="certificate_id" maxlength="128" required></label>
+            <label>Agent-ID<input type="number" min="1" name="agent_id"></label>
+            <label>Provider<select name="ca_provider_id">{}</select></label>
+            <label>Serial-Hash<input name="serial_number_hash" maxlength="128"></label>
+            <label>Subject<input name="subject_summary" maxlength="255"></label>
+            <label>SANs<textarea name="san_summary" maxlength="1000"></textarea></label>
+            <label>Issuer<input name="issuer_summary" maxlength="255" value="not_configured"></label>
+            <label>Not before<input name="not_before" maxlength="64" placeholder="2026-07-09T00:00:00Z"></label>
+            <label>Not after<input name="not_after" maxlength="64" placeholder="2026-10-07T00:00:00Z"></label>
+            <label>Fingerprint SHA-256<input name="fingerprint_sha256" maxlength="128"></label>
+            <label>Zertifikatsstatus<select name="certificate_status">{}</select></label>
+            <label>mTLS-Bindung<select name="mtls_binding_status">{}</select></label>
+            <label>Rotation<select name="rotation_status">{}</select></label>
+            <label>Widerruf<select name="revocation_status">{}</select></label>
+            <label>Evidence-IDs<input name="evidence_ids" placeholder="1, 2, 3"></label>
+            <button type="submit">Zertifikatsstatus speichern</button>
+          </form>
+        </article>
+        "#,
+        html_escape(&action),
+        provider_select_options(providers),
+        pki_select_options(
+            "issued_metadata_only",
+            &[
+                ("not_present", "Nicht vorhanden"),
+                ("requested", "Angefordert"),
+                ("issued_metadata_only", "Nur Metadaten"),
+                ("active", "Aktiv"),
+                ("expiring_soon", "Laeuft bald ab"),
+                ("expired", "Abgelaufen"),
+                ("revoked", "Widerrufen"),
+                ("rotation_required", "Rotation erforderlich"),
+                ("validation_failed", "Validierung fehlgeschlagen"),
+                ("not_configured", "Nicht konfiguriert"),
+            ],
+        ),
+        pki_select_options(
+            "not_configured",
+            &[
+                ("not_configured", "Nicht konfiguriert"),
+                ("pending", "Ausstehend"),
+                ("bound", "Gebunden"),
+                ("mismatch", "Mismatch"),
+                ("stale", "Veraltet"),
+                ("failed", "Fehlgeschlagen"),
+            ],
+        ),
+        pki_select_options(
+            "not_configured",
+            &[
+                ("not_configured", "Nicht konfiguriert"),
+                ("not_required", "Nicht erforderlich"),
+                ("pending", "Ausstehend"),
+                ("rotation_required", "Rotation erforderlich"),
+                ("scheduled", "Geplant"),
+                ("completed_metadata_only", "Nur Metadaten abgeschlossen"),
+                ("failed", "Fehlgeschlagen"),
+            ],
+        ),
+        pki_select_options(
+            "not_applicable",
+            &[
+                ("not_applicable", "Nicht anwendbar"),
+                ("not_revoked", "Nicht widerrufen"),
+                ("revocation_requested", "Widerruf angefordert"),
+                ("revoked_metadata_only", "Widerruf nur Metadaten"),
+                ("failed", "Fehlgeschlagen"),
+                ("unknown", "Unbekannt"),
+            ],
+        ),
+    )
+}
+
+fn provider_select_options(providers: &[agent_pki_store::AgentPkiProvider]) -> String {
+    let mut options = vec![r#"<option value="">Nicht konfiguriert</option>"#.to_string()];
+    options.extend(providers.iter().map(|provider| {
+        format!(
+            r#"<option value="{}">{}</option>"#,
+            html_escape(&provider.ca_provider_id),
+            html_escape(&provider.provider_name),
+        )
+    }));
+    options.join("")
+}
+
+fn pki_select_options(selected: &str, options: &[(&str, &str)]) -> String {
+    options
+        .iter()
+        .map(|(value, label)| option_tag(value, label, selected))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn agent_pki_status_badge(status: &str) -> String {
+    let normalized = status.to_ascii_lowercase();
+    let class_name = match normalized.as_str() {
+        "ready_for_test" | "active" | "bound" | "not_required" | "not_revoked" => "ok-badge",
+        "pending"
+        | "pending_review"
+        | "validation_required"
+        | "requested"
+        | "expiring_soon"
+        | "rotation_required"
+        | "revocation_requested"
+        | "scheduled" => "warning-badge",
+        "error" | "failed" | "expired" | "revoked" | "mismatch" | "stale" | "validation_failed"
+        | "rejected" => "danger-badge",
+        _ => "muted-badge",
+    };
+    web_badge(&pki_status_label(status), class_name)
+}
+
+fn pki_status_label(status: &str) -> String {
+    match status {
+        "not_configured" => "Nicht konfiguriert",
+        "configured_metadata_only" => "Nur Metadaten",
+        "validation_required" => "Validierung erforderlich",
+        "ready_for_test" => "Testbereit",
+        "disabled" => "Deaktiviert",
+        "pending_review" => "Pruefung offen",
+        "approved_for_issue" => "Genehmigt",
+        "issued_metadata_only" => "Nur Metadaten ausgestellt",
+        "cancelled" => "Abgebrochen",
+        "not_present" => "Nicht vorhanden",
+        "requested" => "Angefordert",
+        "active" => "Aktiv",
+        "expiring_soon" => "Laeuft bald ab",
+        "expired" => "Abgelaufen",
+        "revoked" => "Widerrufen",
+        "rotation_required" => "Rotation erforderlich",
+        "validation_failed" => "Validierung fehlgeschlagen",
+        "pending" => "Ausstehend",
+        "bound" => "Gebunden",
+        "mismatch" => "Mismatch",
+        "stale" => "Veraltet",
+        "not_applicable" => "Nicht anwendbar",
+        "not_revoked" => "Nicht widerrufen",
+        "revocation_requested" => "Widerruf angefordert",
+        "revoked_metadata_only" => "Widerruf nur Metadaten",
+        "not_required" => "Nicht erforderlich",
+        "scheduled" => "Geplant",
+        "completed_metadata_only" => "Nur Metadaten abgeschlossen",
+        "failed" => "Fehlgeschlagen",
+        "error" => "Fehler",
+        "unknown" => "Unbekannt",
+        "rejected" => "Abgelehnt",
+        _ => status,
+    }
+    .to_string()
+}
+
+fn agent_pki_onboarding_section(pki: Option<&agent_pki_store::AgentPkiOverview>) -> String {
+    let Some(pki) = pki else {
+        return r#"<section class="panel wide"><h2>PKI-/CSR-/mTLS-Hinweis</h2><p>Agent-PKI-Governance ist nicht konfiguriert. Copy-Paste-Kommandos enthalten keine privaten Schluessel oder CA-Secrets.</p></section>"#.to_string();
+    };
+    let provider_status = if pki.configured_provider_count == 0 {
+        agent_pki_status_badge("not_configured")
+    } else {
+        agent_pki_status_badge("configured_metadata_only")
+    };
+    let warning = if pki.configured_provider_count == 0 {
+        "Keine produktive CA aktiv. CSR, Zertifikate und mTLS werden in ISCY nur als Governance-/Statusmetadaten vorbereitet."
+    } else {
+        "PKI-Governance ist metadata-only erfasst. Die produktive CA-Ausstellung und automatische mTLS-Aktivierung bleiben bewusst getrennt."
+    };
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>PKI-/CSR-/mTLS-Hinweis</h2>
+          <p>{}</p>
+          <dl class="detail-list">
+            <dt>CA-/PKI-Status</dt><dd>{}</dd>
+            <dt>Offene CSR</dt><dd>{}</dd>
+            <dt>Zertifikatsstatus erfasst</dt><dd>{}</dd>
+            <dt>mTLS-Gaps</dt><dd>{}</dd>
+            <dt>Rotation/Widerruf</dt><dd>{}</dd>
+          </dl>
+          <p class="muted">Deployment-Schritte zeigen keine privaten Schluessel, keine CA-Secrets und keine produktiven Zertifikatsdateien.</p>
+        </section>
+        "#,
+        html_escape(warning),
+        provider_status,
+        pki.pending_csr_count,
+        pki.certificate_count,
+        pki.mtls_gap_count,
+        pki.rotation_required_count + pki.revocation_requested_count,
+    )
+}
+
+fn agent_pki_provider_payload_from_web(
+    form: WebAgentPkiProviderForm,
+) -> agent_pki_store::AgentPkiProviderWriteRequest {
+    agent_pki_store::AgentPkiProviderWriteRequest {
+        ca_provider_id: normalized_optional_form_text(form.ca_provider_id),
+        provider_name: normalized_optional_form_text(form.provider_name),
+        provider_type: normalized_optional_form_text(form.provider_type),
+        provider_status: normalized_optional_form_text(form.provider_status),
+        trust_domain: normalized_optional_form_text(form.trust_domain),
+        issuing_policy: normalized_optional_form_text(form.issuing_policy),
+        allowed_agent_profiles: Some(comma_separated_form_list(form.allowed_agent_profiles)),
+        certificate_lifetime_days: form.certificate_lifetime_days,
+        renewal_window_days: form.renewal_window_days,
+        revocation_mode: normalized_optional_form_text(form.revocation_mode),
+        crl_or_ocsp_reference: normalized_optional_form_text(form.crl_or_ocsp_reference),
+        key_storage_policy: normalized_optional_form_text(form.key_storage_policy),
+        secret_reference_status: normalized_optional_form_text(form.secret_reference_status),
+        known_limitations: normalized_optional_form_text(form.known_limitations),
+    }
+}
+
+fn agent_pki_csr_payload_from_web(
+    form: WebAgentPkiCsrForm,
+) -> agent_pki_store::AgentCertificateRequestCreateRequest {
+    agent_pki_store::AgentCertificateRequestCreateRequest {
+        csr_id: normalized_optional_form_text(form.csr_id),
+        agent_id: form.agent_id.filter(|id| *id > 0),
+        agent_ref: normalized_optional_form_text(form.agent_ref),
+        asset_id: None,
+        asset_ref: None,
+        subject_common_name: form.subject_common_name,
+        subject_alt_names: Some(comma_separated_form_list(form.subject_alt_names)),
+        key_algorithm: normalized_optional_form_text(form.key_algorithm),
+        key_size_or_curve: normalized_optional_form_text(form.key_size_or_curve),
+        requested_usages: Some(comma_separated_form_list(form.requested_usages)),
+        requested_lifetime_days: form.requested_lifetime_days,
+        csr_fingerprint: normalized_optional_form_text(form.csr_fingerprint),
+        csr_pem_redacted_or_hash: normalized_optional_form_text(form.csr_pem_redacted_or_hash),
+        public_key_fingerprint: normalized_optional_form_text(form.public_key_fingerprint),
+        ca_provider_id: normalized_optional_form_text(form.ca_provider_id),
+        audit_summary: normalized_optional_form_text(form.audit_summary),
+    }
+}
+
+fn agent_pki_certificate_payload_from_web(
+    form: WebAgentPkiCertificateForm,
+) -> Result<agent_pki_store::AgentCertificateStatusUpdateRequest, String> {
+    Ok(agent_pki_store::AgentCertificateStatusUpdateRequest {
+        agent_id: form.agent_id.filter(|id| *id > 0),
+        ca_provider_id: normalized_optional_form_text(form.ca_provider_id),
+        serial_number_hash: normalized_optional_form_text(form.serial_number_hash),
+        serial_reference: normalized_optional_form_text(form.serial_reference),
+        subject_summary: normalized_optional_form_text(form.subject_summary),
+        san_summary: normalized_optional_form_text(form.san_summary),
+        issuer_summary: normalized_optional_form_text(form.issuer_summary),
+        not_before: normalized_optional_form_text(form.not_before),
+        not_after: normalized_optional_form_text(form.not_after),
+        fingerprint_sha256: normalized_optional_form_text(form.fingerprint_sha256),
+        certificate_status: normalized_optional_form_text(form.certificate_status),
+        mtls_binding_status: normalized_optional_form_text(form.mtls_binding_status),
+        rotation_status: normalized_optional_form_text(form.rotation_status),
+        revocation_status: normalized_optional_form_text(form.revocation_status),
+        evidence_ids: Some(parse_id_list(form.evidence_ids.as_deref(), "Evidence-IDs")?),
+    })
+}
+
 fn agent_release_onboarding_artifact_section(
     artifacts: &[agent_release_store::AgentReleaseArtifact],
 ) -> String {
@@ -15100,10 +16305,16 @@ async fn web_agent_onboarding(
         })
         .collect::<Vec<_>>()
         .join("");
+    let pki_overview = match state.agent_pki_store.as_ref() {
+        Some(store) => store.overview(context.tenant_id, 20).await.ok(),
+        None => None,
+    };
+    let pki_section = agent_pki_onboarding_section(pki_overview.as_ref());
     let action = web_path_with_context("/zero-trust/onboarding/preview", Some(&context));
     let body = format!(
         r#"
         <section class="hero compact"><h1>Agent hinzufuegen</h1><p>Schritt 1 von 3 · Rollout vorbereiten</p></section>
+        {}
         <section class="panel wide">
           <form method="post" action="{}" class="form-grid">
             <label>Betriebssystem
@@ -15135,6 +16346,7 @@ async fn web_agent_onboarding(
           </form>
         </section>
         "#,
+        pki_section,
         html_escape(&action),
         policy_options,
     );
@@ -15198,9 +16410,15 @@ async fn web_agent_onboarding_preview(
     }
     let create_action = web_path_with_context("/zero-trust/onboarding/create", Some(&context));
     let cancel_href = web_path_with_context("/zero-trust/onboarding/", Some(&context));
+    let pki_overview = match state.agent_pki_store.as_ref() {
+        Some(store) => store.overview(context.tenant_id, 20).await.ok(),
+        None => None,
+    };
+    let pki_section = agent_pki_onboarding_section(pki_overview.as_ref());
     let body = format!(
         r#"
         <section class="hero compact"><h1>Agent hinzufuegen</h1><p>Schritt 2 von 3 · Zusammenfassung</p></section>
+        {}
         <section class="panel wide">
           <dl class="detail-list">
             <dt>Betriebssystem</dt><dd>{}</dd>
@@ -15220,6 +16438,7 @@ async fn web_agent_onboarding_preview(
           </form>
         </section>
         "#,
+        pki_section,
         html_escape(&form.os_family),
         html_escape(&form.deployment_channel),
         html_escape(form.label.as_deref().unwrap_or("Agent enrollment")),
@@ -15293,7 +16512,7 @@ async fn web_agent_onboarding_create(
         .into_response();
     }
     let release_store = state.agent_release_store.clone();
-    let Some(store) = state.agent_store else {
+    let Some(store) = state.agent_store.clone() else {
         return web_error_page(
             "Agent hinzufuegen",
             "/zero-trust/onboarding/",
@@ -15335,10 +16554,16 @@ async fn web_agent_onboarding_create(
         },
         None => String::new(),
     };
+    let pki_overview = match state.agent_pki_store.as_ref() {
+        Some(store) => store.overview(context.tenant_id, 20).await.ok(),
+        None => None,
+    };
+    let pki_section = agent_pki_onboarding_section(pki_overview.as_ref());
     let status_href = web_path_with_context("/zero-trust/", Some(&context));
     let body = format!(
         r#"
         <section class="hero compact"><h1>Agent hinzufuegen</h1><p>Schritt 3 von 3 · Installation</p></section>
+        {}
         <section class="panel wide">
           <h2>{}</h2>
           <p>Das Enrollment-Token wird ausschliesslich in dieser Antwort angezeigt. Die Plattform speichert nur den Hash.</p>
@@ -15354,6 +16579,7 @@ async fn web_agent_onboarding_create(
         </section>
         {}
         "#,
+        pki_section,
         html_escape(&result.enrollment.label),
         html_escape(&command),
         if result.enrollment.max_uses == 1 {
@@ -16170,6 +17396,282 @@ async fn web_agent_notifications_evaluate(
             "/zero-trust/",
             &context,
             "Notification-Auswertung konnte nicht abgeschlossen werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_agent_pki_provider_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAgentPkiProviderForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Zero Trust", "/zero-trust/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent-PKI")
+            .into_response();
+    };
+    let payload = agent_pki_provider_payload_from_web(form);
+    match store
+        .create_provider(auth_context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(_) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "PKI-Provider-Metadaten konnten nicht gespeichert werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_agent_pki_csr_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAgentPkiCsrForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Zero Trust", "/zero-trust/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent-PKI")
+            .into_response();
+    };
+    let payload = agent_pki_csr_payload_from_web(form);
+    match store
+        .create_csr(auth_context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(_) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "CSR-Metadaten konnten nicht gespeichert werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_agent_pki_csr_approve(
+    Path(csr_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    web_agent_pki_csr_transition(state, headers, csr_id, "approve", None).await
+}
+
+async fn web_agent_pki_csr_reject(
+    Path(csr_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAgentPkiCsrRejectForm>,
+) -> Response {
+    web_agent_pki_csr_transition(state, headers, csr_id, "reject", Some(form.reason)).await
+}
+
+async fn web_agent_pki_csr_cancel(
+    Path(csr_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    web_agent_pki_csr_transition(state, headers, csr_id, "cancel", None).await
+}
+
+async fn web_agent_pki_csr_transition(
+    state: AppState,
+    headers: HeaderMap,
+    csr_id: String,
+    action: &str,
+    reason: Option<String>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Zero Trust", "/zero-trust/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent-PKI")
+            .into_response();
+    };
+    let result = match action {
+        "approve" => {
+            store
+                .approve_csr(auth_context.tenant_id, auth_context.user_id, &csr_id)
+                .await
+        }
+        "reject" => {
+            store
+                .reject_csr(
+                    auth_context.tenant_id,
+                    auth_context.user_id,
+                    &csr_id,
+                    reason.as_deref().unwrap_or(""),
+                )
+                .await
+        }
+        "cancel" => {
+            store
+                .cancel_csr(auth_context.tenant_id, auth_context.user_id, &csr_id)
+                .await
+        }
+        _ => unreachable!("unbekannte Agent-PKI-CSR-Webaktion"),
+    };
+    match result {
+        Ok(Some(_)) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Ok(None) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "CSR wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "CSR-Status konnte nicht gespeichert werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_agent_pki_certificate_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebAgentPkiCertificateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Zero Trust", "/zero-trust/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent-PKI")
+            .into_response();
+    };
+    let certificate_id = form.certificate_id.clone();
+    let payload = match agent_pki_certificate_payload_from_web(form) {
+        Ok(payload) => payload,
+        Err(message) => {
+            return web_error_page("Zero Trust", "/zero-trust/", &context, &message).into_response()
+        }
+    };
+    match store
+        .update_certificate_status(
+            auth_context.tenant_id,
+            auth_context.user_id,
+            &certificate_id,
+            payload,
+        )
+        .await
+    {
+        Ok(_) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Zertifikatsstatus konnte nicht gespeichert werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_agent_pki_certificate_rotation_required(
+    Path(certificate_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    web_agent_pki_certificate_flag(state, headers, certificate_id, true).await
+}
+
+async fn web_agent_pki_certificate_revocation_request(
+    Path(certificate_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    web_agent_pki_certificate_flag(state, headers, certificate_id, false).await
+}
+
+async fn web_agent_pki_certificate_flag(
+    state: AppState,
+    headers: HeaderMap,
+    certificate_id: String,
+    rotation: bool,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Zero Trust", "/zero-trust/").into_response(),
+    };
+    let context = web_context_from_auth(&auth_context);
+    if let Some(response) = write_permission_error(&auth_context) {
+        return response;
+    }
+    let Some(store) = state.agent_pki_store else {
+        return web_store_missing("Zero Trust", "/zero-trust/", &context, "Agent-PKI")
+            .into_response();
+    };
+    let result = if rotation {
+        store
+            .mark_rotation_required(
+                auth_context.tenant_id,
+                auth_context.user_id,
+                &certificate_id,
+            )
+            .await
+    } else {
+        store
+            .request_revocation(
+                auth_context.tenant_id,
+                auth_context.user_id,
+                &certificate_id,
+            )
+            .await
+    };
+    match result {
+        Ok(Some(_)) => {
+            Redirect::to(&web_path_with_context("/zero-trust/", Some(&context))).into_response()
+        }
+        Ok(None) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Zertifikatsstatus wurde nicht gefunden.",
+        )
+        .into_response(),
+        Err(_) => web_error_page(
+            "Zero Trust",
+            "/zero-trust/",
+            &context,
+            "Zertifikats-Governance-Status konnte nicht gesetzt werden.",
         )
         .into_response(),
     }
@@ -37644,6 +39146,56 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/agents/onboarding/artifacts",
             get(agent_onboarding_artifacts),
         )
+        .route(
+            "/api/v1/agents/pki/providers",
+            get(agent_pki_providers).post(agent_pki_provider_create),
+        )
+        .route(
+            "/api/v1/agents/pki/providers/{provider_id}",
+            get(agent_pki_provider_detail).patch(agent_pki_provider_update),
+        )
+        .route(
+            "/api/v1/agents/pki/csrs",
+            get(agent_pki_csrs).post(agent_pki_csr_create),
+        )
+        .route(
+            "/api/v1/agents/pki/csrs/{csr_id}",
+            get(agent_pki_csr_detail),
+        )
+        .route(
+            "/api/v1/agents/pki/csrs/{csr_id}/approve",
+            post(agent_pki_csr_approve),
+        )
+        .route(
+            "/api/v1/agents/pki/csrs/{csr_id}/reject",
+            post(agent_pki_csr_reject),
+        )
+        .route(
+            "/api/v1/agents/pki/csrs/{csr_id}/cancel",
+            post(agent_pki_csr_cancel),
+        )
+        .route(
+            "/api/v1/agents/pki/certificates",
+            get(agent_pki_certificates),
+        )
+        .route(
+            "/api/v1/agents/pki/certificates/{certificate_id}",
+            get(agent_pki_certificate_detail),
+        )
+        .route(
+            "/api/v1/agents/pki/certificates/{certificate_id}/status",
+            patch(agent_pki_certificate_status_update),
+        )
+        .route(
+            "/api/v1/agents/pki/certificates/{certificate_id}/rotation-required",
+            post(agent_pki_certificate_rotation_required),
+        )
+        .route(
+            "/api/v1/agents/pki/certificates/{certificate_id}/revocation-request",
+            post(agent_pki_certificate_revocation_request),
+        )
+        .route("/api/v1/agents/{agent_id}/pki", get(agent_pki_for_agent))
+        .route("/api/v1/agents/onboarding/pki", get(agent_pki_onboarding))
         .route("/api/v1/agents/devices", get(agent_devices))
         .route(
             "/api/v1/agents/enrollment-tokens",
@@ -38141,6 +39693,35 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/zero-trust/notifications/evaluate",
             post(web_agent_notifications_evaluate),
+        )
+        .route(
+            "/zero-trust/pki/providers/",
+            post(web_agent_pki_provider_submit),
+        )
+        .route("/zero-trust/pki/csrs/", post(web_agent_pki_csr_submit))
+        .route(
+            "/zero-trust/pki/csrs/{csr_id}/approve",
+            post(web_agent_pki_csr_approve),
+        )
+        .route(
+            "/zero-trust/pki/csrs/{csr_id}/reject",
+            post(web_agent_pki_csr_reject),
+        )
+        .route(
+            "/zero-trust/pki/csrs/{csr_id}/cancel",
+            post(web_agent_pki_csr_cancel),
+        )
+        .route(
+            "/zero-trust/pki/certificates/",
+            post(web_agent_pki_certificate_submit),
+        )
+        .route(
+            "/zero-trust/pki/certificates/{certificate_id}/rotation-required",
+            post(web_agent_pki_certificate_rotation_required),
+        )
+        .route(
+            "/zero-trust/pki/certificates/{certificate_id}/revocation-request",
+            post(web_agent_pki_certificate_revocation_request),
         )
         .route(
             "/zero-trust/artifacts/refresh",

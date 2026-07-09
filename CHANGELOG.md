@@ -8,6 +8,10 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- ergaenzt Agent-CA-/PKI-/CSR-Governance ueber additive Migration `0037_rust_agent_pki_csr_governance`
+- ergaenzt tenantgebundene Agent-PKI-APIs fuer Provider-Metadaten, CSR-Lifecycle, Zertifikatsstatus, mTLS-Bindungsstatus, Rotation und Widerruf unter `/api/v1/agents/pki*`, `/api/v1/agents/{agent_id}/pki` und `/api/v1/agents/onboarding/pki`
+- erweitert `/zero-trust/` und den gefuehrten Agent-Onboarding-Assistenten um deutsche PKI-/CSR-/mTLS-Governance-Hinweise mit Provider-, CSR- und Zertifikatsstatus, ohne produktive CA-Ausstellung vorzutaueschen
+- erweitert Management-/Regulatory-Review-Pakete fuer NIS2, DORA, DSGVO und generische Governance um Agent-PKI-, CSR-, Zertifikats-, mTLS-, Rotations- und Widerruf-Gaps
 - ergaenzt Agent-Release-Artefakte und Release-Provenance ueber additive Migration `0036_rust_agent_release_artifact_provenance`
 - ergaenzt tenantgebundene Agent-Artefakt-APIs fuer Manifestliste/-detail, Refresh, SHA-256-Pruefung, Signaturstatuspruefung, Provenance-Liste/-detail und Onboarding-Artefakte unter `/api/v1/agents/artifacts*`, `/api/v1/agents/release-provenance*` und `/api/v1/agents/onboarding/artifacts`
 - erweitert `/zero-trust/` und den gefuehrten Agent-Onboarding-Assistenten um deutsche Artefakt-/Pruefsummen-/Signatur-/Provenance-Hinweise fuer systemd, NixOS, Windows Scheduled Task, PowerShell, macOS LaunchDaemon und Konfigurationsbeispiele
@@ -59,6 +63,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- speichert Agent-PKI- und CSR-Daten ausschliesslich als Governance-/Statusmetadaten; rohe private Schluessel, produktive CA-Secrets, Cloud-Credentials, echte CA-Ausstellung, automatische mTLS-Aktivierung und produktive Rotation/Widerruf bleiben bewusst ausserhalb dieses PRs
+- haelt Agent-PKI-Provider, CSR, Zertifikatsstatus und Auditereignisse tenantgebunden; schreibende Aktionen bleiben Admin-/Editor-Rollen vorbehalten, Read-only-Rollen sehen nur sichere Metadaten
+- validiert Provider-, CSR-, Zertifikats-, mTLS-, Rotations- und Widerrufstatus mit sicheren 4xx-Antworten und blockiert private-key-, Secret-, Token- und lokale Pfadfragmente in PKI-Metadaten
 - berechnet Agent-Artefakt-SHA-256 nur aus einer festen Repo-Artefakt-Allowlist und gibt keine Rohdateien, absoluten lokalen Pfade, Tokens, privaten Schluessel, Zertifikate oder Build-Secrets ueber API, UI oder Audit aus
 - modelliert Signaturstatus und Provenance ohne produktive Code-Signing-Zertifikate, private Schluessel, externe PKI/CA, Sigstore-/Rekor-/Fulcio-Netzwerkaufrufe oder GitHub-Release-Veroeffentlichung
 - haelt Agent-Artefakt-Refresh, Checksum-Verify und Signature-Verify auf schreibende Rollen beschraenkt; Read-only-Rollen sehen nur sichere tenantgebundene Metadaten
