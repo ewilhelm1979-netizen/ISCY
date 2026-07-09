@@ -16,7 +16,8 @@ services:
 
   app:
     build:
-      context: ./rust/iscy-backend
+      context: .
+      dockerfile: rust/iscy-backend/Dockerfile
     restart: unless-stopped
     depends_on:
       db:

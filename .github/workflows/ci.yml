@@ -128,4 +128,4 @@ jobs:
           docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml config
       - name: Build hardened application image
         run: |
-          docker build --file rust/iscy-backend/Dockerfile rust/iscy-backend
+          docker build --file rust/iscy-backend/Dockerfile .

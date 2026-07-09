@@ -1,9 +1,11 @@
 FROM rust:1.88-bookworm AS builder
-WORKDIR /build
+WORKDIR /build/rust/iscy-backend
 
-COPY Cargo.toml Cargo.lock ./
-COPY src ./src
-COPY seeds ./seeds
+COPY rust/iscy-backend/Cargo.toml rust/iscy-backend/Cargo.lock ./
+COPY rust/iscy-backend/src ./src
+COPY rust/iscy-backend/seeds ./seeds
+COPY deploy /build/deploy
+COPY flake.lock /build/flake.lock
 
 RUN cargo build --release --locked
 
@@ -16,8 +18,8 @@ RUN apt-get update \
 
 WORKDIR /app
 RUN install -d -o iscy -g iscy /app/media
-COPY --from=builder /build/target/release/iscy-backend /usr/local/bin/iscy-backend
-COPY --from=builder /build/target/release/iscy-canary /usr/local/bin/iscy-canary
+COPY --from=builder /build/rust/iscy-backend/target/release/iscy-backend /usr/local/bin/iscy-backend
+COPY --from=builder /build/rust/iscy-backend/target/release/iscy-canary /usr/local/bin/iscy-canary
 
 ENV RUST_BACKEND_BIND=0.0.0.0:9000
 EXPOSE 9000
