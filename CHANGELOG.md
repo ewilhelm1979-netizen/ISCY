@@ -8,6 +8,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- add Evidence Integrity & Disposition Phase 1 through additive migration `0033_rust_evidence_integrity_disposition`
+- add tenant-scoped Evidence integrity overview, manual and bounded batch SHA-256 re-check APIs, Legal Hold metadata, disposition decisions, and integrity/disposition audit events
+- add Web UI support under `/evidence/integrity/` for safe Evidence integrity metadata, re-hash actions, Legal Hold set/release, and metadata-only disposition decisions
 - add Management-/Regulatory-Templates for ISO 27001, NIS2, DORA, KRITIS, and generic security governance reviews through additive migration `0032_rust_management_regulatory_templates`
 - extend Management Review snapshots with template metadata, regulatory context, supplier review summaries, source counts, gap summaries, and management decision hints
 - add authenticated template list/detail APIs, regulatory preview API, and Management Review Web UI template selection without creating snapshots during preview
@@ -28,6 +31,9 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- keep Evidence re-hash, Legal Hold, and disposition writes tenant-scoped and restricted to administrator/editor roles while allowing read-only roles to inspect safe metadata
+- audit Evidence integrity checks, hash mismatches, missing artifacts, Legal Hold changes, and disposition decisions without storing raw file payloads, secret values, authorization material, SQL details, or absolute media paths
+- make `disposition_completed_metadata_only` an explicit governance decision state; this release does not physically delete Evidence files or implement data destruction
 - audit Management Review template previews, snapshot creation, status changes, and exports without storing raw payloads or secret material
 - keep Management-/Regulatory-Template previews and generated snapshots tenant-scoped and enforce read-only versus write-role separation for snapshot creation
 - audit Supplier creation, updates, review decisions, subprocessor changes, and Evidence, Control, and Risk link changes without exposing SQL details or secret payloads

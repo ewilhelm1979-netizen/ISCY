@@ -1,10 +1,11 @@
 use anyhow::{bail, Context};
 use chrono::{Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
-    Row,
+    Postgres, Row, Sqlite, Transaction,
 };
 
 use crate::cve_store::normalize_database_url;
@@ -13,6 +14,1191 @@ use crate::cve_store::normalize_database_url;
 pub enum EvidenceStore {
     Postgres(PgPool),
     Sqlite(SqlitePool),
+}
+
+#[derive(Debug, Clone)]
+struct EvidenceIntegrityEventWrite {
+    event_type: String,
+    actor_id: Option<i64>,
+    integrity_status: String,
+    legal_hold_status: String,
+    disposition_status: String,
+    mismatch: bool,
+    error_class: String,
+    detail: Value,
+    note: String,
+}
+
+async fn evidence_integrity_overview_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<EvidenceIntegrityOverview> {
+    let sql = evidence_integrity_item_postgres_sql(
+        "WHERE item.tenant_id = $1 ORDER BY item.updated_at DESC, item.id ASC LIMIT $2",
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(limit.clamp(1, 500))
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-Evidence-Integrity-Uebersicht konnte nicht gelesen werden")?;
+    let items = rows
+        .into_iter()
+        .map(evidence_integrity_item_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(EvidenceIntegrityOverview {
+        summary: evidence_integrity_summary(&items),
+        items,
+    })
+}
+
+async fn evidence_integrity_overview_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<EvidenceIntegrityOverview> {
+    let sql = evidence_integrity_item_sqlite_sql(
+        "WHERE item.tenant_id = ?1 ORDER BY item.updated_at DESC, item.id ASC LIMIT ?2",
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(limit.clamp(1, 500))
+        .fetch_all(pool)
+        .await
+        .context("SQLite-Evidence-Integrity-Uebersicht konnte nicht gelesen werden")?;
+    let items = rows
+        .into_iter()
+        .map(evidence_integrity_item_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(EvidenceIntegrityOverview {
+        summary: evidence_integrity_summary(&items),
+        items,
+    })
+}
+
+fn evidence_integrity_summary(items: &[EvidenceIntegrityItem]) -> EvidenceIntegritySummary {
+    EvidenceIntegritySummary {
+        total_items: items.len() as i64,
+        not_checked: count_integrity_status(items, "not_checked"),
+        valid: count_integrity_status(items, "valid"),
+        mismatch: count_integrity_status(items, "mismatch"),
+        missing_artifact: count_integrity_status(items, "missing_artifact"),
+        check_failed: count_integrity_status(items, "check_failed"),
+        quarantined: count_integrity_status(items, "quarantined"),
+        accepted_with_exception: count_integrity_status(items, "accepted_with_exception"),
+        legal_hold_active: items
+            .iter()
+            .filter(|item| item.legal_hold_status == "active")
+            .count() as i64,
+        disposition_due: items
+            .iter()
+            .filter(|item| matches!(item.disposition_status.as_str(), "due" | "review_required"))
+            .count() as i64,
+        disposition_blocked: items
+            .iter()
+            .filter(|item| item.disposition_status == "blocked_by_legal_hold")
+            .count() as i64,
+        disposal_candidates: items.iter().filter(|item| item.disposal_candidate).count() as i64,
+    }
+}
+
+fn count_integrity_status(items: &[EvidenceIntegrityItem], status: &str) -> i64 {
+    items
+        .iter()
+        .filter(|item| item.integrity_status == status)
+        .count() as i64
+}
+
+async fn evidence_integrity_target_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+) -> anyhow::Result<Option<EvidenceIntegrityTarget>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, title, file AS file_name, file_sha256 AS expected_sha256
+        FROM evidence_evidenceitem
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .fetch_optional(pool)
+    .await
+    .context("PostgreSQL-Evidence-Integrity-Target konnte nicht gelesen werden")?;
+    row.map(evidence_integrity_target_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn evidence_integrity_target_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+) -> anyhow::Result<Option<EvidenceIntegrityTarget>> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, title, file AS file_name, file_sha256 AS expected_sha256
+        FROM evidence_evidenceitem
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .fetch_optional(pool)
+    .await
+    .context("SQLite-Evidence-Integrity-Target konnte nicht gelesen werden")?;
+    row.map(evidence_integrity_target_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn evidence_integrity_targets_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<EvidenceIntegrityTarget>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, title, file AS file_name, file_sha256 AS expected_sha256
+        FROM evidence_evidenceitem
+        WHERE tenant_id = $1
+        ORDER BY COALESCE(last_integrity_checked_at, ''), updated_at DESC, id ASC
+        LIMIT $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("PostgreSQL-Evidence-Integrity-Targets konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(evidence_integrity_target_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn evidence_integrity_targets_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    limit: i64,
+) -> anyhow::Result<Vec<EvidenceIntegrityTarget>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, title, file AS file_name, file_sha256 AS expected_sha256
+        FROM evidence_evidenceitem
+        WHERE tenant_id = ?1
+        ORDER BY COALESCE(last_integrity_checked_at, ''), updated_at DESC, id ASC
+        LIMIT ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("SQLite-Evidence-Integrity-Targets konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(evidence_integrity_target_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn evidence_integrity_target_from_pg_row(
+    row: PgRow,
+) -> Result<EvidenceIntegrityTarget, sqlx::Error> {
+    Ok(EvidenceIntegrityTarget {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        file_name: row.try_get("file_name")?,
+        expected_sha256: row.try_get("expected_sha256")?,
+    })
+}
+
+fn evidence_integrity_target_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<EvidenceIntegrityTarget, sqlx::Error> {
+    Ok(EvidenceIntegrityTarget {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        file_name: row.try_get("file_name")?,
+        expected_sha256: row.try_get("expected_sha256")?,
+    })
+}
+
+async fn apply_integrity_check_result_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    update: EvidenceIntegrityCheckUpdate,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    validate_integrity_update(&update)?;
+    let mut tx = pool.begin().await?;
+    let result = sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET last_integrity_checked_at = (CURRENT_TIMESTAMP)::text,
+            last_calculated_sha256 = $3,
+            integrity_status = $4,
+            integrity_mismatch = $5,
+            quarantine_status = $6,
+            integrity_checked_by_id = $7,
+            integrity_result = $8,
+            integrity_error_class = $9,
+            integrity_review_note = $10,
+            updated_at = (CURRENT_TIMESTAMP)::text
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(&update.calculated_sha256)
+    .bind(&update.integrity_status)
+    .bind(update.mismatch)
+    .bind(&update.quarantine_status)
+    .bind(actor_id)
+    .bind(&update.result)
+    .bind(&update.error_class)
+    .bind(&update.review_note)
+    .execute(&mut *tx)
+    .await
+    .context("PostgreSQL-Evidence-Integritaetsstatus konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    let event_type = match update.integrity_status.as_str() {
+        "valid" => "integrity_hash_valid",
+        "mismatch" => "integrity_hash_mismatch",
+        "missing_artifact" => "integrity_artifact_missing",
+        "check_failed" => "integrity_check_failed",
+        "quarantined" => "integrity_quarantined",
+        "accepted_with_exception" => "integrity_exception_accepted",
+        _ => "integrity_check_completed",
+    };
+    insert_evidence_integrity_event_postgres_tx(
+        &mut tx,
+        tenant_id,
+        evidence_id,
+        EvidenceIntegrityEventWrite {
+            event_type: event_type.to_string(),
+            actor_id: Some(actor_id),
+            integrity_status: update.integrity_status.clone(),
+            legal_hold_status: String::new(),
+            disposition_status: String::new(),
+            mismatch: update.mismatch,
+            error_class: update.error_class.clone(),
+            detail: json!({
+                "calculated_hash_present": !update.calculated_sha256.is_empty(),
+                "mismatch": update.mismatch,
+                "quarantine_status": update.quarantine_status,
+            }),
+            note: update.review_note,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    evidence_integrity_item_by_id_postgres(pool, tenant_id, evidence_id).await
+}
+
+async fn apply_integrity_check_result_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    update: EvidenceIntegrityCheckUpdate,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    validate_integrity_update(&update)?;
+    let mut tx = pool.begin().await?;
+    let result = sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET last_integrity_checked_at = datetime('now'),
+            last_calculated_sha256 = ?3,
+            integrity_status = ?4,
+            integrity_mismatch = ?5,
+            quarantine_status = ?6,
+            integrity_checked_by_id = ?7,
+            integrity_result = ?8,
+            integrity_error_class = ?9,
+            integrity_review_note = ?10,
+            updated_at = datetime('now')
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(&update.calculated_sha256)
+    .bind(&update.integrity_status)
+    .bind(update.mismatch)
+    .bind(&update.quarantine_status)
+    .bind(actor_id)
+    .bind(&update.result)
+    .bind(&update.error_class)
+    .bind(&update.review_note)
+    .execute(&mut *tx)
+    .await
+    .context("SQLite-Evidence-Integritaetsstatus konnte nicht aktualisiert werden")?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    let event_type = match update.integrity_status.as_str() {
+        "valid" => "integrity_hash_valid",
+        "mismatch" => "integrity_hash_mismatch",
+        "missing_artifact" => "integrity_artifact_missing",
+        "check_failed" => "integrity_check_failed",
+        "quarantined" => "integrity_quarantined",
+        "accepted_with_exception" => "integrity_exception_accepted",
+        _ => "integrity_check_completed",
+    };
+    insert_evidence_integrity_event_sqlite_tx(
+        &mut tx,
+        tenant_id,
+        evidence_id,
+        EvidenceIntegrityEventWrite {
+            event_type: event_type.to_string(),
+            actor_id: Some(actor_id),
+            integrity_status: update.integrity_status.clone(),
+            legal_hold_status: String::new(),
+            disposition_status: String::new(),
+            mismatch: update.mismatch,
+            error_class: update.error_class.clone(),
+            detail: json!({
+                "calculated_hash_present": !update.calculated_sha256.is_empty(),
+                "mismatch": update.mismatch,
+                "quarantine_status": update.quarantine_status,
+            }),
+            note: update.review_note,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    evidence_integrity_item_by_id_sqlite(pool, tenant_id, evidence_id).await
+}
+
+fn validate_integrity_update(update: &EvidenceIntegrityCheckUpdate) -> anyhow::Result<()> {
+    normalize_integrity_status(&update.integrity_status)?;
+    if !update.calculated_sha256.is_empty() {
+        normalize_file_sha256(&update.calculated_sha256)?;
+    }
+    if !matches!(
+        update.quarantine_status.as_str(),
+        "none" | "review_required" | "quarantined" | "released"
+    ) {
+        bail!("Quarantaene-Status ist ungueltig.");
+    }
+    Ok(())
+}
+
+async fn evidence_integrity_item_by_id_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    let sql = evidence_integrity_item_postgres_sql("WHERE item.tenant_id = $1 AND item.id = $2");
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(evidence_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Evidence-Integrity-Detail konnte nicht gelesen werden")?;
+    row.map(evidence_integrity_item_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn evidence_integrity_item_by_id_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    let sql = evidence_integrity_item_sqlite_sql("WHERE item.tenant_id = ?1 AND item.id = ?2");
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(evidence_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Evidence-Integrity-Detail konnte nicht gelesen werden")?;
+    row.map(evidence_integrity_item_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn evidence_integrity_events_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+    limit: i64,
+) -> anyhow::Result<Option<Vec<EvidenceIntegrityEvent>>> {
+    if evidence_integrity_target_postgres(pool, tenant_id, evidence_id)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let rows = sqlx::query(evidence_integrity_event_postgres_sql())
+        .bind(tenant_id)
+        .bind(evidence_id)
+        .bind(limit.clamp(1, 200))
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-Evidence-Integritaetsereignisse konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(evidence_integrity_event_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+        .map_err(Into::into)
+}
+
+async fn evidence_integrity_events_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+    limit: i64,
+) -> anyhow::Result<Option<Vec<EvidenceIntegrityEvent>>> {
+    if evidence_integrity_target_sqlite(pool, tenant_id, evidence_id)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let rows = sqlx::query(evidence_integrity_event_sqlite_sql())
+        .bind(tenant_id)
+        .bind(evidence_id)
+        .bind(limit.clamp(1, 200))
+        .fetch_all(pool)
+        .await
+        .context("SQLite-Evidence-Integritaetsereignisse konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(evidence_integrity_event_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+        .map_err(Into::into)
+}
+
+async fn insert_evidence_integrity_event_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+    event: EvidenceIntegrityEventWrite,
+) -> anyhow::Result<Option<EvidenceIntegrityEvent>> {
+    if evidence_integrity_target_postgres(pool, tenant_id, evidence_id)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let mut tx = pool.begin().await?;
+    let id =
+        insert_evidence_integrity_event_postgres_tx(&mut tx, tenant_id, evidence_id, event).await?;
+    tx.commit().await?;
+    evidence_integrity_event_by_id_postgres(pool, tenant_id, id).await
+}
+
+async fn insert_evidence_integrity_event_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+    event: EvidenceIntegrityEventWrite,
+) -> anyhow::Result<Option<EvidenceIntegrityEvent>> {
+    if evidence_integrity_target_sqlite(pool, tenant_id, evidence_id)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let mut tx = pool.begin().await?;
+    let id =
+        insert_evidence_integrity_event_sqlite_tx(&mut tx, tenant_id, evidence_id, event).await?;
+    tx.commit().await?;
+    evidence_integrity_event_by_id_sqlite(pool, tenant_id, id).await
+}
+
+async fn insert_evidence_integrity_event_postgres_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: i64,
+    evidence_id: i64,
+    event: EvidenceIntegrityEventWrite,
+) -> anyhow::Result<i64> {
+    let id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO evidence_integrity_event (
+            tenant_id, evidence_id, event_type, actor_id, integrity_status,
+            legal_hold_status, disposition_status, mismatch, error_class,
+            detail_json, note, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, (CURRENT_TIMESTAMP)::text)
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(event.event_type)
+    .bind(event.actor_id)
+    .bind(event.integrity_status)
+    .bind(event.legal_hold_status)
+    .bind(event.disposition_status)
+    .bind(event.mismatch)
+    .bind(event.error_class)
+    .bind(event.detail.to_string())
+    .bind(event.note)
+    .fetch_one(&mut **tx)
+    .await
+    .context("PostgreSQL-Evidence-Integritaetsereignis konnte nicht geschrieben werden")?;
+    Ok(id)
+}
+
+async fn insert_evidence_integrity_event_sqlite_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    tenant_id: i64,
+    evidence_id: i64,
+    event: EvidenceIntegrityEventWrite,
+) -> anyhow::Result<i64> {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO evidence_integrity_event (
+            tenant_id, evidence_id, event_type, actor_id, integrity_status,
+            legal_hold_status, disposition_status, mismatch, error_class,
+            detail_json, note, created_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, datetime('now'))
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(event.event_type)
+    .bind(event.actor_id)
+    .bind(event.integrity_status)
+    .bind(event.legal_hold_status)
+    .bind(event.disposition_status)
+    .bind(event.mismatch)
+    .bind(event.error_class)
+    .bind(event.detail.to_string())
+    .bind(event.note)
+    .execute(&mut **tx)
+    .await
+    .context("SQLite-Evidence-Integritaetsereignis konnte nicht geschrieben werden")?;
+    Ok(result.last_insert_rowid())
+}
+
+async fn evidence_integrity_event_by_id_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    event_id: i64,
+) -> anyhow::Result<Option<EvidenceIntegrityEvent>> {
+    let row = sqlx::query(
+        r#"
+        SELECT event.id, event.tenant_id, event.evidence_id, event.event_type,
+               event.actor_id,
+               COALESCE(NULLIF(BTRIM(CONCAT(COALESCE(actor.first_name, ''), ' ', COALESCE(actor.last_name, ''))), ''), actor.username) AS actor_display,
+               event.integrity_status, event.legal_hold_status, event.disposition_status,
+               event.mismatch, event.error_class, event.detail_json::text AS detail_json_text,
+               event.note, event.created_at::text AS created_at
+        FROM evidence_integrity_event event
+        LEFT JOIN accounts_user actor
+            ON actor.id = event.actor_id AND actor.tenant_id = event.tenant_id
+        WHERE event.tenant_id = $1 AND event.id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(event_id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(evidence_integrity_event_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn evidence_integrity_event_by_id_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    event_id: i64,
+) -> anyhow::Result<Option<EvidenceIntegrityEvent>> {
+    let row = sqlx::query(
+        r#"
+        SELECT event.id, event.tenant_id, event.evidence_id, event.event_type,
+               event.actor_id,
+               COALESCE(NULLIF(TRIM(COALESCE(actor.first_name, '') || ' ' || COALESCE(actor.last_name, '')), ''), actor.username) AS actor_display,
+               event.integrity_status, event.legal_hold_status, event.disposition_status,
+               event.mismatch, event.error_class, CAST(event.detail_json AS TEXT) AS detail_json_text,
+               event.note, CAST(event.created_at AS TEXT) AS created_at
+        FROM evidence_integrity_event event
+        LEFT JOIN accounts_user actor
+            ON actor.id = event.actor_id AND actor.tenant_id = event.tenant_id
+        WHERE event.tenant_id = ?1 AND event.id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(event_id)
+    .fetch_optional(pool)
+    .await?;
+    row.map(evidence_integrity_event_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn set_legal_hold_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    payload: EvidenceLegalHoldRequest,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    let reason = normalize_required_text(&payload.reason, "Legal-Hold-Begruendung")?;
+    let note = payload.review_note.unwrap_or_default();
+    let mut tx = pool.begin().await?;
+    let result = sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET legal_hold_status = 'active',
+            legal_hold_reason = $3,
+            legal_hold_set_by = $4,
+            legal_hold_set_at = (CURRENT_TIMESTAMP)::text,
+            legal_hold_released_by = NULL,
+            legal_hold_released_at = NULL,
+            legal_hold_release_reason = '',
+            legal_hold_blocks_disposition = TRUE,
+            disposition_status = CASE
+                WHEN disposition_status IN ('due','review_required','approved_for_disposition','disposition_completed_metadata_only')
+                THEN 'blocked_by_legal_hold'
+                ELSE disposition_status
+            END,
+            disposition_blocked_reason = CASE
+                WHEN disposition_status IN ('due','review_required','approved_for_disposition','disposition_completed_metadata_only')
+                THEN 'Legal Hold aktiv'
+                ELSE disposition_blocked_reason
+            END,
+            integrity_review_note = $5,
+            updated_at = (CURRENT_TIMESTAMP)::text
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(reason)
+    .bind(actor_id)
+    .bind(note.trim())
+    .execute(&mut *tx)
+    .await
+    .context("PostgreSQL-Legal-Hold konnte nicht gesetzt werden")?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    insert_evidence_integrity_event_postgres_tx(
+        &mut tx,
+        tenant_id,
+        evidence_id,
+        EvidenceIntegrityEventWrite {
+            event_type: "legal_hold_set".to_string(),
+            actor_id: Some(actor_id),
+            integrity_status: String::new(),
+            legal_hold_status: "active".to_string(),
+            disposition_status: String::new(),
+            mismatch: false,
+            error_class: String::new(),
+            detail: json!({"reason_present": true, "blocks_disposition": true}),
+            note,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    evidence_integrity_item_by_id_postgres(pool, tenant_id, evidence_id).await
+}
+
+async fn set_legal_hold_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    payload: EvidenceLegalHoldRequest,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    let reason = normalize_required_text(&payload.reason, "Legal-Hold-Begruendung")?;
+    let note = payload.review_note.unwrap_or_default();
+    let mut tx = pool.begin().await?;
+    let result = sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET legal_hold_status = 'active',
+            legal_hold_reason = ?3,
+            legal_hold_set_by = ?4,
+            legal_hold_set_at = datetime('now'),
+            legal_hold_released_by = NULL,
+            legal_hold_released_at = NULL,
+            legal_hold_release_reason = '',
+            legal_hold_blocks_disposition = 1,
+            disposition_status = CASE
+                WHEN disposition_status IN ('due','review_required','approved_for_disposition','disposition_completed_metadata_only')
+                THEN 'blocked_by_legal_hold'
+                ELSE disposition_status
+            END,
+            disposition_blocked_reason = CASE
+                WHEN disposition_status IN ('due','review_required','approved_for_disposition','disposition_completed_metadata_only')
+                THEN 'Legal Hold aktiv'
+                ELSE disposition_blocked_reason
+            END,
+            integrity_review_note = ?5,
+            updated_at = datetime('now')
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(reason)
+    .bind(actor_id)
+    .bind(note.trim())
+    .execute(&mut *tx)
+    .await
+    .context("SQLite-Legal-Hold konnte nicht gesetzt werden")?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    insert_evidence_integrity_event_sqlite_tx(
+        &mut tx,
+        tenant_id,
+        evidence_id,
+        EvidenceIntegrityEventWrite {
+            event_type: "legal_hold_set".to_string(),
+            actor_id: Some(actor_id),
+            integrity_status: String::new(),
+            legal_hold_status: "active".to_string(),
+            disposition_status: String::new(),
+            mismatch: false,
+            error_class: String::new(),
+            detail: json!({"reason_present": true, "blocks_disposition": true}),
+            note,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    evidence_integrity_item_by_id_sqlite(pool, tenant_id, evidence_id).await
+}
+
+async fn release_legal_hold_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    payload: EvidenceLegalHoldReleaseRequest,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    let reason =
+        normalize_required_text(&payload.release_reason, "Legal-Hold-Freigabebegruendung")?;
+    let note = payload.review_note.unwrap_or_default();
+    let mut tx = pool.begin().await?;
+    let result = sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET legal_hold_status = 'released',
+            legal_hold_released_by = $3,
+            legal_hold_released_at = (CURRENT_TIMESTAMP)::text,
+            legal_hold_release_reason = $4,
+            legal_hold_blocks_disposition = FALSE,
+            disposition_status = CASE
+                WHEN disposition_status = 'blocked_by_legal_hold' THEN 'review_required'
+                ELSE disposition_status
+            END,
+            disposition_blocked_reason = CASE
+                WHEN disposition_status = 'blocked_by_legal_hold' THEN ''
+                ELSE disposition_blocked_reason
+            END,
+            integrity_review_note = $5,
+            updated_at = (CURRENT_TIMESTAMP)::text
+        WHERE tenant_id = $1 AND id = $2 AND legal_hold_status = 'active'
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(actor_id)
+    .bind(reason)
+    .bind(note.trim())
+    .execute(&mut *tx)
+    .await
+    .context("PostgreSQL-Legal-Hold konnte nicht freigegeben werden")?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    insert_evidence_integrity_event_postgres_tx(
+        &mut tx,
+        tenant_id,
+        evidence_id,
+        EvidenceIntegrityEventWrite {
+            event_type: "legal_hold_released".to_string(),
+            actor_id: Some(actor_id),
+            integrity_status: String::new(),
+            legal_hold_status: "released".to_string(),
+            disposition_status: String::new(),
+            mismatch: false,
+            error_class: String::new(),
+            detail: json!({"release_reason_present": true, "blocks_disposition": false}),
+            note,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    evidence_integrity_item_by_id_postgres(pool, tenant_id, evidence_id).await
+}
+
+async fn release_legal_hold_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    payload: EvidenceLegalHoldReleaseRequest,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    let reason =
+        normalize_required_text(&payload.release_reason, "Legal-Hold-Freigabebegruendung")?;
+    let note = payload.review_note.unwrap_or_default();
+    let mut tx = pool.begin().await?;
+    let result = sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET legal_hold_status = 'released',
+            legal_hold_released_by = ?3,
+            legal_hold_released_at = datetime('now'),
+            legal_hold_release_reason = ?4,
+            legal_hold_blocks_disposition = 0,
+            disposition_status = CASE
+                WHEN disposition_status = 'blocked_by_legal_hold' THEN 'review_required'
+                ELSE disposition_status
+            END,
+            disposition_blocked_reason = CASE
+                WHEN disposition_status = 'blocked_by_legal_hold' THEN ''
+                ELSE disposition_blocked_reason
+            END,
+            integrity_review_note = ?5,
+            updated_at = datetime('now')
+        WHERE tenant_id = ?1 AND id = ?2 AND legal_hold_status = 'active'
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(actor_id)
+    .bind(reason)
+    .bind(note.trim())
+    .execute(&mut *tx)
+    .await
+    .context("SQLite-Legal-Hold konnte nicht freigegeben werden")?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    insert_evidence_integrity_event_sqlite_tx(
+        &mut tx,
+        tenant_id,
+        evidence_id,
+        EvidenceIntegrityEventWrite {
+            event_type: "legal_hold_released".to_string(),
+            actor_id: Some(actor_id),
+            integrity_status: String::new(),
+            legal_hold_status: "released".to_string(),
+            disposition_status: String::new(),
+            mismatch: false,
+            error_class: String::new(),
+            detail: json!({"release_reason_present": true, "blocks_disposition": false}),
+            note,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    evidence_integrity_item_by_id_sqlite(pool, tenant_id, evidence_id).await
+}
+
+async fn decide_disposition_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    payload: EvidenceDispositionRequest,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    let current = evidence_integrity_item_by_id_postgres(pool, tenant_id, evidence_id).await?;
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    let mut status = normalize_disposition_status(&payload.disposition_status)?;
+    let reason = normalize_required_text(&payload.reason, "Disposition-Begruendung")?;
+    let decision = payload.decision.unwrap_or_default().trim().to_string();
+    let retention_due_at =
+        normalize_evidence_date(payload.retention_due_at.as_deref(), "Retention faellig am")?;
+    let disposition_due_at = normalize_evidence_date(
+        payload.disposition_due_at.as_deref(),
+        "Disposition faellig am",
+    )?;
+    let mut blocked_reason = payload
+        .blocked_reason
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let legal_hold_blocks = current.legal_hold_status == "active";
+    if legal_hold_blocks {
+        status = "blocked_by_legal_hold".to_string();
+        if blocked_reason.is_empty() {
+            blocked_reason = "Legal Hold aktiv".to_string();
+        }
+    }
+    let disposal_candidate = matches!(
+        status.as_str(),
+        "due"
+            | "review_required"
+            | "approved_for_disposition"
+            | "disposition_completed_metadata_only"
+    );
+    let note = payload.review_note.unwrap_or_default();
+    let mut tx = pool.begin().await?;
+    let result = sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET disposition_status = $3,
+            retention_due_at = $4,
+            disposition_due_at = $5,
+            disposition_decision = $6,
+            disposition_reason = $7,
+            disposition_decided_by = $8,
+            disposition_decided_at = (CURRENT_TIMESTAMP)::text,
+            disposition_blocked_reason = $9,
+            disposal_candidate = $10,
+            legal_hold_blocks_disposition = $11,
+            integrity_review_note = $12,
+            updated_at = (CURRENT_TIMESTAMP)::text
+        WHERE tenant_id = $1 AND id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(&status)
+    .bind(retention_due_at)
+    .bind(disposition_due_at)
+    .bind(&decision)
+    .bind(reason)
+    .bind(actor_id)
+    .bind(&blocked_reason)
+    .bind(disposal_candidate)
+    .bind(legal_hold_blocks)
+    .bind(note.trim())
+    .execute(&mut *tx)
+    .await
+    .context("PostgreSQL-Disposition-Entscheidung konnte nicht gespeichert werden")?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    let event_type = if status == "blocked_by_legal_hold" {
+        "disposition_blocked"
+    } else if status == "review_required" {
+        "disposition_review_started"
+    } else {
+        "disposition_decision_recorded"
+    };
+    insert_evidence_integrity_event_postgres_tx(
+        &mut tx,
+        tenant_id,
+        evidence_id,
+        EvidenceIntegrityEventWrite {
+            event_type: event_type.to_string(),
+            actor_id: Some(actor_id),
+            integrity_status: String::new(),
+            legal_hold_status: current.legal_hold_status,
+            disposition_status: status.clone(),
+            mismatch: false,
+            error_class: String::new(),
+            detail: json!({
+                "decision_present": !decision.is_empty(),
+                "reason_present": true,
+                "metadata_only": status == "disposition_completed_metadata_only",
+                "legal_hold_blocks_disposition": legal_hold_blocks,
+            }),
+            note,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    evidence_integrity_item_by_id_postgres(pool, tenant_id, evidence_id).await
+}
+
+async fn decide_disposition_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    payload: EvidenceDispositionRequest,
+) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+    let current = evidence_integrity_item_by_id_sqlite(pool, tenant_id, evidence_id).await?;
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    let mut status = normalize_disposition_status(&payload.disposition_status)?;
+    let reason = normalize_required_text(&payload.reason, "Disposition-Begruendung")?;
+    let decision = payload.decision.unwrap_or_default().trim().to_string();
+    let retention_due_at =
+        normalize_evidence_date(payload.retention_due_at.as_deref(), "Retention faellig am")?;
+    let disposition_due_at = normalize_evidence_date(
+        payload.disposition_due_at.as_deref(),
+        "Disposition faellig am",
+    )?;
+    let mut blocked_reason = payload
+        .blocked_reason
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let legal_hold_blocks = current.legal_hold_status == "active";
+    if legal_hold_blocks {
+        status = "blocked_by_legal_hold".to_string();
+        if blocked_reason.is_empty() {
+            blocked_reason = "Legal Hold aktiv".to_string();
+        }
+    }
+    let disposal_candidate = matches!(
+        status.as_str(),
+        "due"
+            | "review_required"
+            | "approved_for_disposition"
+            | "disposition_completed_metadata_only"
+    );
+    let note = payload.review_note.unwrap_or_default();
+    let mut tx = pool.begin().await?;
+    let result = sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET disposition_status = ?3,
+            retention_due_at = ?4,
+            disposition_due_at = ?5,
+            disposition_decision = ?6,
+            disposition_reason = ?7,
+            disposition_decided_by = ?8,
+            disposition_decided_at = datetime('now'),
+            disposition_blocked_reason = ?9,
+            disposal_candidate = ?10,
+            legal_hold_blocks_disposition = ?11,
+            integrity_review_note = ?12,
+            updated_at = datetime('now')
+        WHERE tenant_id = ?1 AND id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(&status)
+    .bind(retention_due_at)
+    .bind(disposition_due_at)
+    .bind(&decision)
+    .bind(reason)
+    .bind(actor_id)
+    .bind(&blocked_reason)
+    .bind(disposal_candidate)
+    .bind(legal_hold_blocks)
+    .bind(note.trim())
+    .execute(&mut *tx)
+    .await
+    .context("SQLite-Disposition-Entscheidung konnte nicht gespeichert werden")?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    let event_type = if status == "blocked_by_legal_hold" {
+        "disposition_blocked"
+    } else if status == "review_required" {
+        "disposition_review_started"
+    } else {
+        "disposition_decision_recorded"
+    };
+    insert_evidence_integrity_event_sqlite_tx(
+        &mut tx,
+        tenant_id,
+        evidence_id,
+        EvidenceIntegrityEventWrite {
+            event_type: event_type.to_string(),
+            actor_id: Some(actor_id),
+            integrity_status: String::new(),
+            legal_hold_status: current.legal_hold_status,
+            disposition_status: status.clone(),
+            mismatch: false,
+            error_class: String::new(),
+            detail: json!({
+                "decision_present": !decision.is_empty(),
+                "reason_present": true,
+                "metadata_only": status == "disposition_completed_metadata_only",
+                "legal_hold_blocks_disposition": legal_hold_blocks,
+            }),
+            note,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    evidence_integrity_item_by_id_sqlite(pool, tenant_id, evidence_id).await
+}
+
+fn normalize_batch_limit(value: i64) -> i64 {
+    value.clamp(1, 25)
+}
+
+fn normalize_integrity_status(value: &str) -> anyhow::Result<String> {
+    let value = value.trim().to_ascii_lowercase();
+    if matches!(
+        value.as_str(),
+        "not_checked"
+            | "valid"
+            | "mismatch"
+            | "missing_artifact"
+            | "check_failed"
+            | "quarantined"
+            | "accepted_with_exception"
+    ) {
+        Ok(value)
+    } else {
+        bail!("Integritaetsstatus ist ungueltig.");
+    }
+}
+
+fn normalize_disposition_status(value: &str) -> anyhow::Result<String> {
+    let value = value.trim().to_ascii_lowercase();
+    if matches!(
+        value.as_str(),
+        "not_due"
+            | "due"
+            | "review_required"
+            | "blocked_by_legal_hold"
+            | "approved_for_disposition"
+            | "disposition_deferred"
+            | "disposition_completed_metadata_only"
+    ) {
+        Ok(value)
+    } else {
+        bail!("Disposition-Status ist ungueltig.");
+    }
+}
+
+fn integrity_status_label(status: &str) -> &'static str {
+    match status {
+        "valid" => "valid",
+        "mismatch" => "Hash mismatch",
+        "missing_artifact" => "Artefakt fehlt",
+        "check_failed" => "Check fehlgeschlagen",
+        "quarantined" => "Quarantaene",
+        "accepted_with_exception" => "Ausnahme akzeptiert",
+        _ => "nicht geprueft",
+    }
+}
+
+fn legal_hold_status_label(status: &str) -> &'static str {
+    match status {
+        "active" => "Legal Hold aktiv",
+        "released" => "Legal Hold freigegeben",
+        _ => "kein Legal Hold",
+    }
+}
+
+fn disposition_status_label(status: &str) -> &'static str {
+    match status {
+        "due" => "faellig",
+        "review_required" => "Review erforderlich",
+        "blocked_by_legal_hold" => "durch Legal Hold blockiert",
+        "approved_for_disposition" => "Disposition freigegeben",
+        "disposition_deferred" => "Disposition verschoben",
+        "disposition_completed_metadata_only" => "metadata-only abgeschlossen",
+        _ => "nicht faellig",
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -27,6 +1213,147 @@ pub struct EvidenceQualityOverview {
     pub summary: EvidenceQualitySummary,
     pub items: Vec<EvidenceQualityItem>,
     pub needs: Vec<EvidenceQualityNeed>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceIntegrityOverview {
+    pub summary: EvidenceIntegritySummary,
+    pub items: Vec<EvidenceIntegrityItem>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceIntegritySummary {
+    pub total_items: i64,
+    pub not_checked: i64,
+    pub valid: i64,
+    pub mismatch: i64,
+    pub missing_artifact: i64,
+    pub check_failed: i64,
+    pub quarantined: i64,
+    pub accepted_with_exception: i64,
+    pub legal_hold_active: i64,
+    pub disposition_due: i64,
+    pub disposition_blocked: i64,
+    pub disposal_candidates: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceIntegrityItem {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub title: String,
+    pub evidence_status: String,
+    pub quality_status_label: String,
+    pub sensitivity: String,
+    pub owner_id: Option<i64>,
+    pub owner_display: Option<String>,
+    pub file_name: Option<String>,
+    pub artifact_reference_present: bool,
+    pub expected_sha256_present: bool,
+    pub expected_sha256: String,
+    pub last_calculated_sha256: String,
+    pub last_integrity_checked_at: Option<String>,
+    pub integrity_status: String,
+    pub integrity_status_label: String,
+    pub integrity_mismatch: bool,
+    pub quarantine_status: String,
+    pub integrity_checked_by_id: Option<i64>,
+    pub integrity_checked_by_display: Option<String>,
+    pub integrity_result: String,
+    pub integrity_error_class: String,
+    pub integrity_review_note: String,
+    pub valid_until: Option<String>,
+    pub retention_until: Option<String>,
+    pub retention_due_at: Option<String>,
+    pub legal_hold_status: String,
+    pub legal_hold_status_label: String,
+    pub legal_hold_reason: String,
+    pub legal_hold_set_by: Option<i64>,
+    pub legal_hold_set_by_display: Option<String>,
+    pub legal_hold_set_at: Option<String>,
+    pub legal_hold_released_by: Option<i64>,
+    pub legal_hold_released_by_display: Option<String>,
+    pub legal_hold_released_at: Option<String>,
+    pub legal_hold_release_reason: String,
+    pub disposition_status: String,
+    pub disposition_status_label: String,
+    pub disposition_due_at: Option<String>,
+    pub disposition_decision: String,
+    pub disposition_reason: String,
+    pub disposition_decided_by: Option<i64>,
+    pub disposition_decided_by_display: Option<String>,
+    pub disposition_decided_at: Option<String>,
+    pub disposition_blocked_reason: String,
+    pub disposal_candidate: bool,
+    pub legal_hold_blocks_disposition: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceIntegrityEvent {
+    pub id: i64,
+    pub tenant_id: i64,
+    pub evidence_id: i64,
+    pub event_type: String,
+    pub actor_id: Option<i64>,
+    pub actor_display: Option<String>,
+    pub integrity_status: String,
+    pub legal_hold_status: String,
+    pub disposition_status: String,
+    pub mismatch: bool,
+    pub error_class: String,
+    pub detail: Value,
+    pub note: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EvidenceIntegrityTarget {
+    pub id: i64,
+    pub title: String,
+    pub file_name: Option<String>,
+    pub expected_sha256: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EvidenceIntegrityCheckUpdate {
+    pub calculated_sha256: String,
+    pub integrity_status: String,
+    pub mismatch: bool,
+    pub quarantine_status: String,
+    pub result: String,
+    pub error_class: String,
+    pub review_note: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvidenceIntegrityBatchRequest {
+    pub evidence_ids: Option<Vec<i64>>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvidenceLegalHoldRequest {
+    pub reason: String,
+    pub review_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvidenceLegalHoldReleaseRequest {
+    pub release_reason: String,
+    pub review_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvidenceDispositionRequest {
+    pub disposition_status: String,
+    pub retention_due_at: Option<String>,
+    pub disposition_due_at: Option<String>,
+    pub decision: Option<String>,
+    pub reason: String,
+    pub blocked_reason: Option<String>,
+    pub review_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -323,6 +1650,502 @@ impl EvidenceStore {
             }
         }
     }
+
+    pub async fn evidence_integrity_overview(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<EvidenceIntegrityOverview> {
+        match self {
+            Self::Postgres(pool) => {
+                evidence_integrity_overview_postgres(pool, tenant_id, limit).await
+            }
+            Self::Sqlite(pool) => evidence_integrity_overview_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
+    pub async fn evidence_integrity_target(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+    ) -> anyhow::Result<Option<EvidenceIntegrityTarget>> {
+        match self {
+            Self::Postgres(pool) => {
+                evidence_integrity_target_postgres(pool, tenant_id, evidence_id).await
+            }
+            Self::Sqlite(pool) => {
+                evidence_integrity_target_sqlite(pool, tenant_id, evidence_id).await
+            }
+        }
+    }
+
+    pub async fn evidence_integrity_targets(
+        &self,
+        tenant_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EvidenceIntegrityTarget>> {
+        let limit = normalize_batch_limit(limit);
+        match self {
+            Self::Postgres(pool) => {
+                evidence_integrity_targets_postgres(pool, tenant_id, limit).await
+            }
+            Self::Sqlite(pool) => evidence_integrity_targets_sqlite(pool, tenant_id, limit).await,
+        }
+    }
+
+    pub async fn record_evidence_integrity_event(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+        actor_id: Option<i64>,
+        event_type: &str,
+        detail: Value,
+        note: &str,
+    ) -> anyhow::Result<Option<EvidenceIntegrityEvent>> {
+        let event = EvidenceIntegrityEventWrite {
+            event_type: event_type.to_string(),
+            actor_id,
+            integrity_status: String::new(),
+            legal_hold_status: String::new(),
+            disposition_status: String::new(),
+            mismatch: false,
+            error_class: String::new(),
+            detail,
+            note: note.trim().to_string(),
+        };
+        match self {
+            Self::Postgres(pool) => {
+                insert_evidence_integrity_event_postgres(pool, tenant_id, evidence_id, event).await
+            }
+            Self::Sqlite(pool) => {
+                insert_evidence_integrity_event_sqlite(pool, tenant_id, evidence_id, event).await
+            }
+        }
+    }
+
+    pub async fn apply_integrity_check_result(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+        actor_id: i64,
+        update: EvidenceIntegrityCheckUpdate,
+    ) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+        match self {
+            Self::Postgres(pool) => {
+                apply_integrity_check_result_postgres(
+                    pool,
+                    tenant_id,
+                    evidence_id,
+                    actor_id,
+                    update,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                apply_integrity_check_result_sqlite(pool, tenant_id, evidence_id, actor_id, update)
+                    .await
+            }
+        }
+    }
+
+    pub async fn evidence_integrity_events(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+        limit: i64,
+    ) -> anyhow::Result<Option<Vec<EvidenceIntegrityEvent>>> {
+        match self {
+            Self::Postgres(pool) => {
+                evidence_integrity_events_postgres(pool, tenant_id, evidence_id, limit).await
+            }
+            Self::Sqlite(pool) => {
+                evidence_integrity_events_sqlite(pool, tenant_id, evidence_id, limit).await
+            }
+        }
+    }
+
+    pub async fn set_legal_hold(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+        actor_id: i64,
+        payload: EvidenceLegalHoldRequest,
+    ) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+        match self {
+            Self::Postgres(pool) => {
+                set_legal_hold_postgres(pool, tenant_id, evidence_id, actor_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                set_legal_hold_sqlite(pool, tenant_id, evidence_id, actor_id, payload).await
+            }
+        }
+    }
+
+    pub async fn release_legal_hold(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+        actor_id: i64,
+        payload: EvidenceLegalHoldReleaseRequest,
+    ) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+        match self {
+            Self::Postgres(pool) => {
+                release_legal_hold_postgres(pool, tenant_id, evidence_id, actor_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                release_legal_hold_sqlite(pool, tenant_id, evidence_id, actor_id, payload).await
+            }
+        }
+    }
+
+    pub async fn decide_disposition(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+        actor_id: i64,
+        payload: EvidenceDispositionRequest,
+    ) -> anyhow::Result<Option<EvidenceIntegrityItem>> {
+        match self {
+            Self::Postgres(pool) => {
+                decide_disposition_postgres(pool, tenant_id, evidence_id, actor_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                decide_disposition_sqlite(pool, tenant_id, evidence_id, actor_id, payload).await
+            }
+        }
+    }
+}
+
+fn evidence_integrity_item_postgres_sql(where_clause: &str) -> String {
+    format!(
+        r#"
+        SELECT
+            item.id,
+            item.tenant_id,
+            item.title,
+            item.status AS evidence_status,
+            item.sensitivity,
+            item.owner_id,
+            COALESCE(NULLIF(BTRIM(CONCAT(COALESCE(owner.first_name, ''), ' ', COALESCE(owner.last_name, ''))), ''), owner.username) AS owner_display,
+            item.file AS file_name,
+            item.file_sha256 AS expected_sha256,
+            item.last_calculated_sha256,
+            item.last_integrity_checked_at,
+            item.integrity_status,
+            item.integrity_mismatch,
+            item.quarantine_status,
+            item.integrity_checked_by_id,
+            COALESCE(NULLIF(BTRIM(CONCAT(COALESCE(checker.first_name, ''), ' ', COALESCE(checker.last_name, ''))), ''), checker.username) AS integrity_checked_by_display,
+            item.integrity_result,
+            item.integrity_error_class,
+            item.integrity_review_note,
+            item.valid_until,
+            item.retention_until,
+            item.retention_due_at,
+            item.legal_hold_status,
+            item.legal_hold_reason,
+            item.legal_hold_set_by,
+            COALESCE(NULLIF(BTRIM(CONCAT(COALESCE(hold_setter.first_name, ''), ' ', COALESCE(hold_setter.last_name, ''))), ''), hold_setter.username) AS legal_hold_set_by_display,
+            item.legal_hold_set_at,
+            item.legal_hold_released_by,
+            COALESCE(NULLIF(BTRIM(CONCAT(COALESCE(hold_releaser.first_name, ''), ' ', COALESCE(hold_releaser.last_name, ''))), ''), hold_releaser.username) AS legal_hold_released_by_display,
+            item.legal_hold_released_at,
+            item.legal_hold_release_reason,
+            item.disposition_status,
+            item.disposition_due_at,
+            item.disposition_decision,
+            item.disposition_reason,
+            item.disposition_decided_by,
+            COALESCE(NULLIF(BTRIM(CONCAT(COALESCE(disposition_actor.first_name, ''), ' ', COALESCE(disposition_actor.last_name, ''))), ''), disposition_actor.username) AS disposition_decided_by_display,
+            item.disposition_decided_at,
+            item.disposition_blocked_reason,
+            item.disposal_candidate,
+            item.legal_hold_blocks_disposition,
+            item.created_at::text AS created_at,
+            item.updated_at::text AS updated_at
+        FROM evidence_evidenceitem item
+        LEFT JOIN accounts_user owner
+            ON owner.id = item.owner_id AND owner.tenant_id = item.tenant_id
+        LEFT JOIN accounts_user checker
+            ON checker.id = item.integrity_checked_by_id AND checker.tenant_id = item.tenant_id
+        LEFT JOIN accounts_user hold_setter
+            ON hold_setter.id = item.legal_hold_set_by AND hold_setter.tenant_id = item.tenant_id
+        LEFT JOIN accounts_user hold_releaser
+            ON hold_releaser.id = item.legal_hold_released_by AND hold_releaser.tenant_id = item.tenant_id
+        LEFT JOIN accounts_user disposition_actor
+            ON disposition_actor.id = item.disposition_decided_by AND disposition_actor.tenant_id = item.tenant_id
+        {where_clause}
+        "#
+    )
+}
+
+fn evidence_integrity_item_sqlite_sql(where_clause: &str) -> String {
+    format!(
+        r#"
+        SELECT
+            item.id,
+            item.tenant_id,
+            item.title,
+            item.status AS evidence_status,
+            item.sensitivity,
+            item.owner_id,
+            COALESCE(NULLIF(TRIM(COALESCE(owner.first_name, '') || ' ' || COALESCE(owner.last_name, '')), ''), owner.username) AS owner_display,
+            item.file AS file_name,
+            item.file_sha256 AS expected_sha256,
+            item.last_calculated_sha256,
+            CAST(item.last_integrity_checked_at AS TEXT) AS last_integrity_checked_at,
+            item.integrity_status,
+            item.integrity_mismatch,
+            item.quarantine_status,
+            item.integrity_checked_by_id,
+            COALESCE(NULLIF(TRIM(COALESCE(checker.first_name, '') || ' ' || COALESCE(checker.last_name, '')), ''), checker.username) AS integrity_checked_by_display,
+            item.integrity_result,
+            item.integrity_error_class,
+            item.integrity_review_note,
+            item.valid_until,
+            item.retention_until,
+            item.retention_due_at,
+            item.legal_hold_status,
+            item.legal_hold_reason,
+            item.legal_hold_set_by,
+            COALESCE(NULLIF(TRIM(COALESCE(hold_setter.first_name, '') || ' ' || COALESCE(hold_setter.last_name, '')), ''), hold_setter.username) AS legal_hold_set_by_display,
+            CAST(item.legal_hold_set_at AS TEXT) AS legal_hold_set_at,
+            item.legal_hold_released_by,
+            COALESCE(NULLIF(TRIM(COALESCE(hold_releaser.first_name, '') || ' ' || COALESCE(hold_releaser.last_name, '')), ''), hold_releaser.username) AS legal_hold_released_by_display,
+            CAST(item.legal_hold_released_at AS TEXT) AS legal_hold_released_at,
+            item.legal_hold_release_reason,
+            item.disposition_status,
+            item.disposition_due_at,
+            item.disposition_decision,
+            item.disposition_reason,
+            item.disposition_decided_by,
+            COALESCE(NULLIF(TRIM(COALESCE(disposition_actor.first_name, '') || ' ' || COALESCE(disposition_actor.last_name, '')), ''), disposition_actor.username) AS disposition_decided_by_display,
+            CAST(item.disposition_decided_at AS TEXT) AS disposition_decided_at,
+            item.disposition_blocked_reason,
+            item.disposal_candidate,
+            item.legal_hold_blocks_disposition,
+            CAST(item.created_at AS TEXT) AS created_at,
+            CAST(item.updated_at AS TEXT) AS updated_at
+        FROM evidence_evidenceitem item
+        LEFT JOIN accounts_user owner
+            ON owner.id = item.owner_id AND owner.tenant_id = item.tenant_id
+        LEFT JOIN accounts_user checker
+            ON checker.id = item.integrity_checked_by_id AND checker.tenant_id = item.tenant_id
+        LEFT JOIN accounts_user hold_setter
+            ON hold_setter.id = item.legal_hold_set_by AND hold_setter.tenant_id = item.tenant_id
+        LEFT JOIN accounts_user hold_releaser
+            ON hold_releaser.id = item.legal_hold_released_by AND hold_releaser.tenant_id = item.tenant_id
+        LEFT JOIN accounts_user disposition_actor
+            ON disposition_actor.id = item.disposition_decided_by AND disposition_actor.tenant_id = item.tenant_id
+        {where_clause}
+        "#
+    )
+}
+
+fn evidence_integrity_event_postgres_sql() -> &'static str {
+    r#"
+    SELECT event.id, event.tenant_id, event.evidence_id, event.event_type,
+           event.actor_id,
+           COALESCE(NULLIF(BTRIM(CONCAT(COALESCE(actor.first_name, ''), ' ', COALESCE(actor.last_name, ''))), ''), actor.username) AS actor_display,
+           event.integrity_status, event.legal_hold_status, event.disposition_status,
+           event.mismatch, event.error_class, event.detail_json::text AS detail_json_text,
+           event.note, event.created_at::text AS created_at
+    FROM evidence_integrity_event event
+    LEFT JOIN accounts_user actor
+        ON actor.id = event.actor_id AND actor.tenant_id = event.tenant_id
+    WHERE event.tenant_id = $1 AND event.evidence_id = $2
+    ORDER BY event.created_at DESC, event.id DESC
+    LIMIT $3
+    "#
+}
+
+fn evidence_integrity_event_sqlite_sql() -> &'static str {
+    r#"
+    SELECT event.id, event.tenant_id, event.evidence_id, event.event_type,
+           event.actor_id,
+           COALESCE(NULLIF(TRIM(COALESCE(actor.first_name, '') || ' ' || COALESCE(actor.last_name, '')), ''), actor.username) AS actor_display,
+           event.integrity_status, event.legal_hold_status, event.disposition_status,
+           event.mismatch, event.error_class, CAST(event.detail_json AS TEXT) AS detail_json_text,
+           event.note, CAST(event.created_at AS TEXT) AS created_at
+    FROM evidence_integrity_event event
+    LEFT JOIN accounts_user actor
+        ON actor.id = event.actor_id AND actor.tenant_id = event.tenant_id
+    WHERE event.tenant_id = ?1 AND event.evidence_id = ?2
+    ORDER BY event.created_at DESC, event.id DESC
+    LIMIT ?3
+    "#
+}
+
+fn evidence_integrity_item_from_pg_row(row: PgRow) -> Result<EvidenceIntegrityItem, sqlx::Error> {
+    let evidence_status: String = row.try_get("evidence_status")?;
+    let integrity_status: String = row.try_get("integrity_status")?;
+    let legal_hold_status: String = row.try_get("legal_hold_status")?;
+    let disposition_status: String = row.try_get("disposition_status")?;
+    let file_name: Option<String> = row.try_get("file_name")?;
+    let expected_sha256: String = row.try_get("expected_sha256")?;
+    Ok(EvidenceIntegrityItem {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        title: row.try_get("title")?,
+        evidence_status: evidence_status.clone(),
+        quality_status_label: evidence_status_label(&evidence_status).to_string(),
+        sensitivity: row.try_get("sensitivity")?,
+        owner_id: row.try_get("owner_id")?,
+        owner_display: row.try_get("owner_display")?,
+        artifact_reference_present: file_name
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        expected_sha256_present: !expected_sha256.trim().is_empty(),
+        file_name,
+        expected_sha256,
+        last_calculated_sha256: row.try_get("last_calculated_sha256")?,
+        last_integrity_checked_at: row.try_get("last_integrity_checked_at")?,
+        integrity_status_label: integrity_status_label(&integrity_status).to_string(),
+        integrity_status,
+        integrity_mismatch: row.try_get("integrity_mismatch")?,
+        quarantine_status: row.try_get("quarantine_status")?,
+        integrity_checked_by_id: row.try_get("integrity_checked_by_id")?,
+        integrity_checked_by_display: row.try_get("integrity_checked_by_display")?,
+        integrity_result: row.try_get("integrity_result")?,
+        integrity_error_class: row.try_get("integrity_error_class")?,
+        integrity_review_note: row.try_get("integrity_review_note")?,
+        valid_until: row.try_get("valid_until")?,
+        retention_until: row.try_get("retention_until")?,
+        retention_due_at: row.try_get("retention_due_at")?,
+        legal_hold_status_label: legal_hold_status_label(&legal_hold_status).to_string(),
+        legal_hold_status,
+        legal_hold_reason: row.try_get("legal_hold_reason")?,
+        legal_hold_set_by: row.try_get("legal_hold_set_by")?,
+        legal_hold_set_by_display: row.try_get("legal_hold_set_by_display")?,
+        legal_hold_set_at: row.try_get("legal_hold_set_at")?,
+        legal_hold_released_by: row.try_get("legal_hold_released_by")?,
+        legal_hold_released_by_display: row.try_get("legal_hold_released_by_display")?,
+        legal_hold_released_at: row.try_get("legal_hold_released_at")?,
+        legal_hold_release_reason: row.try_get("legal_hold_release_reason")?,
+        disposition_status_label: disposition_status_label(&disposition_status).to_string(),
+        disposition_status,
+        disposition_due_at: row.try_get("disposition_due_at")?,
+        disposition_decision: row.try_get("disposition_decision")?,
+        disposition_reason: row.try_get("disposition_reason")?,
+        disposition_decided_by: row.try_get("disposition_decided_by")?,
+        disposition_decided_by_display: row.try_get("disposition_decided_by_display")?,
+        disposition_decided_at: row.try_get("disposition_decided_at")?,
+        disposition_blocked_reason: row.try_get("disposition_blocked_reason")?,
+        disposal_candidate: row.try_get("disposal_candidate")?,
+        legal_hold_blocks_disposition: row.try_get("legal_hold_blocks_disposition")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn evidence_integrity_item_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<EvidenceIntegrityItem, sqlx::Error> {
+    let evidence_status: String = row.try_get("evidence_status")?;
+    let integrity_status: String = row.try_get("integrity_status")?;
+    let legal_hold_status: String = row.try_get("legal_hold_status")?;
+    let disposition_status: String = row.try_get("disposition_status")?;
+    let file_name: Option<String> = row.try_get("file_name")?;
+    let expected_sha256: String = row.try_get("expected_sha256")?;
+    Ok(EvidenceIntegrityItem {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        title: row.try_get("title")?,
+        evidence_status: evidence_status.clone(),
+        quality_status_label: evidence_status_label(&evidence_status).to_string(),
+        sensitivity: row.try_get("sensitivity")?,
+        owner_id: row.try_get("owner_id")?,
+        owner_display: row.try_get("owner_display")?,
+        artifact_reference_present: file_name
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        expected_sha256_present: !expected_sha256.trim().is_empty(),
+        file_name,
+        expected_sha256,
+        last_calculated_sha256: row.try_get("last_calculated_sha256")?,
+        last_integrity_checked_at: row.try_get("last_integrity_checked_at")?,
+        integrity_status_label: integrity_status_label(&integrity_status).to_string(),
+        integrity_status,
+        integrity_mismatch: row.try_get("integrity_mismatch")?,
+        quarantine_status: row.try_get("quarantine_status")?,
+        integrity_checked_by_id: row.try_get("integrity_checked_by_id")?,
+        integrity_checked_by_display: row.try_get("integrity_checked_by_display")?,
+        integrity_result: row.try_get("integrity_result")?,
+        integrity_error_class: row.try_get("integrity_error_class")?,
+        integrity_review_note: row.try_get("integrity_review_note")?,
+        valid_until: row.try_get("valid_until")?,
+        retention_until: row.try_get("retention_until")?,
+        retention_due_at: row.try_get("retention_due_at")?,
+        legal_hold_status_label: legal_hold_status_label(&legal_hold_status).to_string(),
+        legal_hold_status,
+        legal_hold_reason: row.try_get("legal_hold_reason")?,
+        legal_hold_set_by: row.try_get("legal_hold_set_by")?,
+        legal_hold_set_by_display: row.try_get("legal_hold_set_by_display")?,
+        legal_hold_set_at: row.try_get("legal_hold_set_at")?,
+        legal_hold_released_by: row.try_get("legal_hold_released_by")?,
+        legal_hold_released_by_display: row.try_get("legal_hold_released_by_display")?,
+        legal_hold_released_at: row.try_get("legal_hold_released_at")?,
+        legal_hold_release_reason: row.try_get("legal_hold_release_reason")?,
+        disposition_status_label: disposition_status_label(&disposition_status).to_string(),
+        disposition_status,
+        disposition_due_at: row.try_get("disposition_due_at")?,
+        disposition_decision: row.try_get("disposition_decision")?,
+        disposition_reason: row.try_get("disposition_reason")?,
+        disposition_decided_by: row.try_get("disposition_decided_by")?,
+        disposition_decided_by_display: row.try_get("disposition_decided_by_display")?,
+        disposition_decided_at: row.try_get("disposition_decided_at")?,
+        disposition_blocked_reason: row.try_get("disposition_blocked_reason")?,
+        disposal_candidate: row.try_get("disposal_candidate")?,
+        legal_hold_blocks_disposition: row.try_get("legal_hold_blocks_disposition")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn evidence_integrity_event_from_pg_row(row: PgRow) -> Result<EvidenceIntegrityEvent, sqlx::Error> {
+    let detail_text: String = row.try_get("detail_json_text")?;
+    Ok(EvidenceIntegrityEvent {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        evidence_id: row.try_get("evidence_id")?,
+        event_type: row.try_get("event_type")?,
+        actor_id: row.try_get("actor_id")?,
+        actor_display: row.try_get("actor_display")?,
+        integrity_status: row.try_get("integrity_status")?,
+        legal_hold_status: row.try_get("legal_hold_status")?,
+        disposition_status: row.try_get("disposition_status")?,
+        mismatch: row.try_get("mismatch")?,
+        error_class: row.try_get("error_class")?,
+        detail: parse_json_value(&detail_text),
+        note: row.try_get("note")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn evidence_integrity_event_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<EvidenceIntegrityEvent, sqlx::Error> {
+    let detail_text: String = row.try_get("detail_json_text")?;
+    Ok(EvidenceIntegrityEvent {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        evidence_id: row.try_get("evidence_id")?,
+        event_type: row.try_get("event_type")?,
+        actor_id: row.try_get("actor_id")?,
+        actor_display: row.try_get("actor_display")?,
+        integrity_status: row.try_get("integrity_status")?,
+        legal_hold_status: row.try_get("legal_hold_status")?,
+        disposition_status: row.try_get("disposition_status")?,
+        mismatch: row.try_get("mismatch")?,
+        error_class: row.try_get("error_class")?,
+        detail: parse_json_value(&detail_text),
+        note: row.try_get("note")?,
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn parse_json_value(value: &str) -> Value {
+    serde_json::from_str(value).unwrap_or_else(|_| json!({}))
 }
 
 async fn evidence_overview_postgres(

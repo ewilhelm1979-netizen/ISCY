@@ -74,7 +74,7 @@ Erfolgskriterium:
 
 Ziel: Evidence soll nicht nur vorhanden sein, sondern belastbar bewertet werden.
 
-Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert.
+Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert. Im Unreleased-Stand kommt Evidence Integrity & Disposition Phase 1 hinzu.
 
 Umgesetzt:
 
@@ -89,11 +89,17 @@ Umgesetzt:
 - Schutzklassen `PUBLIC`, `INTERNAL`, `CONFIDENTIAL` und `RESTRICTED`.
 - Quality-Issues und Betriebszentrale fuer abgelaufene, bald ablaufende, ungehashte oder ohne Retention gefuehrte Evidence.
 - Incident-/NIS2-/DORA-/DSGVO-Exporte weisen Version, Schutzklasse, Gueltigkeit und SHA-256 aus.
+- Migration `0033_rust_evidence_integrity_disposition` ergaenzt Integritaetsstatus, letzten Re-Hash-Zeitpunkt, berechneten Hash, sichere Fehlerklasse, Quarantaene-/Review-Status, Legal Hold, Retention-/Disposition-Metadaten und eine eigene Evidence-Integritaetsereignistabelle.
+- Weboberflaeche unter `/evidence/integrity/`.
+- API-Pfade fuer sichere Integritaetsuebersicht, einzelne Re-Hash-Pruefung, begrenzte Batch-Pruefung, Integritaetsereignisse, Legal-Hold-Set/Release und dokumentierte Disposition-Entscheidungen.
+- Serverseitige SHA-256-Neuberechnung vorhandener Evidence-Artefakte mit Status `valid`, `mismatch`, `missing_artifact` oder `check_failed`.
+- Legal Hold kann Disposition-Entscheidungen blockieren und wird mit Begruendung, Akteurreferenz und Zeitpunkt auditierbar gefuehrt.
+- Disposition bleibt in Phase 1 ein Governance-/Audit-Metadatenmodell; `disposition_completed_metadata_only` loescht keine Dateien.
 
 Naechste Vertiefung:
 
-- Periodische Re-Hash-Pruefung gespeicherter Dateien und Quarantaene bei Integritaetsabweichung.
-- Legal-Hold-, Freigabe- und dokumentierter Loesch-/Disposition-Workflow nach Ende der Retention.
+- Periodischen Re-Hash-Worker mit Betriebssignalen und Queue-Steuerung ergaenzen.
+- Kontrollierte physische Loeschung/Datenvernichtung als getrennten, spaeteren Meilenstein entwerfen.
 - Optionales S3-/Objektspeicher-Backend inklusive Restore- und Integritaetsdrill.
 
 Erfolgskriterium:
@@ -211,10 +217,12 @@ Offen:
 - signierte MSI-/PKG-/deb-/rpm-Pakete und Release-Provenance bereitstellen.
 - lokale CSR-Erzeugung und providerunabhaengige CA-Anbindung als eigener spaeterer Meilenstein untersuchen.
 
-Bewusst nicht Teil der fachuebergreifenden Notifications sind Management-/Regulatory-Templates, Evidence-Legal-Hold,
-Disposition oder kontrollierte Loeschung, Re-Hash-Worker, Objektspeicher,
-CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete, Release-Provenance sowie
-Performance-, HA- und visuelle Regressionserweiterungen.
+Bewusst nicht Teil der fachuebergreifenden Notifications sind Management-/
+Regulatory-Templates, Evidence Integrity & Disposition als eigener
+Governance-Workflow, kontrollierte physische Loeschung, Re-Hash-Worker,
+Objektspeicher, CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete,
+Release-Provenance sowie Performance-, HA- und visuelle
+Regressionserweiterungen.
 
 Erfolgskriterium:
 
@@ -223,7 +231,7 @@ Erfolgskriterium:
 ## Empfohlene Umsetzungsreihenfolge
 
 1. Feinere Template-Varianten und kontextsensitive NIS2-/DORA-/DSGVO-Pruefpakete auf Basis der neuen Management-/Regulatory-Template-Schicht.
-2. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend.
+2. Evidence-Integrity-Worker, kontrollierte physische Disposition und optionales Objektspeicher-Backend.
 3. Signierte Agent-Pakete, Release-Provenance und eine spaetere getrennte CA-/PKI-Stufe.
 
 ## Verbleibende Roadmap
@@ -238,7 +246,8 @@ Erfolgskriterium:
 | Unreleased | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
 | Unreleased | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen, Exit-Test-Nachweise und tenantgesicherte Evidence-/Control-/Risk-Links. |
 | Umgesetzt / Vertiefung | Management-/Regulatory-Templates | Wiederholbare ISO-27001-, NIS2-, DORA-, KRITIS- und Governance-Pakete werden aus bestehenden Snapshots erzeugt; feinere Varianten koennen spaeter folgen. |
-| Reifegrad | Evidence-Disposition und Objektspeicher | Legal Hold, kontrollierte Loeschung, periodische Integritaetspruefung und Storage-Restore sind auditierbar. |
+| Unreleased | Evidence Integrity & Disposition Phase 1 | Manuelle und begrenzte Batch-Re-Hash-Pruefung, Legal Hold, metadata-only Disposition und auditierbare Integritaetsereignisse sind tenantgebunden verfuegbar. |
+| Reifegrad | Evidence-Worker, physische Disposition und Objektspeicher | Periodische Integritaetspruefung, kontrollierte Datenvernichtung und Storage-Restore sind auditierbar. |
 | Reifegrad | Performance, HA und visuelle Regression | Lastgrenzen, Mehrinstanzbetrieb und UI-Regressionen sind messbar abgesichert. |
 
 ## Abgrenzung
