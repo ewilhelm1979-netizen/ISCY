@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
     fs,
-    path::{Path as FsPath, PathBuf},
+    path::{Component, Path as FsPath, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -1479,6 +1479,36 @@ pub struct EvidenceQualityResponse {
     pub quality: evidence_store::EvidenceQualityOverview,
 }
 
+#[derive(Debug, Serialize)]
+pub struct EvidenceIntegrityResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub integrity: evidence_store::EvidenceIntegrityOverview,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceIntegrityItemResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub item: evidence_store::EvidenceIntegrityItem,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceIntegrityBatchResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub checked: usize,
+    pub items: Vec<evidence_store::EvidenceIntegrityItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceIntegrityEventsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub evidence_id: i64,
+    pub events: Vec<evidence_store::EvidenceIntegrityEvent>,
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct WebContextQuery {
     pub tenant_id: Option<i64>,
@@ -1547,6 +1577,29 @@ pub struct WebAiGovernanceLinkForm {
 pub struct WebAiGovernanceGapTaskForm {
     pub requirement_key: String,
     pub phase_id: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebEvidenceLegalHoldForm {
+    pub reason: String,
+    pub review_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebEvidenceLegalHoldReleaseForm {
+    pub release_reason: String,
+    pub review_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebEvidenceDispositionForm {
+    pub disposition_status: String,
+    pub retention_due_at: Option<String>,
+    pub disposition_due_at: Option<String>,
+    pub decision: Option<String>,
+    pub reason: String,
+    pub blocked_reason: Option<String>,
+    pub review_note: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -8953,6 +9006,569 @@ async fn evidence_quality(
     }
 }
 
+async fn evidence_integrity(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .evidence_integrity_overview(context.tenant_id, 500)
+        .await
+    {
+        Ok(integrity) => (
+            StatusCode::OK,
+            Json(EvidenceIntegrityResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                integrity,
+            }),
+        )
+            .into_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Evidence-Integrity konnte nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_integrity_check(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match run_evidence_integrity_check(&state, &store, &context, evidence_id).await {
+        Ok(Some(item)) => (
+            StatusCode::OK,
+            Json(EvidenceIntegrityItemResponse {
+                accepted: true,
+                api_version: "v1",
+                item,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+async fn evidence_integrity_batch_checks(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<evidence_store::EvidenceIntegrityBatchRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    let targets = if let Some(evidence_ids) = payload.evidence_ids {
+        evidence_ids
+            .into_iter()
+            .filter(|id| *id > 0)
+            .take(25)
+            .collect::<Vec<_>>()
+    } else {
+        match store
+            .evidence_integrity_targets(context.tenant_id, payload.limit.unwrap_or(10))
+            .await
+        {
+            Ok(targets) => targets.into_iter().map(|target| target.id).collect(),
+            Err(_) => {
+                return evidence_api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "database_error",
+                    "Evidence-Integrity-Targets konnten nicht sicher gelesen werden.",
+                );
+            }
+        }
+    };
+    let mut items = Vec::new();
+    for evidence_id in targets {
+        match run_evidence_integrity_check(&state, &store, &context, evidence_id).await {
+            Ok(Some(item)) => items.push(item),
+            Ok(None) => {}
+            Err(err) => return err.into_response(),
+        }
+    }
+    (
+        StatusCode::OK,
+        Json(EvidenceIntegrityBatchResponse {
+            accepted: true,
+            api_version: "v1",
+            checked: items.len(),
+            items,
+        }),
+    )
+        .into_response()
+}
+
+async fn evidence_integrity_events(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .evidence_integrity_events(context.tenant_id, evidence_id, 100)
+        .await
+    {
+        Ok(Some(events)) => (
+            StatusCode::OK,
+            Json(EvidenceIntegrityEventsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                events,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Evidence-Integrity-Ereignisse konnten nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_legal_hold(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<evidence_store::EvidenceLegalHoldRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .set_legal_hold(context.tenant_id, evidence_id, context.user_id, payload)
+        .await
+    {
+        Ok(Some(item)) => (
+            StatusCode::OK,
+            Json(EvidenceIntegrityItemResponse {
+                accepted: true,
+                api_version: "v1",
+                item,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(err) if evidence_payload_error(&err) => evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_evidence_governance_request",
+            "Evidence-Governance-Anfrage ist ungueltig.",
+        ),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Legal Hold konnte nicht sicher gespeichert werden.",
+        ),
+    }
+}
+
+async fn evidence_legal_hold_release(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<evidence_store::EvidenceLegalHoldReleaseRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .release_legal_hold(context.tenant_id, evidence_id, context.user_id, payload)
+        .await
+    {
+        Ok(Some(item)) => (
+            StatusCode::OK,
+            Json(EvidenceIntegrityItemResponse {
+                accepted: true,
+                api_version: "v1",
+                item,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(err) if evidence_payload_error(&err) => evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_evidence_governance_request",
+            "Evidence-Governance-Anfrage ist ungueltig.",
+        ),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Legal Hold konnte nicht sicher freigegeben werden.",
+        ),
+    }
+}
+
+async fn evidence_disposition(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<evidence_store::EvidenceDispositionRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .decide_disposition(context.tenant_id, evidence_id, context.user_id, payload)
+        .await
+    {
+        Ok(Some(item)) => (
+            StatusCode::OK,
+            Json(EvidenceIntegrityItemResponse {
+                accepted: true,
+                api_version: "v1",
+                item,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(err) if evidence_payload_error(&err) => evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_evidence_governance_request",
+            "Evidence-Disposition-Anfrage ist ungueltig.",
+        ),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Disposition-Entscheidung konnte nicht sicher gespeichert werden.",
+        ),
+    }
+}
+
+fn auth_error_response(err: RequiredTenantContextError) -> Response {
+    (
+        err.status_code(),
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: err.error_code(),
+            message: err.message().to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn evidence_api_error(
+    status: StatusCode,
+    error_code: &'static str,
+    message: &'static str,
+) -> Response {
+    (
+        status,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: message.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn evidence_not_found_api_response() -> Response {
+    evidence_api_error(
+        StatusCode::NOT_FOUND,
+        "evidence_not_found",
+        "Evidence wurde fuer diesen Tenant nicht gefunden.",
+    )
+}
+
+fn evidence_payload_error(err: &anyhow::Error) -> bool {
+    evidence_upload_payload_error(err)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EvidenceIntegrityActionError {
+    Database,
+    StorageUnavailable,
+    StorageRead,
+}
+
+impl EvidenceIntegrityActionError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Database => evidence_api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "Evidence-Integrity konnte nicht sicher gespeichert werden.",
+            ),
+            Self::StorageUnavailable => evidence_api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "evidence_storage_unavailable",
+                "Evidence-Dateispeicher ist nicht sicher verfuegbar.",
+            ),
+            Self::StorageRead => evidence_api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "evidence_integrity_check_failed",
+                "Evidence-Integritaetscheck konnte nicht sicher ausgefuehrt werden.",
+            ),
+        }
+    }
+}
+
+async fn run_evidence_integrity_check(
+    state: &AppState,
+    store: &EvidenceStore,
+    context: &AuthenticatedTenantContext,
+    evidence_id: i64,
+) -> Result<Option<evidence_store::EvidenceIntegrityItem>, EvidenceIntegrityActionError> {
+    let target = store
+        .evidence_integrity_target(context.tenant_id, evidence_id)
+        .await
+        .map_err(|_| EvidenceIntegrityActionError::Database)?;
+    let Some(target) = target else {
+        return Ok(None);
+    };
+    store
+        .record_evidence_integrity_event(
+            context.tenant_id,
+            target.id,
+            Some(context.user_id),
+            "integrity_check_started",
+            serde_json::json!({
+                "artifact_reference_present": target.file_name.as_deref().is_some_and(|value| !value.trim().is_empty()),
+                "expected_hash_present": !target.expected_sha256.trim().is_empty(),
+            }),
+            "",
+        )
+        .await
+        .map_err(|_| EvidenceIntegrityActionError::Database)?;
+
+    let update = evidence_integrity_check_update(state, &target).await?;
+    store
+        .apply_integrity_check_result(context.tenant_id, target.id, context.user_id, update)
+        .await
+        .map_err(|_| EvidenceIntegrityActionError::Database)
+}
+
+async fn evidence_integrity_check_update(
+    state: &AppState,
+    target: &evidence_store::EvidenceIntegrityTarget,
+) -> Result<evidence_store::EvidenceIntegrityCheckUpdate, EvidenceIntegrityActionError> {
+    let expected = target.expected_sha256.trim().to_ascii_lowercase();
+    let Some(stored_path) = target
+        .file_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(evidence_integrity_update(
+            "",
+            "missing_artifact",
+            false,
+            "none",
+            "Keine Artefaktreferenz gespeichert.",
+            "artifact_reference_missing",
+        ));
+    };
+    let media_root = evidence_media_root(state);
+    let file_path = match resolve_evidence_integrity_path(&media_root, stored_path) {
+        Ok(path) => path,
+        Err(EvidenceIntegrityPathError::Missing | EvidenceIntegrityPathError::Unsafe) => {
+            return Ok(evidence_integrity_update(
+                "",
+                "missing_artifact",
+                false,
+                "none",
+                "Artefakt fehlt oder wurde ausserhalb des sicheren Medienpfads referenziert.",
+                "artifact_missing_or_unsafe",
+            ));
+        }
+        Err(EvidenceIntegrityPathError::Storage) => {
+            return Err(EvidenceIntegrityActionError::StorageUnavailable);
+        }
+    };
+    let calculated = calculate_file_sha256(file_path)
+        .await
+        .map_err(|_| EvidenceIntegrityActionError::StorageRead)?;
+    if expected.is_empty() {
+        return Ok(evidence_integrity_update(
+            &calculated,
+            "check_failed",
+            false,
+            "review_required",
+            "Kein erwarteter SHA-256-Hash gespeichert; manuelle Review erforderlich.",
+            "expected_hash_missing",
+        ));
+    }
+    if calculated == expected {
+        Ok(evidence_integrity_update(
+            &calculated,
+            "valid",
+            false,
+            "none",
+            "Serverseitiger SHA-256-Re-Hash stimmt mit dem gespeicherten Hash ueberein.",
+            "",
+        ))
+    } else {
+        Ok(evidence_integrity_update(
+            &calculated,
+            "mismatch",
+            true,
+            "review_required",
+            "Serverseitiger SHA-256-Re-Hash weicht vom gespeicherten Hash ab.",
+            "hash_mismatch",
+        ))
+    }
+}
+
+fn evidence_integrity_update(
+    calculated_sha256: &str,
+    integrity_status: &str,
+    mismatch: bool,
+    quarantine_status: &str,
+    result: &str,
+    error_class: &str,
+) -> evidence_store::EvidenceIntegrityCheckUpdate {
+    evidence_store::EvidenceIntegrityCheckUpdate {
+        calculated_sha256: calculated_sha256.to_string(),
+        integrity_status: integrity_status.to_string(),
+        mismatch,
+        quarantine_status: quarantine_status.to_string(),
+        result: result.to_string(),
+        error_class: error_class.to_string(),
+        review_note: String::new(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvidenceIntegrityPathError {
+    Missing,
+    Unsafe,
+    Storage,
+}
+
+fn resolve_evidence_integrity_path(
+    media_root: &FsPath,
+    stored_path: &str,
+) -> Result<PathBuf, EvidenceIntegrityPathError> {
+    let relative = FsPath::new(stored_path);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
+    {
+        return Err(EvidenceIntegrityPathError::Unsafe);
+    }
+    let canonical_root = media_root.canonicalize().map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            EvidenceIntegrityPathError::Missing
+        } else {
+            EvidenceIntegrityPathError::Storage
+        }
+    })?;
+    let relative = strip_integrity_repeated_root_prefix(media_root, relative);
+    let candidate = canonical_root.join(relative);
+    let canonical_candidate = candidate.canonicalize().map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            EvidenceIntegrityPathError::Missing
+        } else {
+            EvidenceIntegrityPathError::Storage
+        }
+    })?;
+    if !canonical_candidate.starts_with(&canonical_root) || !canonical_candidate.is_file() {
+        return Err(EvidenceIntegrityPathError::Unsafe);
+    }
+    Ok(canonical_candidate)
+}
+
+fn strip_integrity_repeated_root_prefix<'a>(
+    media_root: &FsPath,
+    relative: &'a FsPath,
+) -> &'a FsPath {
+    let Some(root_name) = media_root.file_name() else {
+        return relative;
+    };
+    relative.strip_prefix(root_name).unwrap_or(relative)
+}
+
+async fn calculate_file_sha256(path: PathBuf) -> Result<String, ()> {
+    tokio::task::spawn_blocking(move || {
+        let bytes = fs::read(path).map_err(|_| ())?;
+        Ok::<_, ()>(format!("{:x}", Sha256::digest(&bytes)))
+    })
+    .await
+    .map_err(|_| ())?
+}
+
 async fn evidence_need_sync(
     Path(session_id): Path<i64>,
     State(state): State<AppState>,
@@ -14304,7 +14920,7 @@ async fn web_evidence(
                 </section>
                 <section class="panel wide">
                   <h2>Evidence-Qualitaet</h2>
-                  <p><a href="{}">Nachweisreife und Review-Luecken oeffnen</a></p>
+                  <p><a href="{}">Nachweisreife und Review-Luecken oeffnen</a> · <a href="{}">Integrity & Disposition oeffnen</a></p>
                 </section>
                 <section class="grid">
                   <article class="panel wide">
@@ -14346,6 +14962,7 @@ async fn web_evidence(
                 metric_card("Abgedeckt", overview.need_summary.covered),
                 metric_card("Qualitaet", overview.evidence_items.len() as i64),
                 web_path_with_context("/evidence/quality/", Some(&context)),
+                web_path_with_context("/evidence/integrity/", Some(&context)),
                 if rows.is_empty() {
                     r#"<tr><td colspan="8">Keine Evidenzen vorhanden.</td></tr>"#.to_string()
                 } else {
@@ -14494,6 +15111,485 @@ async fn web_evidence_quality(
             &err.to_string(),
         ),
     }
+}
+
+async fn web_evidence_integrity(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Evidence Integrity", "/evidence/integrity/");
+    };
+    let can_write = authenticated_tenant_context(&state, &headers)
+        .await
+        .is_ok_and(|auth_context| auth_context.can_write());
+    let Some(store) = state.evidence_store.as_ref() else {
+        return web_store_missing(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Evidence",
+        );
+    };
+    match store
+        .evidence_integrity_overview(context.tenant_id, 500)
+        .await
+    {
+        Ok(overview) => {
+            let rows = overview
+                .items
+                .iter()
+                .map(|item| evidence_integrity_web_row(&context, item, can_write))
+                .collect::<Vec<_>>()
+                .join("");
+            let body = format!(
+                r#"
+                <section class="hero compact"><h1>Evidence Integrity</h1><p>{} Nachweise · {} Mismatch · {} Legal Hold</p></section>
+                <section class="metrics">
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                  {}
+                </section>
+                <section class="panel wide">
+                  <h2>Integrity & Disposition</h2>
+                  <table>
+                    <thead><tr><th>Evidence</th><th>Integrity</th><th>Legal Hold</th><th>Disposition</th><th>Retention</th><th>Letzter Check</th><th>Aktionen</th></tr></thead>
+                    <tbody>{}</tbody>
+                  </table>
+                </section>
+                "#,
+                overview.summary.total_items,
+                overview.summary.mismatch,
+                overview.summary.legal_hold_active,
+                metric_card("Valid", overview.summary.valid),
+                metric_card("Mismatch", overview.summary.mismatch),
+                metric_card("Fehlend", overview.summary.missing_artifact),
+                metric_card("Legal Hold", overview.summary.legal_hold_active),
+                metric_card("Disposition faellig", overview.summary.disposition_due),
+                metric_card("Blockiert", overview.summary.disposition_blocked),
+                if rows.is_empty() {
+                    web_empty_row(7, "Keine Evidence vorhanden.")
+                } else {
+                    rows
+                },
+            );
+            web_page(
+                "Evidence Integrity",
+                "/evidence/integrity/",
+                Some(&context),
+                &body,
+            )
+        }
+        Err(err) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            &err.to_string(),
+        ),
+    }
+}
+
+async fn web_evidence_integrity_check(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(_query): Query<WebContextQuery>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Evidence Integrity", "/evidence/integrity/")
+                .into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Diese Aktion benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.evidence_store.clone() else {
+        return web_store_missing(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Evidence",
+        )
+        .into_response();
+    };
+    match run_evidence_integrity_check(&state, &store, &auth_context, evidence_id).await {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            "/evidence/integrity/",
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Evidence wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(_) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Integritaetscheck konnte nicht sicher ausgefuehrt werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_evidence_legal_hold(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(_query): Query<WebContextQuery>,
+    Form(form): Form<WebEvidenceLegalHoldForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Evidence Integrity", "/evidence/integrity/")
+                .into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Diese Aktion benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.evidence_store else {
+        return web_store_missing(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Evidence",
+        )
+        .into_response();
+    };
+    let payload = evidence_store::EvidenceLegalHoldRequest {
+        reason: form.reason,
+        review_note: form.review_note,
+    };
+    match store
+        .set_legal_hold(
+            auth_context.tenant_id,
+            evidence_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            "/evidence/integrity/",
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Evidence wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(_) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Legal Hold konnte nicht gespeichert werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_evidence_legal_hold_release(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(_query): Query<WebContextQuery>,
+    Form(form): Form<WebEvidenceLegalHoldReleaseForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Evidence Integrity", "/evidence/integrity/")
+                .into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Diese Aktion benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.evidence_store else {
+        return web_store_missing(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Evidence",
+        )
+        .into_response();
+    };
+    let payload = evidence_store::EvidenceLegalHoldReleaseRequest {
+        release_reason: form.release_reason,
+        review_note: form.review_note,
+    };
+    match store
+        .release_legal_hold(
+            auth_context.tenant_id,
+            evidence_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            "/evidence/integrity/",
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Aktiver Legal Hold wurde fuer diese Evidence nicht gefunden.",
+        )
+        .into_response(),
+        Err(_) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Legal Hold konnte nicht freigegeben werden.",
+        )
+        .into_response(),
+    }
+}
+
+async fn web_evidence_disposition(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(_query): Query<WebContextQuery>,
+    Form(form): Form<WebEvidenceDispositionForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Evidence Integrity", "/evidence/integrity/")
+                .into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !auth_context.can_write() {
+        return web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Diese Aktion benoetigt eine schreibende ISCY-Rolle.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.evidence_store else {
+        return web_store_missing(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Evidence",
+        )
+        .into_response();
+    };
+    let payload = evidence_store::EvidenceDispositionRequest {
+        disposition_status: form.disposition_status,
+        retention_due_at: form.retention_due_at,
+        disposition_due_at: form.disposition_due_at,
+        decision: form.decision,
+        reason: form.reason,
+        blocked_reason: form.blocked_reason,
+        review_note: form.review_note,
+    };
+    match store
+        .decide_disposition(
+            auth_context.tenant_id,
+            evidence_id,
+            auth_context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(Some(_)) => Redirect::to(&web_path_with_context(
+            "/evidence/integrity/",
+            Some(&context),
+        ))
+        .into_response(),
+        Ok(None) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Evidence wurde fuer diesen Tenant nicht gefunden.",
+        )
+        .into_response(),
+        Err(_) => web_error_page(
+            "Evidence Integrity",
+            "/evidence/integrity/",
+            &context,
+            "Disposition-Entscheidung konnte nicht gespeichert werden.",
+        )
+        .into_response(),
+    }
+}
+
+fn evidence_integrity_web_row(
+    context: &WebContext,
+    item: &evidence_store::EvidenceIntegrityItem,
+    can_write: bool,
+) -> String {
+    let artifact = if item.artifact_reference_present {
+        "Artefakt"
+    } else {
+        "kein Artefakt"
+    };
+    let hash = if item.expected_sha256_present {
+        item.expected_sha256
+            .get(..12)
+            .unwrap_or(&item.expected_sha256)
+            .to_string()
+    } else {
+        "-".to_string()
+    };
+    let actions = if can_write {
+        let check_action = web_path_with_context(
+            &format!("/evidence/{}/integrity-check", item.id),
+            Some(context),
+        );
+        let hold_action =
+            web_path_with_context(&format!("/evidence/{}/legal-hold", item.id), Some(context));
+        let release_action = web_path_with_context(
+            &format!("/evidence/{}/legal-hold/release", item.id),
+            Some(context),
+        );
+        let disposition_action =
+            web_path_with_context(&format!("/evidence/{}/disposition", item.id), Some(context));
+        format!(
+            r#"
+            <form method="post" action="{}"><button type="submit">Re-Hash</button></form>
+            <details><summary>Legal Hold</summary>
+              <form method="post" action="{}">
+                <label>Grund<input name="reason" required></label>
+                <label>Notiz<input name="review_note"></label>
+                <button type="submit">Setzen</button>
+              </form>
+              <form method="post" action="{}">
+                <label>Freigabegrund<input name="release_reason" required></label>
+                <label>Notiz<input name="review_note"></label>
+                <button type="submit">Freigeben</button>
+              </form>
+            </details>
+            <details><summary>Disposition</summary>
+              <form method="post" action="{}">
+                <label>Status<select name="disposition_status">{}</select></label>
+                <label>Retention faellig<input name="retention_due_at" type="date" value="{}"></label>
+                <label>Disposition faellig<input name="disposition_due_at" type="date" value="{}"></label>
+                <label>Entscheidung<input name="decision" value="{}"></label>
+                <label>Grund<input name="reason" required value="{}"></label>
+                <label>Blocker<input name="blocked_reason" value="{}"></label>
+                <label>Notiz<input name="review_note"></label>
+                <button type="submit">Dokumentieren</button>
+              </form>
+            </details>
+            "#,
+            html_escape(&check_action),
+            html_escape(&hold_action),
+            html_escape(&release_action),
+            html_escape(&disposition_action),
+            evidence_disposition_status_options(&item.disposition_status),
+            html_escape(item.retention_due_at.as_deref().unwrap_or("")),
+            html_escape(item.disposition_due_at.as_deref().unwrap_or("")),
+            html_escape(&item.disposition_decision),
+            html_escape(&item.disposition_reason),
+            html_escape(&item.disposition_blocked_reason),
+        )
+    } else {
+        "Nur Lesen".to_string()
+    };
+    format!(
+        r#"<tr><td><strong>{}</strong><br><span>{} · {} · Hash {}</span></td><td>{}<br><span>{}</span></td><td>{}<br><span>{}</span></td><td>{}<br><span>{}</span></td><td>{}<br><span>{}</span></td><td>{}</td><td>{}</td></tr>"#,
+        html_escape(&item.title),
+        html_escape(&item.quality_status_label),
+        artifact,
+        html_escape(&hash),
+        html_escape(&item.integrity_status_label),
+        html_escape(&item.integrity_result),
+        html_escape(&item.legal_hold_status_label),
+        html_escape(&item.legal_hold_reason),
+        html_escape(&item.disposition_status_label),
+        html_escape(&item.disposition_reason),
+        html_escape(item.retention_until.as_deref().unwrap_or("-")),
+        html_escape(item.disposition_due_at.as_deref().unwrap_or("-")),
+        html_escape(item.last_integrity_checked_at.as_deref().unwrap_or("-")),
+        actions,
+    )
+}
+
+fn evidence_disposition_status_options(selected: &str) -> String {
+    [
+        ("not_due", "nicht faellig"),
+        ("due", "faellig"),
+        ("review_required", "Review erforderlich"),
+        ("blocked_by_legal_hold", "durch Legal Hold blockiert"),
+        ("approved_for_disposition", "Disposition freigegeben"),
+        ("disposition_deferred", "Disposition verschoben"),
+        (
+            "disposition_completed_metadata_only",
+            "metadata-only abgeschlossen",
+        ),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        let selected_attr = if *value == selected { " selected" } else { "" };
+        format!(
+            r#"<option value="{}"{}>{}</option>"#,
+            html_escape(value),
+            selected_attr,
+            html_escape(label),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
 }
 
 async fn web_evidence_upload(
@@ -30892,7 +31988,32 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/evidence", get(evidence_overview))
         .route("/api/v1/evidence/quality", get(evidence_quality))
+        .route("/api/v1/evidence/integrity", get(evidence_integrity))
+        .route(
+            "/api/v1/evidence/integrity-checks",
+            post(evidence_integrity_batch_checks),
+        )
         .route("/api/v1/evidence/uploads", post(evidence_upload))
+        .route(
+            "/api/v1/evidence/{evidence_id}/integrity-check",
+            post(evidence_integrity_check),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/integrity-events",
+            get(evidence_integrity_events),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/legal-hold",
+            post(evidence_legal_hold),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/legal-hold/release",
+            post(evidence_legal_hold_release),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/disposition",
+            post(evidence_disposition),
+        )
         .route(
             "/api/v1/evidence/sessions/{session_id}/needs/sync",
             post(evidence_need_sync),
@@ -31134,6 +32255,23 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/roadmap/", get(web_roadmap))
         .route("/evidence/", get(web_evidence).post(web_evidence_upload))
         .route("/evidence/quality/", get(web_evidence_quality))
+        .route("/evidence/integrity/", get(web_evidence_integrity))
+        .route(
+            "/evidence/{evidence_id}/integrity-check",
+            post(web_evidence_integrity_check),
+        )
+        .route(
+            "/evidence/{evidence_id}/legal-hold",
+            post(web_evidence_legal_hold),
+        )
+        .route(
+            "/evidence/{evidence_id}/legal-hold/release",
+            post(web_evidence_legal_hold_release),
+        )
+        .route(
+            "/evidence/{evidence_id}/disposition",
+            post(web_evidence_disposition),
+        )
         .route("/assets/", get(web_assets))
         .route("/suppliers/", get(web_suppliers).post(web_suppliers_submit))
         .route("/suppliers/{supplier_id}/", get(web_supplier_detail))

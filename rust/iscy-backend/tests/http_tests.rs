@@ -655,8 +655,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0032_rust_management_regulatory_templates"));
-    assert!(html.contains("32/32 angewendet"));
+    assert!(html.contains("0033_rust_evidence_integrity_disposition"));
+    assert!(html.contains("33/33 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -8755,6 +8755,254 @@ async fn evidence_upload_rejects_foreign_tenant_links_and_removes_staged_files()
 }
 
 #[tokio::test]
+async fn evidence_integrity_legal_hold_and_disposition_are_tenant_scoped_and_metadata_only() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let media_root = test_media_root("evidence-integrity-disposition");
+    let evidence_dir = media_root.join("evidence/integrity");
+    fs::create_dir_all(&evidence_dir).unwrap();
+    fs::write(evidence_dir.join("valid.txt"), b"trusted evidence\n").unwrap();
+    fs::write(evidence_dir.join("changed.txt"), b"changed evidence\n").unwrap();
+    let valid_hash = format!("{:x}", Sha256::digest(b"trusted evidence\n"));
+    let stale_hash = "0".repeat(64);
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (
+            id, tenant_id, title, description, linked_requirement, file,
+            file_sha256, status, owner_id, valid_until, retention_until,
+            retention_reason
+        ) VALUES
+            (900, 1, 'Valid integrity evidence', 'Expected hash matches', 'NIS2 21', 'evidence/integrity/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
+            (901, 1, 'Mismatch integrity evidence', 'Expected hash is stale', 'NIS2 21', 'evidence/integrity/changed.txt', ?2, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
+            (902, 1, 'Missing artifact evidence', 'File is missing', 'NIS2 21', 'evidence/integrity/missing.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
+            (903, 2, 'Foreign tenant evidence', 'Foreign tenant', 'NIS2 21', 'evidence/integrity/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test')
+        "#,
+    )
+    .bind(&valid_hash)
+    .bind(&stale_hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/integrity")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert!(
+        payload["integrity"]["summary"]["total_items"]
+            .as_i64()
+            .unwrap()
+            >= 4
+    );
+
+    let readonly_check = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/integrity-check")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly_check.status(), StatusCode::FORBIDDEN);
+
+    for (evidence_id, expected_status, expected_mismatch) in [
+        (900, "valid", false),
+        (901, "mismatch", true),
+        (902, "missing_artifact", false),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/evidence/{evidence_id}/integrity-check"))
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["item"]["integrity_status"], expected_status);
+        assert_eq!(payload["item"]["integrity_mismatch"], expected_mismatch);
+    }
+
+    let foreign_check = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/integrity-check")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_check.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/legal-hold")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"reason":"Regulatory investigation","review_note":"Hold until review"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["item"]["legal_hold_status"], "active");
+    assert_eq!(payload["item"]["legal_hold_blocks_disposition"], true);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/disposition")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"disposition_status":"approved_for_disposition","retention_due_at":"2026-01-01","disposition_due_at":"2026-02-01","decision":"metadata-only approval","reason":"Retention due"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["item"]["disposition_status"],
+        "blocked_by_legal_hold"
+    );
+    assert!(media_root.join("evidence/integrity/valid.txt").exists());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/legal-hold/release")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"release_reason":"Review completed"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/disposition")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"disposition_status":"disposition_completed_metadata_only","retention_due_at":"2026-01-01","disposition_due_at":"2026-02-01","decision":"metadata-only completion","reason":"Disposition decision documented without physical deletion"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["item"]["disposition_status"],
+        "disposition_completed_metadata_only"
+    );
+    assert!(media_root.join("evidence/integrity/valid.txt").exists());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/900/integrity-events")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    let events = payload["events"].as_array().unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event["event_type"] == "integrity_hash_valid"));
+    assert!(events
+        .iter()
+        .any(|event| event["event_type"] == "legal_hold_set"));
+    assert!(events
+        .iter()
+        .any(|event| event["event_type"] == "disposition_decision_recorded"));
+    assert!(events.iter().all(|event| event.get("file").is_none()));
+
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
 async fn rust_web_evidence_accepts_file_upload_from_form() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -8875,6 +9123,59 @@ async fn rust_web_evidence_quality_renders_maturity_queue() {
     assert!(html.contains("Incident Playbook"));
     assert!(html.contains("Datei oder Artefaktreferenz fehlt"));
     assert!(html.contains("Nachweis f"));
+}
+
+#[tokio::test]
+async fn rust_web_evidence_integrity_renders_safe_metadata_and_write_actions_by_role() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool))),
+    );
+
+    let readonly = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/evidence/integrity/?tenant_id=1&user_id=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly.status(), StatusCode::OK);
+    let body = to_bytes(readonly.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Evidence Integrity"));
+    assert!(html.contains("MFA rollout evidence"));
+    assert!(html.contains("Nur Lesen"));
+    assert!(!html.contains("Re-Hash"));
+
+    let admin = app
+        .oneshot(
+            Request::builder()
+                .uri("/evidence/integrity/")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admin.status(), StatusCode::OK);
+    let body = to_bytes(admin.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Evidence Integrity"));
+    assert!(html.contains("MFA rollout evidence"));
+    assert!(html.contains("Re-Hash"));
+    assert!(html.contains("Legal Hold"));
+    assert!(html.contains("Disposition"));
 }
 
 #[tokio::test]
@@ -12857,7 +13158,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0029_rust_cross_domain_notifications",
             "0030_rust_notification_dispatch_claim",
             "0031_rust_supplier_review_workflow",
-            "0032_rust_management_regulatory_templates"
+            "0032_rust_management_regulatory_templates",
+            "0033_rust_evidence_integrity_disposition"
         ]
     );
     assert!(

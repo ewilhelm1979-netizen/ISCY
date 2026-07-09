@@ -222,6 +222,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_MANAGEMENT_REGULATORY_TEMPLATE_SCHEMA,
         postgres_sql: POSTGRES_MANAGEMENT_REGULATORY_TEMPLATE_SCHEMA,
     },
+    Migration {
+        version: "0033_rust_evidence_integrity_disposition",
+        sqlite_sql: SQLITE_EVIDENCE_INTEGRITY_DISPOSITION_SCHEMA,
+        postgres_sql: POSTGRES_EVIDENCE_INTEGRITY_DISPOSITION_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -962,6 +967,85 @@ CREATE INDEX IF NOT EXISTS idx_management_review_audit_tenant
     ON management_review_audit_event(tenant_id, review_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_management_review_template_type
     ON reports_managementreviewpackage(tenant_id, template_type, created_at);
+"#;
+
+const SQLITE_EVIDENCE_INTEGRITY_DISPOSITION_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS evidence_integrity_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    evidence_id INTEGER NOT NULL,
+    event_type varchar(64) NOT NULL,
+    actor_id INTEGER NULL,
+    integrity_status varchar(40) NOT NULL DEFAULT '',
+    legal_hold_status varchar(24) NOT NULL DEFAULT '',
+    disposition_status varchar(48) NOT NULL DEFAULT '',
+    mismatch bool NOT NULL DEFAULT 0,
+    error_class varchar(64) NOT NULL DEFAULT '',
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_integrity_event_tenant
+    ON evidence_integrity_event(tenant_id, evidence_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_integrity_status
+    ON evidence_evidenceitem(tenant_id, integrity_status, last_integrity_checked_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_legal_hold
+    ON evidence_evidenceitem(tenant_id, legal_hold_status);
+CREATE INDEX IF NOT EXISTS idx_evidence_disposition
+    ON evidence_evidenceitem(tenant_id, disposition_status, disposition_due_at);
+"#;
+
+const POSTGRES_EVIDENCE_INTEGRITY_DISPOSITION_SCHEMA: &str = r#"
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS last_integrity_checked_at TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS last_calculated_sha256 varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS integrity_status varchar(40) NOT NULL DEFAULT 'not_checked';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS integrity_mismatch BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS quarantine_status varchar(32) NOT NULL DEFAULT 'none';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS integrity_checked_by_id BIGINT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS integrity_result TEXT NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS integrity_error_class varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS integrity_review_note TEXT NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS legal_hold_status varchar(24) NOT NULL DEFAULT 'none';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS legal_hold_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS legal_hold_set_by BIGINT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS legal_hold_set_at TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS legal_hold_released_by BIGINT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS legal_hold_released_at TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS legal_hold_release_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_status varchar(48) NOT NULL DEFAULT 'not_due';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS retention_due_at TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_due_at TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_decision varchar(64) NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_decided_by BIGINT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_decided_at TEXT NULL;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposition_blocked_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS disposal_candidate BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE evidence_evidenceitem ADD COLUMN IF NOT EXISTS legal_hold_blocks_disposition BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE TABLE IF NOT EXISTS evidence_integrity_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    evidence_id BIGINT NOT NULL,
+    event_type varchar(64) NOT NULL,
+    actor_id BIGINT NULL,
+    integrity_status varchar(40) NOT NULL DEFAULT '',
+    legal_hold_status varchar(24) NOT NULL DEFAULT '',
+    disposition_status varchar(48) NOT NULL DEFAULT '',
+    mismatch BOOLEAN NOT NULL DEFAULT FALSE,
+    error_class varchar(64) NOT NULL DEFAULT '',
+    detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_integrity_event_tenant
+    ON evidence_integrity_event(tenant_id, evidence_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_integrity_status
+    ON evidence_evidenceitem(tenant_id, integrity_status, last_integrity_checked_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_legal_hold
+    ON evidence_evidenceitem(tenant_id, legal_hold_status);
+CREATE INDEX IF NOT EXISTS idx_evidence_disposition
+    ON evidence_evidenceitem(tenant_id, disposition_status, disposition_due_at);
 "#;
 
 const SQLITE_SUPPLIER_RISK_CORE_SCHEMA: &str = r#"
@@ -3347,6 +3431,44 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'st
             ] {
                 ensure_sqlite_column(pool, "reports_managementreviewpackage", column, definition)
                     .await?;
+            }
+        }
+        if migration.version == "0033_rust_evidence_integrity_disposition" {
+            for (column, definition) in [
+                ("last_integrity_checked_at", "TEXT NULL"),
+                ("last_calculated_sha256", "varchar(64) NOT NULL DEFAULT ''"),
+                (
+                    "integrity_status",
+                    "varchar(40) NOT NULL DEFAULT 'not_checked'",
+                ),
+                ("integrity_mismatch", "bool NOT NULL DEFAULT 0"),
+                ("quarantine_status", "varchar(32) NOT NULL DEFAULT 'none'"),
+                ("integrity_checked_by_id", "INTEGER NULL"),
+                ("integrity_result", "TEXT NOT NULL DEFAULT ''"),
+                ("integrity_error_class", "varchar(64) NOT NULL DEFAULT ''"),
+                ("integrity_review_note", "TEXT NOT NULL DEFAULT ''"),
+                ("legal_hold_status", "varchar(24) NOT NULL DEFAULT 'none'"),
+                ("legal_hold_reason", "TEXT NOT NULL DEFAULT ''"),
+                ("legal_hold_set_by", "INTEGER NULL"),
+                ("legal_hold_set_at", "TEXT NULL"),
+                ("legal_hold_released_by", "INTEGER NULL"),
+                ("legal_hold_released_at", "TEXT NULL"),
+                ("legal_hold_release_reason", "TEXT NOT NULL DEFAULT ''"),
+                (
+                    "disposition_status",
+                    "varchar(48) NOT NULL DEFAULT 'not_due'",
+                ),
+                ("retention_due_at", "TEXT NULL"),
+                ("disposition_due_at", "TEXT NULL"),
+                ("disposition_decision", "varchar(64) NOT NULL DEFAULT ''"),
+                ("disposition_reason", "TEXT NOT NULL DEFAULT ''"),
+                ("disposition_decided_by", "INTEGER NULL"),
+                ("disposition_decided_at", "TEXT NULL"),
+                ("disposition_blocked_reason", "TEXT NOT NULL DEFAULT ''"),
+                ("disposal_candidate", "bool NOT NULL DEFAULT 0"),
+                ("legal_hold_blocks_disposition", "bool NOT NULL DEFAULT 0"),
+            ] {
+                ensure_sqlite_column(pool, "evidence_evidenceitem", column, definition).await?;
             }
         }
         execute_sqlite_script(pool, migration.sqlite_sql)
@@ -6220,5 +6342,112 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_0033_is_restartable_and_preserves_evidence_integrity_metadata() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_evidenceitem (
+                id, tenant_id, title, file, file_sha256, status,
+                integrity_status, last_calculated_sha256, legal_hold_status,
+                legal_hold_reason, disposition_status, disposition_reason,
+                disposal_candidate, legal_hold_blocks_disposition
+            ) VALUES (
+                7701, 77, 'Existing Integrity Evidence', 'tenant-77/evidence.txt',
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'APPROVED',
+                'valid', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'active', 'Existing contractual hold', 'blocked_by_legal_hold',
+                'Existing disposition reason', 1, 1
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_integrity_event (
+                tenant_id, evidence_id, event_type, actor_id, integrity_status,
+                legal_hold_status, disposition_status, mismatch, error_class,
+                detail_json, note
+            ) VALUES (
+                77, 7701, 'integrity_hash_valid', 7, 'valid', 'active',
+                'blocked_by_legal_hold', 0, '', '{"scope":"restart-test"}',
+                'Existing integrity event'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0033_rust_evidence_integrity_disposition'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0033_rust_evidence_integrity_disposition"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let evidence = sqlx::query(
+            r#"
+            SELECT title, integrity_status, last_calculated_sha256,
+                   legal_hold_status, legal_hold_reason, disposition_status,
+                   disposition_reason, disposal_candidate,
+                   legal_hold_blocks_disposition
+            FROM evidence_evidenceitem
+            WHERE id = 7701
+            "#,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            evidence.get::<String, _>("title"),
+            "Existing Integrity Evidence"
+        );
+        assert_eq!(evidence.get::<String, _>("integrity_status"), "valid");
+        assert_eq!(
+            evidence.get::<String, _>("last_calculated_sha256"),
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        assert_eq!(evidence.get::<String, _>("legal_hold_status"), "active");
+        assert_eq!(
+            evidence.get::<String, _>("legal_hold_reason"),
+            "Existing contractual hold"
+        );
+        assert_eq!(
+            evidence.get::<String, _>("disposition_status"),
+            "blocked_by_legal_hold"
+        );
+        assert_eq!(
+            evidence.get::<String, _>("disposition_reason"),
+            "Existing disposition reason"
+        );
+        assert_eq!(evidence.get::<i64, _>("disposal_candidate"), 1);
+        assert_eq!(evidence.get::<i64, _>("legal_hold_blocks_disposition"), 1);
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM evidence_integrity_event WHERE tenant_id = 77 AND evidence_id = 7701",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(event_count, 1);
+        let index_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_evidence_integrity_event_tenant','idx_evidence_integrity_status','idx_evidence_legal_hold','idx_evidence_disposition')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(index_count, 4);
     }
 }

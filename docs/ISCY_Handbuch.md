@@ -450,6 +450,12 @@ Typische Funktionen:
 - Gueltigkeit, Aufbewahrungsfrist, Retention-Begruendung und Schutzklasse pflegen
 - abgelaufene und innerhalb von 30 Tagen ablaufende Nachweise in Quality-Queue und Betriebszentrale erkennen
 - Version, Schutzklasse, Gueltigkeit und SHA-256 in Incident-/Regulatory-Exporten ausweisen
+- Evidence-Integritaet unter `/evidence/integrity/` pruefen
+- vorhandene Evidence-Artefakte manuell oder begrenzt im Batch serverseitig neu mit SHA-256 hashen
+- Integritaetsstatus, letzte Pruefung, berechneten Hash, Mismatch, sichere Fehlerklasse und Quarantaene-/Review-Status anzeigen
+- Legal Hold mit Begruendung setzen oder freigeben
+- Disposition-/Retention-Entscheidungen als Governance-Metadaten dokumentieren
+- Integritaets-, Legal-Hold- und Disposition-Ereignisse auditierbar nachvollziehen
 
 Fachlicher Nutzen:
 
@@ -459,6 +465,7 @@ Fachlicher Nutzen:
 - klarere Rueckverfolgbarkeit durch stabile Linked-Requirement- und Evidence-Key-Bezuege
 - belastbarere Aussage, ob Nachweise nur vorhanden oder wirklich reviewt und verwertbar sind
 - nachvollziehbare Integritaet und Lifecycle-Steuerung ohne pauschal fest codierte gesetzliche Aufbewahrungsfrist
+- klare Trennung zwischen Nachweisqualitaet, Integritaetspruefung, Legal Hold und metadata-only Disposition
 
 Fuer Nicht-Sicherheitsleute:
 Evidence ist der Ordner mit den Belegen, aber strukturiert und auswertbar.
@@ -1151,10 +1158,79 @@ Responses noch in der Read-only-Ansicht ausgegeben. Administratoren duerfen
 Kanaele und Signalbereiche aendern; authentifizierte Read-only-Rollen sehen nur
 sichere tenantgebundene Delivery-Metadaten.
 
-Bewusst nicht umgesetzt sind Evidence-Legal-Hold und -Disposition,
-kontrollierte Loeschung, Re-Hash-Worker, Objektspeicher, CA-/PKI-/CSR-
-Funktionen, signierte Agent-Pakete, Release-Provenance sowie Performance-,
-HA- und visuelle Regressionserweiterungen.
+Bewusst nicht umgesetzt sind kontrollierte physische Loeschung, Re-Hash-Worker,
+Objektspeicher, CA-/PKI-/CSR-Funktionen, signierte Agent-Pakete,
+Release-Provenance sowie Performance-, HA- und visuelle
+Regressionserweiterungen.
+
+### 6.12 Evidence Integrity & Disposition Phase 1
+
+ISCY fuehrt Evidence-Integritaet als Governance- und Audit-Funktion, nicht als
+neue Evidence-Engine. Migration `0033_rust_evidence_integrity_disposition`
+erweitert bestehende Evidence-Datensaetze additiv um Integritaets-, Legal-Hold-
+und Disposition-Metadaten sowie um eine tenantgebundene Ereignistabelle fuer
+Integritaets- und Disposition-Ereignisse.
+
+Die Webansicht `/evidence/integrity/` zeigt berechtigten Nutzern sichere
+Metadaten je Evidence Item:
+
+- Evidence-ID, Titel, Typ, Owner und Quality-Status
+- letzter Integritaetscheck und Integritaetsstatus
+- ob ein gespeicherter Hash vorhanden ist
+- ob eine Integritaetsabweichung erkannt wurde
+- Legal-Hold-Status
+- Retention- und Disposition-Faelligkeit
+- Disposition-Status
+
+Die API stellt dieselben Grenzen maschinenlesbar bereit:
+
+- `GET /api/v1/evidence/integrity`
+- `POST /api/v1/evidence/{evidence_id}/integrity-check`
+- `POST /api/v1/evidence/integrity-checks`
+- `GET /api/v1/evidence/{evidence_id}/integrity-events`
+- `POST /api/v1/evidence/{evidence_id}/legal-hold`
+- `POST /api/v1/evidence/{evidence_id}/legal-hold/release`
+- `POST /api/v1/evidence/{evidence_id}/disposition`
+
+Admin- und Editor-Rollen duerfen Integritaetschecks ausloesen, Legal Holds
+setzen oder freigeben und Disposition-Entscheidungen dokumentieren. Read-only-
+Rollen sehen nur sichere Metadaten und Integritaetsereignisse. Alle Operationen
+bleiben in der Datenbankabfrage tenantgebunden; fremde Evidence-IDs werden nicht
+aufgeloest.
+
+Die Re-Hash-Pruefung berechnet SHA-256 serverseitig aus dem gespeicherten
+Evidence-Artefakt und vergleicht den Wert mit dem vorhandenen Evidence-Hash.
+Moegliche Integritaetsstatuswerte sind `not_checked`, `valid`, `mismatch`,
+`missing_artifact`, `check_failed`, `quarantined` und
+`accepted_with_exception`. Bei Mismatch setzt ISCY einen Review-/Quarantaene-
+Status und protokolliert ein sicheres Integritaetsereignis. Clientseitige
+Hashwerte werden fuer diese Pruefung nicht ungeprueft uebernommen.
+
+Legal Hold wird als Governance-Status mit Grund, Akteurreferenz und Zeitstempel
+gefuehrt. Ein aktiver Legal Hold blockiert Disposition-Entscheidungen und setzt
+den Disposition-Status auf `blocked_by_legal_hold`, wenn eine Entscheidung sonst
+zur Freigabe fuehren wuerde. ISCY formuliert daraus keine Rechtsberatung und
+trifft keine automatische rechtliche Bewertung.
+
+Disposition bleibt in Phase 1 ausdruecklich ein Metadaten- und
+Entscheidungsworkflow. Statuswerte wie `not_due`, `due`, `review_required`,
+`approved_for_disposition`, `disposition_deferred` und
+`disposition_completed_metadata_only` dokumentieren den Governance-Stand. Der
+Status `disposition_completed_metadata_only` bedeutet: Entscheidung und Audit
+sind dokumentiert, aber keine Evidence-Datei wird physisch geloescht und keine
+technische Datenvernichtung wird durchgefuehrt.
+
+Auditereignisse werden fuer gestartete und abgeschlossene Integritaetschecks,
+gueltige Hashes, Mismatches, fehlende Artefakte, Check-Fehler, Legal-Hold-
+Set/Release sowie Disposition-Review, -Blockade und -Entscheidung geschrieben.
+Auditdetails enthalten keine Secrets, Tokens, Authorization Header,
+vollstaendigen Evidence-Payloads, vertraulichen Dateiinhalte, SQL-Details,
+fremden Tenant-IDs oder unnoetige absolute Dateipfade.
+
+Bewusst nicht Teil dieser Phase sind ein periodischer Re-Hash-Scheduler,
+Objektspeicher/S3, kontrollierte physische Loeschung, technische
+Datenvernichtung, eine neue Evidence-, Risk-, Control- oder Notification-Engine
+sowie Plattform-, Docker-, Postgres-, nginx-, Nix- oder Dependency-Upgrades.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
@@ -1196,12 +1272,12 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, KRITIS und generische Security-Governance-Reviews. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, KRITIS und generische Security-Governance-Reviews. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
 1. Feinere Management-/Regulatory-Template-Varianten und kontextsensitive Pruefpakete
-2. Evidence-Disposition, periodische Re-Hash-Pruefung und optionales Objektspeicher-Backend
+2. Evidence-Integrity-Worker, kontrollierte physische Disposition und optionales Objektspeicher-Backend
 3. Signierte Agent-Pakete sowie eine spaetere getrennte CA-/PKI-Stufe
 4. Performance-, HA- und visuelle Regressionstests
 
