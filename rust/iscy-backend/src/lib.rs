@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use axum::{
     body::Bytes,
     extract::{DefaultBodyLimit, Json, Path, State},
@@ -44,6 +46,7 @@ pub mod cve_store;
 pub mod dashboard_store;
 pub mod db_admin;
 pub mod evidence_artifact_storage;
+pub mod evidence_object_storage;
 pub mod evidence_store;
 pub mod hardening;
 pub mod import_preview;
@@ -80,6 +83,11 @@ use dashboard_store::DashboardStore;
 use evidence_artifact_storage::{
     EvidenceArtifactDisposition, EvidenceArtifactDrill, EvidenceArtifactMetadata,
     EvidenceArtifactRef, FilesystemEvidenceArtifactStorage,
+};
+use evidence_object_storage::{
+    EvidenceObjectDrillResult, EvidenceObjectReference, EvidenceObjectReferenceAttachRequest,
+    EvidenceStorageBackendConfig, EvidenceStorageBackendConfigRequest, EvidenceStorageBackendEvent,
+    EvidenceStorageSecretReferenceStatus, BACKEND_S3_COMPATIBLE,
 };
 use evidence_store::EvidenceStore;
 use hardening::CommunitySecurityConfig;
@@ -2065,6 +2073,51 @@ pub struct EvidenceStorageBackendsResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
     pub backends: Vec<EvidenceStorageBackendStatus>,
+    pub configured_backends: Vec<EvidenceStorageBackendConfig>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceStorageBackendConfigResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub backend: EvidenceStorageBackendConfig,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceStorageBackendValidationResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub backend: EvidenceStorageBackendConfig,
+    pub secret_refs: Vec<EvidenceStorageSecretReferenceStatus>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceStorageBackendEventsResponse {
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub backend_id: String,
+    pub events: Vec<EvidenceStorageBackendEvent>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceObjectReferenceResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub evidence_id: i64,
+    pub reference: EvidenceObjectReference,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceObjectDrillResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub evidence_id: i64,
+    pub drill: EvidenceObjectDrillResult,
+    pub item: Option<evidence_store::EvidenceIntegrityItem>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -11151,15 +11204,167 @@ async fn evidence_storage_backends(State(state): State<AppState>, headers: Heade
         Ok(context) => context,
         Err(err) => return auth_error_response(err),
     };
+    let configs = if let Some(store) = state.evidence_store.as_ref() {
+        match store
+            .evidence_storage_backend_configs(context.tenant_id)
+            .await
+        {
+            Ok(configs) => configs,
+            Err(_) => {
+                return evidence_api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "database_error",
+                    "Evidence-Storage-Backend-Konfigurationen konnten nicht sicher gelesen werden.",
+                );
+            }
+        }
+    } else {
+        Vec::new()
+    };
     (
         StatusCode::OK,
         Json(EvidenceStorageBackendsResponse {
             api_version: "v1",
             tenant_id: context.tenant_id,
             backends: evidence_storage_backend_statuses(&state),
+            configured_backends: configs,
         }),
     )
         .into_response()
+}
+
+async fn evidence_storage_backend_upsert(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<EvidenceStorageBackendConfigRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .upsert_evidence_storage_backend_config(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(backend) => (
+            StatusCode::OK,
+            Json(EvidenceStorageBackendConfigResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                backend,
+            }),
+        )
+            .into_response(),
+        Err(err) => evidence_object_storage_error_response(
+            err,
+            "Evidence-Storage-Backend-Konfiguration konnte nicht gespeichert werden",
+        ),
+    }
+}
+
+async fn evidence_storage_backend_patch(
+    Path(backend_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(mut payload): Json<EvidenceStorageBackendConfigRequest>,
+) -> Response {
+    payload.backend_id = Some(backend_id);
+    evidence_storage_backend_upsert(State(state), headers, Json(payload)).await
+}
+
+async fn evidence_storage_backend_validate(
+    Path(backend_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .validate_evidence_storage_backend_config(context.tenant_id, &backend_id, context.user_id)
+        .await
+    {
+        Ok(Some((backend, secret_refs))) => (
+            StatusCode::OK,
+            Json(EvidenceStorageBackendValidationResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                backend,
+                secret_refs,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_api_error(
+            StatusCode::NOT_FOUND,
+            "storage_backend_not_found",
+            "Evidence-Storage-Backend wurde fuer diesen Tenant nicht gefunden.",
+        ),
+        Err(err) => evidence_object_storage_error_response(
+            err,
+            "Evidence-Storage-Backend-Validierung konnte nicht gespeichert werden",
+        ),
+    }
+}
+
+async fn evidence_storage_backend_events(
+    Path(backend_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .evidence_storage_backend_events(context.tenant_id, &backend_id, 100)
+        .await
+    {
+        Ok(events) => (
+            StatusCode::OK,
+            Json(EvidenceStorageBackendEventsResponse {
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                backend_id,
+                events,
+            }),
+        )
+            .into_response(),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Evidence-Storage-Backend-Ereignisse konnten nicht sicher gelesen werden.",
+        ),
+    }
 }
 
 async fn evidence_storage_detail(
@@ -11196,6 +11401,152 @@ async fn evidence_storage_detail(
             StatusCode::INTERNAL_SERVER_ERROR,
             "database_error",
             "Evidence-Storage-Metadaten konnten nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_object_reference_attach(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<EvidenceObjectReferenceAttachRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .attach_evidence_object_reference(context.tenant_id, evidence_id, context.user_id, payload)
+        .await
+    {
+        Ok(Some(reference)) => (
+            StatusCode::OK,
+            Json(EvidenceObjectReferenceResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                reference,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(err) => evidence_object_storage_error_response(
+            err,
+            "Evidence-Object-Storage-Referenz konnte nicht gespeichert werden",
+        ),
+    }
+}
+
+async fn evidence_object_reference_detail(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .evidence_object_reference(context.tenant_id, evidence_id)
+        .await
+    {
+        Ok(Some(reference)) => (
+            StatusCode::OK,
+            Json(EvidenceObjectReferenceResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                reference,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_api_error(
+            StatusCode::NOT_FOUND,
+            "object_reference_not_found",
+            "Evidence-Object-Storage-Referenz wurde fuer diesen Tenant nicht gefunden.",
+        ),
+        Err(_) => evidence_api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Evidence-Object-Storage-Referenz konnte nicht sicher gelesen werden.",
+        ),
+    }
+}
+
+async fn evidence_object_reference_verify(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match store
+        .verify_evidence_object_reference(context.tenant_id, evidence_id, context.user_id)
+        .await
+    {
+        Ok(Some(drill)) => {
+            let item = store
+                .apply_integrity_check_result(
+                    context.tenant_id,
+                    evidence_id,
+                    context.user_id,
+                    evidence_integrity_update_from_object_drill(&drill),
+                )
+                .await
+                .ok()
+                .flatten();
+            (
+                StatusCode::OK,
+                Json(EvidenceObjectDrillResponse {
+                    accepted: true,
+                    api_version: "v1",
+                    tenant_id: context.tenant_id,
+                    evidence_id,
+                    drill,
+                    item,
+                }),
+            )
+                .into_response()
+        }
+        Ok(None) => evidence_api_error(
+            StatusCode::NOT_FOUND,
+            "object_reference_not_found",
+            "Evidence-Object-Storage-Referenz wurde fuer diesen Tenant nicht gefunden.",
+        ),
+        Err(err) => evidence_object_storage_error_response(
+            err,
+            "Evidence-Object-Storage-Drill konnte nicht gespeichert werden",
         ),
     }
 }
@@ -11907,6 +12258,58 @@ fn evidence_api_error(
         .into_response()
 }
 
+fn evidence_object_storage_error_response(err: anyhow::Error, message: &'static str) -> Response {
+    let details = err
+        .chain()
+        .map(|cause| cause.to_string())
+        .collect::<Vec<_>>()
+        .join(": ");
+    if let Some(error_class) = object_storage_validation_error_class(&details) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: error_class,
+                message: format!("{message}: {error_class}."),
+            }),
+        )
+            .into_response();
+    }
+    evidence_api_error(StatusCode::INTERNAL_SERVER_ERROR, "database_error", message)
+}
+
+fn object_storage_validation_error_class(details: &str) -> Option<&'static str> {
+    const PREFIX: &str = "object_storage_validation:";
+    let class = details
+        .split(PREFIX)
+        .nth(1)
+        .and_then(|tail| tail.split([':', ' ']).next())
+        .unwrap_or("");
+    match class {
+        "invalid_backend_type" => Some("invalid_backend_type"),
+        "invalid_backend_status" => Some("invalid_backend_status"),
+        "invalid_endpoint" => Some("invalid_endpoint"),
+        "endpoint_contains_credentials" => Some("endpoint_contains_credentials"),
+        "insecure_scheme" => Some("insecure_scheme"),
+        "blocked_loopback" => Some("blocked_loopback"),
+        "blocked_link_local" => Some("blocked_link_local"),
+        "blocked_private_network" => Some("blocked_private_network"),
+        "blocked_metadata_service" => Some("blocked_metadata_service"),
+        "endpoint_policy_violation" => Some("endpoint_policy_violation"),
+        "invalid_reference" => Some("invalid_reference"),
+        "invalid_bucket_name" => Some("invalid_bucket_name"),
+        "invalid_object_key" => Some("invalid_object_key"),
+        "object_key_traversal" => Some("object_key_traversal"),
+        "object_key_outside_prefix" => Some("object_key_outside_prefix"),
+        "object_reference_tenant_mismatch" => Some("object_reference_tenant_mismatch"),
+        "invalid_object_reference_status" => Some("invalid_object_reference_status"),
+        "invalid_sha256" => Some("invalid_sha256"),
+        "invalid_object_size" => Some("invalid_object_size"),
+        _ => None,
+    }
+}
+
 fn evidence_not_found_api_response() -> Response {
     evidence_api_error(
         StatusCode::NOT_FOUND,
@@ -12182,6 +12585,35 @@ fn evidence_integrity_update_from_storage_drill(
             "Storage-/Restore-Drill: Artefakt ist lesbar, aber erwarteter SHA-256 fehlt."
         }
         _ => "Storage-/Restore-Drill konnte nicht sicher abgeschlossen werden.",
+    };
+    evidence_integrity_update(
+        &drill.calculated_sha256,
+        &drill.status,
+        drill.status == "mismatch",
+        quarantine_status,
+        result,
+        &drill.safe_error_class,
+    )
+}
+
+fn evidence_integrity_update_from_object_drill(
+    drill: &EvidenceObjectDrillResult,
+) -> evidence_store::EvidenceIntegrityCheckUpdate {
+    let quarantine_status = if drill.status == "valid" {
+        "none"
+    } else {
+        "review_required"
+    };
+    let result = match drill.status.as_str() {
+        "valid" => "Object-Storage-Contract-Drill: Referenz ist vorhanden und hash-konsistent.",
+        "mismatch" => "Object-Storage-Contract-Drill: Referenz ist vorhanden, Hash weicht ab.",
+        "missing_artifact" => {
+            "Object-Storage-Contract-Drill: Objekt fehlt oder ist nicht auffindbar."
+        }
+        _ if drill.safe_error_class == "validation_required" => {
+            "Object-Storage-Contract-Drill: Live-Pruefung benoetigt weitere Konfiguration."
+        }
+        _ => "Object-Storage-Contract-Drill konnte nicht sicher abgeschlossen werden.",
     };
     evidence_integrity_update(
         &drill.calculated_sha256,
@@ -19833,8 +20265,14 @@ async fn web_evidence_integrity(
                     "<section class=\"panel wide\"><h2>Integritaets-Worker</h2><p>Worker-Status konnte nicht gelesen werden.</p></section>".to_string()
                 }
             };
-            let backend_panel =
-                evidence_storage_backend_panel(&evidence_storage_backend_statuses(&state));
+            let configured_backends = store
+                .evidence_storage_backend_configs(context.tenant_id)
+                .await
+                .unwrap_or_default();
+            let backend_panel = evidence_storage_backend_panel(
+                &evidence_storage_backend_statuses(&state),
+                &configured_backends,
+            );
             let disposition_panel = evidence_disposition_candidate_panel(
                 &overview
                     .items
@@ -20490,7 +20928,10 @@ fn evidence_worker_panel(
     )
 }
 
-fn evidence_storage_backend_panel(backends: &[EvidenceStorageBackendStatus]) -> String {
+fn evidence_storage_backend_panel(
+    backends: &[EvidenceStorageBackendStatus],
+    configs: &[EvidenceStorageBackendConfig],
+) -> String {
     let rows = backends
         .iter()
         .map(|backend| {
@@ -20509,13 +20950,34 @@ fn evidence_storage_backend_panel(backends: &[EvidenceStorageBackendStatus]) -> 
         })
         .collect::<Vec<_>>()
         .join("");
+    let config_rows = configs
+        .iter()
+        .map(|config| {
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                html_escape(&config.backend_id),
+                html_escape(&config.backend_type),
+                html_escape(&config.status),
+                html_escape(&config.allowed_endpoint_policy),
+                html_escape(&safe_storage_bucket_display(config)),
+                html_escape(&safe_storage_prefix_display(config)),
+                html_escape(storage_backend_validation_label(config)),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
     format!(
         r#"
         <section class="panel wide">
           <h2>Storage-Backend-Status</h2>
-          <p>Object Storage ist vorbereitet und wird ohne echte Credentials oder externe Live-Pruefung angezeigt.</p>
+          <p>Object Storage ist metadata-only vorbereitet; Secret-Werte und vollstaendige Objektpfade werden nicht angezeigt.</p>
           <table>
             <thead><tr><th>Backend</th><th>Aktiv</th><th>Konfiguration</th><th>Status</th><th>Fehlerklasse</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+          <h3>Tenant-Backends</h3>
+          <table>
+            <thead><tr><th>ID</th><th>Typ</th><th>Status</th><th>Endpoint-Policy</th><th>Bucket</th><th>Prefix</th><th>Letzte Validierung</th></tr></thead>
             <tbody>{}</tbody>
           </table>
         </section>
@@ -20525,7 +20987,44 @@ fn evidence_storage_backend_panel(backends: &[EvidenceStorageBackendStatus]) -> 
         } else {
             rows
         },
+        if config_rows.is_empty() {
+            web_empty_row(
+                7,
+                "Keine Object-Storage-Backend-Metadaten fuer diesen Tenant erfasst.",
+            )
+        } else {
+            config_rows
+        },
     )
+}
+
+fn safe_storage_bucket_display(config: &EvidenceStorageBackendConfig) -> String {
+    if config.backend_type != BACKEND_S3_COMPATIBLE || config.bucket_name.trim().is_empty() {
+        "-".to_string()
+    } else {
+        config.bucket_name.clone()
+    }
+}
+
+fn safe_storage_prefix_display(config: &EvidenceStorageBackendConfig) -> String {
+    if config.key_prefix.trim().is_empty() {
+        "-".to_string()
+    } else {
+        format!(
+            "prefix:{}",
+            config.key_prefix.chars().take(32).collect::<String>()
+        )
+    }
+}
+
+fn storage_backend_validation_label(config: &EvidenceStorageBackendConfig) -> &str {
+    if !config.last_validation_error_class.trim().is_empty() {
+        &config.last_validation_error_class
+    } else if !config.last_validation_status.trim().is_empty() {
+        &config.last_validation_status
+    } else {
+        "nicht validiert"
+    }
 }
 
 fn evidence_disposition_candidate_panel(candidates: &[EvidenceDispositionPreview]) -> String {
@@ -39472,7 +39971,19 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/evidence/storage", get(evidence_storage))
         .route(
             "/api/v1/evidence/storage/backends",
-            get(evidence_storage_backends),
+            get(evidence_storage_backends).post(evidence_storage_backend_upsert),
+        )
+        .route(
+            "/api/v1/evidence/storage/backends/{backend_id}",
+            patch(evidence_storage_backend_patch),
+        )
+        .route(
+            "/api/v1/evidence/storage/backends/{backend_id}/validate",
+            post(evidence_storage_backend_validate),
+        )
+        .route(
+            "/api/v1/evidence/storage/backends/{backend_id}/events",
+            get(evidence_storage_backend_events),
         )
         .route(
             "/api/v1/evidence/integrity-checks",
@@ -39494,6 +40005,22 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/evidence/{evidence_id}/storage",
             get(evidence_storage_detail),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/storage/object-reference",
+            get(evidence_object_reference_detail).post(evidence_object_reference_attach),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/storage/attach-object",
+            post(evidence_object_reference_attach),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/storage/verify-object",
+            post(evidence_object_reference_verify),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/storage/object-drill",
+            post(evidence_object_reference_verify),
         )
         .route(
             "/api/v1/evidence/{evidence_id}/integrity-check",

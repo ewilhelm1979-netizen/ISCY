@@ -20,8 +20,11 @@ The project uses release tags for immutable release points. Changes under **Unre
 - ergaenzt tenantgebundene Evidence-Worker-APIs fuer Status, manuelle begrenzte Worker-Laeufe und Laufhistorie unter `/api/v1/evidence/integrity/worker*`
 - ergaenzt kontrollierte Disposition-APIs fuer Kandidaten, Preview, Approval, Execute, Cancel und Ereignisse; physische Aussonderung erfolgt nur nach dokumentierter Freigabe, ohne Legal Hold und ueber die sichere Storage-Abstraktion
 - ergaenzt Storage-Backend-Status unter `/api/v1/evidence/storage/backends` mit `local_filesystem` als Default und sicher vorbereiteten `s3_compatible`-Konfigurationssignalen ohne Live-Credentials oder Netzwerkaufrufe
+- ergaenzt Evidence Object Storage Client Phase 3 ueber additive Migration `0038_rust_evidence_object_storage_client` mit tenantgebundenen Backend-Konfigurationen, Secret-Referenzstatus, redaktionellen Object-Referenzen, Backend-Events und Contract-Drills
+- ergaenzt API-Pfade fuer Object-Storage-Backend-Metadaten, Endpoint-/Secret-Validierung, Backend-Events, Object-Referenz-Anbindung und Object-Storage-Drills unter `/api/v1/evidence/storage/backends*` und `/api/v1/evidence/{evidence_id}/storage/*`
 - erweitert `/evidence/integrity/` um Integritaets-Worker-Status, letzte Worker-Laeufe, Storage-Backend-Status, Disposition-Kandidaten sowie Freigabe-/Aussonderungsaktionen fuer schreibende Rollen
-- erweitert Regulatory Review-Pakete fuer NIS2, DORA, DSGVO und generische Governance um Evidence-Worker-, Storage-/Restore- und kontrollierte Disposition-Signale
+- erweitert `/evidence/integrity/` um tenantgebundene Object-Storage-Backend-Metadaten mit Endpoint-Policy, Bucket, Prefix, Validierungsstatus und sicheren Fehlerklassen ohne Secretwerte oder vollstaendige Object-Keys
+- erweitert Regulatory Review-Pakete fuer NIS2, DORA, DSGVO und generische Governance um Evidence-Worker-, Storage-/Restore-, Object-Storage-Contract- und kontrollierte Disposition-Signale
 - dokumentiert den lokalen PostgreSQL-Live-Haertungstest fuer Migration `0034_rust_supplier_product_security_governance` als erfolgreich nachgezogenen Preflight-Drill
 - ergaenzt Supplier/Product-Security-Deepening mit tenantgebundenem Governance-Modell fuer Lieferant, Produkt/Service, lokale Advisory-/PSIRT-/CVE-Metadaten, SBOM-/VEX-Bezuege, Review-Status, offene Massnahmen und Management-/Regulatory-Review-Bezug
 - ergaenzt additive Migration `0034_rust_supplier_product_security_governance` fuer Supplier/Product-Security-Datensaetze, Evidence-Links, Ereignis-/Audit-Historie und Vertrags-/Exit-Plan-Historie ohne destruktive Datenbankoperationen
@@ -73,6 +76,10 @@ The project uses release tags for immutable release points. Changes under **Unre
 - fuehrt physische Disposition nur ueber canonical-path-gepruefte Storage-Abstraktion aus und speichert Tombstone-Metadaten mit sicherer Fehlerklasse, Backend und Hash statt Rohpfaden oder Dateiinhalten
 - haelt Evidence-Worker-Start, Disposition-Approval und Disposition-Execute auf Administrator-/Editor-Rollen beschraenkt; Read-only-Rollen sehen nur sichere, tenantgebundene Metadaten
 - validiert vorbereitetes Object Storage nur ueber Endpoint-/Bucket-/Region- und Secret-Referenzsignale; echte Cloud-Credentials, Secretwerte und externe Netzwerkaufrufe werden nicht eingefuehrt
+- validiert Object-Storage-Endpoints gegen Credentials in URLs, unsichere Schemes, Loopback, Link-Local, private Netze und Metadata-Services; produktive DNS-/Redirect-/Live-Checks bleiben fuer einen separaten echten S3-Client reserviert
+- speichert Object-Storage-Secret-Referenzen nur als Referenzen und lehnt direkt wirkende Secretwerte, private-Key-Fragmente und URL-artige Secret-Inputs mit sicheren 4xx-Fehlerklassen ab
+- speichert keine vollstaendigen Object-Keys; Object-Referenzen persistieren nur redaktionelle Anzeige, SHA-256 des Keys, Tenant-/Evidence-Bindung, erwartete Hashes und Contract-Status
+- haelt Object-Storage-Backend-Konfiguration, Validierung, Object-Referenz-Anbindung und Contract-Drills tenantgebunden und auf Admin-/Editor-Schreibrollen beschraenkt; Read-only-Rollen sehen nur sichere Metadaten und Events
 - haelt Supplier/Product-Security-Datensaetze, Evidence-Links, Events und Vertrags-/Exit-Historie tenantgebunden; Admin-/Editor-Rollen duerfen schreiben, Read-only-Rollen sehen nur sichere Metadaten
 - validiert Status-, Severity-, Datums-, CVE-, Score-, Owner-, Supplier-, Evidence- und Referenzfelder mit sicheren 4xx-Fehlern ohne SQL-/Store-Details, Secrets, Rohpayloads oder absolute Dateipfade
 - speichert Advisory-/PSIRT-/CVE-Referenzen nur lokal als Text/URL und fuehrt keine externen Live-Abfragen aus; URL-Ausgabe in API und Web UI bleibt gegen unsichere Schemes und HTML-Injection abgesichert

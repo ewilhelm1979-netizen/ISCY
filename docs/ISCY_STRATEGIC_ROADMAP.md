@@ -79,7 +79,7 @@ Erfolgskriterium:
 
 Ziel: Evidence soll nicht nur vorhanden sein, sondern belastbar bewertet werden.
 
-Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert. Im Unreleased-Stand sind Evidence Integrity & Disposition Phase 1, Evidence Object Storage & Restore Drill Phase 2 sowie die Vertiefung mit Integritaets-Worker, kontrollierter physischer Disposition und vorbereitetem Object-Storage-Backend umgesetzt.
+Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert. Im Unreleased-Stand sind Evidence Integrity & Disposition Phase 1, Evidence Object Storage & Restore Drill Phase 2, Integritaets-Worker, kontrollierte physische Disposition, vorbereitetes Object-Storage-Backend sowie die Object-Storage-Client-Contract-Schicht mit Migration `0038_rust_evidence_object_storage_client` umgesetzt.
 
 Umgesetzt:
 
@@ -109,12 +109,16 @@ Umgesetzt:
 - Integritaets-Worker-APIs `GET /api/v1/evidence/integrity/worker`, `POST /api/v1/evidence/integrity/worker/run` und `GET /api/v1/evidence/integrity/worker/runs` liefern Betriebssignale, begrenzte manuelle Laeufe, Batch-/Runtime-Grenzen, Dry-Run und Laufhistorie.
 - Kontrollierte Disposition nutzt getrennte APIs fuer Kandidaten, Preview, Approval, Execute, Cancel und Ereignisse; Execute prueft vor jeder Storage-Operation Approval, Begruendung und Legal Hold und laeuft nur ueber die Storage-Abstraktion.
 - Storage-Backend-Status `GET /api/v1/evidence/storage/backends` zeigt `local_filesystem` als Default und ein vorbereitetes `s3_compatible`-Backend mit Konfigurationsvalidierung, aber ohne echte Cloud-Credentials oder externe Netzwerkaufrufe.
+- Migration `0038_rust_evidence_object_storage_client` ergaenzt tenantgebundene Object-Storage-Backend-Konfigurationen, Secret-Referenzstatus, sichere Object-Referenzen, Backend-Events und Contract-Drills.
+- Neue API-Pfade verwalten Backend-Metadaten, validieren Endpoint-/Bucket-/Secret-Referenzen, binden Object-Referenzen an Evidence und dokumentieren Object-Storage-Drills, ohne vollstaendige Object-Keys, Secretwerte oder Objektinhalte offenzulegen.
+- Endpoint- und Object-Key-Validierung blockiert Credentials in URLs, unsichere Schemes, Loopback, Link-Local, private Netze, Metadata-Services, Directory Traversal, fremde Prefixe und Object-Keys ohne aktuellen Tenant-/Evidence-Bezug.
+- Management-/Regulatory-Review-Pakete nehmen Object-Storage-Backend-, Konfigurations-, Drill- und Objekt-/Hash-Gaps als aggregierte Snapshot-Signale auf.
 - NIS2-, DORA-, DSGVO- und generische Review-Pakete nehmen Evidence-Worker-, Storage-/Restore-, Legal-Hold- und Disposition-Gaps als eingefrorene Snapshot-Signale auf.
 - Der PostgreSQL-Live-Haertungstest fuer Migration `0034_rust_supplier_product_security_governance` wurde lokal mit temporaerer PostgreSQL-Instanz, Supplier/Product-Security-API, Evidence-Link, Event- und Vertrags-/Exit-Historie erfolgreich nachgezogen.
 
 Naechste Vertiefung:
 
-- Produktiven S3-/Objektspeicher-Client mit Mock-/Contract-Tests erst in einem separaten Security-PR pruefen.
+- Echte S3-kompatible Live-Operationen, Streaming-Reads/Writes und kontrollierte Deletes erst in einem separaten Security-PR auf Basis der Contract-Schicht pruefen.
 - Vier-Augen-Prinzip fuer physische Disposition vorbereiten, falls das bestehende Rollenmodell fachlich erweitert wird.
 - Periodische Hintergrundausfuehrung des Evidence-Workers an den bestehenden Betriebs-/Scheduler-Rahmen anbinden.
 

@@ -1999,6 +1999,13 @@ async fn management_review_metrics_postgres(
         "evidence_integrity_mismatch": json_i64(&evidence_integrity_storage, "mismatch"),
         "evidence_storage_artifact_references": json_i64(&evidence_integrity_storage, "artifact_references"),
         "evidence_storage_drills_recorded": json_i64(&evidence_integrity_storage, "storage_drills_recorded"),
+        "evidence_object_storage_backends": json_i64(&evidence_integrity_storage, "object_storage_backends"),
+        "evidence_object_storage_ready_backends": json_i64(&evidence_integrity_storage, "object_storage_ready_backends"),
+        "evidence_object_storage_config_errors": json_i64(&evidence_integrity_storage, "object_storage_config_errors"),
+        "evidence_object_storage_refs": json_i64(&evidence_integrity_storage, "object_storage_refs"),
+        "evidence_object_storage_drills_recorded": json_i64(&evidence_integrity_storage, "object_storage_drills_recorded"),
+        "evidence_object_storage_drill_gaps": json_i64(&evidence_integrity_storage, "object_storage_drill_gaps"),
+        "evidence_object_storage_object_gaps": json_i64(&evidence_integrity_storage, "object_storage_object_gaps"),
         "evidence_worker_runs_recorded": json_i64(&evidence_integrity_storage, "worker_runs_recorded"),
         "evidence_worker_missing_runs": if json_i64(&evidence_integrity_storage, "total_items") > 0 && json_i64(&evidence_integrity_storage, "worker_runs_recorded") == 0 { 1 } else { 0 },
         "evidence_storage_drill_gaps": (json_i64(&evidence_integrity_storage, "total_items") - json_i64(&evidence_integrity_storage, "storage_drills_recorded")).max(0),
@@ -2045,6 +2052,13 @@ async fn management_review_metrics_sqlite(
         "evidence_integrity_mismatch": json_i64(&evidence_integrity_storage, "mismatch"),
         "evidence_storage_artifact_references": json_i64(&evidence_integrity_storage, "artifact_references"),
         "evidence_storage_drills_recorded": json_i64(&evidence_integrity_storage, "storage_drills_recorded"),
+        "evidence_object_storage_backends": json_i64(&evidence_integrity_storage, "object_storage_backends"),
+        "evidence_object_storage_ready_backends": json_i64(&evidence_integrity_storage, "object_storage_ready_backends"),
+        "evidence_object_storage_config_errors": json_i64(&evidence_integrity_storage, "object_storage_config_errors"),
+        "evidence_object_storage_refs": json_i64(&evidence_integrity_storage, "object_storage_refs"),
+        "evidence_object_storage_drills_recorded": json_i64(&evidence_integrity_storage, "object_storage_drills_recorded"),
+        "evidence_object_storage_drill_gaps": json_i64(&evidence_integrity_storage, "object_storage_drill_gaps"),
+        "evidence_object_storage_object_gaps": json_i64(&evidence_integrity_storage, "object_storage_object_gaps"),
         "evidence_worker_runs_recorded": json_i64(&evidence_integrity_storage, "worker_runs_recorded"),
         "evidence_worker_missing_runs": if json_i64(&evidence_integrity_storage, "total_items") > 0 && json_i64(&evidence_integrity_storage, "worker_runs_recorded") == 0 { 1 } else { 0 },
         "evidence_storage_drill_gaps": (json_i64(&evidence_integrity_storage, "total_items") - json_i64(&evidence_integrity_storage, "storage_drills_recorded")).max(0),
@@ -2080,6 +2094,13 @@ async fn evidence_integrity_storage_postgres(
         "artifact_references": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND file IS NOT NULL AND BTRIM(file) <> ''", tenant_id).await?,
         "expected_hash_present": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND (BTRIM(file_sha256) <> '' OR BTRIM(last_calculated_sha256) <> '')", tenant_id).await?,
         "storage_drills_recorded": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND last_integrity_checked_at IS NOT NULL AND BTRIM(last_integrity_checked_at::text) <> ''", tenant_id).await?,
+        "object_storage_backends": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_storage_backend_config WHERE tenant_id = $1 AND backend_type = 's3_compatible'", tenant_id).await?,
+        "object_storage_ready_backends": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_storage_backend_config WHERE tenant_id = $1 AND backend_type = 's3_compatible' AND status IN ('ready_for_test','ready')", tenant_id).await?,
+        "object_storage_config_errors": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_storage_backend_config WHERE tenant_id = $1 AND backend_type = 's3_compatible' AND (status = 'error' OR BTRIM(last_validation_error_class) <> '')", tenant_id).await?,
+        "object_storage_refs": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_object_reference WHERE tenant_id = $1", tenant_id).await?,
+        "object_storage_drills_recorded": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_object_reference WHERE tenant_id = $1 AND last_drill_at IS NOT NULL AND BTRIM(last_drill_at::text) <> ''", tenant_id).await?,
+        "object_storage_drill_gaps": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_object_reference WHERE tenant_id = $1 AND (last_drill_at IS NULL OR BTRIM(last_drill_at::text) = '')", tenant_id).await?,
+        "object_storage_object_gaps": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_object_reference WHERE tenant_id = $1 AND last_drill_error_class IN ('object_missing','object_unreadable','hash_mismatch','timeout','access_denied','backend_error','validation_required')", tenant_id).await?,
         "worker_runs_recorded": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_integrity_worker_run WHERE tenant_id = $1", tenant_id).await?,
         "legal_hold_active": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND legal_hold_status = 'active'", tenant_id).await?,
         "disposition_due": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND (disposition_status IN ('due', 'approved_for_disposition', 'blocked_by_legal_hold') OR (disposition_due_at IS NOT NULL AND disposition_due_at::text <= CURRENT_DATE::text))", tenant_id).await?,
@@ -2089,6 +2110,7 @@ async fn evidence_integrity_storage_postgres(
         "disposal_candidates": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND disposal_candidate = TRUE", tenant_id).await?,
         "notes": [
             "Nur aggregierte Statuswerte; Evidence-Dateinamen, Pfade und Rohinhalte sind ausgeschlossen.",
+            "Object-Storage-Metriken verwenden nur Backend-Metadaten, redaktionelle Object-Referenzen, Hashes und sichere Fehlerklassen; Secret-Werte und Objektinhalte sind ausgeschlossen.",
             "Physische Disposition erfolgt nur kontrolliert nach Freigabe ueber die Storage-Abstraktion; Tombstone-Metadaten bleiben erhalten."
         ]
     }))
@@ -2109,6 +2131,13 @@ async fn evidence_integrity_storage_sqlite(
         "artifact_references": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND file IS NOT NULL AND TRIM(file) <> ''", tenant_id).await?,
         "expected_hash_present": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND (TRIM(file_sha256) <> '' OR TRIM(last_calculated_sha256) <> '')", tenant_id).await?,
         "storage_drills_recorded": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND last_integrity_checked_at IS NOT NULL AND TRIM(CAST(last_integrity_checked_at AS TEXT)) <> ''", tenant_id).await?,
+        "object_storage_backends": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_storage_backend_config WHERE tenant_id = ? AND backend_type = 's3_compatible'", tenant_id).await?,
+        "object_storage_ready_backends": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_storage_backend_config WHERE tenant_id = ? AND backend_type = 's3_compatible' AND status IN ('ready_for_test','ready')", tenant_id).await?,
+        "object_storage_config_errors": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_storage_backend_config WHERE tenant_id = ? AND backend_type = 's3_compatible' AND (status = 'error' OR TRIM(last_validation_error_class) <> '')", tenant_id).await?,
+        "object_storage_refs": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_object_reference WHERE tenant_id = ?", tenant_id).await?,
+        "object_storage_drills_recorded": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_object_reference WHERE tenant_id = ? AND last_drill_at IS NOT NULL AND TRIM(CAST(last_drill_at AS TEXT)) <> ''", tenant_id).await?,
+        "object_storage_drill_gaps": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_object_reference WHERE tenant_id = ? AND (last_drill_at IS NULL OR TRIM(CAST(last_drill_at AS TEXT)) = '')", tenant_id).await?,
+        "object_storage_object_gaps": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_object_reference WHERE tenant_id = ? AND last_drill_error_class IN ('object_missing','object_unreadable','hash_mismatch','timeout','access_denied','backend_error','validation_required')", tenant_id).await?,
         "worker_runs_recorded": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_integrity_worker_run WHERE tenant_id = ?", tenant_id).await?,
         "legal_hold_active": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND legal_hold_status = 'active'", tenant_id).await?,
         "disposition_due": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND (disposition_status IN ('due', 'approved_for_disposition', 'blocked_by_legal_hold') OR (disposition_due_at IS NOT NULL AND CAST(disposition_due_at AS TEXT) <= date('now')))", tenant_id).await?,
@@ -2118,6 +2147,7 @@ async fn evidence_integrity_storage_sqlite(
         "disposal_candidates": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND disposal_candidate = 1", tenant_id).await?,
         "notes": [
             "Nur aggregierte Statuswerte; Evidence-Dateinamen, Pfade und Rohinhalte sind ausgeschlossen.",
+            "Object-Storage-Metriken verwenden nur Backend-Metadaten, redaktionelle Object-Referenzen, Hashes und sichere Fehlerklassen; Secret-Werte und Objektinhalte sind ausgeschlossen.",
             "Physische Disposition erfolgt nur kontrolliert nach Freigabe ueber die Storage-Abstraktion; Tombstone-Metadaten bleiben erhalten."
         ]
     }))
@@ -2990,6 +3020,13 @@ fn management_review_gap_summary(
         "evidence_integrity_mismatch": json_i64(metrics, "evidence_integrity_mismatch"),
         "evidence_storage_artifact_references": json_i64(metrics, "evidence_storage_artifact_references"),
         "evidence_storage_drills_recorded": json_i64(metrics, "evidence_storage_drills_recorded"),
+        "evidence_object_storage_backends": json_i64(metrics, "evidence_object_storage_backends"),
+        "evidence_object_storage_ready_backends": json_i64(metrics, "evidence_object_storage_ready_backends"),
+        "evidence_object_storage_config_errors": json_i64(metrics, "evidence_object_storage_config_errors"),
+        "evidence_object_storage_refs": json_i64(metrics, "evidence_object_storage_refs"),
+        "evidence_object_storage_drills_recorded": json_i64(metrics, "evidence_object_storage_drills_recorded"),
+        "evidence_object_storage_drill_gaps": json_i64(metrics, "evidence_object_storage_drill_gaps"),
+        "evidence_object_storage_object_gaps": json_i64(metrics, "evidence_object_storage_object_gaps"),
         "evidence_worker_runs_recorded": json_i64(metrics, "evidence_worker_runs_recorded"),
         "evidence_worker_missing_runs": json_i64(metrics, "evidence_worker_missing_runs"),
         "evidence_storage_drill_gaps": json_i64(metrics, "evidence_storage_drill_gaps"),
@@ -3293,6 +3330,21 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         "Offene Storage-/Restore-Pruefungen",
                         "evidence_storage_drill_gaps",
                         false,
+                    ),
+                    (
+                        "Object-Storage-Konfigurationsfehler",
+                        "evidence_object_storage_config_errors",
+                        true,
+                    ),
+                    (
+                        "Offene Object-Storage-Drills",
+                        "evidence_object_storage_drill_gaps",
+                        false,
+                    ),
+                    (
+                        "Object-Storage-Objekt-/Hash-Gaps",
+                        "evidence_object_storage_object_gaps",
+                        true,
                     ),
                     (
                         "Fehlgeschlagene Dispositionen",
@@ -3818,6 +3870,9 @@ fn regulatory_review_has_open_gaps(gap_summary: &Value) -> bool {
         "evidence_integrity_mismatch",
         "evidence_worker_missing_runs",
         "evidence_storage_drill_gaps",
+        "evidence_object_storage_config_errors",
+        "evidence_object_storage_drill_gaps",
+        "evidence_object_storage_object_gaps",
         "evidence_legal_hold_active",
         "evidence_disposition_due",
         "evidence_disposition_failed",
@@ -3929,11 +3984,14 @@ fn management_review_decision_summary(
         || json_i64(sources.metrics, "evidence_integrity_not_checked") > 0
         || json_i64(sources.metrics, "evidence_worker_missing_runs") > 0
         || json_i64(sources.metrics, "evidence_storage_drill_gaps") > 0
+        || json_i64(sources.metrics, "evidence_object_storage_config_errors") > 0
+        || json_i64(sources.metrics, "evidence_object_storage_drill_gaps") > 0
+        || json_i64(sources.metrics, "evidence_object_storage_object_gaps") > 0
         || json_i64(sources.metrics, "evidence_disposition_due") > 0
         || json_i64(sources.metrics, "evidence_disposition_failed") > 0
     {
         required_decisions.push(
-            "Evidence-Integritaet, Storage-/Restore-Pruefung, Legal Hold oder kontrollierte Disposition nachziehen",
+            "Evidence-Integritaet, Object-Storage-/Restore-Pruefung, Legal Hold oder kontrollierte Disposition nachziehen",
         );
     }
     if json_i64(sources.supplier, "missing_supplier_evidence") > 0
