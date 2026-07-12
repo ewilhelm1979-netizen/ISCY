@@ -127,6 +127,158 @@ async fn health_alias_endpoint_returns_ok() {
 }
 
 #[tokio::test]
+async fn readiness_requires_current_reachable_database_without_exposing_url() {
+    let db_path = std::env::temp_dir().join(format!(
+        "iscy-readiness-{}.sqlite3",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let database_url = format!("sqlite:///{}", db_path.display());
+    db_admin::run_db_admin_action(&database_url, db_admin::DbAdminAction::Migrate)
+        .await
+        .unwrap();
+
+    let state = AppState::default().with_database_url(Some(database_url.clone()));
+    let response = app_router_with_state(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/health/ready")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains("Betriebsbereit"));
+    assert!(!body.contains(&database_url));
+
+    state.mark_not_ready();
+    let response = app_router_with_state(state)
+        .oneshot(
+            Request::builder()
+                .uri("/health/ready")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    assert!(String::from_utf8(body.to_vec())
+        .unwrap()
+        .contains("shutdown_in_progress"));
+
+    let _ = fs::remove_file(db_path);
+}
+
+#[tokio::test]
+async fn readiness_fails_closed_with_safe_error_when_database_is_unavailable() {
+    let unavailable_path = std::env::temp_dir()
+        .join("iscy-readiness-missing-directory")
+        .join("database.sqlite3");
+    let database_url = format!("sqlite:///{}", unavailable_path.display());
+    let response =
+        app_router_with_state(AppState::default().with_database_url(Some(database_url.clone())))
+            .oneshot(
+                Request::builder()
+                    .uri("/health/ready")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains("database_unavailable"));
+    assert!(!body.contains(&database_url));
+}
+
+#[tokio::test]
+async fn startup_health_exposes_only_safe_runtime_metadata() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/health/startup")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains("instance_id"));
+    assert!(body.contains("startup_time"));
+    assert!(!body.contains("DATABASE_URL"));
+}
+
+#[tokio::test]
+async fn evidence_worker_claim_prevents_parallel_tenant_runs() {
+    let db_path = std::env::temp_dir().join(format!(
+        "iscy-worker-claim-{}.sqlite3",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let database_url = format!("sqlite:///{}", db_path.display());
+    db_admin::run_db_admin_action(&database_url, db_admin::DbAdminAction::Migrate)
+        .await
+        .unwrap();
+    let store = EvidenceStore::connect(&database_url).await.unwrap();
+    let payload = iscy_backend::evidence_store::EvidenceIntegrityWorkerRunCreate {
+        trigger_mode: "manual".to_string(),
+        batch_size: 1,
+        max_runtime_seconds: 30,
+        cooldown_seconds: 300,
+        dry_run: true,
+        detail: serde_json::json!({"bounded": true}),
+    };
+
+    let first_store = store.clone();
+    let first_payload = payload.clone();
+    let second_store = store.clone();
+    let second_payload = payload.clone();
+    let (first, second) = tokio::join!(
+        first_store.claim_evidence_worker_run(1, 1, first_payload),
+        second_store.claim_evidence_worker_run(1, 1, second_payload),
+    );
+    let claims = [first.unwrap(), second.unwrap()];
+    assert_eq!(claims.iter().filter(|claim| claim.is_some()).count(), 1);
+    let run = claims.into_iter().flatten().next().unwrap();
+    store
+        .finish_evidence_worker_run(
+            1,
+            run.id,
+            iscy_backend::evidence_store::EvidenceIntegrityWorkerRunFinish {
+                status: "completed".to_string(),
+                checked_count: 0,
+                valid_count: 0,
+                mismatch_count: 0,
+                missing_count: 0,
+                failed_count: 0,
+                skipped_count: 0,
+                detail: serde_json::json!({"bounded": true}),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(store
+        .claim_evidence_worker_run(1, 1, payload)
+        .await
+        .unwrap()
+        .is_some());
+
+    drop(store);
+    let _ = fs::remove_file(db_path);
+}
+
+#[tokio::test]
 async fn security_headers_are_added_to_http_responses() {
     let response = app_router()
         .oneshot(

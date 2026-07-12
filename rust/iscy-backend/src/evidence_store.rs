@@ -3242,6 +3242,22 @@ impl EvidenceStore {
         }
     }
 
+    pub async fn claim_evidence_worker_run(
+        &self,
+        tenant_id: i64,
+        actor_id: i64,
+        payload: EvidenceIntegrityWorkerRunCreate,
+    ) -> anyhow::Result<Option<EvidenceIntegrityWorkerRun>> {
+        match self {
+            Self::Postgres(pool) => {
+                claim_evidence_worker_run_postgres(pool, tenant_id, actor_id, payload).await
+            }
+            Self::Sqlite(pool) => {
+                claim_evidence_worker_run_sqlite(pool, tenant_id, actor_id, payload).await
+            }
+        }
+    }
+
     pub async fn finish_evidence_worker_run(
         &self,
         tenant_id: i64,
@@ -3367,6 +3383,136 @@ async fn create_evidence_worker_run_sqlite(
     .execute(pool)
     .await?;
     evidence_worker_run_by_id_sqlite(pool, tenant_id, result.last_insert_rowid()).await
+}
+
+async fn claim_evidence_worker_run_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    actor_id: i64,
+    payload: EvidenceIntegrityWorkerRunCreate,
+) -> anyhow::Result<Option<EvidenceIntegrityWorkerRun>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(5_322_000_000_000_i64.saturating_add(tenant_id))
+        .execute(&mut *tx)
+        .await?;
+    let active = sqlx::query(
+        r#"
+        SELECT id, tenant_id, started_by, status, trigger_mode, batch_size,
+               max_runtime_seconds, cooldown_seconds, dry_run, checked_count,
+               valid_count, mismatch_count, missing_count, failed_count, skipped_count,
+               started_at, completed_at, detail_json::text AS detail_json_text
+        FROM evidence_integrity_worker_run
+        WHERE tenant_id = $1 AND status = 'running'
+          AND started_at::timestamptz >= CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+        ORDER BY id DESC
+        LIMIT 1
+        FOR UPDATE
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if active.is_some() {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    let row = sqlx::query(
+        r#"
+        INSERT INTO evidence_integrity_worker_run (
+            tenant_id, started_by, status, trigger_mode, batch_size,
+            max_runtime_seconds, cooldown_seconds, dry_run, detail_json
+        )
+        VALUES ($1, $2, 'running', $3, $4, $5, $6, $7, $8)
+        RETURNING id, tenant_id, started_by, status, trigger_mode, batch_size,
+                  max_runtime_seconds, cooldown_seconds, dry_run, checked_count,
+                  valid_count, mismatch_count, missing_count, failed_count, skipped_count,
+                  started_at, completed_at, detail_json::text AS detail_json_text
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(actor_id)
+    .bind(payload.trigger_mode)
+    .bind(payload.batch_size)
+    .bind(payload.max_runtime_seconds)
+    .bind(payload.cooldown_seconds)
+    .bind(payload.dry_run)
+    .bind(sqlx::types::Json(payload.detail))
+    .fetch_one(&mut *tx)
+    .await?;
+    let run = evidence_worker_run_from_pg_row(row)?;
+    tx.commit().await?;
+    Ok(Some(run))
+}
+
+async fn claim_evidence_worker_run_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    actor_id: i64,
+    payload: EvidenceIntegrityWorkerRunCreate,
+) -> anyhow::Result<Option<EvidenceIntegrityWorkerRun>> {
+    let mut connection = pool.acquire().await?;
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut *connection)
+        .await?;
+    let result = async {
+        let active: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT id
+            FROM evidence_integrity_worker_run
+            WHERE tenant_id = ?1 AND status = 'running'
+              AND datetime(started_at) >= datetime('now', '-10 minutes')
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(tenant_id)
+        .fetch_optional(&mut *connection)
+        .await?;
+        if active.is_some() {
+            return Ok(None);
+        }
+        let result = sqlx::query(
+            r#"
+            INSERT INTO evidence_integrity_worker_run (
+                tenant_id, started_by, status, trigger_mode, batch_size,
+                max_runtime_seconds, cooldown_seconds, dry_run, detail_json
+            )
+            VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+        )
+        .bind(tenant_id)
+        .bind(actor_id)
+        .bind(payload.trigger_mode)
+        .bind(payload.batch_size)
+        .bind(payload.max_runtime_seconds)
+        .bind(payload.cooldown_seconds)
+        .bind(payload.dry_run)
+        .bind(payload.detail.to_string())
+        .execute(&mut *connection)
+        .await?;
+        let row = sqlx::query(evidence_worker_run_sqlite_sql())
+            .bind(tenant_id)
+            .bind(1_i64)
+            .fetch_one(&mut *connection)
+            .await?;
+        let run = evidence_worker_run_from_sqlite_row(row)?;
+        if run.id != result.last_insert_rowid() {
+            return Err(sqlx::Error::RowNotFound);
+        }
+        Ok(Some(run))
+    }
+    .await;
+    match result {
+        Ok(run) => {
+            sqlx::query("COMMIT").execute(&mut *connection).await?;
+            Ok(run)
+        }
+        Err(error) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
+            Err(error.into())
+        }
+    }
 }
 
 async fn finish_evidence_worker_run_postgres(

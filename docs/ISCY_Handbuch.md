@@ -914,7 +914,7 @@ Merksatz: Erst verstehen, dann bewerten, dann eindaemmen, dann eskalieren - wenn
 Einfachster lokaler Start:
 
 ```bash
-cd /home/enricow79/Projekte/ISCY
+cd ~/Projekte/ISCY
 ./start.sh
 ```
 
@@ -1680,7 +1680,45 @@ Bewusst nicht Teil dieses Blocks sind echte Cloud-Credentials, Cloud-native
 Secret-Manager, externe Live-Feeds, automatische Rechtsbewertung,
 automatische Behoerdenmeldung, neue Risk-/Control-/Notification-Engines,
 Dependency- oder Plattform-Upgrades, produktive PKI-/CSR-Ausstellung sowie
-Performance-, HA- oder Visual-Regression-Ausbau.
+Performance-, HA- oder Visual-Regression-Aussagen ausserhalb der nachfolgend
+beschriebenen Testgrenzen.
+
+### 6.17 Performance-, HA- und visuelle Regression
+
+ISCY trennt jetzt Liveness, Readiness und Startup. `/health/live` sagt nur,
+dass der Rust-Prozess lebt. `/health/ready` prueft Datenbank, vollstaendigen
+Migrationsstand und aktive Request-Annahme. `/health/startup` zeigt lediglich
+eine zufaellige nicht sensitive Instanz-ID und den Startzeitpunkt. Fehler
+enthalten keine Connection Strings, SQL-Details, Secrets oder internen Pfade.
+
+SIGINT und SIGTERM schalten zuerst Readiness ab. Laufende Requests duerfen
+begrenzt enden; der Notification-Worker beendet seinen aktuellen Zyklus und
+stoppt danach. PostgreSQL-Migrationen werden mit einem Advisory Lock
+serialisiert. SQLite bleibt ausdruecklich ein Single-Instance-Pfad.
+
+`make performance-smoke` startet eine wegwerfbare Testtopologie und misst
+Health, typische Lesewege, Regulatory Preview, einen kleinen Write sowie den
+S3-Lifecycle. Der JSON-/Markdown-Bericht enthaelt p50, p95, p99, Maximum und
+Fehlerrate. Die grosszuegigen Grenzen sind CI-Regressionsbudgets und keine
+Produktions-SLOs.
+
+`make ha-integration` prueft zwei identische Backends mit gemeinsamem
+PostgreSQL 16 und MinIO hinter nginx 1.27. Daten und Evidence werden ueber
+unterschiedliche Instanzen geschrieben, gelesen und verifiziert. Danach wird
+Failover in beide Richtungen sowie ein paralleler Migrationsstart geprueft.
+Lokaler Dateispeicher und SQLite werden nicht als HA-faehig dargestellt.
+
+`make visual-regression` vergleicht 34 bewusst versionierte Playwright-
+Baselines fuer 17 zentrale Seiten bei Desktop- und kleinem Laptop-Viewport.
+Neben Pixelabweichungen prueft die Suite leere Hauptbereiche, 500-Seiten,
+horizontalen Ueberlauf, abgeschnittene Tabellenueberschriften und sichtbare
+Secrets. CI aktualisiert Baselines nie automatisch.
+
+Die Testarchitektur, Budgets, Baseline-Pflege und verbleibenden Single Points
+of Failure sind in `docs/PERFORMANCE_HA_VISUAL_TESTING.md` beschrieben.
+PostgreSQL, MinIO und nginx sind in der Testtopologie selbst jeweils
+Einzelinstanzen. ISCY behauptet damit weder Multi-Region-HA noch beliebige
+Skalierbarkeit, SLA-Erfuellung, Zertifizierung oder Rechtskonformitaet.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 

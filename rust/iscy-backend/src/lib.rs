@@ -26,7 +26,10 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs,
     path::{Path as FsPath, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 
@@ -149,7 +152,31 @@ pub struct AppState {
     pub nvd_api_base_url: Option<String>,
     pub database_url: Option<String>,
     pub security_config: CommunitySecurityConfig,
+    runtime_status: RuntimeStatus,
     login_rate_limits: Arc<Mutex<HashMap<String, LoginRateLimitEntry>>>,
+}
+
+#[derive(Clone)]
+struct RuntimeStatus {
+    instance_id: Arc<str>,
+    startup_time: Arc<str>,
+    accepting_requests: Arc<AtomicBool>,
+}
+
+impl Default for RuntimeStatus {
+    fn default() -> Self {
+        let mut random = [0_u8; 8];
+        let instance_id = if getrandom::fill(&mut random).is_ok() {
+            random.iter().map(|byte| format!("{byte:02x}")).collect()
+        } else {
+            "nicht-verfuegbar".to_string()
+        };
+        Self {
+            instance_id: instance_id.into(),
+            startup_time: Utc::now().to_rfc3339().into(),
+            accepting_requests: Arc::new(AtomicBool::new(true)),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +221,7 @@ impl AppState {
             nvd_api_base_url: None,
             database_url: None,
             security_config: CommunitySecurityConfig::default(),
+            runtime_status: RuntimeStatus::default(),
             login_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -232,6 +260,7 @@ impl AppState {
             nvd_api_base_url: None,
             database_url: None,
             security_config: CommunitySecurityConfig::default(),
+            runtime_status: RuntimeStatus::default(),
             login_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -318,6 +347,12 @@ impl AppState {
     pub fn with_security_config(mut self, security_config: CommunitySecurityConfig) -> Self {
         self.security_config = security_config;
         self
+    }
+
+    pub fn mark_not_ready(&self) {
+        self.runtime_status
+            .accepting_requests
+            .store(false, Ordering::Release);
     }
 
     pub fn with_security_store(mut self, security_store: Option<SecurityStore>) -> Self {
@@ -3068,6 +3103,100 @@ fn nvd_normalize_response(payload: NvdImportRequest) -> Response {
 
 async fn health_live() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok", "service": "iscy-rust-backend" }))
+}
+
+async fn health_startup(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "started",
+        "status_label": "Gestartet",
+        "service": "iscy-rust-backend",
+        "instance_id": state.runtime_status.instance_id.as_ref(),
+        "startup_time": state.runtime_status.startup_time.as_ref(),
+    }))
+}
+
+async fn health_ready(State(state): State<AppState>) -> Response {
+    let instance_id = state.runtime_status.instance_id.as_ref();
+    if !state
+        .runtime_status
+        .accepting_requests
+        .load(Ordering::Acquire)
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "not_ready",
+                "status_label": "Nicht betriebsbereit",
+                "service": "iscy-rust-backend",
+                "instance_id": instance_id,
+                "safe_error_class": "shutdown_in_progress",
+            })),
+        )
+            .into_response();
+    }
+    let Some(database_url) = state.database_url.as_deref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "not_ready",
+                "status_label": "Nicht betriebsbereit",
+                "service": "iscy-rust-backend",
+                "instance_id": instance_id,
+                "safe_error_class": "database_not_configured",
+            })),
+        )
+            .into_response();
+    };
+    let migration_status = match db_admin::migration_status(database_url).await {
+        Ok(status) => status,
+        Err(_) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "status": "not_ready",
+                    "status_label": "Nicht betriebsbereit",
+                    "service": "iscy-rust-backend",
+                    "instance_id": instance_id,
+                    "safe_error_class": "database_unavailable",
+                })),
+            )
+                .into_response();
+        }
+    };
+    let migrations_current = migration_status.applied_count
+        == migration_status.expected_count as i64
+        && migration_status.latest_applied_version.as_deref()
+            == migration_status.expected_latest_version;
+    if !migrations_current {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "not_ready",
+                "status_label": "Nicht betriebsbereit",
+                "service": "iscy-rust-backend",
+                "instance_id": instance_id,
+                "safe_error_class": "migrations_incomplete",
+                "migration_count": migration_status.applied_count,
+                "expected_migration_count": migration_status.expected_count,
+            })),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ready",
+            "status_label": "Betriebsbereit",
+            "service": "iscy-rust-backend",
+            "instance_id": instance_id,
+            "checks": {
+                "configuration": "ok",
+                "database": "ok",
+                "migrations": "ok",
+            },
+        })),
+    )
+        .into_response()
 }
 
 async fn operations_alertmanager_webhook(
@@ -11062,6 +11191,11 @@ async fn evidence_integrity_worker_run(
             }),
         )
             .into_response(),
+        Err(err) if err.to_string() == "evidence_worker_already_running" => evidence_api_error(
+            StatusCode::CONFLICT,
+            "evidence_worker_already_running",
+            "Fuer diesen Tenant ist bereits ein Evidence-Worker-Lauf aktiv.",
+        ),
         Err(_) => evidence_api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "database_error",
@@ -12583,6 +12717,16 @@ async fn evidence_disposition_execute(
         )
             .into_response();
     }
+    if runtime
+        .as_ref()
+        .is_some_and(|runtime| runtime.upload_status == "delete_in_progress")
+    {
+        return evidence_api_error(
+            StatusCode::CONFLICT,
+            "disposition_already_running",
+            "Fuer diese Evidence ist bereits eine kontrollierte Disposition aktiv.",
+        );
+    }
     if let Some(error_class) = evidence_disposition_execution_blocker(&item) {
         let _ = store
             .record_evidence_integrity_event(
@@ -12623,6 +12767,23 @@ async fn evidence_disposition_execute(
         );
     }
     let disposition = if let Some(runtime) = runtime {
+        match store.claim_s3_delete(context.tenant_id, evidence_id).await {
+            Ok(true) => {}
+            Ok(false) => {
+                return evidence_api_error(
+                    StatusCode::CONFLICT,
+                    "disposition_already_running",
+                    "Fuer diese Evidence ist bereits eine kontrollierte Disposition aktiv.",
+                )
+            }
+            Err(_) => {
+                return evidence_api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "database_error",
+                    "Disposition-Claim konnte nicht sicher gespeichert werden.",
+                )
+            }
+        }
         let runtime_delete = async {
             let (backend, client) = s3_runtime_client_for_backend(
                 &state,
@@ -12640,14 +12801,34 @@ async fn evidence_disposition_execute(
         match runtime_delete {
             Ok(result) => {
                 let already_missing = result.safe_error_class == "object_already_missing";
-                let _ = store
+                if store
                     .complete_s3_delete(
                         context.tenant_id,
                         evidence_id,
                         context.user_id,
                         already_missing,
                     )
-                    .await;
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_none()
+                {
+                    let _ = store
+                        .fail_s3_runtime_operation(
+                            context.tenant_id,
+                            evidence_id,
+                            context.user_id,
+                            "delete",
+                            "database_finalize_failed",
+                            true,
+                        )
+                        .await;
+                    return evidence_api_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "orphan_review_required",
+                        "Remote-Disposition wurde nicht vollstaendig finalisiert; eine Orphan-Pruefung ist erforderlich.",
+                    );
+                }
                 EvidenceArtifactDisposition {
                     backend: "s3_compatible",
                     artifact_reference_present: true,
@@ -12657,6 +12838,13 @@ async fn evidence_disposition_execute(
                 }
             }
             Err(error) => {
+                let _ = store
+                    .release_s3_delete_claim(
+                        context.tenant_id,
+                        evidence_id,
+                        error.safe_error_class(),
+                    )
+                    .await;
                 let _ = store
                     .fail_s3_runtime_operation(
                         context.tenant_id,
@@ -13206,7 +13394,7 @@ async fn run_evidence_integrity_worker(
         evidence_worker_config_value("ISCY_EVIDENCE_WORKER_COOLDOWN_SECONDS", 300, 0, 86_400);
     let dry_run = payload.dry_run.unwrap_or(false);
     let run = store
-        .create_evidence_worker_run(
+        .claim_evidence_worker_run(
             context.tenant_id,
             context.user_id,
             evidence_store::EvidenceIntegrityWorkerRunCreate {
@@ -13222,7 +13410,8 @@ async fn run_evidence_integrity_worker(
                 }),
             },
         )
-        .await?;
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("evidence_worker_already_running"))?;
     let targets = store
         .evidence_integrity_targets(context.tenant_id, batch_size)
         .await?;
@@ -36681,6 +36870,28 @@ async fn status_operations_overview(
             Some("/health/live".to_string()),
         ),
         StatusSignal::new(
+            "Health",
+            "Readiness",
+            if state
+                .runtime_status
+                .accepting_requests
+                .load(Ordering::Acquire)
+            {
+                StatusSignalLevel::Ok
+            } else {
+                StatusSignalLevel::Warn
+            },
+            "Readiness trennt DB-, Migrations- und Shutdown-Zustand von der reinen Liveness.",
+            Some("/health/ready".to_string()),
+        ),
+        StatusSignal::new(
+            "Health",
+            "Startup",
+            StatusSignalLevel::Ok,
+            "Der Startup-Endpunkt liefert nur nicht sensitive Instanz- und Startmetadaten.",
+            Some("/health/startup".to_string()),
+        ),
+        StatusSignal::new(
             "Runtime",
             "Rust-only",
             if rust_only {
@@ -40744,8 +40955,9 @@ pub fn app_router_with_state(state: AppState) -> Router {
     let security_config = state.security_config.clone();
     Router::new()
         .route("/health", get(health_live))
-        .route("/health/ready", get(health_live))
+        .route("/health/ready", get(health_ready))
         .route("/health/live", get(health_live))
+        .route("/health/startup", get(health_startup))
         .route("/metrics", get(status_operations_metrics))
         .route("/api/v1/context/whoami", get(context_whoami))
         .route("/api/v1/context/tenant", get(context_tenant))

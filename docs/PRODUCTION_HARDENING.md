@@ -154,3 +154,33 @@ Ausnahme wirkungslos. Vor dem produktiven Einsatz sind ein eigener
 Live-Validation-Lauf, ein Upload-/Download-Test, eine Restore-Pruefung, ein
 freigegebener Disposition-Test und die Aufnahme in das betriebliche RPO-/RTO-
 Verfahren erforderlich.
+
+## Performance-, Readiness- und Mehrinstanz-Haertung
+
+ISCY trennt die Systempruefungen bewusst:
+
+- `/health/live` meldet ausschliesslich, dass der Prozess lebt.
+- `/health/ready` liefert nur bei erreichbarer Datenbank, vollstaendig
+  angewendeten Migrationen und aktiver Request-Annahme HTTP 200.
+- `/health/startup` liefert eine zufaellige nicht sensitive Instanz-ID und den
+  Startzeitpunkt, aber keine Hostnamen, IPs, Pfade oder Connection Strings.
+
+Readiness-Fehler verwenden sichere Klassen wie `database_unavailable`,
+`migrations_incomplete` oder `shutdown_in_progress`. SIGINT/SIGTERM schalten
+Readiness ab und starten einen begrenzten Graceful Shutdown. Der Timeout wird
+mit `ISCY_SHUTDOWN_TIMEOUT_SECONDS` konfiguriert, auf 5 bis 120 Sekunden
+begrenzt und betraegt standardmaessig 30 Sekunden.
+
+PostgreSQL-Migrationen werden durch einen Advisory Lock serialisiert. Der Lock
+wartet maximal 60 Sekunden und ersetzt keine kontrollierte Deployment-
+Reihenfolge. SQLite ist weiterhin ausschliesslich fuer Single-Instance-Betrieb
+vorgesehen.
+
+Der technische Zwei-Instanzen-Test verwendet PostgreSQL 16, S3-kompatibles
+MinIO, zwei Backend-Instanzen und nginx 1.27. `local_filesystem` wird nicht als
+HA-faehig dargestellt. PostgreSQL, MinIO und nginx bleiben in dieser
+Testtopologie jeweils Single Points of Failure; Multi-Region-, Cluster- und
+SLA-Aussagen sind daraus nicht ableitbar.
+
+Ausfuehrung und Grenzen sind in
+`docs/PERFORMANCE_HA_VISUAL_TESTING.md` dokumentiert.

@@ -603,6 +603,75 @@ impl EvidenceStore {
         }
         self.s3_runtime_object(tenant_id, evidence_id).await
     }
+
+    pub async fn claim_s3_delete(&self, tenant_id: i64, evidence_id: i64) -> anyhow::Result<bool> {
+        let rows_affected = match self {
+            Self::Postgres(pool) => sqlx::query(
+                r#"
+                UPDATE evidence_s3_runtime_object
+                SET upload_status = 'delete_in_progress',
+                    last_runtime_operation_at = (CURRENT_TIMESTAMP)::text,
+                    last_runtime_error_class = '',
+                    updated_at = (CURRENT_TIMESTAMP)::text
+                WHERE tenant_id = $1 AND evidence_id = $2
+                  AND (
+                    upload_status = 'upload_completed'
+                    OR (
+                      upload_status = 'delete_in_progress'
+                      AND updated_at::timestamptz < CURRENT_TIMESTAMP - INTERVAL '10 minutes'
+                    )
+                  )
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(evidence_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+            Self::Sqlite(pool) => sqlx::query(
+                r#"
+                UPDATE evidence_s3_runtime_object
+                SET upload_status = 'delete_in_progress',
+                    last_runtime_operation_at = datetime('now'),
+                    last_runtime_error_class = '',
+                    updated_at = datetime('now')
+                WHERE tenant_id = ?1 AND evidence_id = ?2
+                  AND (
+                    upload_status = 'upload_completed'
+                    OR (
+                      upload_status = 'delete_in_progress'
+                      AND datetime(updated_at) < datetime('now', '-10 minutes')
+                    )
+                  )
+                "#,
+            )
+            .bind(tenant_id)
+            .bind(evidence_id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+        };
+        Ok(rows_affected == 1)
+    }
+
+    pub async fn release_s3_delete_claim(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+        error_class: &str,
+    ) -> anyhow::Result<()> {
+        match self {
+            Self::Postgres(pool) => {
+                sqlx::query("UPDATE evidence_s3_runtime_object SET upload_status='upload_completed', last_runtime_error_class=$3, updated_at=(CURRENT_TIMESTAMP)::text WHERE tenant_id=$1 AND evidence_id=$2 AND upload_status='delete_in_progress'")
+                    .bind(tenant_id).bind(evidence_id).bind(error_class).execute(pool).await?;
+            }
+            Self::Sqlite(pool) => {
+                sqlx::query("UPDATE evidence_s3_runtime_object SET upload_status='upload_completed', last_runtime_error_class=?3, updated_at=datetime('now') WHERE tenant_id=?1 AND evidence_id=?2 AND upload_status='delete_in_progress'")
+                    .bind(tenant_id).bind(evidence_id).bind(error_class).execute(pool).await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 fn runtime_select(where_clause: &str) -> String {
@@ -816,6 +885,14 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(completed.upload_status, "upload_completed");
+        assert!(store.claim_s3_delete(1, 1).await.unwrap());
+        assert!(!store.claim_s3_delete(1, 1).await.unwrap());
+        assert!(!store.claim_s3_delete(2, 1).await.unwrap());
+        store
+            .release_s3_delete_claim(1, 1, "backend_unavailable")
+            .await
+            .unwrap();
+        assert!(store.claim_s3_delete(1, 1).await.unwrap());
         let stored_ref: String = sqlx::query_scalar(
             "SELECT storage_object_reference FROM evidence_evidenceitem WHERE tenant_id=1 AND id=1",
         )

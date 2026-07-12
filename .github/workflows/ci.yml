@@ -48,6 +48,7 @@ jobs:
       - name: Run Rust DB/bootstrap HTTP smoke
         run: |
           make rust-smoke
+          make graceful-shutdown-smoke
 
   nix-rust-smoke:
     runs-on: ubuntu-24.04
@@ -125,6 +126,53 @@ jobs:
         run: |
           make object-storage-integration
 
+  performance-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run bounded PostgreSQL and MinIO performance smoke
+        run: |
+          make performance-smoke
+      - name: Upload performance report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: performance-smoke-report
+          path: artifacts/performance/
+          if-no-files-found: warn
+          retention-days: 14
+
+  ha-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run two-instance failover and migration-race test
+        run: |
+          make ha-integration
+
+  visual-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Run pinned Playwright visual regression
+        run: |
+          nix develop --command make visual-regression
+      - name: Upload visual differences
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: visual-regression-artifacts
+          path: artifacts/visual/
+          if-no-files-found: warn
+          retention-days: 14
+
   docker-config:
     runs-on: ubuntu-24.04
     steps:
@@ -137,6 +185,7 @@ jobs:
           docker compose --env-file .env -f docker-compose.yml -f docker-compose.stage.yml config
           docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml config
           docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml config
+          docker compose -f tests/resilience/docker-compose.ha.yml config
       - name: Build hardened application image
         run: |
           docker build --file rust/iscy-backend/Dockerfile .

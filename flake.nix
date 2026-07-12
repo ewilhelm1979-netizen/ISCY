@@ -27,6 +27,14 @@
           pkgs.libjpeg
           pkgs.freetype
         ];
+        visualTestPackages = pkgs.lib.optionals pkgs.stdenv.isLinux [
+          pkgs.playwright-test
+          pkgs.playwright-driver.browsers
+        ];
+        visualTestShellHook = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+          export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
+          export PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true
+        '';
         iscyBackendApp = pkgs.writeShellApplication {
           name = "iscy-backend";
           runtimeInputs = [
@@ -116,7 +124,8 @@
             pkgs.openblas
             pkgs.libpq
             pkgs.sqlite
-          ];
+          ]
+          ++ visualTestPackages;
 
           shellHook = ''
             export PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -125,6 +134,7 @@
             export CXX=${pkgs.gcc14}/bin/g++
             export FORCE_CMAKE=1
             export CMAKE_ARGS="-DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF"
+            ${visualTestShellHook}
             echo "ISCY dev shell ready"
           '';
         };
