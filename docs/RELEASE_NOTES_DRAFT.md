@@ -1,6 +1,6 @@
-# ISCY V23.7.28-rc.1 - Release-Notes-Entwurf
+# ISCY V23.7.28-rc.1 - Release Notes
 
-Status: Release Candidate vorbereitet, Veröffentlichung ausstehend.
+Status: Release Candidate (Prerelease; nicht als Latest Release vorgesehen).
 
 ISCY bleibt eine selbst gehostete, local-first und datenschutzbewusste
 Open-Source-Plattform unter `AGPL-3.0-only`. Die beschriebenen Funktionen
@@ -119,9 +119,9 @@ reproduzierbare Performance-, Mehrinstanz- und UI-Regressionspruefungen.
 ## Versionsstatus
 
 - Letzte veröffentlichte Plattformversion: `V23.7.27`
-- Vorgeschlagener Release Candidate: `V23.7.28-rc.1`
+- Release Candidate: `V23.7.28-rc.1`
 - Internes Rust-Paket: `0.3.22`
-- Tag: nicht erstellt
-- GitHub Release: nicht erstellt
-- SBOM: CycloneDX 1.5, lokal/CI vorbereitet
+- Git-Tag: `V23.7.28-rc.1`
+- GitHub-Release-Typ: Prerelease, nicht als Latest Release markiert
+- SBOM: CycloneDX 1.5, als Release-Asset beigefuegt
 - Signatur: `unsigned`

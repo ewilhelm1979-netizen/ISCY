@@ -38,19 +38,21 @@ source_date_epoch="$(git show -s --format=%ct HEAD)"
 
 cp "$binary" "$output_dir/iscy-backend"
 cp docs/ISCY_Handbuch.pdf "$output_dir/ISCY_Handbuch.pdf"
-cp docs/RELEASE_NOTES_DRAFT.md "$output_dir/RELEASE_NOTES_DRAFT.md"
+cp docs/RELEASE_NOTES_DRAFT.md "$output_dir/RELEASE_NOTES.md"
 cp release/iscy-backend.cdx.json "$output_dir/iscy-backend.cdx.json"
 jq \
     --arg source_commit "$commit" \
     --argjson source_date_epoch "$source_date_epoch" \
-    '.source_commit = $source_commit | .source_date_epoch = $source_date_epoch' \
+    '.source_commit = $source_commit
+    | .source_date_epoch = $source_date_epoch
+    | .release_status = "release_candidate_prerelease"' \
     release/release-manifest.json >"$output_dir/release-manifest.json"
 
 (
     cd "$output_dir"
     sha256sum \
         ISCY_Handbuch.pdf \
-        RELEASE_NOTES_DRAFT.md \
+        RELEASE_NOTES.md \
         iscy-backend \
         iscy-backend.cdx.json \
         release-manifest.json >SHA256SUMS
