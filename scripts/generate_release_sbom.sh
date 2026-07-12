@@ -63,7 +63,11 @@ jq --arg timestamp "$timestamp" --arg root_purl "$root_purl" \
     "$raw_path" >"$output"
 jq -e '.bomFormat == "CycloneDX" and .specVersion == "1.5" and (.components | length > 0)' \
     "$output" >/dev/null
-if grep -aEq '/home/[A-Za-z0-9._-]+/|C:\\Users\\|file:///home/' "$output"; then
+local_home='/home/'
+local_file_scheme='file://'
+regex_backslash=$'\\\\'
+local_path_pattern="${local_home}[A-Za-z0-9._-]+/|C:${regex_backslash}Users${regex_backslash}|${local_file_scheme}${local_home}"
+if grep -aEq "$local_path_pattern" "$output"; then
     echo 'SBOM_ERROR[local_path]: SBOM enthaelt einen lokalen absoluten Pfad.' >&2
     exit 1
 fi

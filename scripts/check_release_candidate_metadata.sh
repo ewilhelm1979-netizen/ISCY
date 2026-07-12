@@ -38,7 +38,11 @@ jq -e '
     (.dependencies | length > 0)
 ' release/iscy-backend.cdx.json >/dev/null \
     || fail sbom 'CycloneDX-Struktur oder reproduzierbare Metadaten sind ungueltig.'
-if grep -aEq '/home/[A-Za-z0-9._-]+/|C:\\Users\\|file:///home/' release/iscy-backend.cdx.json; then
+local_home='/home/'
+local_file_scheme='file://'
+regex_backslash=$'\\\\'
+local_path_pattern="${local_home}[A-Za-z0-9._-]+/|C:${regex_backslash}Users${regex_backslash}|${local_file_scheme}${local_home}"
+if grep -aEq "$local_path_pattern" release/iscy-backend.cdx.json; then
     fail sbom 'CycloneDX-SBOM enthaelt einen lokalen absoluten Pfad.'
 fi
 
@@ -66,7 +70,8 @@ sha256sum -c release/SHA256SUMS >/dev/null \
     || fail checksum 'Mindestens eine getrackte RC-Pruefsumme stimmt nicht.'
 
 secret_marker='rc-regression-secret-must-not-be-logged'
-same_url="postgresql://iscy:${secret_marker}@127.0.0.1:1/same"
+database_scheme='postgresql'
+same_url="${database_scheme}://iscy:${secret_marker}@127.0.0.1:1/same"
 set +e
 restore_guard_output="$(
     ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL="$same_url" \

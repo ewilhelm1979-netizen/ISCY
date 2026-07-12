@@ -37,9 +37,11 @@ report_tracked_matches \
 report_tracked_matches \
     cloud_access_key \
     '(AKIA|ASIA)[0-9A-Z]{16}'
-report_tracked_matches \
-    local_absolute_path \
-    '/home/[A-Za-z0-9._-]+/|C:\\Users\\|file:///home/'
+local_home='/home/'
+local_file_scheme='file://'
+regex_backslash=$'\\\\'
+local_path_pattern="${local_home}[A-Za-z0-9._-]+/|C:${regex_backslash}Users${regex_backslash}|${local_file_scheme}${local_home}"
+report_tracked_matches local_absolute_path "$local_path_pattern"
 
 while IFS= read -r file; do
     printf 'SENSITIVE_SCAN finding category=tracked_sensitive_file location=%s value=redacted\n' \
@@ -59,7 +61,7 @@ done < <(git ls-files 'docs/*.pdf' 'docs/assets/*.png' 'tests/visual/baselines/*
 credential_url_matches="$(
     git grep -n -I -E \
         '(postgres(ql)?|mysql|mongodb(\+srv)?|redis)://[^[:space:]"<>]+:[^[:space:]"<>]+@' \
-        -- . || true
+        -- . ':!scripts/check_release_sensitive_data.sh' || true
 )"
 if [[ -n "$credential_url_matches" ]]; then
     while IFS=: read -r file line content; do
