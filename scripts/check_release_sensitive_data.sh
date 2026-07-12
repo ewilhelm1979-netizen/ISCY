@@ -61,7 +61,7 @@ done < <(git ls-files 'docs/*.pdf' 'docs/assets/*.png' 'tests/visual/baselines/*
 credential_url_matches="$(
     git grep -n -I -E \
         '(postgres(ql)?|mysql|mongodb(\+srv)?|redis)://[^[:space:]"<>]+:[^[:space:]"<>]+@' \
-        -- . ':!scripts/check_release_sensitive_data.sh' || true
+        -- . || true
 )"
 if [[ -n "$credential_url_matches" ]]; then
     while IFS=: read -r file line content; do
