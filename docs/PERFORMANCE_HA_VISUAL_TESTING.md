@@ -95,7 +95,9 @@ keine Multi-Region-Architektur und keine automatische horizontale Skalierung.
 Playwright und Chromium stammen aus dem durch `flake.lock` gepinnten Nixpkgs-
 Stand. Der aktuelle Testpfad verwendet Playwright 1.56.1 als reine
 Entwicklungs-/CI-Abhaengigkeit; Produktivimage und Rust-Runtime enthalten kein
-Browser-Tooling.
+Browser-Tooling. Ausschliesslich fuer diese Testumgebung setzt eine erzeugte
+Fontconfig `DejaVu Sans` aus demselben Nixpkgs-Stand als deterministische
+Schrift; die produktive Schriftkonfiguration bleibt unveraendert.
 
 `make visual-regression` prueft feste Demo-Daten, Sprache `de-DE`, Zeitzone
 `Europe/Berlin`, deaktivierte Animationen und die Viewports 1440 x 1200 sowie

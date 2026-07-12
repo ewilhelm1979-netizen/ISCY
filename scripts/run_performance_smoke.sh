@@ -122,12 +122,13 @@ measure read GET /regulatory-review-packs/ '' 6 4
 measure read GET /zero-trust/ '' 6 4
 measure review POST /api/v1/regulatory/review-packs/nis2/preview '{}' 6 2
 measure write PATCH /api/v1/roadmap/tasks/1 \
-  '{"status":"IN_PROGRESS","notes":"Synthetischer Performance-Smoke"}' 4 2
+  '{"status":"IN_PROGRESS","planned_start":"2026-05-02","due_date":"2026-05-15","notes":"Synthetischer Performance-Smoke"}' 4 2
 
 upload_result="$(curl --silent --show-error --cookie "$COOKIE" \
   --output "$TMP_DIR/upload.json" --write-out '%{http_code} %{time_total}' \
   --form 'title=Performance Evidence' --form 'status=SUBMITTED' \
   --form 'sensitivity=INTERNAL' --form 'storage_backend_id=performance-s3' \
+  --form 'valid_until=2027-01-31' --form 'retention_until=2028-01-31' \
   --form "file=@$EVIDENCE_FILE;filename=performance-evidence.txt;type=text/plain" \
   "$BASE_URL/api/v1/evidence/uploads")"
 upload_code="${upload_result%% *}"

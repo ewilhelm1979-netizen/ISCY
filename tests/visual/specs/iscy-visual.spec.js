@@ -38,6 +38,7 @@ async function stabilize(page) {
         animation: none !important;
         transition: none !important;
         caret-color: transparent !important;
+        font-family: "DejaVu Sans", sans-serif !important;
       }
       html { scroll-behavior: auto !important; }
     `,

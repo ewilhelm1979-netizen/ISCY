@@ -29,7 +29,7 @@ curl --fail --silent --show-error --cookie-jar "$COOKIE" \
 
 curl --fail --silent --show-error --cookie "$COOKIE" \
   --request PATCH --header "content-type: application/json" \
-  --data '{"status":"TODO","notes":"Synthetischer HA-Test"}' \
+  --data '{"status":"IN_PROGRESS","planned_start":"2026-05-02","due_date":"2026-05-15","notes":"Synthetischer HA-Test"}' \
   "$BASE_A/api/v1/roadmap/tasks/1" >/dev/null
 curl --fail --silent --show-error --cookie "$COOKIE" \
   "$BASE_B/api/v1/roadmap/plans/1" >/dev/null
@@ -62,6 +62,7 @@ curl --fail --silent --show-error --cookie "$COOKIE" --request POST \
 upload_json="$(curl --fail --silent --show-error --cookie "$COOKIE" \
   --form 'title=HA Evidence' --form 'status=SUBMITTED' \
   --form 'sensitivity=INTERNAL' --form 'storage_backend_id=ha-s3' \
+  --form 'valid_until=2027-01-31' --form 'retention_until=2028-01-31' \
   --form "file=@$EVIDENCE_FILE;filename=ha-evidence.txt;type=text/plain" \
   "$BASE_A/api/v1/evidence/uploads")"
 evidence_id="$(printf '%s' "$upload_json" | jq --exit-status --raw-output '.item.id')"

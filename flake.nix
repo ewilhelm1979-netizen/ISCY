@@ -28,10 +28,15 @@
           pkgs.freetype
         ];
         visualTestPackages = pkgs.lib.optionals pkgs.stdenv.isLinux [
+          pkgs.dejavu_fonts
           pkgs.playwright-test
           pkgs.playwright-driver.browsers
         ];
+        visualTestFontConfig = pkgs.makeFontsConf {
+          fontDirectories = [ pkgs.dejavu_fonts ];
+        };
         visualTestShellHook = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+          export FONTCONFIG_FILE="${visualTestFontConfig}"
           export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
           export PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=true
         '';
