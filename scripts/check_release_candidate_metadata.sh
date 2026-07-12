@@ -19,6 +19,11 @@ command -v sha256sum >/dev/null || fail prerequisite 'sha256sum fehlt.'
 [[ -f release/release-manifest.json ]] || fail manifest 'Release-Manifest fehlt.'
 [[ -f release/SHA256SUMS ]] || fail checksum 'Release-Checksummen fehlen.'
 [[ -f release/iscy-backend.cdx.json ]] || fail sbom 'CycloneDX-SBOM fehlt.'
+if grep -Eq \
+    'Release-Notes-Entwurf|Veröffentlichung ausstehend|Tag: nicht erstellt|GitHub Release: nicht erstellt' \
+    docs/RELEASE_NOTES_DRAFT.md; then
+    fail documentation 'Release Notes enthalten einen widerspruechlichen Draft-Platzhalter.'
+fi
 
 jq -e '
     .proposed_version == "V23.7.28-rc.1" and
