@@ -30,9 +30,16 @@ jq -e '
     .release_status == "prepared_not_published" and
     .source_commit == "git:HEAD" and
     .migration_count == 39 and
+    .test_suite_summary.required_ci_jobs == 10 and
     .signature_status == "unsigned" and
     .provenance_status == "prepared_unsigned" and
-    .sbom_status == "generated_cyclonedx_1.5"
+    .sbom_status == "generated_cyclonedx_1.5" and
+    .release_artifact.type == "linux-x86_64-glibc" and
+    .release_artifact.elf_interpreter == "/lib64/ld-linux-x86-64.so.2" and
+    .release_artifact.runtime_libraries == ["libgcc_s.so.1", "libm.so.6", "libc.so.6", "ld-linux-x86-64.so.2"] and
+    .release_artifact.rpath_status == "absent" and
+    .release_artifact.reproducibility_status == "required_two_build_sha256" and
+    .release_artifact.binary_sha256 == null
 ' release/release-manifest.json >/dev/null \
     || fail manifest 'Pflichtfelder oder sichere Statuswerte sind ungueltig.'
 jq -e '

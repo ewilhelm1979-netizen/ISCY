@@ -11,7 +11,7 @@ require_command() {
     }
 }
 
-for command in cargo cargo-audit cargo-cyclonedx cargo-deny docker jq nix pg_dump pg_restore psql sha256sum; do
+for command in cargo cargo-audit cargo-cyclonedx cargo-deny docker file jq ldd nix pg_dump pg_restore psql readelf sha256sum stat strings; do
     require_command "$command"
 done
 
@@ -56,7 +56,7 @@ COMPOSE_ENV_FILE=.env.example make docker-check
 docker build --file rust/iscy-backend/Dockerfile .
 make docs-pdf
 make release-sbom
-cargo build --release --locked --manifest-path rust/iscy-backend/Cargo.toml
+make release-binary-gate
 make release-candidate-artifacts
 make release-candidate-metadata-check
 
