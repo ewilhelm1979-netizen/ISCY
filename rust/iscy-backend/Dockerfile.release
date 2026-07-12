@@ -1,0 +1,24 @@
+FROM --platform=linux/amd64 docker.io/library/rust:1.88-bookworm@sha256:4727898c104ecd2e22d780925832502faee9fe4e70581b8572af081370b315a0 AS builder
+
+ARG SOURCE_DATE_EPOCH
+WORKDIR /usr/src/iscy/rust/iscy-backend
+
+ENV CARGO_INCREMENTAL=0 \
+    CARGO_PROFILE_RELEASE_DEBUG=0 \
+    CARGO_PROFILE_RELEASE_STRIP=symbols \
+    RUSTFLAGS="--remap-path-prefix=/usr/local/cargo/registry=/usr/src/cargo-registry --remap-path-prefix=/usr/local/cargo/git=/usr/src/cargo-git"
+
+COPY rust/iscy-backend/Cargo.toml rust/iscy-backend/Cargo.lock ./
+COPY rust/iscy-backend/src ./src
+COPY rust/iscy-backend/seeds ./seeds
+COPY deploy /usr/src/iscy/deploy
+COPY flake.lock /usr/src/iscy/flake.lock
+
+RUN test -n "$SOURCE_DATE_EPOCH" \
+    && case "$SOURCE_DATE_EPOCH" in *[!0-9]*) exit 1 ;; esac \
+    && test "$(rustc --version | cut -d ' ' -f 2)" = "1.88.0" \
+    && SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+       cargo build --release --locked --bin iscy-backend
+
+FROM scratch AS artifact
+COPY --from=builder /usr/src/iscy/rust/iscy-backend/target/release/iscy-backend /iscy-backend

@@ -25,9 +25,25 @@
     "s3_compatible"
   ],
   "test_suite_summary": {
-    "required_ci_jobs": 9,
+    "required_ci_jobs": 10,
     "visual_baselines": 34,
     "status": "validated_by_release_candidate_check_and_ci"
+  },
+  "release_artifact": {
+    "type": "linux-x86_64-glibc",
+    "builder_image": "docker.io/library/rust:1.88-bookworm@sha256:4727898c104ecd2e22d780925832502faee9fe4e70581b8572af081370b315a0",
+    "runtime_test_image": "docker.io/library/debian:bookworm-slim@sha256:1def178129dfb5f24db43afbf2fcac04530012e3264ba4ff81c71184e17a9ee4",
+    "elf_interpreter": "/lib64/ld-linux-x86-64.so.2",
+    "runtime_libraries": [
+      "libgcc_s.so.1",
+      "libm.so.6",
+      "libc.so.6",
+      "ld-linux-x86-64.so.2"
+    ],
+    "rpath_status": "absent",
+    "path_remapping": "container_build_roots_only",
+    "reproducibility_status": "required_two_build_sha256",
+    "binary_sha256": null
   },
   "provenance_status": "prepared_unsigned",
   "signature_status": "unsigned",

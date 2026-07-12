@@ -68,6 +68,24 @@ reproduzierbare Performance-, Mehrinstanz- und UI-Regressionspruefungen.
   Failure; Multi-Region-HA wird nicht behauptet.
 - 34 Playwright-Baselines decken 17 zentrale Webbereiche bei zwei Viewports ab.
 
+## Portables Linux-Release-Artefakt
+
+- Das unsignierte Backend-Binary wird fuer `linux-x86_64-glibc` in einem
+  digest-gepinnten Rust-1.88-/Debian-Bookworm-Builder erzeugt.
+- Compile-time-Pfade werden auf neutrale Containerpfade abgebildet. Lokale
+  Home-, Worktree-, GitHub-Runner- und Nix-Store-Pfade sind im Artefakt nicht
+  erlaubt.
+- Das ELF-Binary verwendet den regulaeren x86_64-glibc-Systeminterpreter und
+  besitzt weder RPATH noch RUNPATH. Seine dynamischen Laufzeitabhaengigkeiten
+  sind `libgcc_s.so.1`, `libm.so.6`, `libc.so.6` und
+  `ld-linux-x86-64.so.2`.
+- Zwei unabhaengige, cachefreie Builds muessen byteidentische SHA-256-Werte
+  liefern. Anschliessend werden Loader, `ldd`, SQLite-Initialisierung,
+  `/health/live` und Graceful Shutdown in einem sauberen, digest-gepinnten
+  Debian-Bookworm-Slim-Container ohne Nix, Rust, Cargo oder Compiler geprueft.
+- Das Binary zielt auf kompatible x86_64-glibc-Systeme; daraus folgt keine
+  Aussage, dass es auf jeder Linux-Distribution oder Architektur laeuft.
+
 ## Security-Hardening dieses Release Candidates
 
 - Passwortlose `tenant_id`-/`user_id`-Sessionerzeugung ist auf den expliziten
@@ -107,6 +125,8 @@ reproduzierbare Performance-, Mehrinstanz- und UI-Regressionspruefungen.
 - Produktive CA-Anbindung und Agent-Paketsignierung sind nicht enthalten.
 - Cloud-native Secret-Manager sind nicht enthalten.
 - Performance-CI-Budgets sind keine Produktions-SLOs.
+- Das bereitgestellte Linux-Binary setzt eine kompatible x86_64-glibc-Laufzeit
+  voraus; andere Architekturen und musl-only-Systeme sind nicht abgedeckt.
 - Monitoring-Beispielimages sowie mehrere GitHub Actions sind noch nicht durch
   immutable Digests beziehungsweise Commit-SHAs gepinnt.
 - Eine reproduzierbare CycloneDX-1.5-SBOM ist vorbereitet. Eine

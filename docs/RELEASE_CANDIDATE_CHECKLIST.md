@@ -120,21 +120,36 @@ aus; `release-candidate-check` aggregiert deren Ergebnis und validiert danach
 Manifest, Checksums, Migrationen, Baselines, Referenzen und Sensitive-Data-
 Scan, ohne die Pipeline doppelt auszufuehren.
 
+Der portable Binary-Pfad kann separat mit `make release-binary-gate` geprueft
+werden. Er baut das Backend zweimal cachefrei im digest-gepinnten
+Rust-1.88-Bookworm-Builder, verlangt identische SHA-256-Werte und prueft das
+Ergebnis in einem sauberen Debian-Bookworm-Slim-Runtime-Container. Das Ziel ist
+`linux-x86_64-glibc`; der Systeminterpreter muss regulaer sein, RPATH/RUNPATH
+muessen fehlen und lokale Home-, Worktree-, Runner- sowie Nix-Store-Pfade sind
+verboten. Als dynamische Laufzeitbibliotheken werden `libgcc_s.so.1`,
+`libm.so.6`, `libc.so.6` und `ld-linux-x86-64.so.2` erwartet.
+
 ## Lokale Artefakte
 
 Nach einem erfolgreichen Release-Build erzeugt
 `make release-candidate-artifacts` ausschließlich unter
 `artifacts/release-candidate/`:
 
-- Rust-Backend-Binary
+- portables `linux-x86_64-glibc` Rust-Backend-Binary
 - Handbuch-PDF
-- Release-Notes-Entwurf
+- Release Notes
 - reproduzierbare CycloneDX-1.5-SBOM
 - auf den aktuellen Commit aufgeloestes Release-Manifest
 - SHA-256-Pruefsummen
 
 Diese Artefakte sind unsigniert und werden weder hochgeladen noch
-veroeffentlicht. `cargo-cyclonedx` stammt als reines Build-Werkzeug aus dem
+veroeffentlicht. Das Binary wird aus einem neutralen Containerpfad mit
+deaktiviertem inkrementellem Build und Release-Debuginfo sowie aktiviertem
+Symbol-Strip erzeugt. Zwei getrennte Builds, Binary-Hygiene, Loader-/`ldd`-
+Pruefung, SQLite-Startup, Health und Graceful Shutdown sind Pflicht. Der
+Runtime-Test enthaelt weder Nix noch Rust, Cargo oder einen Compiler. Das
+glibc-Binary ist fuer kompatible x86_64-Laufzeiten bestimmt und nicht als
+universelles Linux-Artefakt zu verstehen. `cargo-cyclonedx` stammt als reines Build-Werkzeug aus dem
 durch `flake.lock` gepinnten Nixpkgs-Stand. Der Generator entfernt die zufaellige
 Serialnummer, setzt den Timestamp auf den Basis-Commit und ersetzt den lokalen
 Root-Pfad durch einen stabilen Cargo-PURL. Zwei aufeinanderfolgende Laeufe
@@ -158,6 +173,8 @@ freigegebene Vulnerability-Assertion vorliegt.
 - [ ] Alle lokalen, in der Umgebung ausführbaren Pflichtprüfungen sind grün.
 - [ ] SQLite leer/restartbar und PostgreSQL leer/Bestand/Restore/Race sind grün.
 - [ ] MinIO-Lifecycle, Performance, HA und Visual Regression 34/34 sind grün.
+- [ ] Binary-Hygiene, sauberer Runtime-Container und zwei byteidentische
+  portable Builds sind gruen.
 - [ ] Manifest, Checksums, Handbuch und Release Notes sind konsistent.
 - [ ] GitHub-CI einschließlich Aggregation ist vollständig grün.
 - [ ] CodeQL Default Setup `Analyze (rust)` und `Analyze (actions)` ist grün.

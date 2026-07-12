@@ -190,6 +190,15 @@ jobs:
         run: |
           docker build --file rust/iscy-backend/Dockerfile .
 
+  release-binary-portability:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and verify portable release binary twice
+        run: |
+          make release-binary-gate
+
   release-candidate-check:
     if: always()
     needs:
@@ -201,6 +210,7 @@ jobs:
       - ha-integration
       - visual-regression
       - docker-config
+      - release-binary-portability
     runs-on: ubuntu-24.04
     steps:
       - name: Require all release-candidate jobs

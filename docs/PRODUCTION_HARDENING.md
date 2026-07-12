@@ -200,9 +200,29 @@ Ausfuehrung und Grenzen sind in
 veroeffentlicht keine Artefakte. Der Aufruf bricht bei fehlenden Werkzeugen,
 fehlenden Wegwerf-PostgreSQL-URLs oder einem Testfehler ab. Die GitHub-CI nutzt
 weiterhin getrennte zeitbegrenzte Jobs fuer Rust, Nix, MinIO, Performance, HA,
-Visual Regression und Docker. Der abschliessende Aggregationsjob prueft deren
+Visual Regression, Docker und das portable Linux-Binary. Der abschliessende Aggregationsjob prueft deren
 Erfolg sowie Manifest, Checksums, 39 Migrationen, 34 Baselines,
 Dokumentationsreferenzen und den wertredigierten Sensitive-Data-Scan.
+
+`make release-binary-gate` erzeugt das Release-Binary zweimal cachefrei in
+einem digest-gepinnten Rust-1.88-Bookworm-Builder unter `/usr/src/iscy`.
+Cargo-Registry-Pfade werden auf neutrale Praefixe abgebildet, Release-Debuginfo
+und inkrementeller Build sind deaktiviert und Symbole werden kontrolliert
+gestrippt. Beide Builds muessen byteidentisch sein. Das finale
+`linux-x86_64-glibc`-Binary darf keine lokalen Home-, temporaeren Worktree-,
+Runner- oder Nix-Store-Pfade und weder RPATH noch RUNPATH enthalten. Erlaubt
+ist nur ein regulaerer x86_64-glibc-Systeminterpreter.
+Die dynamischen Laufzeitabhaengigkeiten sind auf `libgcc_s.so.1`, `libm.so.6`,
+`libc.so.6` und `ld-linux-x86-64.so.2` begrenzt und werden im Release-Manifest
+festgehalten.
+
+Der Portabilitaetstest verwendet einen digest-gepinnten
+Debian-Bookworm-Slim-Container ohne Nix, Rust, Cargo und Compiler. Er prueft
+`ldd`, CLI-Start, SQLite-Initialisierung, `/health/live`, Log-Hygiene und
+Graceful Shutdown. Das belegt den dokumentierten Bookworm-/glibc-Pfad, nicht
+die Ausfuehrbarkeit auf jeder Linux-Distribution oder Architektur. Das Binary,
+SBOM und Checksummen bleiben unsigniert; der Test veroeffentlicht weder Assets
+noch Container.
 
 Release-Artefakte unter `artifacts/release-candidate/` sind lokal, unsigniert
 und nicht veroeffentlicht. Eine produktive Signatur oder SBOM wird nicht
