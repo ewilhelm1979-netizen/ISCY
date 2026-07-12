@@ -79,7 +79,7 @@ Erfolgskriterium:
 
 Ziel: Evidence soll nicht nur vorhanden sein, sondern belastbar bewertet werden.
 
-Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert. Im Unreleased-Stand sind Evidence Integrity & Disposition Phase 1, Evidence Object Storage & Restore Drill Phase 2, Integritaets-Worker, kontrollierte physische Disposition, vorbereitetes Object-Storage-Backend sowie die Object-Storage-Client-Contract-Schicht mit Migration `0038_rust_evidence_object_storage_client` umgesetzt.
+Status: In V23.7.21 als Evidence-Quality-API und Webansicht umgesetzt; am 2026-06-27 um den persistierten Evidence-Lifecycle erweitert. Im Unreleased-Stand sind Evidence Integrity & Disposition Phase 1, Evidence Object Storage & Restore Drill Phase 2, Integritaets-Worker, kontrollierte physische Disposition, die Object-Storage-Contract-Schicht sowie der echte S3-kompatible Runtime-Client mit Migration `0039_rust_evidence_s3_runtime_client` umgesetzt.
 
 Umgesetzt:
 
@@ -113,12 +113,15 @@ Umgesetzt:
 - Neue API-Pfade verwalten Backend-Metadaten, validieren Endpoint-/Bucket-/Secret-Referenzen, binden Object-Referenzen an Evidence und dokumentieren Object-Storage-Drills, ohne vollstaendige Object-Keys, Secretwerte oder Objektinhalte offenzulegen.
 - Endpoint- und Object-Key-Validierung blockiert Credentials in URLs, unsichere Schemes, Loopback, Link-Local, private Netze, Metadata-Services, Directory Traversal, fremde Prefixe und Object-Keys ohne aktuellen Tenant-/Evidence-Bezug.
 - Management-/Regulatory-Review-Pakete nehmen Object-Storage-Backend-, Konfigurations-, Drill- und Objekt-/Hash-Gaps als aggregierte Snapshot-Signale auf.
+- Migration `0039_rust_evidence_s3_runtime_client` ergaenzt echte SigV4-PUT-/HEAD-/GET-/DELETE-Operationen, explizite `env:`-/allowlisted-`file:`-Secret-Aufloesung, Request-Time-DNS-/SSRF-Revalidierung und serverseitig erzeugte opaque Object-IDs.
+- Bestehender Evidence-Upload, autorisierter Download, Integritaets-Worker, Restore-Pruefung und kontrollierte Disposition verwenden tenantgebundene S3-Runtime-Referenzen; Remote-Delete bleibt Approval-, Reason- und Legal-Hold-gebunden.
+- `make object-storage-integration` und der getrennte GitHub-CI-Job pruefen den realen S3-Lifecycle gegen versioniertes MinIO mit Dummy-Credentials und Cleanup.
 - NIS2-, DORA-, DSGVO- und generische Review-Pakete nehmen Evidence-Worker-, Storage-/Restore-, Legal-Hold- und Disposition-Gaps als eingefrorene Snapshot-Signale auf.
 - Der PostgreSQL-Live-Haertungstest fuer Migration `0034_rust_supplier_product_security_governance` wurde lokal mit temporaerer PostgreSQL-Instanz, Supplier/Product-Security-API, Evidence-Link, Event- und Vertrags-/Exit-Historie erfolgreich nachgezogen.
 
 Naechste Vertiefung:
 
-- Echte S3-kompatible Live-Operationen, Streaming-Reads/Writes und kontrollierte Deletes erst in einem separaten Security-PR auf Basis der Contract-Schicht pruefen.
+- Produktive Pilotierung eines S3-kompatiblen Backends mit Betreiber-Secret-Roots, Zertifikats-/Endpoint-Policy und Restore-Zeitplan getrennt vom Code-Review planen.
 - Vier-Augen-Prinzip fuer physische Disposition vorbereiten, falls das bestehende Rollenmodell fachlich erweitert wird.
 - Periodische Hintergrundausfuehrung des Evidence-Workers an den bestehenden Betriebs-/Scheduler-Rahmen anbinden.
 
@@ -267,7 +270,7 @@ Erfolgskriterium:
 ## Empfohlene Umsetzungsreihenfolge
 
 1. Review-Pack-Bedienung weiter polishen, z. B. zusaetzliche Filter, Pack-spezifische Gap-Gruppierung und Review-Owner-Hinweise.
-2. Produktiven Object-Storage-Client fuer Evidence nur mit separatem Secret-/SSRF-/Restore-Testkonzept angehen.
+2. Den neuen S3-Runtime-Client nach menschlicher Security-Review in einer isolierten Betreiberumgebung pilotieren; Cloud-native Secret-Manager bleiben ein eigener spaeterer Adapter.
 3. Produktive Signierung und eine spaetere produktive CA-/PKI-Stufe erst nach Review des jetzt vorhandenen Artefakt-/Provenance- und PKI-/CSR-Governance-Modells angehen.
 
 ## Verbleibende Roadmap
@@ -288,6 +291,7 @@ Erfolgskriterium:
 | Unreleased | Evidence Integrity & Disposition Phase 1 | Manuelle und begrenzte Batch-Re-Hash-Pruefung, Legal Hold, metadata-only Disposition und auditierbare Integritaetsereignisse sind tenantgebunden verfuegbar. |
 | Unreleased | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |
 | Unreleased | Evidence-Worker, kontrollierte physische Disposition und Object-Storage-Vorbereitung | Begrenzte Integritaets-Worker-Laeufe, Approval-gebundene physische Disposition, Tombstone-Metadaten und vorbereitete Object-Storage-Konfiguration sind tenantgebunden auditierbar. |
+| Unreleased | S3-kompatibler Evidence-Storage-Runtime-Client | Explizite Secret-Referenzen, SigV4, DNS-/SSRF-Revalidierung, kanonische Object-IDs, begrenzte PUT-/HEAD-/GET-Operationen und kontrolliertes Remote-DELETE sind mit MinIO-Integrationstest umgesetzt. |
 | Reifegrad | Performance, HA und visuelle Regression | Lastgrenzen, Mehrinstanzbetrieb und UI-Regressionen sind messbar abgesichert. |
 
 ## Abgrenzung

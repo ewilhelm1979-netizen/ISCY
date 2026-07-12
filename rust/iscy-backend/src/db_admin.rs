@@ -252,6 +252,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_EVIDENCE_OBJECT_STORAGE_CLIENT_SCHEMA,
         postgres_sql: POSTGRES_EVIDENCE_OBJECT_STORAGE_CLIENT_SCHEMA,
     },
+    Migration {
+        version: "0039_rust_evidence_s3_runtime_client",
+        sqlite_sql: SQLITE_EVIDENCE_S3_RUNTIME_CLIENT_SCHEMA,
+        postgres_sql: POSTGRES_EVIDENCE_S3_RUNTIME_CLIENT_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1354,6 +1359,76 @@ CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_event_tenant
     ON evidence_storage_backend_event(tenant_id, backend_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_event_evidence
     ON evidence_storage_backend_event(tenant_id, evidence_id, created_at);
+"#;
+
+const SQLITE_EVIDENCE_S3_RUNTIME_CLIENT_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS evidence_s3_runtime_object (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    evidence_id INTEGER NOT NULL,
+    backend_id varchar(96) NOT NULL,
+    opaque_object_id varchar(32) NOT NULL,
+    canonical_key_sha256 varchar(64) NOT NULL,
+    upload_status varchar(64) NOT NULL DEFAULT 'upload_pending',
+    runtime_verification_status varchar(64) NOT NULL DEFAULT 'verification_required',
+    object_size_bytes INTEGER NULL,
+    object_sha256 varchar(64) NOT NULL DEFAULT '',
+    content_type varchar(128) NOT NULL DEFAULT 'application/octet-stream',
+    last_runtime_operation_at TEXT NULL,
+    last_runtime_error_class varchar(64) NOT NULL DEFAULT '',
+    orphan_review_required bool NOT NULL DEFAULT 0,
+    remote_delete_verified_at TEXT NULL,
+    tombstone_status varchar(64) NOT NULL DEFAULT '',
+    created_by INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, evidence_id, backend_id),
+    UNIQUE(tenant_id, backend_id, opaque_object_id),
+    FOREIGN KEY (tenant_id, evidence_id, backend_id)
+        REFERENCES evidence_object_reference(tenant_id, evidence_id, backend_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_s3_runtime_tenant
+    ON evidence_s3_runtime_object(tenant_id, backend_id, upload_status);
+CREATE INDEX IF NOT EXISTS idx_evidence_s3_runtime_verification
+    ON evidence_s3_runtime_object(tenant_id, runtime_verification_status, last_runtime_operation_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_s3_runtime_orphan
+    ON evidence_s3_runtime_object(tenant_id, orphan_review_required, updated_at);
+"#;
+
+const POSTGRES_EVIDENCE_S3_RUNTIME_CLIENT_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS evidence_s3_runtime_object (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    evidence_id BIGINT NOT NULL,
+    backend_id varchar(96) NOT NULL,
+    opaque_object_id varchar(32) NOT NULL,
+    canonical_key_sha256 varchar(64) NOT NULL,
+    upload_status varchar(64) NOT NULL DEFAULT 'upload_pending',
+    runtime_verification_status varchar(64) NOT NULL DEFAULT 'verification_required',
+    object_size_bytes BIGINT NULL,
+    object_sha256 varchar(64) NOT NULL DEFAULT '',
+    content_type varchar(128) NOT NULL DEFAULT 'application/octet-stream',
+    last_runtime_operation_at TEXT NULL,
+    last_runtime_error_class varchar(64) NOT NULL DEFAULT '',
+    orphan_review_required BOOLEAN NOT NULL DEFAULT FALSE,
+    remote_delete_verified_at TEXT NULL,
+    tombstone_status varchar(64) NOT NULL DEFAULT '',
+    created_by BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id, evidence_id, backend_id),
+    UNIQUE(tenant_id, backend_id, opaque_object_id),
+    FOREIGN KEY (tenant_id, evidence_id, backend_id)
+        REFERENCES evidence_object_reference(tenant_id, evidence_id, backend_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_s3_runtime_tenant
+    ON evidence_s3_runtime_object(tenant_id, backend_id, upload_status);
+CREATE INDEX IF NOT EXISTS idx_evidence_s3_runtime_verification
+    ON evidence_s3_runtime_object(tenant_id, runtime_verification_status, last_runtime_operation_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_s3_runtime_orphan
+    ON evidence_s3_runtime_object(tenant_id, orphan_review_required, updated_at);
 "#;
 
 const SQLITE_AGENT_RELEASE_ARTIFACT_PROVENANCE_SCHEMA: &str = r#"
@@ -8085,5 +8160,104 @@ mod tests {
         assert_eq!(object_ref_count, 1);
         assert_eq!(event_count, 1);
         assert_eq!(index_count, 6);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0039_is_restartable_and_preserves_s3_runtime_metadata() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_storage_backend_config (
+                tenant_id, backend_id, backend_type, display_name, status,
+                endpoint_reference, region, bucket_name, key_prefix,
+                access_key_secret_ref, secret_key_secret_ref, allowed_endpoint_policy
+            ) VALUES (
+                109, 's3-runtime', 's3_compatible', 'Runtime Fixture',
+                'ready', 'https://objects.example.test', 'eu-central-1',
+                'iscy-runtime', 'iscy', 'env:ISCY_TEST_ACCESS',
+                'env:ISCY_TEST_SECRET', 'production_https_public'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_object_reference (
+                tenant_id, evidence_id, backend_id, backend_type,
+                object_key_redacted, object_key_sha256, object_reference_status,
+                expected_sha256, contract_status, contract_sha256
+            ) VALUES (
+                109, 9001, 's3-runtime', 's3_compatible',
+                'object:runtime...fixture',
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'upload_completed',
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'present',
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_s3_runtime_object (
+                tenant_id, evidence_id, backend_id, opaque_object_id,
+                canonical_key_sha256, upload_status, runtime_verification_status,
+                object_size_bytes, object_sha256, content_type
+            ) VALUES (
+                109, 9001, 's3-runtime', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                'upload_completed', 'verified', 128,
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'application/pdf'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0039_rust_evidence_s3_runtime_client'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0039_rust_evidence_s3_runtime_client"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+        let row: (String, String, i64, String) = sqlx::query_as(
+            r#"
+            SELECT opaque_object_id, upload_status, object_size_bytes, object_sha256
+            FROM evidence_s3_runtime_object
+            WHERE tenant_id = 109 AND evidence_id = 9001 AND backend_id = 's3-runtime'
+            "#,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        assert_eq!(row.1, "upload_completed");
+        assert_eq!(row.2, 128);
+        assert_eq!(
+            row.3,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        let index_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_evidence_s3_runtime_tenant','idx_evidence_s3_runtime_verification','idx_evidence_s3_runtime_orphan')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(index_count, 3);
     }
 }

@@ -8,6 +8,11 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Added
 
+- ergaenzt den echten S3-kompatiblen Evidence-Storage-Runtime-Client ueber additive Migration `0039_rust_evidence_s3_runtime_client` mit tenantgebundenen opaque Object-IDs, Upload-/Verify-/Orphan-/Delete-Status und Tombstone-Nachweis
+- ergaenzt explizite `env:`- und allowlist-gebundene `file:`-Secret-Aufloesung, Request-Time-DNS-/SSRF-Revalidierung, AWS-SigV4 sowie begrenzte PUT-, HEAD-, GET- und kontrollierte DELETE-Operationen ohne automatische Credential-Provider-Chain
+- erweitert bestehende Evidence-Uploads, autorisierte Downloads, Integritaets-Worker, Restore-Pruefungen und freigegebene Disposition um `s3_compatible`, waehrend `local_filesystem` unterstuetzt bleibt
+- ergaenzt einen isolierten MinIO-Integrationstest und CI-Job fuer PUT/HEAD/GET, SHA-256, Hash-Mismatch, Object-missing, Access-denied, kontrolliertes DELETE, idempotenten Wiederanlauf und Cleanup
+- erweitert `/evidence/integrity/` und Management-/Regulatory-Review-Signale um S3-Runtime-, Upload-, Restore-, Fehler- und Orphan-Status ohne Secretwerte oder vollstaendige Object Keys
 - ergaenzt Agent-CA-/PKI-/CSR-Governance ueber additive Migration `0037_rust_agent_pki_csr_governance`
 - ergaenzt tenantgebundene Agent-PKI-APIs fuer Provider-Metadaten, CSR-Lifecycle, Zertifikatsstatus, mTLS-Bindungsstatus, Rotation und Widerruf unter `/api/v1/agents/pki*`, `/api/v1/agents/{agent_id}/pki` und `/api/v1/agents/onboarding/pki`
 - erweitert `/zero-trust/` und den gefuehrten Agent-Onboarding-Assistenten um deutsche PKI-/CSR-/mTLS-Governance-Hinweise mit Provider-, CSR- und Zertifikatsstatus, ohne produktive CA-Ausstellung vorzutaueschen
@@ -66,6 +71,11 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ### Security
 
+- loest S3-Zugangsdaten ausschliesslich pro Operation aus expliziten Secret-Referenzen auf; AWS-Profile, SSO, Home-Verzeichnisse, EC2/ECS-Metadata-Credentials, Proxy-Autodiscovery und Redirects sind nicht aktiviert
+- erzwingt fuer produktive S3-Endpoints HTTPS und blockiert Credentials in URLs, Loopback, Link-Local, private/CGNAT-Netze, `.local` und Metadata-Dienste; lokales MinIO ist nur im Development-Modus mit `ISCY_EVIDENCE_ALLOW_LOCAL_TEST_ENDPOINT=true` zulaessig
+- erzeugt kanonische Object Keys serverseitig aus Tenant-, Evidence- und opaque Object-ID, persistiert nur die opaque ID, den Key-Hash und eine redigierte Anzeige und akzeptiert keine frei gewaehlten Runtime-Keys aus Requests
+- begrenzt S3-Objekte auf das Evidence-Upload-Limit, liest GET-Antworten chunkweise mit harter Obergrenze und protokolliert weder Object-Inhalte noch Credentials, Secret-Dateipfade, Authorization Header oder SDK-/SQL-Details
+- fuehrt Remote-DELETE ausschliesslich nach bestehender Approval-, Begruendungs- und Legal-Hold-Pruefung aus, verifiziert die Abwesenheit und erhaelt Tombstone-/Key-Hash-Metadaten
 - speichert Agent-PKI- und CSR-Daten ausschliesslich als Governance-/Statusmetadaten; rohe private Schluessel, produktive CA-Secrets, Cloud-Credentials, echte CA-Ausstellung, automatische mTLS-Aktivierung und produktive Rotation/Widerruf bleiben bewusst ausserhalb dieses PRs
 - haelt Agent-PKI-Provider, CSR, Zertifikatsstatus und Auditereignisse tenantgebunden; schreibende Aktionen bleiben Admin-/Editor-Rollen vorbehalten, Read-only-Rollen sehen nur sichere Metadaten
 - validiert Provider-, CSR-, Zertifikats-, mTLS-, Rotations- und Widerrufstatus mit sicheren 4xx-Antworten und blockiert private-key-, Secret-, Token- und lokale Pfadfragmente in PKI-Metadaten

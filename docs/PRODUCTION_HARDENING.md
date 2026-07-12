@@ -122,4 +122,35 @@ iscy_operations_security_flag
 
 - Ohne konfigurierten Security-Store fallen Login-Rate-Limits und HMAC-Nonce-Erkennung auf Einzelprozess-/Timestamp-Schutz zurueck.
 - Der PostgreSQL-Restore-Drill nutzt wegwerfbare Testdatenbanken; produktive Restore-Prozesse muessen je Umgebung mit echten Backup-Speichern, RPO/RTO und Freigaben erprobt werden.
-- Objektspeicher-/S3-artige Evidence-Backends sind noch nicht Teil des automatischen Restore-Drills.
+- S3-kompatible Evidence-Backends koennen ueber den begrenzten Evidence-Worker und manuelle Restore-Pruefungen validiert werden; ein produktiver periodischer Scheduler sowie betreiberspezifische RPO-/RTO-Nachweise bleiben Umgebungsaufgabe.
+
+## S3-kompatibler Evidence-Storage
+
+Produktive Backends muessen `https://` verwenden und duerfen weder lokale,
+private, Link-Local-, CGNAT-, `.local`- noch Metadata-Service-Ziele aufloesen.
+ISCY revalidiert DNS vor jeder Operation, deaktiviert Redirects und
+Proxy-Autodiscovery und verwendet keine AWS-Profile, SSO-, Home-Verzeichnis-
+oder EC2-/ECS-Metadata-Credentials.
+
+Zugangsdaten werden nur ueber explizite Referenzen konfiguriert:
+
+```text
+env:ISCY_EVIDENCE_S3_ACCESS_KEY
+env:ISCY_EVIDENCE_S3_SECRET_KEY
+file:/run/secrets/iscy/s3-access-key
+file:/run/secrets/iscy/s3-secret-key
+```
+
+Fuer `file:` muessen erlaubte, read-only gemountete Wurzeln gesetzt werden,
+zum Beispiel `ISCY_EVIDENCE_SECRET_ROOTS=/run/secrets/iscy`. Secret-Dateien
+duerfen keine fuer Gruppe/Andere schreibbaren Unix-Rechte besitzen und maximal
+16 KiB gross sein und keine Lese-/Schreib-/Ausfuehrungsrechte fuer Gruppe oder
+Andere besitzen. Werte werden pro Operation aufgeloest, nicht persistiert und
+nicht protokolliert.
+
+`ISCY_EVIDENCE_ALLOW_LOCAL_TEST_ENDPOINT=true` ist ausschliesslich fuer den
+Development-Modus und lokales MinIO vorgesehen. In Production bleibt die
+Ausnahme wirkungslos. Vor dem produktiven Einsatz sind ein eigener
+Live-Validation-Lauf, ein Upload-/Download-Test, eine Restore-Pruefung, ein
+freigegebener Disposition-Test und die Aufnahme in das betriebliche RPO-/RTO-
+Verfahren erforderlich.

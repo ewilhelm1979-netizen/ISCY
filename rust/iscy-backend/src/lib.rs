@@ -47,6 +47,8 @@ pub mod dashboard_store;
 pub mod db_admin;
 pub mod evidence_artifact_storage;
 pub mod evidence_object_storage;
+pub mod evidence_s3_runtime;
+pub mod evidence_s3_store;
 pub mod evidence_store;
 pub mod hardening;
 pub mod import_preview;
@@ -89,6 +91,10 @@ use evidence_object_storage::{
     EvidenceStorageBackendConfig, EvidenceStorageBackendConfigRequest, EvidenceStorageBackendEvent,
     EvidenceStorageSecretReferenceStatus, BACKEND_S3_COMPATIBLE,
 };
+use evidence_s3_runtime::{
+    S3RuntimeClient, S3RuntimeConfig, S3RuntimeDrill, S3RuntimeError, SecretResolver,
+};
+use evidence_s3_store::EvidenceS3RuntimeObject;
 use evidence_store::EvidenceStore;
 use hardening::CommunitySecurityConfig;
 use import_preview::{ImportPreview, ImportUploadFile};
@@ -2082,6 +2088,37 @@ pub struct EvidenceStorageBackendConfigResponse {
     pub api_version: &'static str,
     pub tenant_id: i64,
     pub backend: EvidenceStorageBackendConfig,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceS3RuntimeStatusResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub backend_id: String,
+    pub runtime_status: String,
+    pub safe_error_class: String,
+    pub live_validation_performed: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceS3ObjectResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub evidence_id: i64,
+    pub runtime: EvidenceS3RuntimeObject,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EvidenceS3DrillResponse {
+    pub accepted: bool,
+    pub api_version: &'static str,
+    pub tenant_id: i64,
+    pub evidence_id: i64,
+    pub drill: S3RuntimeDrill,
+    pub runtime: EvidenceS3RuntimeObject,
+    pub item: Option<evidence_store::EvidenceIntegrityItem>,
 }
 
 #[derive(Debug, Serialize)]
@@ -11329,6 +11366,602 @@ async fn evidence_storage_backend_validate(
     }
 }
 
+fn s3_local_test_endpoint_allowed(state: &AppState) -> bool {
+    state.security_config.app_mode.as_str() == "development"
+        && std::env::var("ISCY_EVIDENCE_ALLOW_LOCAL_TEST_ENDPOINT")
+            .ok()
+            .is_some_and(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes"
+                )
+            })
+}
+
+async fn s3_runtime_client_for_backend(
+    state: &AppState,
+    store: &EvidenceStore,
+    tenant_id: i64,
+    backend_id: &str,
+) -> Result<(EvidenceStorageBackendConfig, S3RuntimeClient), S3RuntimeError> {
+    let backend = store
+        .evidence_storage_backend_config(tenant_id, backend_id)
+        .await
+        .map_err(|_| S3RuntimeError::BackendUnavailable)?
+        .ok_or(S3RuntimeError::BackendNotReady)?;
+    let config = S3RuntimeConfig::from_backend(
+        &backend,
+        state.security_config.app_mode.is_production(),
+        s3_local_test_endpoint_allowed(state),
+    )?;
+    Ok((
+        backend,
+        S3RuntimeClient::new(config, SecretResolver::from_environment()),
+    ))
+}
+
+async fn evidence_storage_backend_validate_live(
+    Path(backend_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    let client =
+        match s3_runtime_client_for_backend(&state, store, context.tenant_id, &backend_id).await {
+            Ok((_, client)) => client,
+            Err(error) => {
+                let _ = store
+                    .record_s3_live_validation(
+                        context.tenant_id,
+                        &backend_id,
+                        context.user_id,
+                        false,
+                        error.safe_error_class(),
+                    )
+                    .await;
+                return s3_runtime_error_response(error);
+            }
+        };
+    match client.validate_live().await {
+        Ok(_) => {
+            let _ = store
+                .record_s3_live_validation(
+                    context.tenant_id,
+                    &backend_id,
+                    context.user_id,
+                    true,
+                    "",
+                )
+                .await;
+            (
+                StatusCode::OK,
+                Json(EvidenceS3RuntimeStatusResponse {
+                    accepted: true,
+                    api_version: "v1",
+                    tenant_id: context.tenant_id,
+                    backend_id,
+                    runtime_status: "ready".to_string(),
+                    safe_error_class: String::new(),
+                    live_validation_performed: true,
+                }),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            let _ = store
+                .record_s3_live_validation(
+                    context.tenant_id,
+                    &backend_id,
+                    context.user_id,
+                    false,
+                    error.safe_error_class(),
+                )
+                .await;
+            s3_runtime_error_response(error)
+        }
+    }
+}
+
+async fn evidence_storage_backend_runtime_status(
+    Path(backend_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match s3_runtime_client_for_backend(&state, store, context.tenant_id, &backend_id).await {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(EvidenceS3RuntimeStatusResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                backend_id,
+                runtime_status: "configured".to_string(),
+                safe_error_class: String::new(),
+                live_validation_performed: false,
+            }),
+        )
+            .into_response(),
+        Err(error) => s3_runtime_error_response(error),
+    }
+}
+
+async fn evidence_s3_upload(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    let item = match store
+        .evidence_integrity_item(context.tenant_id, evidence_id)
+        .await
+    {
+        Ok(Some(item)) => item,
+        Ok(None) => return evidence_not_found_api_response(),
+        Err(_) => {
+            return evidence_api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "Evidence konnte nicht sicher gelesen werden.",
+            )
+        }
+    };
+    if item.artifact_reference_present {
+        return evidence_api_error(
+            StatusCode::CONFLICT,
+            "artifact_reference_exists",
+            "Evidence besitzt bereits eine Artefakt-Referenz.",
+        );
+    }
+    match store
+        .s3_runtime_object(context.tenant_id, evidence_id)
+        .await
+    {
+        Ok(Some(runtime)) if runtime.upload_status == "upload_completed" => {
+            return evidence_api_error(
+                StatusCode::CONFLICT,
+                "artifact_reference_exists",
+                "Evidence besitzt bereits ein abgeschlossenes S3-Artefakt.",
+            );
+        }
+        Ok(_) => {}
+        Err(_) => {
+            return evidence_api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "S3-Evidence-Referenz konnte nicht sicher gelesen werden.",
+            );
+        }
+    }
+    let form = match parse_evidence_upload_form(&headers, &body) {
+        Ok(form) => form,
+        Err(_) => {
+            return evidence_api_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_evidence_upload",
+                "S3-Evidence-Upload ist ungueltig.",
+            )
+        }
+    };
+    let Some(file) = form.file.as_ref() else {
+        return evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "evidence_file_missing",
+            "Fuer den S3-Upload fehlt die Evidence-Datei.",
+        );
+    };
+    if validate_evidence_upload_file(file).is_err() {
+        return evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_evidence_file",
+            "Evidence-Datei verletzt die Upload-Schutzregeln.",
+        );
+    }
+    let backend_id = form
+        .fields
+        .get("storage_backend_id")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("");
+    if backend_id.is_empty() {
+        return evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "storage_backend_required",
+            "S3-Evidence-Upload benoetigt ein explizites Storage-Backend.",
+        );
+    }
+    let (backend, client) =
+        match s3_runtime_client_for_backend(&state, store, context.tenant_id, backend_id).await {
+            Ok(value) => value,
+            Err(error) => return s3_runtime_error_response(error),
+        };
+    let sha256 = format!("{:x}", Sha256::digest(&file.data));
+    let content_type = file
+        .content_type
+        .as_deref()
+        .unwrap_or("application/octet-stream");
+    let runtime = match store
+        .reserve_s3_runtime_object(
+            context.tenant_id,
+            evidence_id,
+            backend_id,
+            context.user_id,
+            &sha256,
+            content_type,
+        )
+        .await
+    {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            return evidence_api_error(
+                StatusCode::CONFLICT,
+                "object_reference_conflict",
+                "S3-Object-Referenz konnte nicht sicher reserviert werden.",
+            )
+        }
+    };
+    let object_key = match runtime.canonical_key(&backend.key_prefix) {
+        Ok(key) => key,
+        Err(_) => {
+            return evidence_api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "object_reference_invalid",
+                "S3-Object-Referenz konnte nicht sicher erzeugt werden.",
+            )
+        }
+    };
+    if let Err(error) = client.put(&object_key, &file.data, content_type).await {
+        let _ = store
+            .fail_s3_runtime_operation(
+                context.tenant_id,
+                evidence_id,
+                context.user_id,
+                "upload",
+                error.safe_error_class(),
+                false,
+            )
+            .await;
+        return s3_runtime_error_response(error);
+    }
+    match store
+        .complete_s3_upload(
+            context.tenant_id,
+            evidence_id,
+            context.user_id,
+            file.data.len() as i64,
+            &sha256,
+        )
+        .await
+    {
+        Ok(Some(runtime)) => (
+            StatusCode::OK,
+            Json(EvidenceS3ObjectResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                runtime,
+            }),
+        )
+            .into_response(),
+        _ => {
+            let orphan_review_required = client.delete(&object_key).await.is_err();
+            let _ = store
+                .fail_s3_runtime_operation(
+                    context.tenant_id,
+                    evidence_id,
+                    context.user_id,
+                    "upload",
+                    "database_finalize_failed",
+                    orphan_review_required,
+                )
+                .await;
+            if orphan_review_required {
+                evidence_api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "orphan_review_required",
+                    "Upload wurde nicht vollstaendig finalisiert; eine Orphan-Pruefung ist erforderlich.",
+                )
+            } else {
+                evidence_api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "upload_finalize_failed",
+                    "Upload wurde nicht finalisiert; das Remote-Object wurde kontrolliert bereinigt.",
+                )
+            }
+        }
+    }
+}
+
+fn s3_download_allowed(
+    context: &AuthenticatedTenantContext,
+    item: &evidence_store::EvidenceIntegrityItem,
+) -> bool {
+    if context.is_superuser || context.is_staff || item.owner_id == Some(context.user_id) {
+        return true;
+    }
+    match item.sensitivity.trim().to_ascii_uppercase().as_str() {
+        "PUBLIC" | "INTERNAL" => true,
+        "CONFIDENTIAL" => [
+            "ADMIN",
+            "MANAGEMENT",
+            "CISO",
+            "ISMS_MANAGER",
+            "COMPLIANCE_MANAGER",
+            "AUDITOR",
+        ]
+        .iter()
+        .any(|role| context.has_role(role)),
+        "RESTRICTED" => ["ADMIN", "CISO", "ISMS_MANAGER", "COMPLIANCE_MANAGER"]
+            .iter()
+            .any(|role| context.has_role(role)),
+        _ => false,
+    }
+}
+
+async fn evidence_s3_download(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    let item = match store
+        .evidence_integrity_item(context.tenant_id, evidence_id)
+        .await
+    {
+        Ok(Some(item)) if s3_download_allowed(&context, &item) => item,
+        Ok(Some(_)) => {
+            return evidence_api_error(
+                StatusCode::FORBIDDEN,
+                "evidence_download_forbidden",
+                "Diese Evidence-Schutzklasse darf mit der aktuellen Rolle nicht heruntergeladen werden.",
+            )
+        }
+        Ok(None) => return evidence_not_found_api_response(),
+        Err(_) => {
+            return evidence_api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "Evidence konnte nicht sicher gelesen werden.",
+            )
+        }
+    };
+    let runtime = match store
+        .s3_runtime_object(context.tenant_id, evidence_id)
+        .await
+    {
+        Ok(Some(runtime)) if runtime.upload_status == "upload_completed" => runtime,
+        Ok(_) => {
+            return evidence_api_error(
+                StatusCode::NOT_FOUND,
+                "object_reference_not_found",
+                "S3-Evidence-Artefakt ist nicht verfuegbar.",
+            )
+        }
+        Err(_) => {
+            return evidence_api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "S3-Evidence-Referenz konnte nicht sicher gelesen werden.",
+            )
+        }
+    };
+    let (backend, client) =
+        match s3_runtime_client_for_backend(&state, store, context.tenant_id, &runtime.backend_id)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => return s3_runtime_error_response(error),
+        };
+    let object_key = match runtime.canonical_key(&backend.key_prefix) {
+        Ok(key) => key,
+        Err(_) => return s3_runtime_error_response(S3RuntimeError::InvalidObjectKey),
+    };
+    let object = match client.get(&object_key).await {
+        Ok(object) => object,
+        Err(error) => return s3_runtime_error_response(error),
+    };
+    if !runtime.object_sha256.is_empty()
+        && !object.sha256.eq_ignore_ascii_case(&runtime.object_sha256)
+    {
+        return s3_runtime_error_response(S3RuntimeError::HashMismatch);
+    }
+    let _ = store
+        .record_evidence_integrity_event(
+            context.tenant_id,
+            evidence_id,
+            Some(context.user_id),
+            "storage_object_downloaded",
+            serde_json::json!({
+                "storage_backend": "s3_compatible",
+                "size_bytes": object.size_bytes,
+                "hash_verified": true,
+                "object_key_exposed": false
+            }),
+            "",
+        )
+        .await;
+    let download_name = sanitize_filename(&format!("evidence-{evidence_id}-{}", item.title));
+    let mut response = (StatusCode::OK, Bytes::from(object.bytes)).into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_str(&runtime.content_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "attachment; filename=\"{}\"",
+        download_name.replace('"', "")
+    )) {
+        response.headers_mut().insert(CONTENT_DISPOSITION, value);
+    }
+    response
+}
+
+async fn evidence_s3_verify(
+    Path(evidence_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return auth_error_response(err),
+    };
+    if let Some(response) = write_permission_error(&context) {
+        return response;
+    }
+    let Some(store) = state.evidence_store.as_ref() else {
+        return evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database_not_configured",
+            "Rust-Evidence-Store ist nicht konfiguriert.",
+        );
+    };
+    match run_s3_runtime_drill(&state, store, &context, evidence_id).await {
+        Ok(Some((drill, runtime, item))) => (
+            StatusCode::OK,
+            Json(EvidenceS3DrillResponse {
+                accepted: drill.status == "valid",
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                drill,
+                runtime,
+                item,
+            }),
+        )
+            .into_response(),
+        Ok(None) => evidence_not_found_api_response(),
+        Err(error) => s3_runtime_error_response(error),
+    }
+}
+
+async fn run_s3_runtime_drill(
+    state: &AppState,
+    store: &EvidenceStore,
+    context: &AuthenticatedTenantContext,
+    evidence_id: i64,
+) -> Result<
+    Option<(
+        S3RuntimeDrill,
+        EvidenceS3RuntimeObject,
+        Option<evidence_store::EvidenceIntegrityItem>,
+    )>,
+    S3RuntimeError,
+> {
+    let runtime = store
+        .s3_runtime_object(context.tenant_id, evidence_id)
+        .await
+        .map_err(|_| S3RuntimeError::BackendUnavailable)?;
+    let Some(runtime) = runtime else {
+        return Ok(None);
+    };
+    let (backend, client) =
+        s3_runtime_client_for_backend(state, store, context.tenant_id, &runtime.backend_id).await?;
+    let key = runtime
+        .canonical_key(&backend.key_prefix)
+        .map_err(|_| S3RuntimeError::InvalidObjectKey)?;
+    let drill = match client.drill(&key, &runtime.object_sha256).await {
+        Ok(drill) => drill,
+        Err(error) => {
+            let _ = store
+                .fail_s3_runtime_operation(
+                    context.tenant_id,
+                    evidence_id,
+                    context.user_id,
+                    "drill",
+                    error.safe_error_class(),
+                    false,
+                )
+                .await;
+            return Err(error);
+        }
+    };
+    let runtime = store
+        .complete_s3_verification(
+            context.tenant_id,
+            evidence_id,
+            context.user_id,
+            &drill.calculated_sha256,
+            drill.size_bytes.unwrap_or(0) as i64,
+            drill.hash_matches,
+        )
+        .await
+        .map_err(|_| S3RuntimeError::BackendUnavailable)?
+        .ok_or(S3RuntimeError::ObjectMissing)?;
+    let update = evidence_integrity_update(
+        &drill.calculated_sha256,
+        &drill.status,
+        !drill.hash_matches,
+        if drill.hash_matches {
+            "none"
+        } else {
+            "review_required"
+        },
+        if drill.hash_matches {
+            "S3-Restore-Pruefung: Object vorhanden, lesbar und hash-konsistent."
+        } else {
+            "S3-Restore-Pruefung: Object vorhanden, Hash weicht ab."
+        },
+        &drill.safe_error_class,
+    );
+    let item = store
+        .apply_integrity_check_result(context.tenant_id, evidence_id, context.user_id, update)
+        .await
+        .map_err(|_| S3RuntimeError::BackendUnavailable)?;
+    Ok(Some((drill, runtime, item)))
+}
+
 async fn evidence_storage_backend_events(
     Path(backend_id): Path<String>,
     State(state): State<AppState>,
@@ -11913,7 +12546,43 @@ async fn evidence_disposition_execute(
             )
         }
     };
-    let storage = evidence_artifact_storage(&state);
+    let runtime = match store
+        .s3_runtime_object(context.tenant_id, evidence_id)
+        .await
+    {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            return evidence_api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "S3-Runtime-Referenz konnte fuer Disposition nicht sicher gelesen werden.",
+            )
+        }
+    };
+    if item.disposition_status == "disposition_executed"
+        && runtime
+            .as_ref()
+            .is_some_and(|runtime| !runtime.tombstone_status.is_empty())
+    {
+        return (
+            StatusCode::OK,
+            Json(EvidenceDispositionExecutionResponse {
+                accepted: true,
+                api_version: "v1",
+                tenant_id: context.tenant_id,
+                evidence_id,
+                disposition: EvidenceArtifactDisposition {
+                    backend: "s3_compatible",
+                    artifact_reference_present: true,
+                    artifact_present_before: false,
+                    deleted: true,
+                    safe_error_class: "object_already_missing".to_string(),
+                },
+                item,
+            }),
+        )
+            .into_response();
+    }
     if let Some(error_class) = evidence_disposition_execution_blocker(&item) {
         let _ = store
             .record_evidence_integrity_event(
@@ -11931,7 +12600,85 @@ async fn evidence_disposition_execute(
             "Disposition-Ausfuehrung wurde durch Schutzregeln verweigert.",
         );
     }
-    let disposition = storage.delete_artifact(&evidence_artifact_ref_from_item(&item));
+    if runtime.as_ref().is_some_and(|runtime| {
+        !matches!(
+            runtime.upload_status.as_str(),
+            "upload_completed" | "deleted"
+        )
+    }) {
+        let _ = store
+            .record_evidence_integrity_event(
+                context.tenant_id,
+                evidence_id,
+                Some(context.user_id),
+                "disposition_execution_denied",
+                serde_json::json!({"safe_error_class": "object_reference_not_ready"}),
+                "",
+            )
+            .await;
+        return evidence_api_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_disposition_execution",
+            "S3-Object-Referenz ist fuer Disposition nicht bereit.",
+        );
+    }
+    let disposition = if let Some(runtime) = runtime {
+        let runtime_delete = async {
+            let (backend, client) = s3_runtime_client_for_backend(
+                &state,
+                &store,
+                context.tenant_id,
+                &runtime.backend_id,
+            )
+            .await?;
+            let object_key = runtime
+                .canonical_key(&backend.key_prefix)
+                .map_err(|_| S3RuntimeError::InvalidObjectKey)?;
+            client.delete(&object_key).await
+        }
+        .await;
+        match runtime_delete {
+            Ok(result) => {
+                let already_missing = result.safe_error_class == "object_already_missing";
+                let _ = store
+                    .complete_s3_delete(
+                        context.tenant_id,
+                        evidence_id,
+                        context.user_id,
+                        already_missing,
+                    )
+                    .await;
+                EvidenceArtifactDisposition {
+                    backend: "s3_compatible",
+                    artifact_reference_present: true,
+                    artifact_present_before: result.object_present_before,
+                    deleted: true,
+                    safe_error_class: result.safe_error_class,
+                }
+            }
+            Err(error) => {
+                let _ = store
+                    .fail_s3_runtime_operation(
+                        context.tenant_id,
+                        evidence_id,
+                        context.user_id,
+                        "delete",
+                        error.safe_error_class(),
+                        false,
+                    )
+                    .await;
+                EvidenceArtifactDisposition {
+                    backend: "s3_compatible",
+                    artifact_reference_present: true,
+                    artifact_present_before: false,
+                    deleted: false,
+                    safe_error_class: error.safe_error_class().to_string(),
+                }
+            }
+        }
+    } else {
+        evidence_artifact_storage(&state).delete_artifact(&evidence_artifact_ref_from_item(&item))
+    };
     let tombstone = evidence_disposition_tombstone(&item, &disposition);
     let execution = evidence_store::EvidenceDispositionExecution {
         deleted: disposition.deleted,
@@ -12279,6 +13026,43 @@ fn evidence_object_storage_error_response(err: anyhow::Error, message: &'static 
     evidence_api_error(StatusCode::INTERNAL_SERVER_ERROR, "database_error", message)
 }
 
+fn s3_runtime_error_response(error: S3RuntimeError) -> Response {
+    let error_code = error.safe_error_class();
+    let status = match error {
+        S3RuntimeError::AccessDenied => StatusCode::FORBIDDEN,
+        S3RuntimeError::ObjectMissing => StatusCode::NOT_FOUND,
+        S3RuntimeError::ConnectionTimeout | S3RuntimeError::BackendUnavailable => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+        S3RuntimeError::HashMismatch => StatusCode::CONFLICT,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (
+        status,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: match error {
+                S3RuntimeError::SecretReferenceMissing => {
+                    "Secret-Referenz konnte nicht aufgeloest werden."
+                }
+                S3RuntimeError::AccessDenied => "Zugriff auf das S3-Object wurde verweigert.",
+                S3RuntimeError::ObjectMissing => "S3-Object ist nicht vorhanden.",
+                S3RuntimeError::HashMismatch => {
+                    "S3-Object stimmt nicht mit dem erwarteten Hash ueberein."
+                }
+                S3RuntimeError::ConnectionTimeout => {
+                    "S3-Operation hat das Zeitlimit ueberschritten."
+                }
+                _ => "S3-Runtime-Operation wurde durch Schutzregeln abgebrochen.",
+            }
+            .to_string(),
+        }),
+    )
+        .into_response()
+}
+
 fn object_storage_validation_error_class(details: &str) -> Option<&'static str> {
     const PREFIX: &str = "object_storage_validation:";
     let class = details
@@ -12530,6 +13314,37 @@ async fn run_evidence_integrity_check(
         )
         .await
         .map_err(|_| EvidenceIntegrityActionError::Database)?;
+
+    if store
+        .s3_runtime_object(context.tenant_id, evidence_id)
+        .await
+        .map_err(|_| EvidenceIntegrityActionError::Database)?
+        .is_some()
+    {
+        match run_s3_runtime_drill(state, store, context, evidence_id).await {
+            Ok(Some((_, _, item))) => return Ok(item),
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                let update = evidence_integrity_update(
+                    "",
+                    "check_failed",
+                    false,
+                    "review_required",
+                    "S3-Restore-Pruefung konnte nicht sicher abgeschlossen werden.",
+                    error.safe_error_class(),
+                );
+                return store
+                    .apply_integrity_check_result(
+                        context.tenant_id,
+                        target.id,
+                        context.user_id,
+                        update,
+                    )
+                    .await
+                    .map_err(|_| EvidenceIntegrityActionError::Database);
+            }
+        }
+    }
 
     let update = evidence_integrity_check_update(state, &target).await?;
     store
@@ -13160,13 +13975,38 @@ async fn evidence_upload(
                 .into_response();
         }
     };
+    let s3_backend_id = form
+        .fields
+        .get("storage_backend_id")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if s3_backend_id.is_some() {
+        let Some(file) = form.file.as_ref() else {
+            return evidence_api_error(
+                StatusCode::BAD_REQUEST,
+                "evidence_file_missing",
+                "S3-Evidence-Upload benoetigt eine Datei.",
+            );
+        };
+        if validate_evidence_upload_file(file).is_err() {
+            return evidence_api_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_evidence_file",
+                "Evidence-Datei verletzt die Upload-Schutzregeln.",
+            );
+        }
+    }
     let media_root = evidence_media_root(&state);
-    let saved_file = match form
-        .file
-        .as_ref()
-        .map(|file| save_evidence_upload(&media_root, file))
-        .transpose()
-    {
+    let saved_file = match if s3_backend_id.is_none() {
+        form.file
+            .as_ref()
+            .map(|file| save_evidence_upload(&media_root, file))
+            .transpose()
+    } else {
+        Ok(None)
+    } {
         Ok(file) => file,
         Err(message) => {
             return (
@@ -13197,10 +14037,16 @@ async fn evidence_upload(
             .unwrap_or_default(),
         file_name: saved_file.as_ref().map(|file| file.relative_path.clone()),
         supersedes_id: optional_i64_form_field(&form.fields, "supersedes_id"),
-        file_sha256: saved_file
-            .as_ref()
-            .map(|file| file.sha256.clone())
-            .unwrap_or_default(),
+        file_sha256: if let Some(file) = saved_file.as_ref() {
+            file.sha256.clone()
+        } else if s3_backend_id.is_some() {
+            form.file
+                .as_ref()
+                .map(|file| format!("{:x}", Sha256::digest(&file.data)))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        },
         valid_until: form.fields.get("valid_until").cloned(),
         retention_until: form.fields.get("retention_until").cloned(),
         retention_reason: form
@@ -13222,6 +14068,105 @@ async fn evidence_upload(
         .await
     {
         Ok(item) => {
+            if let Some(backend_id) = s3_backend_id.as_deref() {
+                let Some(file) = form.file.as_ref() else {
+                    return evidence_api_error(
+                        StatusCode::BAD_REQUEST,
+                        "evidence_file_missing",
+                        "S3-Evidence-Upload benoetigt eine Datei.",
+                    );
+                };
+                let (backend, client) = match s3_runtime_client_for_backend(
+                    &state,
+                    &store,
+                    context.tenant_id,
+                    backend_id,
+                )
+                .await
+                {
+                    Ok(value) => value,
+                    Err(error) => return s3_runtime_error_response(error),
+                };
+                let content_type = file
+                    .content_type
+                    .as_deref()
+                    .unwrap_or("application/octet-stream");
+                let runtime = match store
+                    .reserve_s3_runtime_object(
+                        context.tenant_id,
+                        item.id,
+                        backend_id,
+                        context.user_id,
+                        &item.file_sha256,
+                        content_type,
+                    )
+                    .await
+                {
+                    Ok(runtime) => runtime,
+                    Err(_) => {
+                        return evidence_api_error(
+                            StatusCode::CONFLICT,
+                            "object_reference_conflict",
+                            "S3-Object-Referenz konnte nicht sicher reserviert werden.",
+                        )
+                    }
+                };
+                let object_key = match runtime.canonical_key(&backend.key_prefix) {
+                    Ok(key) => key,
+                    Err(_) => return s3_runtime_error_response(S3RuntimeError::InvalidObjectKey),
+                };
+                if let Err(error) = client.put(&object_key, &file.data, content_type).await {
+                    let _ = store
+                        .fail_s3_runtime_operation(
+                            context.tenant_id,
+                            item.id,
+                            context.user_id,
+                            "upload",
+                            error.safe_error_class(),
+                            false,
+                        )
+                        .await;
+                    return s3_runtime_error_response(error);
+                }
+                if store
+                    .complete_s3_upload(
+                        context.tenant_id,
+                        item.id,
+                        context.user_id,
+                        file.data.len() as i64,
+                        &item.file_sha256,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_none()
+                {
+                    let orphan_review_required = client.delete(&object_key).await.is_err();
+                    let _ = store
+                        .fail_s3_runtime_operation(
+                            context.tenant_id,
+                            item.id,
+                            context.user_id,
+                            "upload",
+                            "database_finalize_failed",
+                            orphan_review_required,
+                        )
+                        .await;
+                    return if orphan_review_required {
+                        evidence_api_error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "orphan_review_required",
+                            "Upload wurde nicht vollstaendig finalisiert; eine Orphan-Pruefung ist erforderlich.",
+                        )
+                    } else {
+                        evidence_api_error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "upload_finalize_failed",
+                            "Upload wurde nicht finalisiert; das Remote-Object wurde kontrolliert bereinigt.",
+                        )
+                    };
+                }
+            }
             record_incident_evidence_event(&state, context.tenant_id, context.user_id, &item).await;
             let need_sync = if let Some(session_id) = item.session_id {
                 store
@@ -19969,6 +20914,11 @@ async fn web_evidence(
     let Some(store) = state.evidence_store else {
         return web_store_missing("Evidence", "/evidence/", &context, "Evidence");
     };
+    let storage_backend_options = store
+        .evidence_storage_backend_configs(context.tenant_id)
+        .await
+        .map(|configs| evidence_upload_storage_backend_options(&configs))
+        .unwrap_or_else(|_| r#"<option value="">Lokales Dateisystem</option>"#.to_string());
     match store
         .evidence_overview(context.tenant_id, query.session_id, 50, 20)
         .await
@@ -20065,6 +21015,7 @@ async fn web_evidence(
                         <label>Schutzklasse<select name="sensitivity">{}</select></label>
                         <label>Gueltig bis<input name="valid_until" type="date"></label>
                         <label>Aufbewahren bis<input name="retention_until" type="date"></label>
+                        <label>Storage-Backend<select name="storage_backend_id">{}</select></label>
                       </div>
                       <label>Linked Requirement<input name="linked_requirement" type="text" value="{}"></label>
                       <label>Beschreibung<textarea name="description" rows="4">{}</textarea></label>
@@ -20098,6 +21049,7 @@ async fn web_evidence(
                 html_escape(&prefill_control_id),
                 html_escape(&prefill_incident_id),
                 evidence_sensitivity_options_for("INTERNAL"),
+                storage_backend_options,
                 html_escape(prefill_linked_requirement),
                 html_escape(prefill_description),
             );
@@ -20105,6 +21057,25 @@ async fn web_evidence(
         }
         Err(err) => web_error_page("Evidence", "/evidence/", &context, &err.to_string()),
     }
+}
+
+fn evidence_upload_storage_backend_options(configs: &[EvidenceStorageBackendConfig]) -> String {
+    let mut options = vec![r#"<option value="">Lokales Dateisystem</option>"#.to_string()];
+    options.extend(
+        configs
+            .iter()
+            .filter(|config| {
+                config.backend_type == BACKEND_S3_COMPATIBLE && config.status == "ready"
+            })
+            .map(|config| {
+                format!(
+                    r#"<option value="{}">S3: {}</option>"#,
+                    html_escape(&config.backend_id),
+                    html_escape(&config.display_name),
+                )
+            }),
+    );
+    options.join("")
 }
 
 async fn web_evidence_quality(
@@ -20269,9 +21240,15 @@ async fn web_evidence_integrity(
                 .evidence_storage_backend_configs(context.tenant_id)
                 .await
                 .unwrap_or_default();
+            let runtime_objects = store
+                .s3_runtime_objects(context.tenant_id, 100)
+                .await
+                .unwrap_or_default();
             let backend_panel = evidence_storage_backend_panel(
+                can_write,
                 &evidence_storage_backend_statuses(&state),
                 &configured_backends,
+                &runtime_objects,
             );
             let disposition_panel = evidence_disposition_candidate_panel(
                 &overview
@@ -20929,8 +21906,10 @@ fn evidence_worker_panel(
 }
 
 fn evidence_storage_backend_panel(
+    can_write: bool,
     backends: &[EvidenceStorageBackendStatus],
     configs: &[EvidenceStorageBackendConfig],
+    runtime_objects: &[EvidenceS3RuntimeObject],
 ) -> String {
     let rows = backends
         .iter()
@@ -20953,15 +21932,71 @@ fn evidence_storage_backend_panel(
     let config_rows = configs
         .iter()
         .map(|config| {
+            let runtime_status = if config.status == "ready" {
+                "Runtime bereit"
+            } else if config.status == "ready_for_test" {
+                "Live-Pruefung erforderlich"
+            } else {
+                "metadata-only / nicht bereit"
+            };
+            let action = if can_write && config.backend_type == BACKEND_S3_COMPATIBLE {
+                format!(
+                    r#"<form method="post" action="/api/v1/evidence/storage/backends/{}/validate-live"><button type="submit">Live-Storage-Pruefung</button></form>"#,
+                    html_escape(&config.backend_id),
+                )
+            } else {
+                "Nur Lesen".to_string()
+            };
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
                 html_escape(&config.backend_id),
                 html_escape(&config.backend_type),
                 html_escape(&config.status),
+                runtime_status,
                 html_escape(&config.allowed_endpoint_policy),
                 html_escape(&safe_storage_bucket_display(config)),
                 html_escape(&safe_storage_prefix_display(config)),
                 html_escape(storage_backend_validation_label(config)),
+                action,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let runtime_rows = runtime_objects
+        .iter()
+        .map(|runtime| {
+            let hash = runtime
+                .object_sha256
+                .get(..12)
+                .unwrap_or(&runtime.object_sha256);
+            let verify_path = format!(
+                "/api/v1/evidence/{}/storage/verify-runtime",
+                runtime.evidence_id
+            );
+            let download_path = format!(
+                "/api/v1/evidence/{}/storage/download",
+                runtime.evidence_id
+            );
+            let actions = if can_write {
+                format!(
+                    r#"<form method="post" action="{}"><button type="submit">Restore-Pruefung</button></form><a href="{}">Download</a>"#,
+                    html_escape(&verify_path),
+                    html_escape(&download_path),
+                )
+            } else {
+                "Nur Lesen".to_string()
+            };
+            format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                runtime.evidence_id,
+                html_escape(&runtime.backend_id),
+                html_escape(&runtime.upload_status),
+                html_escape(&runtime.runtime_verification_status),
+                runtime.object_size_bytes.map(|value| value.to_string()).unwrap_or_else(|| "-".to_string()),
+                html_escape(hash),
+                html_escape(&runtime.last_runtime_error_class),
+                if runtime.orphan_review_required { "Review erforderlich" } else { "-" },
+                actions,
             )
         })
         .collect::<Vec<_>>()
@@ -20970,14 +22005,19 @@ fn evidence_storage_backend_panel(
         r#"
         <section class="panel wide">
           <h2>Storage-Backend-Status</h2>
-          <p>Object Storage ist metadata-only vorbereitet; Secret-Werte und vollstaendige Objektpfade werden nicht angezeigt.</p>
+          <p>S3-kompatible Runtime-Operationen sind nur nach Secret-, Endpoint- und DNS-Pruefung aktiv. Secret-Werte und vollstaendige Object Keys werden nicht angezeigt.</p>
           <table>
             <thead><tr><th>Backend</th><th>Aktiv</th><th>Konfiguration</th><th>Status</th><th>Fehlerklasse</th></tr></thead>
             <tbody>{}</tbody>
           </table>
           <h3>Tenant-Backends</h3>
           <table>
-            <thead><tr><th>ID</th><th>Typ</th><th>Status</th><th>Endpoint-Policy</th><th>Bucket</th><th>Prefix</th><th>Letzte Validierung</th></tr></thead>
+            <thead><tr><th>ID</th><th>Typ</th><th>Status</th><th>Runtime-Status</th><th>Endpoint-Policy</th><th>Bucket</th><th>Prefix</th><th>Letzte Validierung</th><th>Aktion</th></tr></thead>
+            <tbody>{}</tbody>
+          </table>
+          <h3>S3-Evidence-Objects</h3>
+          <table>
+            <thead><tr><th>Evidence</th><th>Backend</th><th>Upload</th><th>Restore/Verify</th><th>Groesse</th><th>SHA-256</th><th>Fehlerklasse</th><th>Orphan</th><th>Aktion</th></tr></thead>
             <tbody>{}</tbody>
           </table>
         </section>
@@ -20989,11 +22029,16 @@ fn evidence_storage_backend_panel(
         },
         if config_rows.is_empty() {
             web_empty_row(
-                7,
+                9,
                 "Keine Object-Storage-Backend-Metadaten fuer diesen Tenant erfasst.",
             )
         } else {
             config_rows
+        },
+        if runtime_rows.is_empty() {
+            web_empty_row(9, "Keine S3-Runtime-Objects fuer diesen Tenant erfasst.")
+        } else {
+            runtime_rows
         },
     )
 }
@@ -21272,13 +22317,36 @@ async fn web_evidence_upload(
             return web_error_page("Evidence", "/evidence/", &context, &message).into_response();
         }
     };
-    let media_root = evidence_media_root(&state);
-    let saved_file = match form
-        .file
-        .as_ref()
-        .map(|file| save_evidence_upload(&media_root, file))
-        .transpose()
+    let s3_backend_id = form
+        .fields
+        .get("storage_backend_id")
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    if s3_backend_id.is_some()
+        && form
+            .file
+            .as_ref()
+            .is_none_or(|file| validate_evidence_upload_file(file).is_err())
     {
+        return web_error_page(
+            "Evidence",
+            "/evidence/",
+            &context,
+            "Fuer S3-Storage ist eine gueltige Evidence-Datei erforderlich.",
+        )
+        .into_response();
+    }
+    let media_root = evidence_media_root(&state);
+    let saved_file = match if s3_backend_id.is_none() {
+        form.file
+            .as_ref()
+            .map(|file| save_evidence_upload(&media_root, file))
+            .transpose()
+    } else {
+        Ok(None)
+    } {
         Ok(file) => file,
         Err(message) => {
             return web_error_page("Evidence", "/evidence/", &context, &message).into_response();
@@ -21303,6 +22371,13 @@ async fn web_evidence_upload(
         file_sha256: saved_file
             .as_ref()
             .map(|file| file.sha256.clone())
+            .or_else(|| {
+                s3_backend_id.as_ref().and_then(|_| {
+                    form.file
+                        .as_ref()
+                        .map(|file| format!("{:x}", Sha256::digest(&file.data)))
+                })
+            })
             .unwrap_or_default(),
         valid_until: form.fields.get("valid_until").cloned(),
         retention_until: form.fields.get("retention_until").cloned(),
@@ -21324,6 +22399,129 @@ async fn web_evidence_upload(
         .await
     {
         Ok(item) => {
+            if let Some(backend_id) = s3_backend_id.as_deref() {
+                let Some(file) = form.file.as_ref() else {
+                    return web_error_page(
+                        "Evidence",
+                        "/evidence/",
+                        &context,
+                        "Fuer S3-Storage ist eine Evidence-Datei erforderlich.",
+                    )
+                    .into_response();
+                };
+                let (backend, client) = match s3_runtime_client_for_backend(
+                    &state,
+                    &store,
+                    auth_context.tenant_id,
+                    backend_id,
+                )
+                .await
+                {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return web_error_page(
+                            "Evidence",
+                            "/evidence/",
+                            &context,
+                            "S3-Storage ist nicht sicher betriebsbereit.",
+                        )
+                        .into_response();
+                    }
+                };
+                let content_type = file
+                    .content_type
+                    .as_deref()
+                    .unwrap_or("application/octet-stream");
+                let runtime = match store
+                    .reserve_s3_runtime_object(
+                        auth_context.tenant_id,
+                        item.id,
+                        backend_id,
+                        auth_context.user_id,
+                        &item.file_sha256,
+                        content_type,
+                    )
+                    .await
+                {
+                    Ok(runtime) => runtime,
+                    Err(_) => {
+                        return web_error_page(
+                            "Evidence",
+                            "/evidence/",
+                            &context,
+                            "S3-Object-Referenz konnte nicht sicher reserviert werden.",
+                        )
+                        .into_response();
+                    }
+                };
+                let object_key = match runtime.canonical_key(&backend.key_prefix) {
+                    Ok(key) => key,
+                    Err(_) => {
+                        return web_error_page(
+                            "Evidence",
+                            "/evidence/",
+                            &context,
+                            "S3-Object-Referenz ist nicht sicher verwendbar.",
+                        )
+                        .into_response();
+                    }
+                };
+                if let Err(error) = client.put(&object_key, &file.data, content_type).await {
+                    let _ = store
+                        .fail_s3_runtime_operation(
+                            auth_context.tenant_id,
+                            item.id,
+                            auth_context.user_id,
+                            "upload",
+                            error.safe_error_class(),
+                            false,
+                        )
+                        .await;
+                    return web_error_page(
+                        "Evidence",
+                        "/evidence/",
+                        &context,
+                        "S3-Upload konnte nicht sicher abgeschlossen werden.",
+                    )
+                    .into_response();
+                }
+                if store
+                    .complete_s3_upload(
+                        auth_context.tenant_id,
+                        item.id,
+                        auth_context.user_id,
+                        file.data.len() as i64,
+                        &item.file_sha256,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_none()
+                {
+                    let orphan = client.delete(&object_key).await.is_err();
+                    let _ = store
+                        .fail_s3_runtime_operation(
+                            auth_context.tenant_id,
+                            item.id,
+                            auth_context.user_id,
+                            "upload",
+                            "database_finalize_failed",
+                            orphan,
+                        )
+                        .await;
+                    return web_error_page(
+                        "Evidence",
+                        "/evidence/",
+                        &context,
+                        if orphan {
+                            "S3-Upload benoetigt eine Orphan-Pruefung."
+                        } else {
+                            "S3-Upload wurde nicht finalisiert und kontrolliert bereinigt."
+                        },
+                    )
+                    .into_response();
+                }
+            }
             record_incident_evidence_event(
                 &state,
                 auth_context.tenant_id,
@@ -39982,6 +41180,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(evidence_storage_backend_validate),
         )
         .route(
+            "/api/v1/evidence/storage/backends/{backend_id}/validate-live",
+            post(evidence_storage_backend_validate_live),
+        )
+        .route(
+            "/api/v1/evidence/storage/backends/{backend_id}/runtime-status",
+            get(evidence_storage_backend_runtime_status),
+        )
+        .route(
             "/api/v1/evidence/storage/backends/{backend_id}/events",
             get(evidence_storage_backend_events),
         )
@@ -40021,6 +41227,18 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/api/v1/evidence/{evidence_id}/storage/object-drill",
             post(evidence_object_reference_verify),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/storage/upload",
+            post(evidence_s3_upload),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/storage/download",
+            get(evidence_s3_download),
+        )
+        .route(
+            "/api/v1/evidence/{evidence_id}/storage/verify-runtime",
+            post(evidence_s3_verify),
         )
         .route(
             "/api/v1/evidence/{evidence_id}/integrity-check",

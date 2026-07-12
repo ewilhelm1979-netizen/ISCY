@@ -4,7 +4,7 @@ COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
 COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 RUST_BACKEND_MANIFEST=rust/iscy-backend/Cargo.toml
 
-.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke rust-postgres-restore-drill docs-pdf canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
+.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke rust-postgres-restore-drill object-storage-integration docs-pdf canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
 
 local-bootstrap: rust-init
 
@@ -176,6 +176,9 @@ rust-postgres-restore-drill:
 	DATABASE_URL="$$restore_url" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- migrate; \
 	psql "$$restore_url" -v ON_ERROR_STOP=1 -c 'SELECT COUNT(*) FROM iscy_schema_migrations;' >/dev/null; \
 	echo "Rust PostgreSQL restore drill OK"
+
+object-storage-integration:
+	./scripts/run_object_storage_integration.sh
 
 canary-daily:
 	./scripts/run_daily_canary.sh

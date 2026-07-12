@@ -1575,6 +1575,100 @@ externe Feeds, neue Evidence-/Risk-/Control-/Notification-Engines,
 Dependency-/Plattform-Upgrades, produktive PKI, signierte Agent-Pakete,
 Release-Veroeffentlichung, HA-/Performance-Ausbau und visuelle Regression.
 
+### 6.16 S3-kompatibler Evidence-Storage-Runtime-Client
+
+Migration `0039_rust_evidence_s3_runtime_client` aktiviert die in Phase 3
+vorbereitete Sicherheitsgrundlage fuer echte, explizit konfigurierte
+S3-kompatible Object-Storage-Operationen. `local_filesystem` bleibt
+unterstuetzt. Ein Tenant kann Evidence ueber ein freigegebenes
+`s3_compatible`-Backend hochladen, per HEAD pruefen, begrenzt und chunkweise
+lesen, per SHA-256 verifizieren und ausschliesslich ueber den kontrollierten
+Disposition-Workflow loeschen.
+
+ISCY nutzt dafuer die bereits vorhandenen Rust-Abhaengigkeiten `reqwest`,
+`hmac`, `sha2`, `chrono` und `tokio`. Es wurde kein AWS-SDK und keine implizite
+Credential-Provider-Chain eingefuehrt. Die SigV4-Anfrage wird mit explizitem
+Endpoint, expliziter Region und genau den im Backend hinterlegten
+Secret-Referenzen erstellt. Redirects, Proxy-Autodiscovery, AWS-Profile, SSO,
+Home-Verzeichnis-Credentials sowie EC2-/ECS-Metadata-Credentials sind nicht
+aktiviert. TLS wird ueber das bestehende Rustls-Backend von `reqwest`
+bereitgestellt.
+
+Unterstuetzte Secret-Referenzen:
+
+- `env:VARIABLE_NAME` mit strengem Variablennamen und ohne Shell-Auswertung
+- `file:/absoluter/pfad` nur unter Pfaden aus `ISCY_EVIDENCE_SECRET_ROOTS`
+
+`file:` prueft kanonische Pfadgrenzen, Symlink-Flucht, regulaere Datei,
+Maximalgroesse von 16 KiB, NUL-/UTF-8-Inhalt und unter Unix unsichere
+Schreibrechte fuer Gruppe/Andere. Abschliessende Zeilenumbrueche werden im
+Speicher entfernt. `vault:`, `external:` und `secret:` bleiben in diesem Stand
+bewusst nicht aufloesbar. Secretwerte werden weder persistiert noch in API,
+Audit, Logs, Screenshots oder Dokumentation ausgegeben und nach der jeweiligen
+Operation im Speicher ueberschrieben.
+
+Vor jeder Netzwerkoperation validiert ISCY den Endpoint erneut und loest DNS
+mit einem festen Zeitlimit auf. In Production sind nur HTTPS und oeffentliche,
+nicht lokale Adressen erlaubt. Credentials in URLs, Loopback, Link-Local,
+RFC1918-/private Netze, CGNAT, `.local` und bekannte Metadata-Services werden
+blockiert. Der HTTP-Client bindet die vorab gepruefte Adresse, deaktiviert
+Redirects und Proxy-Autodiscovery und begrenzt Connect- und Operationszeit.
+Lokales HTTP-MinIO ist nur im Development-Modus zusammen mit
+`ISCY_EVIDENCE_ALLOW_LOCAL_TEST_ENDPOINT=true` erlaubt; Production kann diese
+Ausnahme nicht aktivieren.
+
+Object Keys kommen nicht aus einem Upload-Request. ISCY erzeugt eine zufaellige
+opaque Object-ID und leitet den Key serverseitig als
+`{prefix}/tenants/{tenant_id}/evidence/{evidence_id}/objects/{object_id}` ab.
+Die Datenbank speichert die opaque ID, den SHA-256 des kanonischen Keys und eine
+redigierte Anzeige. Der vollstaendige Key wird fuer jede Operation neu erzeugt
+und nicht in UI oder Audit geschrieben. Traversal, absolute Pfade, Backslashes,
+NUL, Windows-Laufwerke, Prefix-Ausbruch sowie Tenant-/Evidence-Wechsel sind
+damit ausgeschlossen.
+
+Neue beziehungsweise runtime-faehige API-Pfade:
+
+- `POST /api/v1/evidence/storage/backends/{backend_id}/validate-live`
+- `GET /api/v1/evidence/storage/backends/{backend_id}/runtime-status`
+- `POST /api/v1/evidence/{evidence_id}/storage/upload`
+- `GET /api/v1/evidence/{evidence_id}/storage/download`
+- `POST /api/v1/evidence/{evidence_id}/storage/verify-runtime`
+- der bestehende `POST /api/v1/evidence/uploads` akzeptiert optional
+  `storage_backend_id` und schreibt dann keine lokale Artefaktkopie
+
+Downloads bleiben an Authentifizierung, Tenant, Evidence-ID, Owner/Rolle und
+Schutzklasse gebunden und verwenden `private, no-store`. Admin-/Editor-Rollen
+duerfen Upload, Live-Pruefung und Restore-Pruefung starten. Auditoren und
+Read-only-Rollen sehen sichere Status-/Nachweisdaten; Runtime-Schreibaktionen
+sind gesperrt. Der Evidence-Worker verwendet fuer S3-Referenzen denselben
+begrenzten HEAD-/GET-/SHA-256-Pfad.
+
+Remote-DELETE wird niemals als freie Object-, Prefix-, Batch- oder
+Bucket-Operation angeboten. Der bestehende Disposition-Execute-Pfad prueft
+Tenant, Evidence, Object-Referenz, dokumentierte Freigabe, Begruendung und
+Legal Hold vor der Remote-Operation. Danach prueft ISCY die Object-Abwesenheit,
+erhaelt Tombstone, opaque ID und Key-Hash und behandelt ein bereits fehlendes
+Object idempotent. Fehler nach Remote-Upload und vor DB-Finalisierung erzeugen
+`orphan_review_required` statt einer gueltigen Evidence-Referenz.
+
+Der reproduzierbare Testpfad `make object-storage-integration` startet eine
+versionierte lokale MinIO-Instanz mit ausschliesslich Dummy-Credentials und
+prueft PUT, HEAD, GET, SHA-256, Hash-Mismatch, Object-missing, Access-denied,
+DELETE, wiederholtes DELETE und Cleanup. Der gleichnamige GitHub-CI-Job ist der
+massgebliche Protokolltest, falls lokal kein Docker vorhanden ist.
+
+Management-/Regulatory-Review-Snapshots enthalten nur aggregierte
+S3-Runtime-Objects, Upload-Fehler, offene Restore-Pruefungen, sichere
+Runtime-/Endpoint-/Secret-Fehlerklassen und Orphan-Reviews. Das unterstuetzt
+NIS2-, DORA-, DSGVO- und generische Governance-Nachweise, ist jedoch keine
+Rechtsberatung, Zertifizierung oder automatische Behoerdenmeldung.
+
+Bewusste Grenzen: kein Bucket Create/Delete, kein List Objects, keine ACL- oder
+Bucket-Policy-Verwaltung, keine Presigned URLs, kein Multipart Upload/Copy,
+keine Cloud-native Secret-Manager, keine automatische Credential Discovery,
+keine unkontrollierten Deletes und keine neuen Evidence-/Risk-/Control- oder
+Notification-Engines.
+
 Als Preflight fuer diesen Roadmap-Block wurde Migration
 `0034_rust_supplier_product_security_governance` zusaetzlich gegen eine echte
 lokale temporaere PostgreSQL-Instanz geprueft. Tabellen, Supplier/Product-
@@ -1582,11 +1676,11 @@ Security-Datensatz, Statusaenderung, Evidence-Link, Events und Vertrags-/Exit-
 Historie liefen erfolgreich; die temporaere Instanz wurde danach gestoppt und
 die Daten wurden geloescht.
 
-Bewusst nicht Teil dieses Blocks sind echte Cloud-Credentials, produktive
-S3-Live-Anbindung, externe Live-Feeds, automatische Rechtsbewertung,
+Bewusst nicht Teil dieses Blocks sind echte Cloud-Credentials, Cloud-native
+Secret-Manager, externe Live-Feeds, automatische Rechtsbewertung,
 automatische Behoerdenmeldung, neue Risk-/Control-/Notification-Engines,
-Dependency- oder Plattform-Upgrades, produktive PKI-/CSR-Ausstellung, signierte Agent-Pakete,
-Release-Provenance sowie Performance-, HA- oder Visual-Regression-Ausbau.
+Dependency- oder Plattform-Upgrades, produktive PKI-/CSR-Ausstellung sowie
+Performance-, HA- oder Visual-Regression-Ausbau.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
@@ -1628,12 +1722,12 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 
 ## 10. Strategische Weiterentwicklung
 
-Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews. Kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO nutzen diese bestehende Snapshot-Schicht und nehmen Evidence-Integrity-/Storage-Aggregate auf, ohne ein neues Compliance-Silo oder ein zweites Evidence-System anzulegen. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Evidence Object Storage & Restore Drill Phase 2 nutzt diese bestehenden Metadaten fuer eine interne lokale Storage-Abstraktion, sichere Artefaktreferenzen und tenantgebundene Restore-/Integritaetsdrills ohne neues Speichersystem. Migration `0034_rust_supplier_product_security_governance` verbindet Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs tenantgebunden, ohne externe Live-Feeds einzufuehren. Migration `0035_rust_evidence_worker_disposition_storage` ergaenzt begrenzte Evidence-Worker-Laeufe, kontrollierte physische Disposition mit Tombstone-Metadaten und ein vorbereitetes Object-Storage-Statusmodell ohne echte Cloud-Credentials. Migration `0036_rust_agent_release_artifact_provenance` ergaenzt Agent-Artefaktmanifest, SHA-256-Pruefsummen, Signaturstatus, Release-Provenance und Verification-Audit fuer vorhandene Deployment-Artefakte, ohne echte Produktionsschluessel, externe PKI/CA oder GitHub-Release-Veroeffentlichung einzufuehren. Migration `0037_rust_agent_pki_csr_governance` ergaenzt Agent-PKI-/CSR-/mTLS-Governance als Metadata-only-Modell ohne produktive CA, private Schluessel, CA-Secrets, externe Ausstellung oder automatische mTLS-Aktivierung. Migration `0038_rust_evidence_object_storage_client` ergaenzt tenantgebundene Object-Storage-Backend-Metadaten, Secret-Referenzstatus, sichere Object-Referenzen, SSRF-/Key-Validierung, Contract-Drills und Review-Pack-Signale, weiterhin ohne echte Cloud-Credentials oder externe Live-Operationen. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews. Kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO nutzen diese bestehende Snapshot-Schicht und nehmen Evidence-Integrity-/Storage-Aggregate auf, ohne ein neues Compliance-Silo oder ein zweites Evidence-System anzulegen. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Evidence Object Storage & Restore Drill Phase 2 nutzt diese bestehenden Metadaten fuer eine interne lokale Storage-Abstraktion, sichere Artefaktreferenzen und tenantgebundene Restore-/Integritaetsdrills ohne neues Speichersystem. Migration `0034_rust_supplier_product_security_governance` verbindet Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs tenantgebunden, ohne externe Live-Feeds einzufuehren. Migration `0035_rust_evidence_worker_disposition_storage` ergaenzt begrenzte Evidence-Worker-Laeufe, kontrollierte physische Disposition mit Tombstone-Metadaten und ein vorbereitetes Object-Storage-Statusmodell ohne echte Cloud-Credentials. Migration `0036_rust_agent_release_artifact_provenance` ergaenzt Agent-Artefaktmanifest, SHA-256-Pruefsummen, Signaturstatus, Release-Provenance und Verification-Audit fuer vorhandene Deployment-Artefakte, ohne echte Produktionsschluessel, externe PKI/CA oder GitHub-Release-Veroeffentlichung einzufuehren. Migration `0037_rust_agent_pki_csr_governance` ergaenzt Agent-PKI-/CSR-/mTLS-Governance als Metadata-only-Modell ohne produktive CA, private Schluessel, CA-Secrets, externe Ausstellung oder automatische mTLS-Aktivierung. Migration `0038_rust_evidence_object_storage_client` ergaenzt tenantgebundene Object-Storage-Backend-Metadaten, Secret-Referenzstatus, sichere Object-Referenzen, SSRF-/Key-Validierung, Contract-Drills und Review-Pack-Signale. Migration `0039_rust_evidence_s3_runtime_client` aktiviert darauf echte, begrenzte S3-kompatible Runtime-Operationen mit expliziter Secret-Aufloesung, DNS-/SSRF-Revalidierung, kanonischen Object-IDs und kontrolliertem Remote-Delete. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
 1. Supplier/Product-Security-Workflow fachlich weiter polishen, z. B. feinere Import-Vorbereitung fuer Hersteller-Advisorys, Contract-/Exit-Reifegrade und Review-Pack-Gliederung
-2. Echte S3-kompatible Live-Operationen fuer Evidence nur als separaten Security-PR auf Basis der neuen Object-Storage-Contract-Schicht mit Secret-, SSRF-, Restore- und Regressionstests vorbereiten
+2. Den S3-kompatiblen Evidence-Storage nach menschlicher Security-Review in einer isolierten Betreiberumgebung mit produktiven Endpoint-, Secret-Root- und Restore-Vorgaben pilotieren
 3. Produktive Agent-Paketsignierung und eine spaetere produktive CA-/PKI-Stufe auf Basis des vorbereiteten Artefakt-/Provenance- und PKI-/CSR-Governance-Modells
 4. Performance-, HA- und visuelle Regressionstests
 
