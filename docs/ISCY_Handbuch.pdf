@@ -4251,7 +4251,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 59 0 R >>
 endobj
 59 0 obj
-<< /Length 4624 >>
+<< /Length 4660 >>
 stream
 BT
 /F1 9 Tf
@@ -4381,6 +4381,91 @@ T*
 T*
 () Tj
 T*
+(6.18 Finales Hardening und Release-Candidate-Vorbereitung:) Tj
+T*
+() Tj
+T*
+(Der vorgeschlagene Stand V23.7.28-rc.1 fuehrt die vorhandenen Pflichtpruefungen) Tj
+T*
+(in make release-candidate-check zusammen, ohne einen Tag, ein GitHub Release) Tj
+T*
+(oder eine oeffentliche Veroeffentlichung zu erzeugen. GitHub-CI behaelt die) Tj
+T*
+(getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und Docker-Jobs und) Tj
+T*
+(aggregiert deren Ergebnis erst am Ende. Lokal erzeugte RC-Artefakte bleiben) Tj
+T*
+(unter artifacts/release-candidate/, sind unsigniert und werden nicht) Tj
+T*
+(hochgeladen.) Tj
+T*
+() Tj
+T*
+ET
+endstream
+endobj
+60 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 61 0 R >>
+endobj
+61 0 obj
+<< /Length 4300 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
+(Der Hardening-Review schliesst einen Development-Kompatibilitaetspfad: Eine) Tj
+T*
+(Session nur aus tenantid und userid kann jetzt ausschliesslich im Modus) Tj
+T*
+(development erstellt werden. demo und production verlangen einen) Tj
+T*
+(Passwort-Login oder eine gueltige bestehende Session. Identitaetsheader sind in) Tj
+T*
+(Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-) Tj
+T*
+(Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder) Tj
+T*
+(internen Store-Details.) Tj
+T*
+() Tj
+T*
+(Die RC-Metadatenpruefung bestaetigt 39 fortlaufende Migrationen, 34 visuelle) Tj
+T*
+(Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen) Tj
+T*
+(wertredigierten Sensitive-Data-Scan. release/release-manifest.json nutzt) Tj
+T*
+(git:HEAD als reproduzierbaren Quellmarker; die lokale Artefakterzeugung loest) Tj
+T*
+(ihn auf den konkreten Commit und dessen SOURCEDATEEPOCH auf.) Tj
+T*
+() Tj
+T*
+(Eine reproduzierbare CycloneDX-1.5-SBOM wird mit dem durch flake.lock) Tj
+T*
+(gepinnten reinen Build-Werkzeug cargo-cyclonedx vorbereitet. Zufalls-Serial,) Tj
+T*
+(fluechtiger Timestamp und lokaler Root-Pfad werden deterministisch durch) Tj
+T*
+(Basis-Commit-Zeit und stabilen Cargo-PURL ersetzt. Die SBOM ist weder Signatur) Tj
+T*
+(noch VEX-Entscheidung. Eine kryptografische Release-Signatur wird nicht) Tj
+T*
+(vorgetaeuscht; Cargo.lock, SBOM, Manifest und Checksums bilden die) Tj
+T*
+(vorbereiteten Provenance-Eingaben. Produktive Agent-Paketsignierung, CA-Ausstellung,) Tj
+T*
+(Cloud-native Secret-Manager, Multi-Region-HA, automatische Zertifizierung,) Tj
+T*
+(Rechtsbewertung und Behoerdenmeldung bleiben ausdruecklich ausserhalb dieses) Tj
+T*
+(Release Candidates. Die vollstaendige Matrix und alle Betriebsgrenzen stehen) Tj
+T*
+(in docs/RELEASECANDIDATECHECKLIST.md.) Tj
+T*
+() Tj
+T*
 (7. Was die wichtigsten Begriffe bedeuten:) Tj
 T*
 () Tj
@@ -4401,19 +4486,6 @@ T*
 T*
 (- Evidence: Nachweis) Tj
 T*
-ET
-endstream
-endobj
-60 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 61 0 R >>
-endobj
-61 0 obj
-<< /Length 5245 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- CVE: standardisierte Kennung fuer eine bekannte Schwachstelle) Tj
 T*
 (- CVSS: Basisscore fuer technische Schwere) Tj
@@ -4486,6 +4558,19 @@ T*
 T*
 (Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness) Tj
 T*
+ET
+endstream
+endobj
+62 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 63 0 R >>
+endobj
+63 0 obj
+<< /Length 5228 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete) Tj
 T*
 (Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte) Tj
@@ -4558,19 +4643,6 @@ T*
 T*
 (begrenzte S3-kompatible Runtime-Operationen mit expliziter Secret-Aufloesung,) Tj
 T*
-ET
-endstream
-endobj
-62 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 63 0 R >>
-endobj
-63 0 obj
-<< /Length 1741 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (DNS-/SSRF-Revalidierung, kanonischen Object-IDs und kontrolliertem Remote-Delete. Die weitere) Tj
 T*
 (ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade,) Tj
@@ -4597,7 +4669,11 @@ T*
 T*
 (vorbereiteten Artefakt-/Provenance- und PKI-/CSR-Governance-Modells) Tj
 T*
-(4. Performance-, HA- und visuelle Regressionstests) Tj
+(4. Den vorbereiteten Release Candidate vollstaendig pruefen und danach die) Tj
+T*
+(getrennten Rust-, PostgreSQL-, nginx- und nixpkgs-Plattform-Upgrades einzeln) Tj
+T*
+(migrieren) Tj
 T*
 () Tj
 T*
@@ -4698,12 +4774,12 @@ xref
 0000104786 00000 n
 0000109572 00000 n
 0000109700 00000 n
-0000114376 00000 n
-0000114504 00000 n
-0000119801 00000 n
-0000119929 00000 n
+0000114412 00000 n
+0000114540 00000 n
+0000118892 00000 n
+0000119020 00000 n
 trailer
 << /Size 64 /Root 1 0 R >>
 startxref
-121722
+124300
 %%EOF

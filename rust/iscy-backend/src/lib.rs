@@ -4557,14 +4557,16 @@ async fn context_whoami(State(state): State<AppState>, headers: HeaderMap) -> Re
                     )
                         .into_response();
                 }
-                Err(err) => {
+                Err(_) => {
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(ApiErrorResponse {
                             accepted: false,
                             api_version: "v1",
                             error_code: "database_error",
-                            message: format!("Rust-Session konnte nicht gelesen werden: {err}"),
+                            message:
+                                "Rust-Session konnte wegen eines internen Fehlers nicht gelesen werden."
+                                    .to_string(),
                         }),
                     )
                         .into_response();
@@ -4664,6 +4666,18 @@ async fn auth_session_create(
                 .await
         }
         (None, None, Some(tenant_id), Some(user_id)) => {
+            if state.security_config.app_mode != hardening::AppMode::Development {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: "legacy_identity_login_disabled",
+                        message: "Login benoetigt Benutzername und Passwort.".to_string(),
+                    }),
+                )
+                    .into_response();
+            }
             store.create_session(tenant_id, user_id).await
         }
         _ => {
@@ -4721,13 +4735,14 @@ async fn auth_session_create(
             )
                 .into_response()
         }
-        Err(err) => (
+        Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiErrorResponse {
                 accepted: false,
                 api_version: "v1",
                 error_code: "database_error",
-                message: format!("Rust-Session konnte nicht erstellt werden: {err}"),
+                message: "Rust-Session konnte wegen eines internen Fehlers nicht erstellt werden."
+                    .to_string(),
             }),
         )
             .into_response(),
@@ -4792,13 +4807,14 @@ async fn auth_session_current(State(state): State<AppState>, headers: HeaderMap)
             }),
         )
             .into_response(),
-        Err(err) => (
+        Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiErrorResponse {
                 accepted: false,
                 api_version: "v1",
                 error_code: "database_error",
-                message: format!("Rust-Session konnte nicht gelesen werden: {err}"),
+                message: "Rust-Session konnte wegen eines internen Fehlers nicht gelesen werden."
+                    .to_string(),
             }),
         )
             .into_response(),

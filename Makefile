@@ -1,10 +1,12 @@
-COMPOSE_DEV=docker compose
-COMPOSE_STAGE=docker compose -f docker-compose.yml -f docker-compose.stage.yml
-COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
-COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
+COMPOSE_ENV_FILE?=.env
+COMPOSE_DEV=docker compose --env-file $(COMPOSE_ENV_FILE)
+COMPOSE_DEV_LLM=docker compose --env-file $(COMPOSE_ENV_FILE) -f docker-compose.yml -f docker-compose.llm.yml
+COMPOSE_STAGE=docker compose --env-file $(COMPOSE_ENV_FILE) -f docker-compose.yml -f docker-compose.stage.yml
+COMPOSE_PROD=docker compose --env-file $(COMPOSE_ENV_FILE) -f docker-compose.yml -f docker-compose.prod.yml
+COMPOSE_PROD_LLM=docker compose --env-file $(COMPOSE_ENV_FILE) -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 RUST_BACKEND_MANIFEST=rust/iscy-backend/Cargo.toml
 
-.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke rust-postgres-restore-drill graceful-shutdown-smoke object-storage-integration resilience-script-tests performance-smoke ha-integration visual-regression visual-baselines docs-pdf canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
+.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke rust-postgres-restore-drill graceful-shutdown-smoke object-storage-integration resilience-script-tests performance-smoke ha-integration visual-regression visual-baselines docs-pdf release-sbom release-candidate-artifacts release-candidate-metadata-check release-candidate-check canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
 
 local-bootstrap: rust-init
 
@@ -16,10 +18,11 @@ team-test: rust-test rust-smoke rust-restore-smoke
 
 docker-check:
 	$(COMPOSE_DEV) config >/dev/null
+	$(COMPOSE_DEV_LLM) config >/dev/null
 	$(COMPOSE_STAGE) config >/dev/null
 	$(COMPOSE_PROD) config >/dev/null
 	$(COMPOSE_PROD_LLM) config >/dev/null
-	docker compose -f tests/resilience/docker-compose.ha.yml config >/dev/null
+	docker compose --env-file $(COMPOSE_ENV_FILE) -f tests/resilience/docker-compose.ha.yml config >/dev/null
 
 docker-smoke:
 	$(COMPOSE_DEV) up -d db app
@@ -162,14 +165,15 @@ rust-postgres-restore-drill:
 		echo "Rust PostgreSQL restore drill SKIP: set ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL and ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL for disposable test databases."; \
 		exit 0; \
 	fi; \
+	source_url="$$ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL"; \
+	restore_url="$$ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL"; \
+	if [ "$$source_url" = "$$restore_url" ]; then echo "Rust PostgreSQL restore drill ERROR: source and restore must differ." >&2; exit 1; fi; \
 	command -v pg_dump >/dev/null; \
 	command -v pg_restore >/dev/null; \
 	command -v psql >/dev/null; \
 	tmpdir=$$(mktemp -d); \
 	dump_file="$$tmpdir/iscy-postgres.dump"; \
-	source_url="$$ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL"; \
-	restore_url="$$ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL"; \
-	echo "Rust PostgreSQL restore drill source: $$source_url"; \
+	echo "Rust PostgreSQL restore drill: separate disposable source and restore databases configured."; \
 	DATABASE_URL="$$source_url" cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- init-demo; \
 	pg_dump --format=custom --no-owner --no-privileges --dbname="$$source_url" --file="$$dump_file"; \
 	psql "$$restore_url" -v ON_ERROR_STOP=1 -c 'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;' >/dev/null; \
@@ -198,6 +202,18 @@ visual-regression:
 
 visual-baselines:
 	ISCY_UPDATE_VISUAL_BASELINES=1 ./scripts/run_visual_regression.sh
+
+release-candidate-artifacts:
+	./scripts/prepare_release_candidate_artifacts.sh
+
+release-sbom:
+	./scripts/generate_release_sbom.sh
+
+release-candidate-metadata-check:
+	./scripts/check_release_candidate_metadata.sh
+
+release-candidate-check:
+	./scripts/run_release_candidate_check.sh
 
 canary-daily:
 	./scripts/run_daily_canary.sh

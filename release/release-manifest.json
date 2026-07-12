@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "proposed_version": "V23.7.28-rc.1",
+  "release_status": "prepared_not_published",
+  "source_commit": "git:HEAD",
+  "source_base_commit": "89922d489ebbf658c4383d88a23dc6607e36eaa1",
+  "source_date_epoch": null,
+  "reproducible_build_marker": "source_date_epoch_from_git_commit",
+  "rust_version": {
+    "package_msrv": "1.88",
+    "container_builder": "1.88",
+    "nix_development_path": "1.91.1"
+  },
+  "cargo_package_version": "0.3.22",
+  "cargo_lock_sha256": "8abc27a4d56f36867d9409b8630c98202b30bfc048a59d8f4a61c6e9812972cf",
+  "flake_lock_sha256": "6e56297c5c57da649c7552a04d94c6b62872dcbe7bc7c6f728a96b1494663e31",
+  "handbook_sha256": "6179a3caecea9f35a2c13ca16d77ccf4b00e7d58b7a6acf2683c5d5b7b719be3",
+  "migration_count": 39,
+  "database_support": [
+    "sqlite_single_instance",
+    "postgresql"
+  ],
+  "evidence_storage_support": [
+    "local_filesystem",
+    "s3_compatible"
+  ],
+  "test_suite_summary": {
+    "required_ci_jobs": 9,
+    "visual_baselines": 34,
+    "status": "validated_by_release_candidate_check_and_ci"
+  },
+  "provenance_status": "prepared_unsigned",
+  "signature_status": "unsigned",
+  "sbom_status": "generated_cyclonedx_1.5",
+  "sbom_sha256": "e682651d01583127ca64509da7e0328b01e49e386003e155ddafe044c154305b",
+  "vex_status": "not_generated_no_release_vulnerability_assertion",
+  "known_limitations_reference": "docs/RELEASE_CANDIDATE_CHECKLIST.md#bekannte-betriebsgrenzen"
+}

@@ -131,6 +131,12 @@ den bestehenden Rust-, Nix-, MinIO-, Compose-, Docker- und Supply-Chain-Checks
 getrennt. Alle Jobs haben harte Zeitlimits und bereinigen ihre Wegwerfcontainer
 und Testdaten.
 
+Der Job `release-candidate-check` aggregiert die bestehenden Pflichtjobs. Er
+fuehrt die teuren Topologien nicht erneut aus, sondern scheitert, sobald ein
+benoetigter Job fehlschlaegt, abgebrochen oder uebersprungen wurde. Danach
+validiert er nur die deterministischen RC-Metadaten, 39 Migrationen, 34
+Baselines, Screenshot-Referenzen, Checksums und den Sensitive-Data-Scan.
+
 Bekannte Grenzen:
 
 - Die Stores verwenden derzeit modulbezogene SQLx-Pools. Die Smoke-Parallelitaet

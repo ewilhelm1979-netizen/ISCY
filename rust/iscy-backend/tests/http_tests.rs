@@ -1127,6 +1127,123 @@ async fn rust_auth_session_creates_cookie_and_drives_web_context() {
 }
 
 #[tokio::test]
+async fn non_development_auth_rejects_passwordless_identity_payload() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+
+    for app_mode in [AppMode::Demo, AppMode::Production] {
+        let app = app_router_with_state(
+            AppState::default()
+                .with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone())))
+                .with_security_config(CommunitySecurityConfig {
+                    app_mode,
+                    trust_identity_headers: false,
+                    trusted_proxy_configured: false,
+                    secure_cookies: app_mode == AppMode::Production,
+                    https_confirmed: false,
+                    hsts_enabled: false,
+                }),
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/auth/sessions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"tenant_id":1,"user_id":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error_code"], "legacy_identity_login_disabled");
+    }
+
+    let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM iscy_auth_session")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(session_count, 0);
+}
+
+#[tokio::test]
+async fn development_auth_keeps_passwordless_compatibility_payload() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"tenant_id":1,"user_id":1}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let session_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM iscy_auth_session")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(session_count, 1);
+}
+
+#[tokio::test]
+async fn auth_session_read_errors_redact_store_details() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_auth_store(Some(AuthStore::from_sqlite_pool(pool))),
+    );
+
+    for path in ["/api/v1/context/whoami", "/api/v1/auth/session"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("authorization", "Bearer deliberately-invalid-session")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error_code"], "database_error");
+        let message = payload["message"].as_str().unwrap();
+        assert!(!message.contains("no such table"));
+        assert!(!message.contains("iscy_auth_session"));
+        assert!(!message.contains("SELECT"));
+    }
+}
+
+#[tokio::test]
 async fn rust_auth_session_rate_limits_repeated_failed_passwords() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)

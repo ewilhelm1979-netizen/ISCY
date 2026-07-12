@@ -126,6 +126,12 @@
             pkgs.cargo
             pkgs.rustfmt
             pkgs.clippy
+            pkgs.cargo-audit
+            pkgs.cargo-cyclonedx
+            pkgs.cargo-deny
+            pkgs.docker_29
+            pkgs.docker-compose
+            pkgs.postgresql_16
             pkgs.openblas
             pkgs.libpq
             pkgs.sqlite
