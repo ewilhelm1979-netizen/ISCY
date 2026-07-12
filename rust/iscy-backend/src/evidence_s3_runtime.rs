@@ -452,7 +452,7 @@ impl S3RuntimeClient {
             return Err(S3RuntimeError::ObjectMissing);
         }
         ensure_success(response.status())?;
-        let size_bytes = response.content_length();
+        let size_bytes = response_content_length(response.headers())?;
         if size_bytes.is_some_and(|size| size > self.config.max_object_bytes as u64) {
             return Err(S3RuntimeError::ObjectTooLarge);
         }
@@ -861,6 +861,19 @@ fn full_sha256_bytes(value: &[u8]) -> String {
     format!("{:x}", Sha256::digest(value))
 }
 
+fn response_content_length(headers: &header::HeaderMap) -> Result<Option<u64>, S3RuntimeError> {
+    headers
+        .get(header::CONTENT_LENGTH)
+        .map(|value| {
+            value
+                .to_str()
+                .map_err(|_| S3RuntimeError::BackendUnavailable)?
+                .parse::<u64>()
+                .map_err(|_| S3RuntimeError::BackendUnavailable)
+        })
+        .transpose()
+}
+
 fn hex_lower(value: &[u8]) -> String {
     let mut result = String::with_capacity(value.len() * 2);
     for byte in value {
@@ -902,6 +915,17 @@ mod tests {
         assert!(canonical_object_key("../escape", 7, 11, &"a".repeat(32)).is_err());
         assert!(canonical_object_key("", 0, 11, &"a".repeat(32)).is_err());
         assert!(canonical_object_key("", 7, 11, "client/key").is_err());
+    }
+
+    #[test]
+    fn head_object_size_uses_content_length_header() {
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_static("39"),
+        );
+
+        assert_eq!(response_content_length(&headers).unwrap(), Some(39));
     }
 
     #[test]
