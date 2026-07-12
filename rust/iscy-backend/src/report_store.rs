@@ -2006,6 +2006,11 @@ async fn management_review_metrics_postgres(
         "evidence_object_storage_drills_recorded": json_i64(&evidence_integrity_storage, "object_storage_drills_recorded"),
         "evidence_object_storage_drill_gaps": json_i64(&evidence_integrity_storage, "object_storage_drill_gaps"),
         "evidence_object_storage_object_gaps": json_i64(&evidence_integrity_storage, "object_storage_object_gaps"),
+        "evidence_s3_runtime_objects": json_i64(&evidence_integrity_storage, "s3_runtime_objects"),
+        "evidence_s3_upload_failures": json_i64(&evidence_integrity_storage, "s3_upload_failures"),
+        "evidence_s3_restore_gaps": json_i64(&evidence_integrity_storage, "s3_restore_gaps"),
+        "evidence_s3_runtime_errors": json_i64(&evidence_integrity_storage, "s3_runtime_errors"),
+        "evidence_s3_orphan_reviews": json_i64(&evidence_integrity_storage, "s3_orphan_reviews"),
         "evidence_worker_runs_recorded": json_i64(&evidence_integrity_storage, "worker_runs_recorded"),
         "evidence_worker_missing_runs": if json_i64(&evidence_integrity_storage, "total_items") > 0 && json_i64(&evidence_integrity_storage, "worker_runs_recorded") == 0 { 1 } else { 0 },
         "evidence_storage_drill_gaps": (json_i64(&evidence_integrity_storage, "total_items") - json_i64(&evidence_integrity_storage, "storage_drills_recorded")).max(0),
@@ -2059,6 +2064,11 @@ async fn management_review_metrics_sqlite(
         "evidence_object_storage_drills_recorded": json_i64(&evidence_integrity_storage, "object_storage_drills_recorded"),
         "evidence_object_storage_drill_gaps": json_i64(&evidence_integrity_storage, "object_storage_drill_gaps"),
         "evidence_object_storage_object_gaps": json_i64(&evidence_integrity_storage, "object_storage_object_gaps"),
+        "evidence_s3_runtime_objects": json_i64(&evidence_integrity_storage, "s3_runtime_objects"),
+        "evidence_s3_upload_failures": json_i64(&evidence_integrity_storage, "s3_upload_failures"),
+        "evidence_s3_restore_gaps": json_i64(&evidence_integrity_storage, "s3_restore_gaps"),
+        "evidence_s3_runtime_errors": json_i64(&evidence_integrity_storage, "s3_runtime_errors"),
+        "evidence_s3_orphan_reviews": json_i64(&evidence_integrity_storage, "s3_orphan_reviews"),
         "evidence_worker_runs_recorded": json_i64(&evidence_integrity_storage, "worker_runs_recorded"),
         "evidence_worker_missing_runs": if json_i64(&evidence_integrity_storage, "total_items") > 0 && json_i64(&evidence_integrity_storage, "worker_runs_recorded") == 0 { 1 } else { 0 },
         "evidence_storage_drill_gaps": (json_i64(&evidence_integrity_storage, "total_items") - json_i64(&evidence_integrity_storage, "storage_drills_recorded")).max(0),
@@ -2101,6 +2111,11 @@ async fn evidence_integrity_storage_postgres(
         "object_storage_drills_recorded": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_object_reference WHERE tenant_id = $1 AND last_drill_at IS NOT NULL AND BTRIM(last_drill_at::text) <> ''", tenant_id).await?,
         "object_storage_drill_gaps": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_object_reference WHERE tenant_id = $1 AND (last_drill_at IS NULL OR BTRIM(last_drill_at::text) = '')", tenant_id).await?,
         "object_storage_object_gaps": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_object_reference WHERE tenant_id = $1 AND last_drill_error_class IN ('object_missing','object_unreadable','hash_mismatch','timeout','access_denied','backend_error','validation_required')", tenant_id).await?,
+        "s3_runtime_objects": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_s3_runtime_object WHERE tenant_id = $1", tenant_id).await?,
+        "s3_upload_failures": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_s3_runtime_object WHERE tenant_id = $1 AND upload_status = 'upload_failed'", tenant_id).await?,
+        "s3_restore_gaps": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_s3_runtime_object WHERE tenant_id = $1 AND runtime_verification_status NOT IN ('verified','object_missing')", tenant_id).await?,
+        "s3_runtime_errors": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_s3_runtime_object WHERE tenant_id = $1 AND BTRIM(last_runtime_error_class) <> ''", tenant_id).await?,
+        "s3_orphan_reviews": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_s3_runtime_object WHERE tenant_id = $1 AND orphan_review_required = TRUE", tenant_id).await?,
         "worker_runs_recorded": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_integrity_worker_run WHERE tenant_id = $1", tenant_id).await?,
         "legal_hold_active": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND legal_hold_status = 'active'", tenant_id).await?,
         "disposition_due": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM evidence_evidenceitem WHERE tenant_id = $1 AND (disposition_status IN ('due', 'approved_for_disposition', 'blocked_by_legal_hold') OR (disposition_due_at IS NOT NULL AND disposition_due_at::text <= CURRENT_DATE::text))", tenant_id).await?,
@@ -2138,6 +2153,11 @@ async fn evidence_integrity_storage_sqlite(
         "object_storage_drills_recorded": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_object_reference WHERE tenant_id = ? AND last_drill_at IS NOT NULL AND TRIM(CAST(last_drill_at AS TEXT)) <> ''", tenant_id).await?,
         "object_storage_drill_gaps": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_object_reference WHERE tenant_id = ? AND (last_drill_at IS NULL OR TRIM(CAST(last_drill_at AS TEXT)) = '')", tenant_id).await?,
         "object_storage_object_gaps": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_object_reference WHERE tenant_id = ? AND last_drill_error_class IN ('object_missing','object_unreadable','hash_mismatch','timeout','access_denied','backend_error','validation_required')", tenant_id).await?,
+        "s3_runtime_objects": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_s3_runtime_object WHERE tenant_id = ?", tenant_id).await?,
+        "s3_upload_failures": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_s3_runtime_object WHERE tenant_id = ? AND upload_status = 'upload_failed'", tenant_id).await?,
+        "s3_restore_gaps": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_s3_runtime_object WHERE tenant_id = ? AND runtime_verification_status NOT IN ('verified','object_missing')", tenant_id).await?,
+        "s3_runtime_errors": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_s3_runtime_object WHERE tenant_id = ? AND TRIM(last_runtime_error_class) <> ''", tenant_id).await?,
+        "s3_orphan_reviews": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_s3_runtime_object WHERE tenant_id = ? AND orphan_review_required = 1", tenant_id).await?,
         "worker_runs_recorded": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_integrity_worker_run WHERE tenant_id = ?", tenant_id).await?,
         "legal_hold_active": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND legal_hold_status = 'active'", tenant_id).await?,
         "disposition_due": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM evidence_evidenceitem WHERE tenant_id = ? AND (disposition_status IN ('due', 'approved_for_disposition', 'blocked_by_legal_hold') OR (disposition_due_at IS NOT NULL AND CAST(disposition_due_at AS TEXT) <= date('now')))", tenant_id).await?,
@@ -3027,6 +3047,11 @@ fn management_review_gap_summary(
         "evidence_object_storage_drills_recorded": json_i64(metrics, "evidence_object_storage_drills_recorded"),
         "evidence_object_storage_drill_gaps": json_i64(metrics, "evidence_object_storage_drill_gaps"),
         "evidence_object_storage_object_gaps": json_i64(metrics, "evidence_object_storage_object_gaps"),
+        "evidence_s3_runtime_objects": json_i64(metrics, "evidence_s3_runtime_objects"),
+        "evidence_s3_upload_failures": json_i64(metrics, "evidence_s3_upload_failures"),
+        "evidence_s3_restore_gaps": json_i64(metrics, "evidence_s3_restore_gaps"),
+        "evidence_s3_runtime_errors": json_i64(metrics, "evidence_s3_runtime_errors"),
+        "evidence_s3_orphan_reviews": json_i64(metrics, "evidence_s3_orphan_reviews"),
         "evidence_worker_runs_recorded": json_i64(metrics, "evidence_worker_runs_recorded"),
         "evidence_worker_missing_runs": json_i64(metrics, "evidence_worker_missing_runs"),
         "evidence_storage_drill_gaps": json_i64(metrics, "evidence_storage_drill_gaps"),
@@ -3346,6 +3371,22 @@ fn review_gap_groups(template_type: &str, gap_summary: &Value) -> Value {
                         "evidence_object_storage_object_gaps",
                         true,
                     ),
+                    (
+                        "S3-Runtime-Upload-Fehler",
+                        "evidence_s3_upload_failures",
+                        true,
+                    ),
+                    (
+                        "Offene S3-Restore-Pruefungen",
+                        "evidence_s3_restore_gaps",
+                        false,
+                    ),
+                    (
+                        "S3-Runtime-/Endpoint-/Secret-Fehler",
+                        "evidence_s3_runtime_errors",
+                        true,
+                    ),
+                    ("S3-Orphan-Reviews", "evidence_s3_orphan_reviews", true),
                     (
                         "Fehlgeschlagene Dispositionen",
                         "evidence_disposition_failed",
@@ -3873,6 +3914,10 @@ fn regulatory_review_has_open_gaps(gap_summary: &Value) -> bool {
         "evidence_object_storage_config_errors",
         "evidence_object_storage_drill_gaps",
         "evidence_object_storage_object_gaps",
+        "evidence_s3_upload_failures",
+        "evidence_s3_restore_gaps",
+        "evidence_s3_runtime_errors",
+        "evidence_s3_orphan_reviews",
         "evidence_legal_hold_active",
         "evidence_disposition_due",
         "evidence_disposition_failed",
@@ -3987,6 +4032,10 @@ fn management_review_decision_summary(
         || json_i64(sources.metrics, "evidence_object_storage_config_errors") > 0
         || json_i64(sources.metrics, "evidence_object_storage_drill_gaps") > 0
         || json_i64(sources.metrics, "evidence_object_storage_object_gaps") > 0
+        || json_i64(sources.metrics, "evidence_s3_upload_failures") > 0
+        || json_i64(sources.metrics, "evidence_s3_restore_gaps") > 0
+        || json_i64(sources.metrics, "evidence_s3_runtime_errors") > 0
+        || json_i64(sources.metrics, "evidence_s3_orphan_reviews") > 0
         || json_i64(sources.metrics, "evidence_disposition_due") > 0
         || json_i64(sources.metrics, "evidence_disposition_failed") > 0
     {

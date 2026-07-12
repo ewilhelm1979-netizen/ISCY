@@ -49,9 +49,12 @@ ohne produktive CA-Ausstellung.
 
 ## Nachweis-Integritaet und Storage
 
-Die Ansicht buendelt lokale Evidence-Integritaet, Storage-/Restore-Drills,
-Worker-/Disposition-Signale und tenantgebundene Object-Storage-Metadaten ohne
-Secretwerte oder vollstaendige Object-Keys.
+Die Ansicht buendelt lokale und S3-kompatible Evidence-Integritaet,
+Storage-/Restore-Pruefungen, Worker-/Disposition-Signale, Runtime-Status,
+Upload-/Verify-Zustand und tenantgebundene Object-Storage-Metadaten ohne
+Secretwerte oder vollstaendige Object Keys. Der vorhandene Demo-Screenshot
+enthaelt ausschliesslich sichere Testmetadaten; Live-Credentials und private
+Endpoints werden nicht fuer Screenshot-Artefakte verwendet.
 
 ![Nachweis-Integritaet und Storage](assets/iscy-evidence-integrity-storage.png)
 

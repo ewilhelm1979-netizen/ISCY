@@ -114,6 +114,17 @@ jobs:
           curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$RUST_BACKEND_URL/api/v1/incidents/1/nis2-export.pdf" >/dev/null
           curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$RUST_BACKEND_URL/api/v1/product-security/overview" >/dev/null
 
+  object-storage-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Run isolated S3-compatible runtime lifecycle
+        run: |
+          make object-storage-integration
+
   docker-config:
     runs-on: ubuntu-24.04
     steps:

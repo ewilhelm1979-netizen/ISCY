@@ -3024,6 +3024,21 @@ impl EvidenceStore {
         }
     }
 
+    pub async fn evidence_storage_backend_config(
+        &self,
+        tenant_id: i64,
+        backend_id: &str,
+    ) -> anyhow::Result<Option<EvidenceStorageBackendConfig>> {
+        match self {
+            Self::Postgres(pool) => {
+                evidence_storage_backend_config_by_id_postgres(pool, tenant_id, backend_id).await
+            }
+            Self::Sqlite(pool) => {
+                evidence_storage_backend_config_by_id_sqlite(pool, tenant_id, backend_id).await
+            }
+        }
+    }
+
     pub async fn upsert_evidence_storage_backend_config(
         &self,
         tenant_id: i64,

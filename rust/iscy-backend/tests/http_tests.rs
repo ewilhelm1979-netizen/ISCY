@@ -696,8 +696,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0038_rust_evidence_object_storage_client"));
-    assert!(html.contains("38/38 angewendet"));
+    assert!(html.contains("0039_rust_evidence_s3_runtime_client"));
+    assert!(html.contains("39/39 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -10447,6 +10447,112 @@ async fn evidence_object_storage_client_is_tenant_scoped_and_secret_safe() {
 }
 
 #[tokio::test]
+async fn evidence_s3_runtime_routes_enforce_auth_roles_tenants_and_production_policy() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_storage_backend_config (
+            tenant_id, backend_id, backend_type, display_name, status,
+            endpoint_reference, region, bucket_name, key_prefix,
+            access_key_secret_ref, secret_key_secret_ref, allow_path_style,
+            allowed_endpoint_policy
+        ) VALUES (
+            1, 'minio-local', 's3_compatible', 'Lokaler Test', 'ready',
+            'http://127.0.0.1:19090', 'us-east-1', 'iscy-test', 'runtime',
+            'env:ISCY_TEST_ACCESS_KEY', 'env:ISCY_TEST_SECRET_KEY', 1,
+            'local_dev_only'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let state = AppState::default()
+        .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())));
+    let app = app_router_with_state(state);
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage/backends/minio-local/runtime-status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    for uri in [
+        "/api/v1/evidence/storage/backends/minio-local/validate-live",
+        "/api/v1/evidence/1/storage/upload",
+        "/api/v1/evidence/1/storage/verify-runtime",
+    ] {
+        let readonly = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .header("x-iscy-roles", "AUDITOR")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(readonly.status(), StatusCode::FORBIDDEN);
+    }
+
+    let foreign_tenant = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage/backends/minio-local/runtime-status")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_tenant.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(foreign_tenant.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("ISCY_TEST_SECRET_KEY"));
+    assert!(!body_text.contains("127.0.0.1"));
+
+    let production_local = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage/backends/minio-local/runtime-status")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(production_local.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(production_local.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "insecure_scheme");
+}
+
+#[tokio::test]
 async fn rust_web_evidence_accepts_file_upload_from_form() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -10483,6 +10589,8 @@ async fn rust_web_evidence_accepts_file_upload_from_form() {
     assert!(html.contains("Gueltig bis"));
     assert!(html.contains("Aufbewahren bis"));
     assert!(html.contains("Retention-Begruendung"));
+    assert!(html.contains("Storage-Backend"));
+    assert!(html.contains("Lokales Dateisystem"));
     assert!(
         html.contains(r#"name="return_to" value="/product-security/?tenant_id=42&amp;user_id=7""#)
     );
@@ -15008,7 +15116,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0035_rust_evidence_worker_disposition_storage",
             "0036_rust_agent_release_artifact_provenance",
             "0037_rust_agent_pki_csr_governance",
-            "0038_rust_evidence_object_storage_client"
+            "0038_rust_evidence_object_storage_client",
+            "0039_rust_evidence_s3_runtime_client"
         ]
     );
     assert!(

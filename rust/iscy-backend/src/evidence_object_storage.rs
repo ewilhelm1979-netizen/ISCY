@@ -462,6 +462,13 @@ fn classify_ip_endpoint(
     }
 }
 
+pub fn validate_resolved_ip(
+    ip: IpAddr,
+    allow_local_test_endpoint: bool,
+) -> Result<String, ObjectStorageValidationError> {
+    classify_ip_endpoint(ip, allow_local_test_endpoint)
+}
+
 fn classify_ipv4_endpoint(
     ip: Ipv4Addr,
     local_dev_policy: bool,
@@ -479,8 +486,15 @@ fn classify_ipv4_endpoint(
     if ip.is_link_local() {
         return Err(ObjectStorageValidationError::BlockedLinkLocal);
     }
-    if ip.is_private() || is_shared_carrier_grade_nat(ip) {
+    if is_shared_carrier_grade_nat(ip) {
         return Err(ObjectStorageValidationError::BlockedPrivateNetwork);
+    }
+    if ip.is_private() {
+        return if local_dev_policy {
+            Ok("local_dev_private".to_string())
+        } else {
+            Err(ObjectStorageValidationError::BlockedPrivateNetwork)
+        };
     }
     Ok("public_ip".to_string())
 }
@@ -500,7 +514,11 @@ fn classify_ipv6_endpoint(
         return Err(ObjectStorageValidationError::BlockedLinkLocal);
     }
     if is_ipv6_unique_local(ip) {
-        return Err(ObjectStorageValidationError::BlockedPrivateNetwork);
+        return if local_dev_policy {
+            Ok("local_dev_private".to_string())
+        } else {
+            Err(ObjectStorageValidationError::BlockedPrivateNetwork)
+        };
     }
     Ok("public_ip".to_string())
 }
