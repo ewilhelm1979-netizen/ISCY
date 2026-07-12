@@ -24,6 +24,13 @@ if grep -Eq \
     docs/RELEASE_NOTES_DRAFT.md; then
     fail documentation 'Release Notes enthalten einen widerspruechlichen Draft-Platzhalter.'
 fi
+notes_path="${ISCY_RELEASE_NOTES_PATH:-docs/RELEASE_NOTES_DRAFT.md}"
+./scripts/check_release_notes_completeness.sh "$notes_path"
+generated_notes_path='artifacts/release-candidate/RELEASE_NOTES.md'
+if [[ -f "$generated_notes_path" && "$notes_path" != "$generated_notes_path" ]]; then
+    ./scripts/check_release_notes_completeness.sh "$generated_notes_path"
+fi
+./tests/release/test_release_notes_completeness.sh
 
 jq -e '
     .proposed_version == "V23.7.28-rc.1" and

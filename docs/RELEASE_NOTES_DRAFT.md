@@ -25,6 +25,22 @@ reproduzierbare Performance-, Mehrinstanz- und UI-Regressionspruefungen.
   Roadmap-Signale in den bestehenden sicheren Kanalbetrieb ein.
 - Supplier Reviews enthalten Freigabehistorie, Unterauftragnehmer,
   Vertragsfristen, Exit-Tests und tenantgesicherte Evidence-/Control-/Risk-Links.
+- Der gefuehrte NIS2-Relevanz-Wizard verbindet Land, Einsatzlaender, Sektor,
+  Mitarbeitendenzahl, Umsatz, kritische Dienstleistungen und organisatorischen
+  Scope mit einer dokumentierten Applicability-Begruendung. Das Ergebnis ist
+  eine Entscheidungshilfe und keine rechtsverbindliche Einstufung oder
+  Rechtsberatung; es muss fachlich und rechtlich geprueft werden.
+- NIS2- und KRITIS-Kontext koennen im Organisationsprofil gepflegt und mit
+  Assessments, Requirements, Risiken, Evidence, Reports und Roadmap-Arbeit
+  verbunden werden.
+- Fuer DORA unterstuetzt ISCY die Dokumentation von Finanzunternehmen und
+  IKT-Drittdienstleister-Rollen sowie die Verknuepfung mit Supplier-, Risiko-,
+  Incident-, Evidence- und Review-Prozessen. Eine automatische
+  DORA-Konformitaetsbewertung erfolgt nicht.
+- Fuer den Cyber Resilience Act (CRA) verbindet ISCY Hersteller- und
+  Product-Security-Kontext mit Produkten, digitalen Komponenten, SBOM, VEX,
+  CVE, PSIRT, Suppliern, Evidence und Reviews. ISCY fuehrt keine automatische
+  Konformitaetsbewertung oder CE-Freigabe durch.
 
 ## Evidence Integrity und Object Storage
 
