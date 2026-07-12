@@ -352,27 +352,16 @@ async fn update_task_postgres(
         .to_string();
     let notes = payload.notes.unwrap_or(current.notes);
 
-    sqlx::query(
-        r#"
-        UPDATE roadmap_roadmaptask
-        SET status = $2,
-            planned_start = $3,
-            due_date = $4,
-            owner_role = $5,
-            notes = $6,
-            updated_at = NOW()
-        WHERE id = $1
-        "#,
-    )
-    .bind(task_id)
-    .bind(status)
-    .bind(planned_start)
-    .bind(due_date)
-    .bind(owner_role)
-    .bind(notes)
-    .execute(pool)
-    .await
-    .context("PostgreSQL-Roadmaptask konnte nicht aktualisiert werden")?;
+    sqlx::query(update_task_postgres_sql())
+        .bind(task_id)
+        .bind(status)
+        .bind(planned_start)
+        .bind(due_date)
+        .bind(owner_role)
+        .bind(notes)
+        .execute(pool)
+        .await
+        .context("PostgreSQL-Roadmaptask konnte nicht aktualisiert werden")?;
 
     let task = task_by_id_postgres(pool, tenant_id, task_id)
         .await?
@@ -381,6 +370,19 @@ async fn update_task_postgres(
         plan_id: current.plan_id,
         task,
     }))
+}
+
+fn update_task_postgres_sql() -> &'static str {
+    r#"
+        UPDATE roadmap_roadmaptask
+        SET status = $2,
+            planned_start = $3::date,
+            due_date = $4::date,
+            owner_role = $5,
+            notes = $6,
+            updated_at = NOW()
+        WHERE id = $1
+    "#
 }
 
 async fn update_task_sqlite(
@@ -1121,5 +1123,17 @@ fn normalize_optional_date(value: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.chars().take(10).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_task_postgres_sql;
+
+    #[test]
+    fn postgres_task_update_casts_normalized_date_strings() {
+        let query = update_task_postgres_sql();
+        assert!(query.contains("planned_start = $3::date"));
+        assert!(query.contains("due_date = $4::date"));
     }
 }

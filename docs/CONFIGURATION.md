@@ -20,6 +20,7 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 | `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET` | Altes HMAC-Secret fuer Rotation | nein | leer | starkes Secret | Erlaubt kurze Secret-Rotation ohne Monitoring-Ausfall | ja, `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE` |
 | `ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS` | Replay-Fenster fuer HMAC-Timestamps | nein | `300` | positive Sekunden | Alte oder weit zukuenftige Signaturen werden abgewiesen | nein |
 | `ISCY_AGENT_NOTIFICATION_INTERVAL_SECONDS` | Agent-Policy-Notification-Worker | nein | `300` | `0` oder mindestens 60 Sekunden | `0` deaktiviert; kleinere positive Werte werden auf 60 Sekunden begrenzt | nein |
+| `ISCY_SHUTDOWN_TIMEOUT_SECONDS` | Graceful-Shutdown-Grenze | nein | `30` | 5 bis 120 Sekunden | Begrenzt das Auslaufen laufender HTTP-Requests nach SIGINT/SIGTERM | nein |
 | `ISCY_NOTIFICATION_ALLOW_HTTP` | Erlaubt HTTP-Webhookziele ausser Loopback | nein | `0` | `0/1`, `true/false` | Nur fuer kontrollierte Entwicklungsnetze; Production sollte HTTPS nutzen | nein |
 | `ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS` | Production-Allowlist fuer Notification-Ziele | Production bei aktivem Kanal: ja | leer | kommaseparierte exakte Hostnamen | Verhindert freie serverseitige Webhook-Ziele; Redirects bleiben deaktiviert | nein |
 | `ISCY_INITIAL_ADMIN_TENANT_NAME` | Tenant-Name fuer `init-admin` | fuer `init-admin` empfohlen | `ISCY Production Tenant` | Text | Erstzugang ohne Demo-Seed | nein |
@@ -52,6 +53,7 @@ ISCY_HSTS_ENABLED=1
 ISCY_ALERTMANAGER_TOKEN_FILE=/run/secrets/iscy-alertmanager-token
 ISCY_ALERTMANAGER_HMAC_SECRET_FILE=/run/secrets/iscy-alertmanager-hmac
 ISCY_AGENT_NOTIFICATION_INTERVAL_SECONDS=300
+ISCY_SHUTDOWN_TIMEOUT_SECONDS=30
 ISCY_NOTIFICATION_ALLOW_HTTP=0
 ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS=soc-webhook.example.org
 ISCY_AGENT_NOTIFICATION_SECRET=<strong-channel-secret>

@@ -4,6 +4,13 @@ Stand: ISCY Unreleased / Rust 0.3.22
 
 Diese Screenshots dokumentieren die aktuelle serverseitige ISCY-Weboberflaeche fuer die wichtigsten Tabs und Funktionsbereiche.
 
+Die getrennten Visual-Regression-Baselines unter `../tests/visual/baselines/`
+werden mit dem durch `flake.lock` gepinnten Playwright-/Chromium-Pfad erzeugt.
+Sie pruefen 17 zentrale Bereiche bei 1440 x 1200 und 1024 x 900. Die
+Dokumentationsbilder in `docs/assets/` werden nicht automatisch als
+Testbaselines verwendet oder durch CI ueberschrieben. Update- und Diff-Prozess
+sind in `PERFORMANCE_HA_VISUAL_TESTING.md` beschrieben.
+
 ## Dashboard
 
 ![Dashboard](assets/iscy-dashboard.png)

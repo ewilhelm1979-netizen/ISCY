@@ -1,6 +1,6 @@
 # ISCY Strategic Roadmap
 
-Stand: 2026-07-09
+Stand: 2026-07-12
 
 Diese Roadmap beschreibt die fachlich sinnvollen naechsten Ausbaustufen nach dem Rust-only-Cutover. Sie ersetzt die alte Rust-Migrationsroadmap nicht, sondern beginnt danach: ISCY ist technisch auf Rust umgestellt und soll nun fachlich reifer, pruefbarer und im Betrieb wirksamer werden.
 
@@ -267,6 +267,31 @@ Erfolgskriterium:
 
 - Agenten koennen realistisch in mehreren Systemen betrieben werden, und wichtige ISCY-Signale gehen nicht im Dashboard unter.
 
+## Prioritaet 8: Performance-, HA- und Visual-Regression-Hardening
+
+Status: Im Unreleased-Stand als reproduzierbarer technischer Reifegrad
+umgesetzt. Details stehen in `docs/PERFORMANCE_HA_VISUAL_TESTING.md`.
+
+Umgesetzt:
+
+- getrennte Endpunkte fuer Liveness, DB-/Migrations-Readiness und Startup
+- begrenzter Graceful Shutdown fuer SIGINT/SIGTERM und kontrolliertes Stoppen des Notification-Workers
+- PostgreSQL-Advisory-Lock gegen parallele Migrationsrennen; SQLite bleibt ausdruecklich Single-Instance
+- atomare tenantgebundene Claims fuer Evidence-Worker-Laeufe und S3-Disposition
+- kurzer Performance-Smoke mit fester Parallelitaet, CI-Budgets sowie JSON-/Markdown-Bericht
+- Zwei-Instanzen-Topologie mit PostgreSQL 16, S3-kompatiblem MinIO und nginx 1.27
+- Cross-Instance-Schreiben/Lesen, Evidence-Upload/Verify und Failover in beide Richtungen
+- Nix-/Playwright-basierte visuelle Regression fuer 17 Bereiche und zwei Viewports mit 34 bewusst versionierten Baselines
+- getrennte CI-Artefakte fuer Performance-Bericht und visuelle Abweichungen
+
+Bewusste Grenze:
+
+- Der Test belegt keine PostgreSQL-, MinIO- oder nginx-Cluster-HA, keine Multi-Region-Architektur, keine Produktions-SLOs und keine beliebige Skalierbarkeit.
+
+Erfolgskriterium:
+
+- Grobe Laufzeit-, Failover-, Side-Effect- und UI-Regressionen werden reproduzierbar vor einem Release Candidate sichtbar.
+
 ## Empfohlene Umsetzungsreihenfolge
 
 1. Review-Pack-Bedienung weiter polishen, z. B. zusaetzliche Filter, Pack-spezifische Gap-Gruppierung und Review-Owner-Hinweise.
@@ -292,7 +317,7 @@ Erfolgskriterium:
 | Unreleased | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |
 | Unreleased | Evidence-Worker, kontrollierte physische Disposition und Object-Storage-Vorbereitung | Begrenzte Integritaets-Worker-Laeufe, Approval-gebundene physische Disposition, Tombstone-Metadaten und vorbereitete Object-Storage-Konfiguration sind tenantgebunden auditierbar. |
 | Unreleased | S3-kompatibler Evidence-Storage-Runtime-Client | Explizite Secret-Referenzen, SigV4, DNS-/SSRF-Revalidierung, kanonische Object-IDs, begrenzte PUT-/HEAD-/GET-Operationen und kontrolliertes Remote-DELETE sind mit MinIO-Integrationstest umgesetzt. |
-| Reifegrad | Performance, HA und visuelle Regression | Lastgrenzen, Mehrinstanzbetrieb und UI-Regressionen sind messbar abgesichert. |
+| Unreleased | Performance, HA und visuelle Regression | Grosszuegige CI-Budgets, gepruefter PostgreSQL-/S3-Zwei-Instanzen-Betrieb und 34 UI-Baselines machen grobe Regressionen sichtbar, ohne allgemeine HA oder SLA zu behaupten. |
 
 ## Abgrenzung
 

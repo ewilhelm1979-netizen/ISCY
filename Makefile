@@ -4,7 +4,7 @@ COMPOSE_PROD=docker compose -f docker-compose.yml -f docker-compose.prod.yml
 COMPOSE_PROD_LLM=docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 RUST_BACKEND_MANIFEST=rust/iscy-backend/Cargo.toml
 
-.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke rust-postgres-restore-drill object-storage-integration docs-pdf canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
+.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke rust-postgres-restore-drill graceful-shutdown-smoke object-storage-integration resilience-script-tests performance-smoke ha-integration visual-regression visual-baselines docs-pdf canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
 
 local-bootstrap: rust-init
 
@@ -19,6 +19,7 @@ docker-check:
 	$(COMPOSE_STAGE) config >/dev/null
 	$(COMPOSE_PROD) config >/dev/null
 	$(COMPOSE_PROD_LLM) config >/dev/null
+	docker compose -f tests/resilience/docker-compose.ha.yml config >/dev/null
 
 docker-smoke:
 	$(COMPOSE_DEV) up -d db app
@@ -177,8 +178,26 @@ rust-postgres-restore-drill:
 	psql "$$restore_url" -v ON_ERROR_STOP=1 -c 'SELECT COUNT(*) FROM iscy_schema_migrations;' >/dev/null; \
 	echo "Rust PostgreSQL restore drill OK"
 
+graceful-shutdown-smoke:
+	./scripts/run_graceful_shutdown_smoke.sh
+
 object-storage-integration:
 	./scripts/run_object_storage_integration.sh
+
+resilience-script-tests:
+	./tests/resilience/test_performance_budget.sh
+
+performance-smoke: resilience-script-tests
+	./scripts/run_performance_smoke.sh
+
+ha-integration:
+	./scripts/run_ha_integration.sh
+
+visual-regression:
+	./scripts/run_visual_regression.sh
+
+visual-baselines:
+	ISCY_UPDATE_VISUAL_BASELINES=1 ./scripts/run_visual_regression.sh
 
 canary-daily:
 	./scripts/run_daily_canary.sh

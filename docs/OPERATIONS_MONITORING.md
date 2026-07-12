@@ -1,6 +1,6 @@
 # ISCY Operations Monitoring
 
-Stand: ISCY V23.7.26 / Rust 0.3.22
+Stand: ISCY Unreleased / Rust 0.3.22
 
 Diese Doku beschreibt die maschinenlesbaren Betriebsendpunkte fuer den Rust-only-Betrieb.
 
@@ -21,8 +21,9 @@ Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/opera
 
 ## Endpunkte
 
-- `GET /health/live`: einfacher Liveness-Check fuer Load Balancer, lokale Starts und CI.
-- `GET /health/ready`: Alias fuer Readiness-/Liveness-Probes.
+- `GET /health/live`: reiner Liveness-Check; ein kurzer DB-Ausfall macht den Prozess nicht kuenstlich tot.
+- `GET /health/ready`: prueft DB-Erreichbarkeit, vollstaendigen Migrationsstand und aktive Request-Annahme; Fehler liefern HTTP 503 und nur sichere Klassen.
+- `GET /health/startup`: nicht sensitive Instanz-ID und Startzeitpunkt fuer Startup-Probes.
 - `GET /status/operations.json`: JSON-Drilldown mit Runtime, Build, Migrationen, Modulen und fachlichen Signalen.
 - `GET /operations/incidents/`: kompakte Alert-Operations-Ansicht fuer Alertmanager-Fallakten, offene/kritische/Triage-Signale und resolved Faelle; Filter sind ueber `?alert_filter=open`, `?alert_filter=critical` und `?alert_filter=resolved` direkt verlinkbar.
 - `GET /api/v1/status/operations`: API-Alias fuer denselben JSON-Drilldown.
@@ -34,6 +35,11 @@ Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/opera
 - `GET|PATCH /api/v1/product-security/evidence-packages/{id}`: eingefrorene Positionen lesen oder Reviewentscheidung speichern.
 - `POST /api/v1/product-security/evidence-packages/{id}/refresh`: neue Paketversion aus dem aktuellen Nachweisstand erzeugen.
 - `GET /api/v1/product-security/evidence-packages/{id}/export/{markdown|html|pdf|json}`: Paketversion exportieren.
+
+Performance-, Zwei-Instanzen-/Failover- und Visual-Regression-Tests werden
+getrennt in CI ausgefuehrt. Berichte, Budgets und Grenzen stehen in
+`PERFORMANCE_HA_VISUAL_TESTING.md`; daraus folgen keine Produktions-SLOs oder
+allgemeinen HA-Aussagen.
 
 Mit Tenant-Kontext liefern die Operations-Endpunkte zusaetzlich fachliche Signale zu ISCY-27, Supplier-Risk, Product Security, AI Governance, Agent-Policy-Konformitaet, Sollabdeckung, Notification-Kanaelen, CVE-Reviews, Evidence-Luecken und Roadmap-Gaps:
 
@@ -176,7 +182,7 @@ Das Modulbeispiel kann in eine NixOS-Konfiguration importiert werden:
 ```nix
 {
   imports = [
-    /home/enricow79/Projekte/ISCY/deploy/monitoring/nixos/iscy-monitoring.nix
+    ./deploy/monitoring/nixos/iscy-monitoring.nix
   ];
 
   services.iscy.monitoring = {

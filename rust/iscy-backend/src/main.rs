@@ -1,7 +1,7 @@
 mod evidence_download;
 mod security_boundary;
 
-use std::{net::SocketAddr, path::PathBuf, time::Duration};
+use std::{future::IntoFuture, net::SocketAddr, path::PathBuf, time::Duration};
 
 use axum::{middleware, routing::get, Router};
 use iscy_backend::{
@@ -41,7 +41,7 @@ use iscy_backend::{
     AppState,
 };
 use security_boundary::sanitize_legacy_identity_query;
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -212,7 +212,9 @@ async fn main() -> anyhow::Result<()> {
         .with_database_url(database_url)
         .with_security_config(security_config.clone());
 
-    start_agent_notification_worker(notification_worker_store);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let notification_worker =
+        start_agent_notification_worker(notification_worker_store, shutdown_rx.clone());
 
     let listener = TcpListener::bind(addr).await?;
     println!("ISCY Rust backend listening on http://{}", addr);
@@ -226,32 +228,73 @@ async fn main() -> anyhow::Result<()> {
             get(evidence_download::download_evidence),
         )
         .with_state(state.clone());
+    let shutdown_state = state.clone();
     let app = evidence_download_router
         .merge(app_router_with_state(state))
         .layer(middleware::from_fn_with_state(
             security_config,
             sanitize_legacy_identity_query,
         ));
-    axum::serve(listener, app).await?;
-    Ok(())
+    let mut server = Box::pin(
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal(shutdown_state, shutdown_tx.clone()))
+            .into_future(),
+    );
+    let mut shutdown_observer = shutdown_rx;
+    let serve_result: anyhow::Result<()> = tokio::select! {
+        result = server.as_mut() => result.map_err(anyhow::Error::from),
+        changed = shutdown_observer.changed() => {
+            match changed {
+                Ok(()) => {
+                    let timeout = shutdown_timeout();
+                    match tokio::time::timeout(timeout, server.as_mut()).await {
+                        Ok(result) => result.map_err(anyhow::Error::from),
+                        Err(_) => Err(anyhow::anyhow!(
+                            "Graceful-Shutdown-Timeout nach {} Sekunden",
+                            timeout.as_secs()
+                        )),
+                    }
+                }
+                Err(_) => Err(anyhow::anyhow!(
+                    "Shutdown-Signal-Kanal wurde unerwartet geschlossen"
+                )),
+            }
+        }
+    };
+    let _ = shutdown_tx.send(true);
+    if let Some(worker) = notification_worker {
+        tokio::time::timeout(Duration::from_secs(10), worker)
+            .await
+            .map_err(|_| anyhow::anyhow!("Notification-Worker-Shutdown-Timeout"))??;
+    }
+    serve_result
 }
 
-fn start_agent_notification_worker(store: Option<AgentGovernanceStore>) {
-    let Some(store) = store else {
-        return;
-    };
+fn start_agent_notification_worker(
+    store: Option<AgentGovernanceStore>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Option<JoinHandle<()>> {
+    let store = store?;
     let interval_seconds = std::env::var("ISCY_AGENT_NOTIFICATION_INTERVAL_SECONDS")
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok())
         .unwrap_or(300);
     if interval_seconds == 0 {
-        return;
+        return None;
     }
     let interval_seconds = interval_seconds.max(60);
-    tokio::spawn(async move {
+    Some(tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(interval_seconds));
         loop {
-            interval.tick().await;
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return;
+                    }
+                    continue;
+                }
+                _ = interval.tick() => {}
+            }
             let tenant_ids = match store.notification_tenant_ids().await {
                 Ok(tenant_ids) => tenant_ids,
                 Err(err) => {
@@ -272,7 +315,37 @@ fn start_agent_notification_worker(store: Option<AgentGovernanceStore>) {
                 }
             }
         }
-    });
+    }))
+}
+
+async fn shutdown_signal(state: AppState, shutdown_tx: watch::Sender<bool>) {
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = terminate => {}
+    }
+    state.mark_not_ready();
+    let _ = shutdown_tx.send(true);
+}
+
+fn shutdown_timeout() -> Duration {
+    let seconds = std::env::var("ISCY_SHUTDOWN_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(30)
+        .clamp(5, 120);
+    Duration::from_secs(seconds)
 }
 
 async fn run_database_admin(action: DbAdminAction) -> anyhow::Result<()> {

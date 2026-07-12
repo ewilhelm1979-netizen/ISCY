@@ -1,4 +1,4 @@
-use std::{fs::File, io::Read, str::FromStr};
+use std::{fs::File, io::Read, str::FromStr, time::Duration};
 
 use anyhow::{bail, Context};
 use chrono::Utc;
@@ -9,6 +9,9 @@ use sqlx::{
 };
 
 use crate::{auth_store::make_django_pbkdf2_sha256_password, cve_store::normalize_database_url};
+
+const POSTGRES_MIGRATION_LOCK_ID: i64 = 4_953_435_900_039;
+const POSTGRES_MIGRATION_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DbAdminAction {
@@ -4579,6 +4582,37 @@ pub async fn seed_sqlite_demo(pool: &SqlitePool) -> anyhow::Result<()> {
 }
 
 async fn run_postgres_migrations(pool: &PgPool) -> anyhow::Result<Vec<&'static str>> {
+    let mut lock_connection = pool
+        .acquire()
+        .await
+        .context("PostgreSQL-Migrations-Lock-Verbindung konnte nicht reserviert werden")?;
+    tokio::time::timeout(
+        POSTGRES_MIGRATION_LOCK_TIMEOUT,
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(POSTGRES_MIGRATION_LOCK_ID)
+            .execute(&mut *lock_connection),
+    )
+    .await
+    .context("PostgreSQL-Migrations-Lock-Timeout")?
+    .context("PostgreSQL-Migrations-Lock konnte nicht gesetzt werden")?;
+
+    let migration_result = run_postgres_migrations_locked(pool).await;
+    let unlock_result: Result<bool, sqlx::Error> =
+        sqlx::query_scalar("SELECT pg_advisory_unlock($1)")
+            .bind(POSTGRES_MIGRATION_LOCK_ID)
+            .fetch_one(&mut *lock_connection)
+            .await;
+    if migration_result.is_ok() {
+        let unlocked =
+            unlock_result.context("PostgreSQL-Migrations-Lock konnte nicht geloest werden")?;
+        if !unlocked {
+            bail!("PostgreSQL-Migrations-Lock war beim Freigeben nicht mehr aktiv");
+        }
+    }
+    migration_result
+}
+
+async fn run_postgres_migrations_locked(pool: &PgPool) -> anyhow::Result<Vec<&'static str>> {
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS iscy_schema_migrations (

@@ -15,4 +15,5 @@ media/
 staticfiles/
 models/
 backups/
+artifacts/
 rust/iscy-backend/target/
