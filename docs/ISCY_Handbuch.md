@@ -1720,6 +1720,42 @@ PostgreSQL, MinIO und nginx sind in der Testtopologie selbst jeweils
 Einzelinstanzen. ISCY behauptet damit weder Multi-Region-HA noch beliebige
 Skalierbarkeit, SLA-Erfuellung, Zertifizierung oder Rechtskonformitaet.
 
+### 6.18 Finales Hardening und Release-Candidate-Vorbereitung
+
+Der vorgeschlagene Stand `V23.7.28-rc.1` fuehrt die vorhandenen Pflichtpruefungen
+in `make release-candidate-check` zusammen, ohne einen Tag, ein GitHub Release
+oder eine oeffentliche Veroeffentlichung zu erzeugen. GitHub-CI behaelt die
+getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und Docker-Jobs und
+aggregiert deren Ergebnis erst am Ende. Lokal erzeugte RC-Artefakte bleiben
+unter `artifacts/release-candidate/`, sind unsigniert und werden nicht
+hochgeladen.
+
+Der Hardening-Review schliesst einen Development-Kompatibilitaetspfad: Eine
+Session nur aus `tenant_id` und `user_id` kann jetzt ausschliesslich im Modus
+`development` erstellt werden. `demo` und `production` verlangen einen
+Passwort-Login oder eine gueltige bestehende Session. Identitaetsheader sind in
+Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-
+Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder
+internen Store-Details.
+
+Die RC-Metadatenpruefung bestaetigt 39 fortlaufende Migrationen, 34 visuelle
+Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen
+wertredigierten Sensitive-Data-Scan. `release/release-manifest.json` nutzt
+`git:HEAD` als reproduzierbaren Quellmarker; die lokale Artefakterzeugung loest
+ihn auf den konkreten Commit und dessen `SOURCE_DATE_EPOCH` auf.
+
+Eine reproduzierbare CycloneDX-1.5-SBOM wird mit dem durch `flake.lock`
+gepinnten reinen Build-Werkzeug `cargo-cyclonedx` vorbereitet. Zufalls-Serial,
+fluechtiger Timestamp und lokaler Root-Pfad werden deterministisch durch
+Basis-Commit-Zeit und stabilen Cargo-PURL ersetzt. Die SBOM ist weder Signatur
+noch VEX-Entscheidung. Eine kryptografische Release-Signatur wird nicht
+vorgetaeuscht; `Cargo.lock`, SBOM, Manifest und Checksums bilden die
+vorbereiteten Provenance-Eingaben. Produktive Agent-Paketsignierung, CA-Ausstellung,
+Cloud-native Secret-Manager, Multi-Region-HA, automatische Zertifizierung,
+Rechtsbewertung und Behoerdenmeldung bleiben ausdruecklich ausserhalb dieses
+Release Candidates. Die vollstaendige Matrix und alle Betriebsgrenzen stehen
+in `docs/RELEASE_CANDIDATE_CHECKLIST.md`.
+
 ## 7. Was die wichtigsten Begriffe bedeuten
 
 - ISO 27001: internationaler Standard fuer Informationssicherheits-Managementsysteme
@@ -1767,7 +1803,9 @@ Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 1. Supplier/Product-Security-Workflow fachlich weiter polishen, z. B. feinere Import-Vorbereitung fuer Hersteller-Advisorys, Contract-/Exit-Reifegrade und Review-Pack-Gliederung
 2. Den S3-kompatiblen Evidence-Storage nach menschlicher Security-Review in einer isolierten Betreiberumgebung mit produktiven Endpoint-, Secret-Root- und Restore-Vorgaben pilotieren
 3. Produktive Agent-Paketsignierung und eine spaetere produktive CA-/PKI-Stufe auf Basis des vorbereiteten Artefakt-/Provenance- und PKI-/CSR-Governance-Modells
-4. Performance-, HA- und visuelle Regressionstests
+4. Den vorbereiteten Release Candidate vollstaendig pruefen und danach die
+   getrennten Rust-, PostgreSQL-, nginx- und nixpkgs-Plattform-Upgrades einzeln
+   migrieren
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 

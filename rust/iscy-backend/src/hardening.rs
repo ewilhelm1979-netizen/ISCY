@@ -105,7 +105,7 @@ impl CommunitySecurityConfig {
         Ok(Self {
             app_mode,
             trust_identity_headers: env_bool("ISCY_TRUST_PROXY_IDENTITY_HEADERS")
-                .unwrap_or(!production),
+                .unwrap_or(matches!(app_mode, AppMode::Development)),
             trusted_proxy_configured: env_bool("ISCY_TRUSTED_PROXY_CONFIGURED").unwrap_or(false),
             secure_cookies: env_bool("ISCY_SECURE_COOKIES").unwrap_or(production),
             https_confirmed: env_bool("ISCY_HTTPS_CONFIRMED").unwrap_or(false),
@@ -216,7 +216,9 @@ pub fn secret_value(name: &str) -> anyhow::Result<Option<String>> {
 }
 
 pub fn identity_headers_trusted(config: &CommunitySecurityConfig, headers: &HeaderMap) -> bool {
-    config.trust_identity_headers || !has_identity_header(headers)
+    !has_identity_header(headers)
+        || (config.trust_identity_headers
+            && (config.app_mode == AppMode::Development || config.trusted_proxy_configured))
 }
 
 pub async fn community_security_headers(
@@ -416,6 +418,28 @@ mod tests {
 
         assert_eq!(config.app_mode, AppMode::Production);
         assert!(!identity_headers_trusted(&config, &headers));
+    }
+
+    #[test]
+    fn non_development_identity_headers_require_configured_proxy_boundary() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iscy-tenant-id", HeaderValue::from_static("42"));
+
+        let demo_without_proxy = CommunitySecurityConfig {
+            app_mode: AppMode::Demo,
+            trust_identity_headers: true,
+            trusted_proxy_configured: false,
+            secure_cookies: false,
+            https_confirmed: false,
+            hsts_enabled: false,
+        };
+        assert!(!identity_headers_trusted(&demo_without_proxy, &headers));
+
+        let demo_with_proxy = CommunitySecurityConfig {
+            trusted_proxy_configured: true,
+            ..demo_without_proxy
+        };
+        assert!(identity_headers_trusted(&demo_with_proxy, &headers));
     }
 
     #[test]

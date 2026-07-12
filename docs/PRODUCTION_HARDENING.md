@@ -33,6 +33,15 @@ Der Command fuehrt Migrationen aus, legt falls noetig einen Tenant an, erzeugt d
 
 Lokale Username-/Passwort-Logins werden pro Tenant/Username begrenzt. Nach fuenf fehlgeschlagenen Versuchen in 15 Minuten blockiert ISCY weitere Versuche fuer 15 Minuten. Wenn `DATABASE_URL` gesetzt und Migration `0023_rust_security_runtime_state` angewendet ist, liegt dieser Zustand in der Datenbank und ist damit fuer mehrere Backend-Instanzen gemeinsam nutzbar. Ohne Security-Store faellt ISCY fuer lokale Entwicklung auf einen Prozessspeicher zurueck. Die Fehlermeldung bleibt generisch und liefert keine Benutzerexistenz zurueck. Betreiber sollten weiterhin Reverse-Proxy-, WAF- oder SIEM-Regeln fuer IP- und Geo-Anomalien nutzen.
 
+Der historische passwortlose `tenant_id`-/`user_id`-Kompatibilitaetspfad ist
+ausschliesslich im Modus `development` verfuegbar. `demo` und `production`
+verlangen Benutzername/Passwort oder eine bereits gueltige serverseitige
+Session. In Nicht-Development-Modi werden `x-iscy-*`-Identitaetsheader nur
+akzeptiert, wenn sowohl Header-Trust als auch eine explizite Trusted-Proxy-
+Grenze konfiguriert sind. Manipulierte IDs erzeugen keine Session; interne
+Session-Store-Fehler werden als stabile Fehlerklasse ohne SQL-/Tabellendetails
+ausgegeben.
+
 ## Alertmanager HMAC
 
 Zusätzlich zum Bearer-Token kann der Operations-Webhook HMAC-Signaturen erzwingen:
@@ -184,3 +193,18 @@ SLA-Aussagen sind daraus nicht ableitbar.
 
 Ausfuehrung und Grenzen sind in
 `docs/PERFORMANCE_HA_VISUAL_TESTING.md` dokumentiert.
+
+## Release-Candidate-Prüfung
+
+`make release-candidate-check` fasst die lokale Pflichtmatrix zusammen und
+veroeffentlicht keine Artefakte. Der Aufruf bricht bei fehlenden Werkzeugen,
+fehlenden Wegwerf-PostgreSQL-URLs oder einem Testfehler ab. Die GitHub-CI nutzt
+weiterhin getrennte zeitbegrenzte Jobs fuer Rust, Nix, MinIO, Performance, HA,
+Visual Regression und Docker. Der abschliessende Aggregationsjob prueft deren
+Erfolg sowie Manifest, Checksums, 39 Migrationen, 34 Baselines,
+Dokumentationsreferenzen und den wertredigierten Sensitive-Data-Scan.
+
+Release-Artefakte unter `artifacts/release-candidate/` sind lokal, unsigniert
+und nicht veroeffentlicht. Eine produktive Signatur oder SBOM wird nicht
+vorgetaeuscht; Status und bekannte Grenzen stehen in
+`docs/RELEASE_CANDIDATE_CHECKLIST.md`.

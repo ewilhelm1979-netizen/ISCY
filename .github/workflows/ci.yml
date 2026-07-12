@@ -189,3 +189,29 @@ jobs:
       - name: Build hardened application image
         run: |
           docker build --file rust/iscy-backend/Dockerfile .
+
+  release-candidate-check:
+    if: always()
+    needs:
+      - rust-backend-tests
+      - rust-bootstrap-smoke
+      - nix-rust-smoke
+      - object-storage-integration
+      - performance-smoke
+      - ha-integration
+      - visual-regression
+      - docker-config
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require all release-candidate jobs
+        env:
+          REQUIRED_RESULTS: ${{ join(needs.*.result, ',') }}
+        run: |
+          if printf '%s' "$REQUIRED_RESULTS" | grep -Eq 'failure|cancelled|skipped'; then
+            echo "Release-Candidate-Aggregation fehlgeschlagen: mindestens ein Pflichtjob war nicht erfolgreich."
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - name: Validate release-candidate metadata
+        run: |
+          make release-candidate-metadata-check

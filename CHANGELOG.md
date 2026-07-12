@@ -6,6 +6,15 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Release candidate preparation
+
+- prepares the proposed platform version `V23.7.28-rc.1` without creating a tag, GitHub Release, signature, or public artifact
+- adds a release-readiness matrix, German release-notes draft, machine-readable release manifest, tracked SHA-256 inputs, and a local unsigned artifact bundle
+- adds `make release-candidate-check` plus a lightweight CI aggregation job that requires all existing Rust, Nix, Object Storage, Performance, HA, Visual, Compose, and hardened-build jobs without duplicating the full pipeline
+- adds only pinned build/test clients for cargo-audit, cargo-deny, cargo-cyclonedx, Docker Compose, and PostgreSQL to the existing Nix development shell; no runtime or platform version is upgraded
+- prepares a reproducible CycloneDX 1.5 dependency SBOM with deterministic source timestamp and stable local-root PURL; it remains unsigned and unpublished
+- adds a value-redacting tracked-file sensitive-data scan and deterministic checks for 39 migrations, 34 visual baselines, screenshot references, manifest fields, and checksums
+
 ### Added
 
 - ergaenzt getrennte Liveness-, Readiness- und Startup-Systempruefungen mit sicherer DB-/Migrationsklassifizierung, nicht sensitiver Runtime-ID und begrenztem Graceful Shutdown
@@ -75,6 +84,12 @@ The project uses release tags for immutable release points. Changes under **Unre
 - add authenticated APIs and Web UI actions to list, create, and remove AI Governance links
 
 ### Security
+
+- blocks the development-only passwordless `tenant_id`/`user_id` session compatibility flow in Demo and Production
+- requires an explicitly configured trusted proxy boundary before Demo or Production can accept `x-iscy-*` identity headers
+- redacts internal SQL, table, and store details from session-read and session-creation failures
+- prevents PostgreSQL restore drills from logging credential-bearing database URLs and rejects identical source/restore targets before destructive restore preparation
+- excludes Rust target directories, local RC/test artifacts, runtime state, backups, and local tool caches from the Docker build context
 
 - serialisiert parallele PostgreSQL-Migrationen mit einem begrenzten Advisory Lock und verhindert parallele tenantgleiche Evidence-Worker-Laeufe sowie doppelte S3-Disposition durch atomare, lease-gebundene DB-Claims
 - liefert Readiness-Fehler ausschliesslich als kompakte sichere Klassen ohne Connection Strings, SQL-/Store-Details, Secrets oder interne Pfade
