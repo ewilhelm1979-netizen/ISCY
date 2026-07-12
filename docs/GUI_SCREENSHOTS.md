@@ -49,6 +49,10 @@ ohne produktive CA-Ausstellung.
 
 ## Nachweis-Integritaet und Storage
 
+Die Ansicht buendelt lokale Evidence-Integritaet, Storage-/Restore-Drills,
+Worker-/Disposition-Signale und tenantgebundene Object-Storage-Metadaten ohne
+Secretwerte oder vollstaendige Object-Keys.
+
 ![Nachweis-Integritaet und Storage](assets/iscy-evidence-integrity-storage.png)
 
 ## Roadmap

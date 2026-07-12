@@ -247,6 +247,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AGENT_PKI_CSR_GOVERNANCE_SCHEMA,
         postgres_sql: POSTGRES_AGENT_PKI_CSR_GOVERNANCE_SCHEMA,
     },
+    Migration {
+        version: "0038_rust_evidence_object_storage_client",
+        sqlite_sql: SQLITE_EVIDENCE_OBJECT_STORAGE_CLIENT_SCHEMA,
+        postgres_sql: POSTGRES_EVIDENCE_OBJECT_STORAGE_CLIENT_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1157,6 +1162,198 @@ CREATE TABLE IF NOT EXISTS evidence_storage_backend_status (
 );
 CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_status_tenant
     ON evidence_storage_backend_status(tenant_id, backend_type, checked_at);
+"#;
+
+const SQLITE_EVIDENCE_OBJECT_STORAGE_CLIENT_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS evidence_storage_backend_config (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    backend_id varchar(96) NOT NULL,
+    backend_type varchar(64) NOT NULL,
+    display_name varchar(160) NOT NULL DEFAULT '',
+    status varchar(64) NOT NULL DEFAULT 'validation_required',
+    endpoint_reference TEXT NOT NULL DEFAULT '',
+    region varchar(64) NOT NULL DEFAULT '',
+    bucket_name varchar(255) NOT NULL DEFAULT '',
+    key_prefix TEXT NOT NULL DEFAULT '',
+    access_key_secret_ref TEXT NOT NULL DEFAULT '',
+    secret_key_secret_ref TEXT NOT NULL DEFAULT '',
+    session_token_secret_ref TEXT NOT NULL DEFAULT '',
+    tls_required bool NOT NULL DEFAULT 1,
+    allow_path_style bool NOT NULL DEFAULT 0,
+    allowed_endpoint_policy varchar(64) NOT NULL DEFAULT 'production_https_public',
+    last_validation_at TEXT NULL,
+    last_validation_status varchar(64) NOT NULL DEFAULT '',
+    last_validation_error_class varchar(64) NOT NULL DEFAULT '',
+    created_by INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    known_limitations TEXT NOT NULL DEFAULT '',
+    UNIQUE(tenant_id, backend_id)
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_config_tenant
+    ON evidence_storage_backend_config(tenant_id, backend_type, status);
+
+CREATE TABLE IF NOT EXISTS evidence_storage_secret_reference_status (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    backend_id varchar(96) NOT NULL,
+    secret_reference TEXT NOT NULL DEFAULT '',
+    secret_ref_type varchar(64) NOT NULL,
+    presence_status varchar(64) NOT NULL DEFAULT 'unknown',
+    last_checked_at TEXT NULL,
+    last_check_error_class varchar(64) NOT NULL DEFAULT '',
+    redacted_display_name varchar(160) NOT NULL DEFAULT '',
+    UNIQUE(tenant_id, backend_id, secret_ref_type),
+    FOREIGN KEY (tenant_id, backend_id)
+        REFERENCES evidence_storage_backend_config(tenant_id, backend_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_storage_secret_status_tenant
+    ON evidence_storage_secret_reference_status(tenant_id, backend_id, presence_status);
+
+CREATE TABLE IF NOT EXISTS evidence_object_reference (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    evidence_id INTEGER NOT NULL,
+    backend_id varchar(96) NOT NULL,
+    backend_type varchar(64) NOT NULL,
+    object_key_redacted varchar(192) NOT NULL DEFAULT '',
+    object_key_sha256 varchar(64) NOT NULL DEFAULT '',
+    object_reference_status varchar(64) NOT NULL DEFAULT 'metadata_only',
+    expected_sha256 varchar(64) NOT NULL DEFAULT '',
+    contract_status varchar(64) NOT NULL DEFAULT 'metadata_only',
+    contract_sha256 varchar(64) NOT NULL DEFAULT '',
+    contract_size_bytes INTEGER NULL,
+    last_drill_at TEXT NULL,
+    last_drill_status varchar(64) NOT NULL DEFAULT '',
+    last_drill_error_class varchar(64) NOT NULL DEFAULT '',
+    created_by INTEGER NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, evidence_id, backend_id),
+    FOREIGN KEY (tenant_id, backend_id)
+        REFERENCES evidence_storage_backend_config(tenant_id, backend_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_object_reference_tenant
+    ON evidence_object_reference(tenant_id, evidence_id, backend_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_object_reference_status
+    ON evidence_object_reference(tenant_id, object_reference_status, last_drill_status);
+
+CREATE TABLE IF NOT EXISTS evidence_storage_backend_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    backend_id varchar(96) NOT NULL DEFAULT '',
+    evidence_id INTEGER NULL,
+    event_type varchar(96) NOT NULL,
+    actor_id INTEGER NULL,
+    status varchar(64) NOT NULL DEFAULT '',
+    error_class varchar(64) NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_event_tenant
+    ON evidence_storage_backend_event(tenant_id, backend_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_event_evidence
+    ON evidence_storage_backend_event(tenant_id, evidence_id, created_at);
+"#;
+
+const POSTGRES_EVIDENCE_OBJECT_STORAGE_CLIENT_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS evidence_storage_backend_config (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    backend_id varchar(96) NOT NULL,
+    backend_type varchar(64) NOT NULL,
+    display_name varchar(160) NOT NULL DEFAULT '',
+    status varchar(64) NOT NULL DEFAULT 'validation_required',
+    endpoint_reference TEXT NOT NULL DEFAULT '',
+    region varchar(64) NOT NULL DEFAULT '',
+    bucket_name varchar(255) NOT NULL DEFAULT '',
+    key_prefix TEXT NOT NULL DEFAULT '',
+    access_key_secret_ref TEXT NOT NULL DEFAULT '',
+    secret_key_secret_ref TEXT NOT NULL DEFAULT '',
+    session_token_secret_ref TEXT NOT NULL DEFAULT '',
+    tls_required BOOLEAN NOT NULL DEFAULT TRUE,
+    allow_path_style BOOLEAN NOT NULL DEFAULT FALSE,
+    allowed_endpoint_policy varchar(64) NOT NULL DEFAULT 'production_https_public',
+    last_validation_at TEXT NULL,
+    last_validation_status varchar(64) NOT NULL DEFAULT '',
+    last_validation_error_class varchar(64) NOT NULL DEFAULT '',
+    created_by BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    known_limitations TEXT NOT NULL DEFAULT '',
+    UNIQUE(tenant_id, backend_id)
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_config_tenant
+    ON evidence_storage_backend_config(tenant_id, backend_type, status);
+
+CREATE TABLE IF NOT EXISTS evidence_storage_secret_reference_status (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    backend_id varchar(96) NOT NULL,
+    secret_reference TEXT NOT NULL DEFAULT '',
+    secret_ref_type varchar(64) NOT NULL,
+    presence_status varchar(64) NOT NULL DEFAULT 'unknown',
+    last_checked_at TEXT NULL,
+    last_check_error_class varchar(64) NOT NULL DEFAULT '',
+    redacted_display_name varchar(160) NOT NULL DEFAULT '',
+    UNIQUE(tenant_id, backend_id, secret_ref_type),
+    FOREIGN KEY (tenant_id, backend_id)
+        REFERENCES evidence_storage_backend_config(tenant_id, backend_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_storage_secret_status_tenant
+    ON evidence_storage_secret_reference_status(tenant_id, backend_id, presence_status);
+
+CREATE TABLE IF NOT EXISTS evidence_object_reference (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    evidence_id BIGINT NOT NULL,
+    backend_id varchar(96) NOT NULL,
+    backend_type varchar(64) NOT NULL,
+    object_key_redacted varchar(192) NOT NULL DEFAULT '',
+    object_key_sha256 varchar(64) NOT NULL DEFAULT '',
+    object_reference_status varchar(64) NOT NULL DEFAULT 'metadata_only',
+    expected_sha256 varchar(64) NOT NULL DEFAULT '',
+    contract_status varchar(64) NOT NULL DEFAULT 'metadata_only',
+    contract_sha256 varchar(64) NOT NULL DEFAULT '',
+    contract_size_bytes BIGINT NULL,
+    last_drill_at TEXT NULL,
+    last_drill_status varchar(64) NOT NULL DEFAULT '',
+    last_drill_error_class varchar(64) NOT NULL DEFAULT '',
+    created_by BIGINT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id, evidence_id, backend_id),
+    FOREIGN KEY (tenant_id, backend_id)
+        REFERENCES evidence_storage_backend_config(tenant_id, backend_id)
+        ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_object_reference_tenant
+    ON evidence_object_reference(tenant_id, evidence_id, backend_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_object_reference_status
+    ON evidence_object_reference(tenant_id, object_reference_status, last_drill_status);
+
+CREATE TABLE IF NOT EXISTS evidence_storage_backend_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    backend_id varchar(96) NOT NULL DEFAULT '',
+    evidence_id BIGINT NULL,
+    event_type varchar(96) NOT NULL,
+    actor_id BIGINT NULL,
+    status varchar(64) NOT NULL DEFAULT '',
+    error_class varchar(64) NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text
+);
+CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_event_tenant
+    ON evidence_storage_backend_event(tenant_id, backend_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_evidence_storage_backend_event_evidence
+    ON evidence_storage_backend_event(tenant_id, evidence_id, created_at);
 "#;
 
 const SQLITE_AGENT_RELEASE_ARTIFACT_PROVENANCE_SCHEMA: &str = r#"
@@ -7766,5 +7963,127 @@ mod tests {
         assert_eq!(certificate_count, 1);
         assert_eq!(event_count, 1);
         assert_eq!(index_count, 11);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0038_is_restartable_and_preserves_evidence_object_storage_metadata() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_storage_backend_config (
+                tenant_id, backend_id, backend_type, display_name, status,
+                endpoint_reference, region, bucket_name, key_prefix,
+                access_key_secret_ref, secret_key_secret_ref, allowed_endpoint_policy
+            ) VALUES (
+                108, 's3-fixture', 's3_compatible', 'Fixture Object Storage',
+                'ready_for_test', 'https://objects.example.test', 'eu-central-1',
+                'iscy-fixture', 'iscy', 'env:ISCY_FIXTURE_ACCESS_KEY_FILE',
+                'env:ISCY_FIXTURE_SECRET_KEY_FILE', 'production_https_public'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_storage_secret_reference_status (
+                tenant_id, backend_id, secret_reference, secret_ref_type,
+                presence_status, redacted_display_name
+            ) VALUES (
+                108, 's3-fixture', 'env:ISCY_FIXTURE_ACCESS_KEY_FILE',
+                'access_key', 'reference_present', 'env:...fixture'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_object_reference (
+                tenant_id, evidence_id, backend_id, backend_type,
+                object_key_redacted, object_key_sha256, object_reference_status,
+                expected_sha256, contract_status, contract_sha256,
+                last_drill_status
+            ) VALUES (
+                108, 7001, 's3-fixture', 's3_compatible',
+                'object:report.pdf...fixture',
+                'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                'ready_for_test',
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'present',
+                'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                'valid'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO evidence_storage_backend_event (
+                tenant_id, backend_id, evidence_id, event_type, status, summary
+            ) VALUES (
+                108, 's3-fixture', 7001, 'storage_object_drill_completed',
+                'valid', 'Fixture ohne Secrets'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version = '0038_rust_evidence_object_storage_client'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0038_rust_evidence_object_storage_client"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let backend_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM evidence_storage_backend_config WHERE tenant_id = 108 AND backend_id = 's3-fixture'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let secret_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM evidence_storage_secret_reference_status WHERE tenant_id = 108 AND backend_id = 's3-fixture'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let object_ref_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM evidence_object_reference WHERE tenant_id = 108 AND backend_id = 's3-fixture'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let event_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM evidence_storage_backend_event WHERE tenant_id = 108 AND backend_id = 's3-fixture'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let index_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_evidence_storage_backend_config_tenant','idx_evidence_storage_secret_status_tenant','idx_evidence_object_reference_tenant','idx_evidence_object_reference_status','idx_evidence_storage_backend_event_tenant','idx_evidence_storage_backend_event_evidence')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(backend_count, 1);
+        assert_eq!(secret_count, 1);
+        assert_eq!(object_ref_count, 1);
+        assert_eq!(event_count, 1);
+        assert_eq!(index_count, 6);
     }
 }

@@ -696,8 +696,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0037_rust_agent_pki_csr_governance"));
-    assert!(html.contains("37/37 angewendet"));
+    assert!(html.contains("0038_rust_evidence_object_storage_client"));
+    assert!(html.contains("38/38 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -10188,6 +10188,265 @@ async fn evidence_storage_drill_uses_local_backend_and_keeps_tenant_boundaries()
 }
 
 #[tokio::test]
+async fn evidence_object_storage_client_is_tenant_scoped_and_secret_safe() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (
+            id, tenant_id, title, description, linked_requirement, file,
+            file_sha256, status, owner_id, valid_until, retention_until,
+            retention_reason
+        ) VALUES
+            (930, 1, 'Object storage evidence', 'S3-compatible metadata fixture', 'NIS2 21', '', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Object storage test'),
+            (931, 2, 'Foreign object storage evidence', 'Foreign tenant', 'NIS2 21', '', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Object storage test')
+        "#,
+    )
+    .bind("c".repeat(64))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool))),
+    );
+
+    let readonly = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/storage/backends")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"backend_type":"s3_compatible","display_name":"Read only"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly.status(), StatusCode::FORBIDDEN);
+
+    let bad_endpoint = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/storage/backends")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"backend_id":"s3-fixture","backend_type":"s3_compatible","display_name":"Unsafe endpoint","endpoint_reference":"https://access:secret@objects.example.test","region":"eu-central-1","bucket_name":"iscy-fixture","key_prefix":"iscy"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_endpoint.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(bad_endpoint.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "endpoint_contains_credentials");
+
+    let backend = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/storage/backends")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{
+                        "backend_id":"s3-fixture",
+                        "backend_type":"s3_compatible",
+                        "display_name":"S3 Fixture",
+                        "status":"validation_required",
+                        "endpoint_reference":"https://objects.example.test",
+                        "region":"eu-central-1",
+                        "bucket_name":"iscy-fixture",
+                        "key_prefix":"iscy",
+                        "access_key_secret_ref":"env:ISCY_FIXTURE_ACCESS_KEY_FILE",
+                        "secret_key_secret_ref":"env:ISCY_FIXTURE_SECRET_KEY_FILE",
+                        "allowed_endpoint_policy":"production_https_public"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(backend.status(), StatusCode::OK);
+    let body = to_bytes(backend.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("AKIA"));
+    assert!(!body_text.contains("BEGIN "));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(payload["backend"]["backend_id"], "s3-fixture");
+    assert_eq!(payload["backend"]["backend_type"], "s3_compatible");
+
+    let validation = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/storage/backends/s3-fixture/validate")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(validation.status(), StatusCode::OK);
+    let body = to_bytes(validation.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("AKIA"));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(payload["backend"]["status"], "ready_for_test");
+    assert_eq!(payload["secret_refs"].as_array().unwrap().len(), 3);
+
+    let wrong_tenant_key = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/930/storage/attach-object")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"backend_id":"s3-fixture","object_key":"iscy/tenants/2/evidence/930/artifacts/report.pdf","expected_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","contract_status":"present","contract_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_tenant_key.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(wrong_tenant_key.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "object_reference_tenant_mismatch");
+
+    let foreign_evidence = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/931/storage/attach-object")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"backend_id":"s3-fixture","object_key":"iscy/tenants/1/evidence/931/artifacts/report.pdf","expected_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","contract_status":"present","contract_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_evidence.status(), StatusCode::NOT_FOUND);
+
+    let attach = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/930/storage/attach-object")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"backend_id":"s3-fixture","object_key":"iscy/tenants/1/evidence/930/artifacts/report.pdf","expected_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","contract_status":"present","contract_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","contract_size_bytes":128}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(attach.status(), StatusCode::OK);
+    let body = to_bytes(attach.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("tenants/1/evidence/930"));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(
+        payload["reference"]["object_reference_status"],
+        "ready_for_test"
+    );
+    assert_eq!(
+        payload["reference"]["object_key_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+
+    let drill = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/930/storage/verify-object")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(drill.status(), StatusCode::OK);
+    let body = to_bytes(drill.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["drill"]["status"], "valid");
+    assert_eq!(payload["drill"]["safe_error_class"], "");
+    assert_eq!(payload["item"]["integrity_status"], "valid");
+
+    let events = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage/backends/s3-fixture/events")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(events.status(), StatusCode::OK);
+    let body = to_bytes(events.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("tenants/1/evidence/930"));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    let event_types = payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["event_type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"storage_backend_config_saved"));
+    assert!(event_types.contains(&"storage_backend_validated"));
+    assert!(event_types.contains(&"storage_object_reference_linked"));
+    assert!(event_types.contains(&"storage_object_drill_completed"));
+}
+
+#[tokio::test]
 async fn rust_web_evidence_accepts_file_upload_from_form() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
@@ -14748,7 +15007,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0034_rust_supplier_product_security_governance",
             "0035_rust_evidence_worker_disposition_storage",
             "0036_rust_agent_release_artifact_provenance",
-            "0037_rust_agent_pki_csr_governance"
+            "0037_rust_agent_pki_csr_governance",
+            "0038_rust_evidence_object_storage_client"
         ]
     );
     assert!(

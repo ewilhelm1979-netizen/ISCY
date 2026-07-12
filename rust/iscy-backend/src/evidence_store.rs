@@ -9,6 +9,17 @@ use sqlx::{
 };
 
 use crate::cve_store::normalize_database_url;
+use crate::evidence_object_storage::{
+    normalize_backend_status, normalize_backend_type, normalize_endpoint_policy,
+    normalize_key_prefix, redacted_secret_display, secret_presence_status, validate_bucket_name,
+    validate_endpoint_reference, validate_object_key, validate_secret_reference,
+    EvidenceObjectDrillResult, EvidenceObjectReference, EvidenceObjectReferenceAttachRequest,
+    EvidenceStorageBackendConfig, EvidenceStorageBackendConfigRequest, EvidenceStorageBackendEvent,
+    EvidenceStorageSecretReferenceStatus, ObjectStorageValidationError, BACKEND_DISABLED,
+    BACKEND_LOCAL_FILESYSTEM, BACKEND_S3_COMPATIBLE, STATUS_CONFIGURED_METADATA_ONLY,
+    STATUS_DISABLED, STATUS_ERROR, STATUS_NOT_CONFIGURED, STATUS_READY, STATUS_READY_FOR_TEST,
+    STATUS_VALIDATION_REQUIRED,
+};
 
 #[derive(Clone)]
 pub enum EvidenceStore {
@@ -637,6 +648,1169 @@ async fn evidence_integrity_event_by_id_sqlite(
     row.map(evidence_integrity_event_from_sqlite_row)
         .transpose()
         .map_err(Into::into)
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedStorageBackendConfig {
+    backend_id: String,
+    backend_type: String,
+    display_name: String,
+    status: String,
+    endpoint_reference: String,
+    region: String,
+    bucket_name: String,
+    key_prefix: String,
+    access_key_secret_ref: String,
+    secret_key_secret_ref: String,
+    session_token_secret_ref: String,
+    tls_required: bool,
+    allow_path_style: bool,
+    allowed_endpoint_policy: String,
+    known_limitations: String,
+}
+
+fn normalize_storage_backend_payload(
+    payload: EvidenceStorageBackendConfigRequest,
+) -> anyhow::Result<NormalizedStorageBackendConfig> {
+    let Some(backend_type) = normalize_backend_type(&payload.backend_type) else {
+        return validation_bail(ObjectStorageValidationError::InvalidBackendType);
+    };
+    let backend_id = normalize_backend_id(payload.backend_id.as_deref(), backend_type)?;
+    let Some(status) = normalize_backend_status(payload.status.as_deref(), backend_type) else {
+        return validation_bail(ObjectStorageValidationError::InvalidBackendStatus);
+    };
+    let display_name = normalize_limited_text(
+        &payload.display_name,
+        160,
+        if backend_type == BACKEND_S3_COMPATIBLE {
+            "S3-kompatibler Evidence-Storage"
+        } else if backend_type == BACKEND_LOCAL_FILESYSTEM {
+            "Lokales Evidence-Dateisystem"
+        } else {
+            "Evidence-Storage deaktiviert"
+        },
+    );
+    let endpoint_reference = payload
+        .endpoint_reference
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let region = normalize_limited_text(payload.region.as_deref().unwrap_or(""), 64, "");
+    let bucket_name = if payload
+        .bucket_name
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        String::new()
+    } else {
+        validate_bucket_name(payload.bucket_name.as_deref().unwrap_or(""))?
+    };
+    let key_prefix = normalize_key_prefix(payload.key_prefix.as_deref())?;
+    let access_key_secret_ref =
+        validate_secret_reference(payload.access_key_secret_ref.as_deref().unwrap_or(""))?;
+    let secret_key_secret_ref =
+        validate_secret_reference(payload.secret_key_secret_ref.as_deref().unwrap_or(""))?;
+    let session_token_secret_ref =
+        validate_secret_reference(payload.session_token_secret_ref.as_deref().unwrap_or(""))?;
+    let tls_required = payload.tls_required.unwrap_or(true);
+    let allow_path_style = payload.allow_path_style.unwrap_or(false);
+    let allowed_endpoint_policy =
+        normalize_endpoint_policy(payload.allowed_endpoint_policy.as_deref());
+    if backend_type == BACKEND_S3_COMPATIBLE && !endpoint_reference.is_empty() {
+        validate_endpoint_reference(&endpoint_reference, tls_required, &allowed_endpoint_policy)?;
+    }
+    if backend_type == BACKEND_DISABLED
+        && status != STATUS_DISABLED
+        && status != STATUS_NOT_CONFIGURED
+    {
+        return validation_bail(ObjectStorageValidationError::InvalidBackendStatus);
+    }
+    Ok(NormalizedStorageBackendConfig {
+        backend_id,
+        backend_type: backend_type.to_string(),
+        display_name,
+        status: status.to_string(),
+        endpoint_reference,
+        region,
+        bucket_name,
+        key_prefix,
+        access_key_secret_ref,
+        secret_key_secret_ref,
+        session_token_secret_ref,
+        tls_required,
+        allow_path_style,
+        allowed_endpoint_policy,
+        known_limitations: normalize_limited_text(
+            payload.known_limitations.as_deref().unwrap_or(""),
+            4000,
+            "",
+        ),
+    })
+}
+
+fn normalize_backend_id(value: Option<&str>, backend_type: &str) -> anyhow::Result<String> {
+    let fallback = match backend_type {
+        BACKEND_LOCAL_FILESYSTEM => "local-filesystem",
+        BACKEND_DISABLED => "disabled",
+        _ => "s3-primary",
+    };
+    let value = value.unwrap_or(fallback).trim().to_ascii_lowercase();
+    let valid = (3..=96).contains(&value.len())
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-' || byte == b'_'
+        })
+        && !value.starts_with('-')
+        && !value.ends_with('-');
+    if valid {
+        Ok(value)
+    } else {
+        validation_bail(ObjectStorageValidationError::InvalidBackendType)
+    }
+}
+
+fn normalize_limited_text(value: &str, max_chars: usize, fallback: &str) -> String {
+    let value = value.trim();
+    let value = if value.is_empty() { fallback } else { value };
+    value.chars().take(max_chars).collect()
+}
+
+fn validation_bail<T>(err: ObjectStorageValidationError) -> anyhow::Result<T> {
+    bail!("object_storage_validation:{}", err.safe_error_class())
+}
+
+fn validate_contract_status(value: Option<&str>) -> anyhow::Result<String> {
+    let status = value.unwrap_or("").trim().to_ascii_lowercase();
+    let status = if status.is_empty() {
+        "metadata_only"
+    } else {
+        status.as_str()
+    };
+    match status {
+        "metadata_only" | "present" | "missing" | "unreadable" | "timeout" | "access_denied"
+        | "backend_error" => Ok(status.to_string()),
+        _ => bail!("object_storage_validation:invalid_object_reference_status"),
+    }
+}
+
+fn normalize_optional_sha256(value: Option<&str>) -> anyhow::Result<String> {
+    let value = value.unwrap_or("").trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok(String::new());
+    }
+    let valid = value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if valid {
+        Ok(value)
+    } else {
+        bail!("object_storage_validation:invalid_sha256")
+    }
+}
+
+fn normalize_contract_size(value: Option<i64>) -> anyhow::Result<Option<i64>> {
+    match value {
+        Some(size) if size < 0 => bail!("object_storage_validation:invalid_object_size"),
+        Some(size) => Ok(Some(size)),
+        None => Ok(None),
+    }
+}
+
+async fn evidence_storage_backend_configs_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+) -> anyhow::Result<Vec<EvidenceStorageBackendConfig>> {
+    let sql = evidence_storage_backend_config_postgres_select(
+        "WHERE tenant_id = $1 ORDER BY backend_type, backend_id",
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .fetch_all(pool)
+        .await
+        .context(
+            "PostgreSQL-Evidence-Storage-Backend-Konfigurationen konnten nicht gelesen werden",
+        )?;
+    rows.into_iter()
+        .map(evidence_storage_backend_config_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn evidence_storage_backend_configs_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+) -> anyhow::Result<Vec<EvidenceStorageBackendConfig>> {
+    let sql = evidence_storage_backend_config_sqlite_select(
+        "WHERE tenant_id = ?1 ORDER BY backend_type, backend_id",
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .fetch_all(pool)
+        .await
+        .context("SQLite-Evidence-Storage-Backend-Konfigurationen konnten nicht gelesen werden")?;
+    rows.into_iter()
+        .map(evidence_storage_backend_config_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn upsert_evidence_storage_backend_config_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    actor_id: i64,
+    payload: EvidenceStorageBackendConfigRequest,
+) -> anyhow::Result<EvidenceStorageBackendConfig> {
+    let normalized = normalize_storage_backend_payload(payload)?;
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query(evidence_storage_backend_config_postgres_upsert_sql())
+        .bind(tenant_id)
+        .bind(&normalized.backend_id)
+        .bind(&normalized.backend_type)
+        .bind(&normalized.display_name)
+        .bind(&normalized.status)
+        .bind(&normalized.endpoint_reference)
+        .bind(&normalized.region)
+        .bind(&normalized.bucket_name)
+        .bind(&normalized.key_prefix)
+        .bind(&normalized.access_key_secret_ref)
+        .bind(&normalized.secret_key_secret_ref)
+        .bind(&normalized.session_token_secret_ref)
+        .bind(normalized.tls_required)
+        .bind(normalized.allow_path_style)
+        .bind(&normalized.allowed_endpoint_policy)
+        .bind(actor_id)
+        .bind(&normalized.known_limitations)
+        .fetch_one(&mut *tx)
+        .await
+        .context(
+            "PostgreSQL-Evidence-Storage-Backend-Konfiguration konnte nicht gespeichert werden",
+        )?;
+    let config = evidence_storage_backend_config_from_pg_row(row)?;
+    refresh_secret_reference_statuses_postgres_tx(&mut tx, tenant_id, &config).await?;
+    insert_storage_backend_event_postgres_tx(
+        &mut tx,
+        tenant_id,
+        StorageBackendEventWrite {
+            backend_id: config.backend_id.clone(),
+            evidence_id: None,
+            event_type: "storage_backend_config_saved",
+            actor_id: Some(actor_id),
+            status: config.status.clone(),
+            error_class: String::new(),
+            summary: "Evidence-Storage-Backend-Metadaten gespeichert.",
+            detail: json!({"backend_type": config.backend_type, "secrets_exposed": false, "endpoint_credentials_allowed": false}),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(config)
+}
+
+async fn upsert_evidence_storage_backend_config_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    actor_id: i64,
+    payload: EvidenceStorageBackendConfigRequest,
+) -> anyhow::Result<EvidenceStorageBackendConfig> {
+    let normalized = normalize_storage_backend_payload(payload)?;
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query(evidence_storage_backend_config_sqlite_upsert_sql())
+        .bind(tenant_id)
+        .bind(&normalized.backend_id)
+        .bind(&normalized.backend_type)
+        .bind(&normalized.display_name)
+        .bind(&normalized.status)
+        .bind(&normalized.endpoint_reference)
+        .bind(&normalized.region)
+        .bind(&normalized.bucket_name)
+        .bind(&normalized.key_prefix)
+        .bind(&normalized.access_key_secret_ref)
+        .bind(&normalized.secret_key_secret_ref)
+        .bind(&normalized.session_token_secret_ref)
+        .bind(normalized.tls_required)
+        .bind(normalized.allow_path_style)
+        .bind(&normalized.allowed_endpoint_policy)
+        .bind(actor_id)
+        .bind(&normalized.known_limitations)
+        .fetch_one(&mut *tx)
+        .await
+        .context("SQLite-Evidence-Storage-Backend-Konfiguration konnte nicht gespeichert werden")?;
+    let config = evidence_storage_backend_config_from_sqlite_row(row)?;
+    refresh_secret_reference_statuses_sqlite_tx(&mut tx, tenant_id, &config).await?;
+    insert_storage_backend_event_sqlite_tx(
+        &mut tx,
+        tenant_id,
+        StorageBackendEventWrite {
+            backend_id: config.backend_id.clone(),
+            evidence_id: None,
+            event_type: "storage_backend_config_saved",
+            actor_id: Some(actor_id),
+            status: config.status.clone(),
+            error_class: String::new(),
+            summary: "Evidence-Storage-Backend-Metadaten gespeichert.",
+            detail: json!({"backend_type": config.backend_type, "secrets_exposed": false, "endpoint_credentials_allowed": false}),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(config)
+}
+
+async fn validate_evidence_storage_backend_config_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    backend_id: &str,
+    actor_id: i64,
+) -> anyhow::Result<
+    Option<(
+        EvidenceStorageBackendConfig,
+        Vec<EvidenceStorageSecretReferenceStatus>,
+    )>,
+> {
+    let Some(config) =
+        evidence_storage_backend_config_by_id_postgres(pool, tenant_id, backend_id).await?
+    else {
+        return Ok(None);
+    };
+    let (status, error_class) = storage_backend_validation_status(&config);
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE evidence_storage_backend_config
+        SET last_validation_at = (CURRENT_TIMESTAMP)::text,
+            last_validation_status = $3,
+            last_validation_error_class = $4,
+            status = $5,
+            updated_at = (CURRENT_TIMESTAMP)::text
+        WHERE tenant_id = $1 AND backend_id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(&config.backend_id)
+    .bind(&status)
+    .bind(&error_class)
+    .bind(if error_class.is_empty() {
+        STATUS_READY_FOR_TEST
+    } else {
+        STATUS_ERROR
+    })
+    .execute(&mut *tx)
+    .await
+    .context("PostgreSQL-Evidence-Storage-Backend-Validierung konnte nicht gespeichert werden")?;
+    insert_storage_backend_event_postgres_tx(
+        &mut tx,
+        tenant_id,
+        StorageBackendEventWrite {
+            backend_id: config.backend_id.clone(),
+            evidence_id: None,
+            event_type: "storage_backend_validated",
+            actor_id: Some(actor_id),
+            status: status.clone(),
+            error_class: error_class.clone(),
+            summary: "Evidence-Storage-Backend ohne Secret-Werte validiert.",
+            detail: json!({"network_checked": false, "secrets_exposed": false, "safe_error_class": error_class}),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    let config =
+        evidence_storage_backend_config_by_id_postgres(pool, tenant_id, backend_id).await?;
+    let statuses =
+        evidence_storage_secret_reference_statuses_postgres(pool, tenant_id, backend_id).await?;
+    Ok(config.map(|config| (config, statuses)))
+}
+
+async fn validate_evidence_storage_backend_config_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    backend_id: &str,
+    actor_id: i64,
+) -> anyhow::Result<
+    Option<(
+        EvidenceStorageBackendConfig,
+        Vec<EvidenceStorageSecretReferenceStatus>,
+    )>,
+> {
+    let Some(config) =
+        evidence_storage_backend_config_by_id_sqlite(pool, tenant_id, backend_id).await?
+    else {
+        return Ok(None);
+    };
+    let (status, error_class) = storage_backend_validation_status(&config);
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE evidence_storage_backend_config
+        SET last_validation_at = datetime('now'),
+            last_validation_status = ?3,
+            last_validation_error_class = ?4,
+            status = ?5,
+            updated_at = datetime('now')
+        WHERE tenant_id = ?1 AND backend_id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(&config.backend_id)
+    .bind(&status)
+    .bind(&error_class)
+    .bind(if error_class.is_empty() {
+        STATUS_READY_FOR_TEST
+    } else {
+        STATUS_ERROR
+    })
+    .execute(&mut *tx)
+    .await
+    .context("SQLite-Evidence-Storage-Backend-Validierung konnte nicht gespeichert werden")?;
+    insert_storage_backend_event_sqlite_tx(
+        &mut tx,
+        tenant_id,
+        StorageBackendEventWrite {
+            backend_id: config.backend_id.clone(),
+            evidence_id: None,
+            event_type: "storage_backend_validated",
+            actor_id: Some(actor_id),
+            status: status.clone(),
+            error_class: error_class.clone(),
+            summary: "Evidence-Storage-Backend ohne Secret-Werte validiert.",
+            detail: json!({"network_checked": false, "secrets_exposed": false, "safe_error_class": error_class}),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    let config = evidence_storage_backend_config_by_id_sqlite(pool, tenant_id, backend_id).await?;
+    let statuses =
+        evidence_storage_secret_reference_statuses_sqlite(pool, tenant_id, backend_id).await?;
+    Ok(config.map(|config| (config, statuses)))
+}
+
+async fn attach_evidence_object_reference_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    payload: EvidenceObjectReferenceAttachRequest,
+) -> anyhow::Result<Option<EvidenceObjectReference>> {
+    if evidence_integrity_target_postgres(pool, tenant_id, evidence_id)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let Some(config) =
+        evidence_storage_backend_config_by_id_postgres(pool, tenant_id, payload.backend_id.trim())
+            .await?
+    else {
+        return Ok(None);
+    };
+    let normalized = normalize_object_reference_payload(tenant_id, evidence_id, &config, payload)?;
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query(evidence_object_reference_postgres_upsert_sql())
+        .bind(tenant_id)
+        .bind(evidence_id)
+        .bind(&config.backend_id)
+        .bind(&config.backend_type)
+        .bind(&normalized.object_key_redacted)
+        .bind(&normalized.object_key_sha256)
+        .bind(&normalized.object_reference_status)
+        .bind(&normalized.expected_sha256)
+        .bind(&normalized.contract_status)
+        .bind(&normalized.contract_sha256)
+        .bind(normalized.contract_size_bytes)
+        .bind(actor_id)
+        .fetch_one(&mut *tx)
+        .await
+        .context("PostgreSQL-Evidence-Object-Referenz konnte nicht gespeichert werden")?;
+    let reference = evidence_object_reference_from_pg_row(row)?;
+    insert_storage_backend_event_postgres_tx(
+        &mut tx,
+        tenant_id,
+        StorageBackendEventWrite {
+            backend_id: config.backend_id.clone(),
+            evidence_id: Some(evidence_id),
+            event_type: "storage_object_reference_linked",
+            actor_id: Some(actor_id),
+            status: reference.object_reference_status.clone(),
+            error_class: String::new(),
+            summary: "Evidence wurde mit einer redaktionellen Object-Storage-Referenz verknuepft.",
+            detail: json!({"object_key_sha256": reference.object_key_sha256, "object_key_redacted": reference.object_key_redacted, "secrets_exposed": false}),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Some(reference))
+}
+
+async fn attach_evidence_object_reference_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    payload: EvidenceObjectReferenceAttachRequest,
+) -> anyhow::Result<Option<EvidenceObjectReference>> {
+    if evidence_integrity_target_sqlite(pool, tenant_id, evidence_id)
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let Some(config) =
+        evidence_storage_backend_config_by_id_sqlite(pool, tenant_id, payload.backend_id.trim())
+            .await?
+    else {
+        return Ok(None);
+    };
+    let normalized = normalize_object_reference_payload(tenant_id, evidence_id, &config, payload)?;
+    let mut tx = pool.begin().await?;
+    let row = sqlx::query(evidence_object_reference_sqlite_upsert_sql())
+        .bind(tenant_id)
+        .bind(evidence_id)
+        .bind(&config.backend_id)
+        .bind(&config.backend_type)
+        .bind(&normalized.object_key_redacted)
+        .bind(&normalized.object_key_sha256)
+        .bind(&normalized.object_reference_status)
+        .bind(&normalized.expected_sha256)
+        .bind(&normalized.contract_status)
+        .bind(&normalized.contract_sha256)
+        .bind(normalized.contract_size_bytes)
+        .bind(actor_id)
+        .fetch_one(&mut *tx)
+        .await
+        .context("SQLite-Evidence-Object-Referenz konnte nicht gespeichert werden")?;
+    let reference = evidence_object_reference_from_sqlite_row(row)?;
+    insert_storage_backend_event_sqlite_tx(
+        &mut tx,
+        tenant_id,
+        StorageBackendEventWrite {
+            backend_id: config.backend_id.clone(),
+            evidence_id: Some(evidence_id),
+            event_type: "storage_object_reference_linked",
+            actor_id: Some(actor_id),
+            status: reference.object_reference_status.clone(),
+            error_class: String::new(),
+            summary: "Evidence wurde mit einer redaktionellen Object-Storage-Referenz verknuepft.",
+            detail: json!({"object_key_sha256": reference.object_key_sha256, "object_key_redacted": reference.object_key_redacted, "secrets_exposed": false}),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Some(reference))
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedObjectReferencePayload {
+    object_key_redacted: String,
+    object_key_sha256: String,
+    object_reference_status: String,
+    expected_sha256: String,
+    contract_status: String,
+    contract_sha256: String,
+    contract_size_bytes: Option<i64>,
+}
+
+#[derive(Debug)]
+struct StorageBackendEventWrite {
+    backend_id: String,
+    evidence_id: Option<i64>,
+    event_type: &'static str,
+    actor_id: Option<i64>,
+    status: String,
+    error_class: String,
+    summary: &'static str,
+    detail: Value,
+}
+
+fn normalize_object_reference_payload(
+    tenant_id: i64,
+    evidence_id: i64,
+    config: &EvidenceStorageBackendConfig,
+    payload: EvidenceObjectReferenceAttachRequest,
+) -> anyhow::Result<NormalizedObjectReferencePayload> {
+    if config.backend_type != BACKEND_S3_COMPATIBLE {
+        return validation_bail(ObjectStorageValidationError::InvalidBackendType);
+    }
+    let object_key = validate_object_key(
+        tenant_id,
+        evidence_id,
+        &config.key_prefix,
+        &payload.object_key,
+    )?;
+    let contract_status = validate_contract_status(payload.contract_status.as_deref())?;
+    let expected_sha256 = normalize_optional_sha256(payload.expected_sha256.as_deref())?;
+    let contract_sha256 = normalize_optional_sha256(payload.contract_sha256.as_deref())?;
+    let contract_size_bytes = normalize_contract_size(payload.contract_size_bytes)?;
+    Ok(NormalizedObjectReferencePayload {
+        object_key_redacted: object_key.redacted,
+        object_key_sha256: object_key.sha256,
+        object_reference_status: if contract_status == "metadata_only" {
+            "metadata_only".to_string()
+        } else {
+            "ready_for_test".to_string()
+        },
+        expected_sha256,
+        contract_status,
+        contract_sha256,
+        contract_size_bytes,
+    })
+}
+
+async fn evidence_object_reference_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+) -> anyhow::Result<Option<EvidenceObjectReference>> {
+    let sql = evidence_object_reference_postgres_select(
+        "WHERE tenant_id = $1 AND evidence_id = $2 ORDER BY updated_at DESC LIMIT 1",
+    );
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(evidence_id)
+        .fetch_optional(pool)
+        .await
+        .context("PostgreSQL-Evidence-Object-Referenz konnte nicht gelesen werden")?;
+    row.map(evidence_object_reference_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn evidence_object_reference_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+) -> anyhow::Result<Option<EvidenceObjectReference>> {
+    let sql = evidence_object_reference_sqlite_select(
+        "WHERE tenant_id = ?1 AND evidence_id = ?2 ORDER BY updated_at DESC LIMIT 1",
+    );
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(evidence_id)
+        .fetch_optional(pool)
+        .await
+        .context("SQLite-Evidence-Object-Referenz konnte nicht gelesen werden")?;
+    row.map(evidence_object_reference_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn verify_evidence_object_reference_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+) -> anyhow::Result<Option<EvidenceObjectDrillResult>> {
+    let Some(reference) = evidence_object_reference_postgres(pool, tenant_id, evidence_id).await?
+    else {
+        return Ok(None);
+    };
+    let Some(config) =
+        evidence_storage_backend_config_by_id_postgres(pool, tenant_id, &reference.backend_id)
+            .await?
+    else {
+        return Ok(Some(object_drill_result_from_error(
+            &reference,
+            "check_failed",
+            "backend_error",
+        )));
+    };
+    let result = object_drill_result_from_contract(&config, &reference);
+    persist_object_drill_result_postgres(pool, tenant_id, evidence_id, actor_id, &result).await?;
+    Ok(Some(result))
+}
+
+async fn verify_evidence_object_reference_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+) -> anyhow::Result<Option<EvidenceObjectDrillResult>> {
+    let Some(reference) = evidence_object_reference_sqlite(pool, tenant_id, evidence_id).await?
+    else {
+        return Ok(None);
+    };
+    let Some(config) =
+        evidence_storage_backend_config_by_id_sqlite(pool, tenant_id, &reference.backend_id)
+            .await?
+    else {
+        return Ok(Some(object_drill_result_from_error(
+            &reference,
+            "check_failed",
+            "backend_error",
+        )));
+    };
+    let result = object_drill_result_from_contract(&config, &reference);
+    persist_object_drill_result_sqlite(pool, tenant_id, evidence_id, actor_id, &result).await?;
+    Ok(Some(result))
+}
+
+async fn evidence_storage_backend_config_by_id_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    backend_id: &str,
+) -> anyhow::Result<Option<EvidenceStorageBackendConfig>> {
+    let sql =
+        evidence_storage_backend_config_postgres_select("WHERE tenant_id = $1 AND backend_id = $2");
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(backend_id.trim())
+        .fetch_optional(pool)
+        .await?;
+    row.map(evidence_storage_backend_config_from_pg_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+async fn evidence_storage_backend_config_by_id_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    backend_id: &str,
+) -> anyhow::Result<Option<EvidenceStorageBackendConfig>> {
+    let sql =
+        evidence_storage_backend_config_sqlite_select("WHERE tenant_id = ?1 AND backend_id = ?2");
+    let row = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(backend_id.trim())
+        .fetch_optional(pool)
+        .await?;
+    row.map(evidence_storage_backend_config_from_sqlite_row)
+        .transpose()
+        .map_err(Into::into)
+}
+
+fn storage_backend_validation_status(config: &EvidenceStorageBackendConfig) -> (String, String) {
+    if config.backend_type == BACKEND_DISABLED {
+        return (STATUS_NOT_CONFIGURED.to_string(), String::new());
+    }
+    if config.backend_type == BACKEND_LOCAL_FILESYSTEM {
+        return (STATUS_READY.to_string(), String::new());
+    }
+    if config.backend_type != BACKEND_S3_COMPATIBLE {
+        return (STATUS_ERROR.to_string(), "invalid_backend_type".to_string());
+    }
+    if config.endpoint_reference.trim().is_empty() {
+        return (
+            STATUS_VALIDATION_REQUIRED.to_string(),
+            "invalid_endpoint".to_string(),
+        );
+    }
+    if let Err(err) = validate_endpoint_reference(
+        &config.endpoint_reference,
+        config.tls_required,
+        &config.allowed_endpoint_policy,
+    ) {
+        return (STATUS_ERROR.to_string(), err.safe_error_class().to_string());
+    }
+    if validate_bucket_name(&config.bucket_name).is_err() {
+        return (
+            STATUS_VALIDATION_REQUIRED.to_string(),
+            "invalid_bucket_name".to_string(),
+        );
+    }
+    if config.region.trim().is_empty() {
+        return (
+            STATUS_VALIDATION_REQUIRED.to_string(),
+            "storage_not_configured".to_string(),
+        );
+    }
+    if config.access_key_secret_ref.trim().is_empty()
+        || config.secret_key_secret_ref.trim().is_empty()
+    {
+        return (
+            STATUS_CONFIGURED_METADATA_ONLY.to_string(),
+            "credentials_missing".to_string(),
+        );
+    }
+    (STATUS_READY_FOR_TEST.to_string(), String::new())
+}
+
+fn object_drill_result_from_contract(
+    config: &EvidenceStorageBackendConfig,
+    reference: &EvidenceObjectReference,
+) -> EvidenceObjectDrillResult {
+    let (status, safe_error_class, object_present, readable, calculated_sha256) =
+        match reference.contract_status.as_str() {
+            "present" => {
+                let hash_matches = !reference.expected_sha256.trim().is_empty()
+                    && reference
+                        .expected_sha256
+                        .eq_ignore_ascii_case(&reference.contract_sha256);
+                let status = if reference.expected_sha256.trim().is_empty() || hash_matches {
+                    "valid"
+                } else {
+                    "mismatch"
+                };
+                let safe_error_class = if status == "mismatch" {
+                    "hash_mismatch"
+                } else {
+                    ""
+                };
+                (
+                    status.to_string(),
+                    safe_error_class.to_string(),
+                    true,
+                    true,
+                    reference.contract_sha256.clone(),
+                )
+            }
+            "missing" => (
+                "missing_artifact".to_string(),
+                "object_missing".to_string(),
+                false,
+                false,
+                String::new(),
+            ),
+            "unreadable" => (
+                "check_failed".to_string(),
+                "object_unreadable".to_string(),
+                true,
+                false,
+                String::new(),
+            ),
+            "timeout" => (
+                "check_failed".to_string(),
+                "timeout".to_string(),
+                true,
+                false,
+                String::new(),
+            ),
+            "access_denied" => (
+                "check_failed".to_string(),
+                "access_denied".to_string(),
+                true,
+                false,
+                String::new(),
+            ),
+            "backend_error" => (
+                "check_failed".to_string(),
+                "backend_error".to_string(),
+                false,
+                false,
+                String::new(),
+            ),
+            _ => (
+                "check_failed".to_string(),
+                "validation_required".to_string(),
+                false,
+                false,
+                String::new(),
+            ),
+        };
+    EvidenceObjectDrillResult {
+        backend_id: config.backend_id.clone(),
+        backend_type: config.backend_type.clone(),
+        evidence_id: reference.evidence_id,
+        object_reference_present: true,
+        object_present,
+        readable,
+        expected_sha256_present: !reference.expected_sha256.trim().is_empty(),
+        calculated_sha256,
+        hash_matches: status == "valid",
+        status,
+        safe_error_class,
+        size_bytes: reference.contract_size_bytes,
+    }
+}
+
+fn object_drill_result_from_error(
+    reference: &EvidenceObjectReference,
+    status: &str,
+    safe_error_class: &str,
+) -> EvidenceObjectDrillResult {
+    EvidenceObjectDrillResult {
+        backend_id: reference.backend_id.clone(),
+        backend_type: reference.backend_type.clone(),
+        evidence_id: reference.evidence_id,
+        object_reference_present: true,
+        object_present: false,
+        readable: false,
+        expected_sha256_present: !reference.expected_sha256.trim().is_empty(),
+        calculated_sha256: String::new(),
+        hash_matches: false,
+        status: status.to_string(),
+        safe_error_class: safe_error_class.to_string(),
+        size_bytes: None,
+    }
+}
+
+async fn persist_object_drill_result_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    result: &EvidenceObjectDrillResult,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE evidence_object_reference
+        SET last_drill_at = (CURRENT_TIMESTAMP)::text,
+            last_drill_status = $3,
+            last_drill_error_class = $4,
+            updated_at = (CURRENT_TIMESTAMP)::text
+        WHERE tenant_id = $1 AND evidence_id = $2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(&result.status)
+    .bind(&result.safe_error_class)
+    .execute(&mut *tx)
+    .await?;
+    insert_storage_backend_event_postgres_tx(
+        &mut tx,
+        tenant_id,
+        StorageBackendEventWrite {
+            backend_id: result.backend_id.clone(),
+            evidence_id: Some(evidence_id),
+            event_type: "storage_object_drill_completed",
+            actor_id: Some(actor_id),
+            status: result.status.clone(),
+            error_class: result.safe_error_class.clone(),
+            summary: "Object-Storage-Contract-Drill abgeschlossen.",
+            detail: json!({
+                "object_present": result.object_present,
+                "readable": result.readable,
+                "hash_matches": result.hash_matches,
+                "size_bytes": result.size_bytes,
+                "object_contents_logged": false,
+                "secrets_exposed": false
+            }),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn persist_object_drill_result_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    evidence_id: i64,
+    actor_id: i64,
+    result: &EvidenceObjectDrillResult,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        r#"
+        UPDATE evidence_object_reference
+        SET last_drill_at = datetime('now'),
+            last_drill_status = ?3,
+            last_drill_error_class = ?4,
+            updated_at = datetime('now')
+        WHERE tenant_id = ?1 AND evidence_id = ?2
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(evidence_id)
+    .bind(&result.status)
+    .bind(&result.safe_error_class)
+    .execute(&mut *tx)
+    .await?;
+    insert_storage_backend_event_sqlite_tx(
+        &mut tx,
+        tenant_id,
+        StorageBackendEventWrite {
+            backend_id: result.backend_id.clone(),
+            evidence_id: Some(evidence_id),
+            event_type: "storage_object_drill_completed",
+            actor_id: Some(actor_id),
+            status: result.status.clone(),
+            error_class: result.safe_error_class.clone(),
+            summary: "Object-Storage-Contract-Drill abgeschlossen.",
+            detail: json!({
+                "object_present": result.object_present,
+                "readable": result.readable,
+                "hash_matches": result.hash_matches,
+                "size_bytes": result.size_bytes,
+                "object_contents_logged": false,
+                "secrets_exposed": false
+            }),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn evidence_storage_secret_reference_statuses_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    backend_id: &str,
+) -> anyhow::Result<Vec<EvidenceStorageSecretReferenceStatus>> {
+    let sql = evidence_storage_secret_reference_status_postgres_select(
+        "WHERE tenant_id = $1 AND backend_id = $2 ORDER BY secret_ref_type",
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(backend_id)
+        .fetch_all(pool)
+        .await?;
+    rows.into_iter()
+        .map(evidence_storage_secret_reference_status_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn evidence_storage_secret_reference_statuses_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    backend_id: &str,
+) -> anyhow::Result<Vec<EvidenceStorageSecretReferenceStatus>> {
+    let sql = evidence_storage_secret_reference_status_sqlite_select(
+        "WHERE tenant_id = ?1 AND backend_id = ?2 ORDER BY secret_ref_type",
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(backend_id)
+        .fetch_all(pool)
+        .await?;
+    rows.into_iter()
+        .map(evidence_storage_secret_reference_status_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn refresh_secret_reference_statuses_postgres_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: i64,
+    config: &EvidenceStorageBackendConfig,
+) -> anyhow::Result<()> {
+    for (secret_ref_type, reference) in storage_secret_references(config) {
+        sqlx::query(evidence_storage_secret_reference_status_postgres_upsert_sql())
+            .bind(tenant_id)
+            .bind(&config.backend_id)
+            .bind(reference)
+            .bind(secret_ref_type)
+            .bind(secret_presence_status(reference))
+            .bind(redacted_secret_display(reference))
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn refresh_secret_reference_statuses_sqlite_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    tenant_id: i64,
+    config: &EvidenceStorageBackendConfig,
+) -> anyhow::Result<()> {
+    for (secret_ref_type, reference) in storage_secret_references(config) {
+        sqlx::query(evidence_storage_secret_reference_status_sqlite_upsert_sql())
+            .bind(tenant_id)
+            .bind(&config.backend_id)
+            .bind(reference)
+            .bind(secret_ref_type)
+            .bind(secret_presence_status(reference))
+            .bind(redacted_secret_display(reference))
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+fn storage_secret_references(config: &EvidenceStorageBackendConfig) -> [(&'static str, &str); 3] {
+    [
+        ("access_key", config.access_key_secret_ref.as_str()),
+        ("secret_key", config.secret_key_secret_ref.as_str()),
+        ("session_token", config.session_token_secret_ref.as_str()),
+    ]
+}
+
+async fn evidence_storage_backend_events_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    backend_id: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<EvidenceStorageBackendEvent>> {
+    let sql = evidence_storage_backend_event_postgres_select(
+        "WHERE tenant_id = $1 AND backend_id = $2 ORDER BY created_at DESC, id DESC LIMIT $3",
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(backend_id.trim())
+        .bind(limit.clamp(1, 200))
+        .fetch_all(pool)
+        .await?;
+    rows.into_iter()
+        .map(evidence_storage_backend_event_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn evidence_storage_backend_events_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    backend_id: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<EvidenceStorageBackendEvent>> {
+    let sql = evidence_storage_backend_event_sqlite_select(
+        "WHERE tenant_id = ?1 AND backend_id = ?2 ORDER BY created_at DESC, id DESC LIMIT ?3",
+    );
+    let rows = sqlx::query(&sql)
+        .bind(tenant_id)
+        .bind(backend_id.trim())
+        .bind(limit.clamp(1, 200))
+        .fetch_all(pool)
+        .await?;
+    rows.into_iter()
+        .map(evidence_storage_backend_event_from_sqlite_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+async fn insert_storage_backend_event_postgres_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: i64,
+    event: StorageBackendEventWrite,
+) -> anyhow::Result<i64> {
+    let id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO evidence_storage_backend_event (
+            tenant_id, backend_id, evidence_id, event_type, actor_id,
+            status, error_class, summary, detail_json, created_at
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,(CURRENT_TIMESTAMP)::text)
+        RETURNING id
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(event.backend_id)
+    .bind(event.evidence_id)
+    .bind(event.event_type)
+    .bind(event.actor_id)
+    .bind(event.status)
+    .bind(event.error_class)
+    .bind(event.summary)
+    .bind(event.detail.to_string())
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(id)
+}
+
+async fn insert_storage_backend_event_sqlite_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    tenant_id: i64,
+    event: StorageBackendEventWrite,
+) -> anyhow::Result<i64> {
+    let result = sqlx::query(
+        r#"
+        INSERT INTO evidence_storage_backend_event (
+            tenant_id, backend_id, evidence_id, event_type, actor_id,
+            status, error_class, summary, detail_json, created_at
+        )
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,datetime('now'))
+        "#,
+    )
+    .bind(tenant_id)
+    .bind(event.backend_id)
+    .bind(event.evidence_id)
+    .bind(event.event_type)
+    .bind(event.actor_id)
+    .bind(event.status)
+    .bind(event.error_class)
+    .bind(event.summary)
+    .bind(event.detail.to_string())
+    .execute(&mut **tx)
+    .await?;
+    Ok(result.last_insert_rowid())
 }
 
 async fn set_legal_hold_postgres(
@@ -1838,6 +3012,143 @@ impl EvidenceStore {
         }
     }
 
+    pub async fn evidence_storage_backend_configs(
+        &self,
+        tenant_id: i64,
+    ) -> anyhow::Result<Vec<EvidenceStorageBackendConfig>> {
+        match self {
+            Self::Postgres(pool) => {
+                evidence_storage_backend_configs_postgres(pool, tenant_id).await
+            }
+            Self::Sqlite(pool) => evidence_storage_backend_configs_sqlite(pool, tenant_id).await,
+        }
+    }
+
+    pub async fn upsert_evidence_storage_backend_config(
+        &self,
+        tenant_id: i64,
+        actor_id: i64,
+        payload: EvidenceStorageBackendConfigRequest,
+    ) -> anyhow::Result<EvidenceStorageBackendConfig> {
+        match self {
+            Self::Postgres(pool) => {
+                upsert_evidence_storage_backend_config_postgres(pool, tenant_id, actor_id, payload)
+                    .await
+            }
+            Self::Sqlite(pool) => {
+                upsert_evidence_storage_backend_config_sqlite(pool, tenant_id, actor_id, payload)
+                    .await
+            }
+        }
+    }
+
+    pub async fn validate_evidence_storage_backend_config(
+        &self,
+        tenant_id: i64,
+        backend_id: &str,
+        actor_id: i64,
+    ) -> anyhow::Result<
+        Option<(
+            EvidenceStorageBackendConfig,
+            Vec<EvidenceStorageSecretReferenceStatus>,
+        )>,
+    > {
+        match self {
+            Self::Postgres(pool) => {
+                validate_evidence_storage_backend_config_postgres(
+                    pool, tenant_id, backend_id, actor_id,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                validate_evidence_storage_backend_config_sqlite(
+                    pool, tenant_id, backend_id, actor_id,
+                )
+                .await
+            }
+        }
+    }
+
+    pub async fn evidence_storage_backend_events(
+        &self,
+        tenant_id: i64,
+        backend_id: &str,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EvidenceStorageBackendEvent>> {
+        match self {
+            Self::Postgres(pool) => {
+                evidence_storage_backend_events_postgres(pool, tenant_id, backend_id, limit).await
+            }
+            Self::Sqlite(pool) => {
+                evidence_storage_backend_events_sqlite(pool, tenant_id, backend_id, limit).await
+            }
+        }
+    }
+
+    pub async fn attach_evidence_object_reference(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+        actor_id: i64,
+        payload: EvidenceObjectReferenceAttachRequest,
+    ) -> anyhow::Result<Option<EvidenceObjectReference>> {
+        match self {
+            Self::Postgres(pool) => {
+                attach_evidence_object_reference_postgres(
+                    pool,
+                    tenant_id,
+                    evidence_id,
+                    actor_id,
+                    payload,
+                )
+                .await
+            }
+            Self::Sqlite(pool) => {
+                attach_evidence_object_reference_sqlite(
+                    pool,
+                    tenant_id,
+                    evidence_id,
+                    actor_id,
+                    payload,
+                )
+                .await
+            }
+        }
+    }
+
+    pub async fn evidence_object_reference(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+    ) -> anyhow::Result<Option<EvidenceObjectReference>> {
+        match self {
+            Self::Postgres(pool) => {
+                evidence_object_reference_postgres(pool, tenant_id, evidence_id).await
+            }
+            Self::Sqlite(pool) => {
+                evidence_object_reference_sqlite(pool, tenant_id, evidence_id).await
+            }
+        }
+    }
+
+    pub async fn verify_evidence_object_reference(
+        &self,
+        tenant_id: i64,
+        evidence_id: i64,
+        actor_id: i64,
+    ) -> anyhow::Result<Option<EvidenceObjectDrillResult>> {
+        match self {
+            Self::Postgres(pool) => {
+                verify_evidence_object_reference_postgres(pool, tenant_id, evidence_id, actor_id)
+                    .await
+            }
+            Self::Sqlite(pool) => {
+                verify_evidence_object_reference_sqlite(pool, tenant_id, evidence_id, actor_id)
+                    .await
+            }
+        }
+    }
+
     pub async fn set_legal_hold(
         &self,
         tenant_id: i64,
@@ -2584,6 +3895,420 @@ fn evidence_integrity_event_sqlite_sql() -> &'static str {
     ORDER BY event.created_at DESC, event.id DESC
     LIMIT ?3
     "#
+}
+
+fn evidence_storage_backend_config_postgres_select(where_clause: &str) -> String {
+    format!(
+        r#"
+        SELECT id, tenant_id, backend_id, backend_type, display_name, status,
+               endpoint_reference, region, bucket_name, key_prefix,
+               access_key_secret_ref, secret_key_secret_ref, session_token_secret_ref,
+               tls_required, allow_path_style, allowed_endpoint_policy,
+               last_validation_at, last_validation_status, last_validation_error_class,
+               created_at, updated_at, known_limitations
+        FROM evidence_storage_backend_config
+        {where_clause}
+        "#
+    )
+}
+
+fn evidence_storage_backend_config_sqlite_select(where_clause: &str) -> String {
+    evidence_storage_backend_config_postgres_select(where_clause)
+}
+
+fn evidence_storage_backend_config_postgres_upsert_sql() -> &'static str {
+    r#"
+    INSERT INTO evidence_storage_backend_config (
+        tenant_id, backend_id, backend_type, display_name, status,
+        endpoint_reference, region, bucket_name, key_prefix,
+        access_key_secret_ref, secret_key_secret_ref, session_token_secret_ref,
+        tls_required, allow_path_style, allowed_endpoint_policy,
+        created_by, created_at, updated_at, known_limitations
+    )
+    VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+        (CURRENT_TIMESTAMP)::text,(CURRENT_TIMESTAMP)::text,$17
+    )
+    ON CONFLICT (tenant_id, backend_id) DO UPDATE SET
+        backend_type = excluded.backend_type,
+        display_name = excluded.display_name,
+        status = excluded.status,
+        endpoint_reference = excluded.endpoint_reference,
+        region = excluded.region,
+        bucket_name = excluded.bucket_name,
+        key_prefix = excluded.key_prefix,
+        access_key_secret_ref = excluded.access_key_secret_ref,
+        secret_key_secret_ref = excluded.secret_key_secret_ref,
+        session_token_secret_ref = excluded.session_token_secret_ref,
+        tls_required = excluded.tls_required,
+        allow_path_style = excluded.allow_path_style,
+        allowed_endpoint_policy = excluded.allowed_endpoint_policy,
+        updated_at = (CURRENT_TIMESTAMP)::text,
+        known_limitations = excluded.known_limitations
+    RETURNING id, tenant_id, backend_id, backend_type, display_name, status,
+              endpoint_reference, region, bucket_name, key_prefix,
+              access_key_secret_ref, secret_key_secret_ref, session_token_secret_ref,
+              tls_required, allow_path_style, allowed_endpoint_policy,
+              last_validation_at, last_validation_status, last_validation_error_class,
+              created_at, updated_at, known_limitations
+    "#
+}
+
+fn evidence_storage_backend_config_sqlite_upsert_sql() -> &'static str {
+    r#"
+    INSERT INTO evidence_storage_backend_config (
+        tenant_id, backend_id, backend_type, display_name, status,
+        endpoint_reference, region, bucket_name, key_prefix,
+        access_key_secret_ref, secret_key_secret_ref, session_token_secret_ref,
+        tls_required, allow_path_style, allowed_endpoint_policy,
+        created_by, created_at, updated_at, known_limitations
+    )
+    VALUES (
+        ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,
+        datetime('now'),datetime('now'),?17
+    )
+    ON CONFLICT (tenant_id, backend_id) DO UPDATE SET
+        backend_type = excluded.backend_type,
+        display_name = excluded.display_name,
+        status = excluded.status,
+        endpoint_reference = excluded.endpoint_reference,
+        region = excluded.region,
+        bucket_name = excluded.bucket_name,
+        key_prefix = excluded.key_prefix,
+        access_key_secret_ref = excluded.access_key_secret_ref,
+        secret_key_secret_ref = excluded.secret_key_secret_ref,
+        session_token_secret_ref = excluded.session_token_secret_ref,
+        tls_required = excluded.tls_required,
+        allow_path_style = excluded.allow_path_style,
+        allowed_endpoint_policy = excluded.allowed_endpoint_policy,
+        updated_at = datetime('now'),
+        known_limitations = excluded.known_limitations
+    RETURNING id, tenant_id, backend_id, backend_type, display_name, status,
+              endpoint_reference, region, bucket_name, key_prefix,
+              access_key_secret_ref, secret_key_secret_ref, session_token_secret_ref,
+              tls_required, allow_path_style, allowed_endpoint_policy,
+              last_validation_at, last_validation_status, last_validation_error_class,
+              created_at, updated_at, known_limitations
+    "#
+}
+
+fn evidence_storage_secret_reference_status_postgres_select(where_clause: &str) -> String {
+    format!(
+        r#"
+        SELECT id, tenant_id, backend_id, secret_reference, secret_ref_type,
+               presence_status, last_checked_at, last_check_error_class, redacted_display_name
+        FROM evidence_storage_secret_reference_status
+        {where_clause}
+        "#
+    )
+}
+
+fn evidence_storage_secret_reference_status_sqlite_select(where_clause: &str) -> String {
+    evidence_storage_secret_reference_status_postgres_select(where_clause)
+}
+
+fn evidence_storage_secret_reference_status_postgres_upsert_sql() -> &'static str {
+    r#"
+    INSERT INTO evidence_storage_secret_reference_status (
+        tenant_id, backend_id, secret_reference, secret_ref_type, presence_status,
+        last_checked_at, last_check_error_class, redacted_display_name
+    )
+    VALUES ($1,$2,$3,$4,$5,(CURRENT_TIMESTAMP)::text,'',$6)
+    ON CONFLICT (tenant_id, backend_id, secret_ref_type) DO UPDATE SET
+        secret_reference = excluded.secret_reference,
+        presence_status = excluded.presence_status,
+        last_checked_at = (CURRENT_TIMESTAMP)::text,
+        last_check_error_class = '',
+        redacted_display_name = excluded.redacted_display_name
+    "#
+}
+
+fn evidence_storage_secret_reference_status_sqlite_upsert_sql() -> &'static str {
+    r#"
+    INSERT INTO evidence_storage_secret_reference_status (
+        tenant_id, backend_id, secret_reference, secret_ref_type, presence_status,
+        last_checked_at, last_check_error_class, redacted_display_name
+    )
+    VALUES (?1,?2,?3,?4,?5,datetime('now'),'',?6)
+    ON CONFLICT (tenant_id, backend_id, secret_ref_type) DO UPDATE SET
+        secret_reference = excluded.secret_reference,
+        presence_status = excluded.presence_status,
+        last_checked_at = datetime('now'),
+        last_check_error_class = '',
+        redacted_display_name = excluded.redacted_display_name
+    "#
+}
+
+fn evidence_object_reference_postgres_select(where_clause: &str) -> String {
+    format!(
+        r#"
+        SELECT id, tenant_id, evidence_id, backend_id, backend_type,
+               object_key_redacted, object_key_sha256, object_reference_status,
+               expected_sha256, contract_status, contract_sha256, contract_size_bytes,
+               last_drill_at, last_drill_status, last_drill_error_class,
+               created_at, updated_at
+        FROM evidence_object_reference
+        {where_clause}
+        "#
+    )
+}
+
+fn evidence_object_reference_sqlite_select(where_clause: &str) -> String {
+    evidence_object_reference_postgres_select(where_clause)
+}
+
+fn evidence_object_reference_postgres_upsert_sql() -> &'static str {
+    r#"
+    INSERT INTO evidence_object_reference (
+        tenant_id, evidence_id, backend_id, backend_type,
+        object_key_redacted, object_key_sha256, object_reference_status,
+        expected_sha256, contract_status, contract_sha256, contract_size_bytes,
+        created_by, created_at, updated_at
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,(CURRENT_TIMESTAMP)::text,(CURRENT_TIMESTAMP)::text)
+    ON CONFLICT (tenant_id, evidence_id, backend_id) DO UPDATE SET
+        backend_type = excluded.backend_type,
+        object_key_redacted = excluded.object_key_redacted,
+        object_key_sha256 = excluded.object_key_sha256,
+        object_reference_status = excluded.object_reference_status,
+        expected_sha256 = excluded.expected_sha256,
+        contract_status = excluded.contract_status,
+        contract_sha256 = excluded.contract_sha256,
+        contract_size_bytes = excluded.contract_size_bytes,
+        updated_at = (CURRENT_TIMESTAMP)::text
+    RETURNING id, tenant_id, evidence_id, backend_id, backend_type,
+              object_key_redacted, object_key_sha256, object_reference_status,
+              expected_sha256, contract_status, contract_sha256, contract_size_bytes,
+              last_drill_at, last_drill_status, last_drill_error_class,
+              created_at, updated_at
+    "#
+}
+
+fn evidence_object_reference_sqlite_upsert_sql() -> &'static str {
+    r#"
+    INSERT INTO evidence_object_reference (
+        tenant_id, evidence_id, backend_id, backend_type,
+        object_key_redacted, object_key_sha256, object_reference_status,
+        expected_sha256, contract_status, contract_sha256, contract_size_bytes,
+        created_by, created_at, updated_at
+    )
+    VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,datetime('now'),datetime('now'))
+    ON CONFLICT (tenant_id, evidence_id, backend_id) DO UPDATE SET
+        backend_type = excluded.backend_type,
+        object_key_redacted = excluded.object_key_redacted,
+        object_key_sha256 = excluded.object_key_sha256,
+        object_reference_status = excluded.object_reference_status,
+        expected_sha256 = excluded.expected_sha256,
+        contract_status = excluded.contract_status,
+        contract_sha256 = excluded.contract_sha256,
+        contract_size_bytes = excluded.contract_size_bytes,
+        updated_at = datetime('now')
+    RETURNING id, tenant_id, evidence_id, backend_id, backend_type,
+              object_key_redacted, object_key_sha256, object_reference_status,
+              expected_sha256, contract_status, contract_sha256, contract_size_bytes,
+              last_drill_at, last_drill_status, last_drill_error_class,
+              created_at, updated_at
+    "#
+}
+
+fn evidence_storage_backend_event_postgres_select(where_clause: &str) -> String {
+    format!(
+        r#"
+        SELECT id, tenant_id, backend_id, evidence_id, event_type, actor_id,
+               status, error_class, summary, detail_json::text AS detail_json_text,
+               created_at
+        FROM evidence_storage_backend_event
+        {where_clause}
+        "#
+    )
+}
+
+fn evidence_storage_backend_event_sqlite_select(where_clause: &str) -> String {
+    format!(
+        r#"
+        SELECT id, tenant_id, backend_id, evidence_id, event_type, actor_id,
+               status, error_class, summary, CAST(detail_json AS TEXT) AS detail_json_text,
+               created_at
+        FROM evidence_storage_backend_event
+        {where_clause}
+        "#
+    )
+}
+
+fn evidence_storage_backend_config_from_pg_row(
+    row: PgRow,
+) -> Result<EvidenceStorageBackendConfig, sqlx::Error> {
+    Ok(EvidenceStorageBackendConfig {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        backend_id: row.try_get("backend_id")?,
+        backend_type: row.try_get("backend_type")?,
+        display_name: row.try_get("display_name")?,
+        status: row.try_get("status")?,
+        endpoint_reference: row.try_get("endpoint_reference")?,
+        region: row.try_get("region")?,
+        bucket_name: row.try_get("bucket_name")?,
+        key_prefix: row.try_get("key_prefix")?,
+        access_key_secret_ref: row.try_get("access_key_secret_ref")?,
+        secret_key_secret_ref: row.try_get("secret_key_secret_ref")?,
+        session_token_secret_ref: row.try_get("session_token_secret_ref")?,
+        tls_required: row.try_get("tls_required")?,
+        allow_path_style: row.try_get("allow_path_style")?,
+        allowed_endpoint_policy: row.try_get("allowed_endpoint_policy")?,
+        last_validation_at: row.try_get("last_validation_at")?,
+        last_validation_status: row.try_get("last_validation_status")?,
+        last_validation_error_class: row.try_get("last_validation_error_class")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+        known_limitations: row.try_get("known_limitations")?,
+    })
+}
+
+fn evidence_storage_backend_config_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<EvidenceStorageBackendConfig, sqlx::Error> {
+    Ok(EvidenceStorageBackendConfig {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        backend_id: row.try_get("backend_id")?,
+        backend_type: row.try_get("backend_type")?,
+        display_name: row.try_get("display_name")?,
+        status: row.try_get("status")?,
+        endpoint_reference: row.try_get("endpoint_reference")?,
+        region: row.try_get("region")?,
+        bucket_name: row.try_get("bucket_name")?,
+        key_prefix: row.try_get("key_prefix")?,
+        access_key_secret_ref: row.try_get("access_key_secret_ref")?,
+        secret_key_secret_ref: row.try_get("secret_key_secret_ref")?,
+        session_token_secret_ref: row.try_get("session_token_secret_ref")?,
+        tls_required: row.try_get("tls_required")?,
+        allow_path_style: row.try_get("allow_path_style")?,
+        allowed_endpoint_policy: row.try_get("allowed_endpoint_policy")?,
+        last_validation_at: row.try_get("last_validation_at")?,
+        last_validation_status: row.try_get("last_validation_status")?,
+        last_validation_error_class: row.try_get("last_validation_error_class")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+        known_limitations: row.try_get("known_limitations")?,
+    })
+}
+
+fn evidence_storage_secret_reference_status_from_pg_row(
+    row: PgRow,
+) -> Result<EvidenceStorageSecretReferenceStatus, sqlx::Error> {
+    Ok(EvidenceStorageSecretReferenceStatus {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        backend_id: row.try_get("backend_id")?,
+        secret_reference: row.try_get("secret_reference")?,
+        secret_ref_type: row.try_get("secret_ref_type")?,
+        presence_status: row.try_get("presence_status")?,
+        last_checked_at: row.try_get("last_checked_at")?,
+        last_check_error_class: row.try_get("last_check_error_class")?,
+        redacted_display_name: row.try_get("redacted_display_name")?,
+    })
+}
+
+fn evidence_storage_secret_reference_status_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<EvidenceStorageSecretReferenceStatus, sqlx::Error> {
+    Ok(EvidenceStorageSecretReferenceStatus {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        backend_id: row.try_get("backend_id")?,
+        secret_reference: row.try_get("secret_reference")?,
+        secret_ref_type: row.try_get("secret_ref_type")?,
+        presence_status: row.try_get("presence_status")?,
+        last_checked_at: row.try_get("last_checked_at")?,
+        last_check_error_class: row.try_get("last_check_error_class")?,
+        redacted_display_name: row.try_get("redacted_display_name")?,
+    })
+}
+
+fn evidence_object_reference_from_pg_row(
+    row: PgRow,
+) -> Result<EvidenceObjectReference, sqlx::Error> {
+    Ok(EvidenceObjectReference {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        evidence_id: row.try_get("evidence_id")?,
+        backend_id: row.try_get("backend_id")?,
+        backend_type: row.try_get("backend_type")?,
+        object_key_redacted: row.try_get("object_key_redacted")?,
+        object_key_sha256: row.try_get("object_key_sha256")?,
+        object_reference_status: row.try_get("object_reference_status")?,
+        expected_sha256: row.try_get("expected_sha256")?,
+        contract_status: row.try_get("contract_status")?,
+        contract_sha256: row.try_get("contract_sha256")?,
+        contract_size_bytes: row.try_get("contract_size_bytes")?,
+        last_drill_at: row.try_get("last_drill_at")?,
+        last_drill_status: row.try_get("last_drill_status")?,
+        last_drill_error_class: row.try_get("last_drill_error_class")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn evidence_object_reference_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<EvidenceObjectReference, sqlx::Error> {
+    Ok(EvidenceObjectReference {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        evidence_id: row.try_get("evidence_id")?,
+        backend_id: row.try_get("backend_id")?,
+        backend_type: row.try_get("backend_type")?,
+        object_key_redacted: row.try_get("object_key_redacted")?,
+        object_key_sha256: row.try_get("object_key_sha256")?,
+        object_reference_status: row.try_get("object_reference_status")?,
+        expected_sha256: row.try_get("expected_sha256")?,
+        contract_status: row.try_get("contract_status")?,
+        contract_sha256: row.try_get("contract_sha256")?,
+        contract_size_bytes: row.try_get("contract_size_bytes")?,
+        last_drill_at: row.try_get("last_drill_at")?,
+        last_drill_status: row.try_get("last_drill_status")?,
+        last_drill_error_class: row.try_get("last_drill_error_class")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn evidence_storage_backend_event_from_pg_row(
+    row: PgRow,
+) -> Result<EvidenceStorageBackendEvent, sqlx::Error> {
+    let detail_text: String = row.try_get("detail_json_text")?;
+    Ok(EvidenceStorageBackendEvent {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        backend_id: row.try_get("backend_id")?,
+        evidence_id: row.try_get("evidence_id")?,
+        event_type: row.try_get("event_type")?,
+        actor_id: row.try_get("actor_id")?,
+        status: row.try_get("status")?,
+        error_class: row.try_get("error_class")?,
+        summary: row.try_get("summary")?,
+        detail: parse_json_value(&detail_text),
+        created_at: row.try_get("created_at")?,
+    })
+}
+
+fn evidence_storage_backend_event_from_sqlite_row(
+    row: SqliteRow,
+) -> Result<EvidenceStorageBackendEvent, sqlx::Error> {
+    let detail_text: String = row.try_get("detail_json_text")?;
+    Ok(EvidenceStorageBackendEvent {
+        id: row.try_get("id")?,
+        tenant_id: row.try_get("tenant_id")?,
+        backend_id: row.try_get("backend_id")?,
+        evidence_id: row.try_get("evidence_id")?,
+        event_type: row.try_get("event_type")?,
+        actor_id: row.try_get("actor_id")?,
+        status: row.try_get("status")?,
+        error_class: row.try_get("error_class")?,
+        summary: row.try_get("summary")?,
+        detail: parse_json_value(&detail_text),
+        created_at: row.try_get("created_at")?,
+    })
 }
 
 fn evidence_integrity_item_from_pg_row(row: PgRow) -> Result<EvidenceIntegrityItem, sqlx::Error> {
