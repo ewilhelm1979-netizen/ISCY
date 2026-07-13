@@ -96,6 +96,22 @@ werden syntaktisch geprueft; Performance-Smoke und Zwei-Instanzen-Test decken
 Proxy-Requests, Sessions, S3-Evidence und Failover ab. Die Messwerte bleiben
 CI-Regressionsbudgets und sind keine Produktions-SLOs.
 
+## PostgreSQL-18-Kompatibilitaet
+
+Der PostgreSQL-16-HA- und Performancepfad bleibt unveraendert. Der zweite
+Schritt im bestehenden CI-Job `ha-integration` fuehrt getrennt
+`make postgresql-18-compatibility` aus. Er prueft PostgreSQL 18 nicht als
+Cluster oder neuen Standard, sondern als frische Zielinstanz fuer einen
+logischen PostgreSQL-16-zu-18-Forward-Restore.
+
+Die Testtopologie liegt unter `tests/postgresql/` und verwendet fuer PG16 und
+PG18 unterschiedliche Wegwerfvolumes sowie die versionsrichtigen Mountziele.
+Sie prueft Fresh Bootstrap, Restart, alle 39 Migrationen, den Advisory Lock,
+Health/Auth/Fachsmokes, Custom- und Betreiberbackup-Restore, dynamische
+Tabellen-/Inhalts-/Sequenz-/Constraint-Vergleiche und Media-Integritaet.
+Details und die Rollback-Grenze stehen in
+`docs/POSTGRESQL_18_COMPATIBILITY.md`.
+
 ## Visuelle Regression
 
 Playwright und Chromium stammen aus dem durch `flake.lock` gepinnten Nixpkgs-

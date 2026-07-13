@@ -281,6 +281,7 @@ Umgesetzt:
 - kurzer Performance-Smoke mit fester Parallelitaet, CI-Budgets sowie JSON-/Markdown-Bericht
 - Zwei-Instanzen-Topologie mit PostgreSQL 16, S3-kompatiblem MinIO und nginx 1.31
 - Cross-Instance-Schreiben/Lesen, Evidence-Upload/Verify und Failover in beide Richtungen
+- isolierter PostgreSQL-18-Kompatibilitaets- und PG16-zu-PG18-Forward-Restore-Test mit getrennten Volumes, dynamischem Datenintegritaetsvergleich, Anwendungssmoke und Migrationsrennen; PostgreSQL 16 bleibt Standard
 - Nix-/Playwright-basierte visuelle Regression fuer 17 Bereiche und zwei Viewports mit 34 bewusst versionierten Baselines
 - getrennte CI-Artefakte fuer Performance-Bericht und visuelle Abweichungen
 
@@ -297,10 +298,10 @@ Erfolgskriterium:
 1. Den vorbereiteten Release Candidate vollstaendig lokal und in GitHub-CI pruefen und danach menschlich fachlich, technisch und sicherheitsseitig reviewen.
 2. Den S3-Runtime-Client nach dieser Review in einer isolierten Betreiberumgebung pilotieren; Cloud-native Secret-Manager bleiben ein eigener spaeterer Adapter.
 3. Produktive Signierung und eine spaetere produktive CA-/PKI-Stufe erst nach Review des vorhandenen Artefakt-/Provenance- und PKI-/CSR-Governance-Modells angehen.
-4. Die getrennten Plattform-Upgrades einzeln migrieren und testen: nginx 1.31
-   ist abgeschlossen; die aktuelle Rust-Build-/Testspur wird auf 1.97 bei
-   unveraenderter MSRV 1.88 gehoben. nixpkgs 26.05 und PostgreSQL 18 bleiben
-   nachgelagerte, isolierte Wartungsbloecke.
+4. Die getrennten Plattform-Wartungsbloecke sind einzeln validiert: nginx 1.31,
+   Rust 1.97 bei unveraenderter MSRV 1.88, nixpkgs 26.05 und PostgreSQL 18 als
+   zusaetzlicher Kompatibilitaets-/Forward-Restore-Pfad. PostgreSQL 16 bleibt
+   bis zu einer gesonderten Betreiberfreigabe der Produktionsstandard.
 
 ## Verbleibende Roadmap
 

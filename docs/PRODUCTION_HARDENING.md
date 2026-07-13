@@ -93,6 +93,15 @@ nix develop --command make rust-postgres-restore-drill
 
 Der Drill initialisiert die Source-Datenbank mit Demo-Daten, erzeugt einen `pg_dump`, leert das Restore-Ziel, spielt den Dump ein und validiert anschliessend die Migrationstabelle.
 
+Der getrennte Kompatibilitaetstest `make postgresql-18-compatibility` validiert
+zusaetzlich einen logischen Forward-Restore von einer isolierten
+PostgreSQL-16-Quelle in eine frische PostgreSQL-18-Zielinstanz. PostgreSQL 16
+bleibt der Standard. Insbesondere darf das PG16-Volumeziel
+`/var/lib/postgresql/data` niemals durch PostgreSQL 18 geoeffnet werden; der
+PG18-Pfad mountet ein eigenes Volume auf `/var/lib/postgresql` und verwendet
+`/var/lib/postgresql/18/docker` als PGDATA. Betriebsablauf, Integritaetschecks
+und die Rollback-Grenze stehen in `docs/POSTGRESQL_18_COMPATIBILITY.md`.
+
 ## Evidence-Integritaet und Lifecycle
 
 Migration `0024_rust_evidence_lifecycle` persistiert fuer Evidence Items Version, Vorgaenger, SHA-256, Gueltigkeit, Aufbewahrungsdatum/-begruendung und Schutzklasse. Der Datei-Hash wird beim Upload serverseitig aus den empfangenen Bytes berechnet. Versionsvorgaenger werden tenantgebunden validiert; ein Vorgaenger darf nur einen direkten Nachfolger besitzen. Die Quality-Queue und Betriebszentrale melden abgelaufene, bald ablaufende und zur Retention-Pruefung faellige Nachweise.
@@ -210,7 +219,7 @@ sowie `cargo test --no-run` mit Rust 1.88 abgesichert.
 
 Der portable Release-Builder bleibt fuer den veroeffentlichten Stand bewusst
 auf dem bestehenden digest-gepinnten Rust-1.88-Bookworm-Image. Die Nix-
-Toolchain stammt weiterhin aus dem unveraenderten nixpkgs-25.11-Flake. Dieser
+Toolchain stammt weiterhin aus dem unveraenderten nixpkgs-26.05-Flake. Dieser
 Wartungsschritt aendert weder Cargo-Abhaengigkeiten noch Produktfunktionalitaet
 und veroeffentlicht kein Container- oder Release-Artefakt. Die Entscheidung
 ueber eine spaetere Release-Builder-Aktualisierung gehoert in die getrennte
