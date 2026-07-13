@@ -1,22 +1,40 @@
-# ISCY Release-Candidate-Checkliste
+# ISCY V23.7.29 Release-Checkliste
 
-Diese Checkliste beschreibt den vorbereiteten Stand fuer `V23.7.28-rc.1`.
+Diese Checkliste beschreibt den vorbereiteten stabilen Stand fuer `V23.7.29`.
 Sie ist ein technischer und fachlicher Review-Nachweis, keine Freigabe,
 Zertifizierung, Rechtsberatung oder Veroeffentlichung.
 
 ## Geprüfter Ausgangsstand
 
-- Basis: `origin/main` mit PR #48
-- Basis-Commit: `89922d489ebbf658c4383d88a23dc6607e36eaa1`
-- Letzte veröffentlichte Plattformversion: `V23.7.27`
-- Internes Rust-Paket: `0.3.22`, MSRV `1.88`
-- Vorgeschlagene Version: `V23.7.28-rc.1`
+- Basis: `origin/main` nach den Platform-Maintenance-PRs #56 bis #59
+- Basis-Commit: `97cebb48a6e0ef581fe5de35b7625c7cc368351e`
+- Vorgängerrelease: `V23.7.28-rc.1`
+- Zielversion: `V23.7.29`
+- Internes Rust-Paket: `0.3.22`
+- Rust-Haupttoolchain: `1.97.0`
+- MSRV und portabler Release-Builder: Rust `1.88`
+- Nix: `nixos-26.05`, Nix-Rust `1.95.0`
+- Datenbank: PostgreSQL 16 bleibt Standard; PostgreSQL 18.4 ist
+  kompatibilitaetsgeprueft
 - Migrationen: 39, fortlaufend `0001` bis `0039`
+- Visual Regression: 34 Baselines
 - Lizenz: `AGPL-3.0-only`
 
 Die vorgeschlagene Patch-Fortschreibung folgt der bestehenden
-projektspezifischen `V23.7.x`-Konvention. Der Suffix `-rc.1` macht deutlich,
-dass noch kein Tag und keine Veroeffentlichung vorliegen.
+projektspezifischen `V23.7.x`-Konvention. `V23.7.29` ist als stabiler
+Folgerelease vorbereitet; Tag und GitHub Release sind noch nicht erstellt.
+
+## Enthaltene Platform-Maintenance
+
+- nginx `1.31-alpine` in Stage, Production und HA-Testtopologie
+- Rust `1.97.0` fuer Build, Test, Clippy und Produktcontainer bei unveraenderter
+  MSRV `1.88`
+- nixpkgs `nixos-26.05` mit Nix-Rust `1.95.0`
+- PostgreSQL-18.4-Kompatibilitaetsgate und logischer Forward-Restore 16 nach 18
+- PostgreSQL 16 weiterhin als Standard mit unveraendertem Volumeziel
+- Release-Manifest-Schema 2 trennt Produkt-, MSRV-, portablen Release- und
+  Nix-Toolchainpfad sowie zehn CI-Pflichtabhaengigkeiten, Aggregationsjob und
+  drei CodeQL-Sprachpruefungen
 
 ## Release-Readiness-Matrix
 
@@ -24,7 +42,8 @@ dass noch kein Tag und keine Veroeffentlichung vorliegen.
 | --- | --- | --- |
 | Rust/Axum Backend und Weboberfläche | bereit | Locked Build, Clippy, Rust-/HTTP-Tests und Smoke-Pfade sind Pflicht. |
 | SQLite | bereit mit dokumentierter Einschränkung | Lokal und restartbar; kein Mehrinstanz-/HA-Pfad. |
-| PostgreSQL | Prüfung erforderlich | Leerdatenbank, Bestand, Dump/Restore und Migrations-Race muessen fuer den RC gruen sein. |
+| PostgreSQL 16 | Prüfung erforderlich | Standardpfad; Leerdatenbank, Bestand, Dump/Restore und Migrations-Race muessen gruen sein. |
+| PostgreSQL 18.4 | Prüfung erforderlich | Zusatzgate fuer frischen Bootstrap, Restart, 39 Migrationen und logischen 16-nach-18-Forward-Restore; noch kein Produktionsstandard. |
 | Lokale Evidence-Speicherung | bereit mit dokumentierter Einschränkung | Authentifiziert und canonical-path-geprueft; nicht HA-faehig. |
 | S3-kompatibler Evidence Storage | Prüfung erforderlich | MinIO-Lifecycle und HA-Cross-Instance-Pfad muessen gruen sein; keine Cloud-Credentials. |
 | Evidence Worker und Disposition | Prüfung erforderlich | Atomare Claims, Legal Hold, Approval, Tombstone und Wiederanlauf werden getestet. |
@@ -43,7 +62,7 @@ dass noch kein Tag und keine Veroeffentlichung vorliegen.
 | Dependency-/Supply-Chain-Prüfung | Prüfung erforderlich | cargo audit, cargo deny und CI muessen gruen sein. |
 
 `Prüfung erforderlich` bedeutet, dass die Funktion implementiert ist, der
-konkrete RC-Nachweis aber erst mit der vollstaendigen lokalen beziehungsweise
+konkrete Release-Nachweis aber erst mit der vollstaendigen lokalen beziehungsweise
 GitHub-CI-Ausfuehrung abgeschlossen wird.
 
 ## Security-Hardening-Befunde
@@ -86,7 +105,7 @@ Nach Release zeitnah prüfen:
   Fehlerklassifizierung wie Agent-, Evidence- und neue Governance-Stores
   vereinheitlicht werden.
 
-## Supply Chain und zurückgestellte Upgrades
+## Supply Chain
 
 - `Cargo.lock` ist verbindlich; direkte Git-Dependencies wurden nicht gefunden.
 - Die Advisory-Ausnahme `RUSTSEC-2023-0071` bleibt nur fuer den deaktivierten
@@ -97,8 +116,9 @@ Nach Release zeitnah prüfen:
   separates, einzeln getestetes Pinning ist nach dem RC erforderlich.
 - Mehrere Actions und Containerbasen sind major-/tag-, aber nicht commit-/
   digest-gepinnt. Dies bleibt ein transparenter separater Hardening-Punkt.
-- Die offenen Plattform-PRs #7, #27, #28 und #29 bleiben unveraendert und sind
-  keine Bestandteile dieses Release Candidates.
+- Die abgeschlossenen Maintenance-Bloecke fuer nginx, Rust, nixpkgs und die
+  PostgreSQL-18-Kompatibilitaet sind Bestandteil von `V23.7.29`. PostgreSQL 18
+  wird dadurch nicht zum Produktionsstandard.
 
 ## Reproduzierbarer Prüfpfad
 
@@ -118,7 +138,8 @@ Voraussetzungen brechen mit einer sicheren Fehlerklasse ab. Die GitHub-CI fuehrt
 Performance-, HA-, Visual- und hardened-Build-Pruefungen in bestehenden Jobs
 aus; `release-candidate-check` aggregiert deren Ergebnis und validiert danach
 Manifest, Checksums, Migrationen, Baselines, Referenzen und Sensitive-Data-
-Scan, ohne die Pipeline doppelt auszufuehren.
+Scan, ohne die Pipeline doppelt auszufuehren. Der HA-Job enthaelt zusaetzlich
+das PostgreSQL-18.4-Kompatibilitaets- und Forward-Restore-Gate.
 
 Der portable Binary-Pfad kann separat mit `make release-binary-gate` geprueft
 werden. Er baut das Backend zweimal cachefrei im digest-gepinnten
@@ -153,9 +174,10 @@ universelles Linux-Artefakt zu verstehen. `cargo-cyclonedx` stammt als reines Bu
 durch `flake.lock` gepinnten Nixpkgs-Stand. Der Generator entfernt die zufaellige
 Serialnummer, setzt den Timestamp auf den Basis-Commit und ersetzt den lokalen
 Root-Pfad durch einen stabilen Cargo-PURL. Zwei aufeinanderfolgende Laeufe
-muessen byteidentisch sein. Die SBOM ist ein Abhaengigkeitsinventar, keine
+muessen in getrennten temporaeren Verzeichnissen byteidentisch sein, bevor die
+SBOM uebernommen wird. Die SBOM ist ein Abhaengigkeitsinventar, keine
 Signatur, VEX-Entscheidung oder Sicherheitsfreigabe. Ein Release-VEX wird
-bewusst nicht erzeugt, weil fuer diesen Candidate keine separate, fachlich
+bewusst nicht erzeugt, weil fuer diesen Release keine separate, fachlich
 freigegebene Vulnerability-Assertion vorliegt.
 
 ## Bekannte Betriebsgrenzen
@@ -172,12 +194,13 @@ freigegebene Vulnerability-Assertion vorliegt.
 
 - [ ] Alle lokalen, in der Umgebung ausführbaren Pflichtprüfungen sind grün.
 - [ ] SQLite leer/restartbar und PostgreSQL leer/Bestand/Restore/Race sind grün.
+- [ ] PostgreSQL 18.4 und der logische Forward-Restore 16 nach 18 sind gruen.
 - [ ] MinIO-Lifecycle, Performance, HA und Visual Regression 34/34 sind grün.
 - [ ] Binary-Hygiene, sauberer Runtime-Container und zwei byteidentische
   portable Builds sind gruen.
 - [ ] Manifest, Checksums, Handbuch und Release Notes sind konsistent.
 - [ ] GitHub-CI einschließlich Aggregation ist vollständig grün.
-- [ ] CodeQL Default Setup `Analyze (rust)` und `Analyze (actions)` ist grün.
+- [ ] CodeQL Default Setup fuer Rust, Actions und JavaScript/TypeScript ist gruen.
 - [ ] Menschliche Security- und Betriebsreview ist erfolgt.
 - [ ] Erst danach darf separat über Ready-for-review, Merge, Tag und Release
   entschieden werden.

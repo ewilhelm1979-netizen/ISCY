@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LC_ALL=C
 
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
@@ -62,7 +63,7 @@ jq \
     --arg binary_sha256 "$binary_sha256" \
     '.source_commit = $source_commit
     | .source_date_epoch = $source_date_epoch
-    | .release_status = "release_candidate_prerelease"
+    | .release_status = "stable_release_prepared"
     | .release_artifact.binary_sha256 = $binary_sha256
     | .release_artifact.reproducibility_status = "verified_two_build_sha256"' \
     release/release-manifest.json >"$output_dir/release-manifest.json"
@@ -77,5 +78,62 @@ jq \
         release-manifest.json >SHA256SUMS
     sha256sum -c SHA256SUMS >/dev/null
 )
+
+mapfile -t bundle_entries < <(find "$output_dir" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+expected_entries=(
+    ISCY_Handbuch.pdf
+    RELEASE_NOTES.md
+    SHA256SUMS
+    iscy-backend
+    iscy-backend.cdx.json
+    release-manifest.json
+)
+[[ "${bundle_entries[*]}" == "${expected_entries[*]}" ]] \
+    || { echo 'RC_ARTIFACT_ERROR[contents]: Bundle muss exakt sechs erwartete Dateien enthalten.' >&2; exit 1; }
+for entry in "${bundle_entries[@]}"; do
+    path="$output_dir/$entry"
+    [[ -f "$path" && ! -L "$path" ]] \
+        || { echo 'RC_ARTIFACT_ERROR[file_type]: Bundle enthaelt keinen regulaeren Dateieintrag.' >&2; exit 1; }
+done
+
+jq -e \
+    --arg source_commit "$commit" \
+    --arg binary_sha256 "$binary_sha256" \
+    '.schema_version == 2
+    and .proposed_version == "V23.7.29"
+    and .release_status == "stable_release_prepared"
+    and .source_commit == $source_commit
+    and (.source_date_epoch | type == "number")
+    and .migration_count == 39
+    and .signature_status == "unsigned"
+    and .provenance_status == "prepared_unsigned"
+    and .release_artifact.binary_sha256 == $binary_sha256
+    and .release_artifact.reproducibility_status == "verified_two_build_sha256"' \
+    "$output_dir/release-manifest.json" >/dev/null \
+    || { echo 'RC_ARTIFACT_ERROR[manifest]: Bundle-Manifest ist inkonsistent.' >&2; exit 1; }
+jq -e '
+    .bomFormat == "CycloneDX"
+    and .specVersion == "1.5"
+    and (has("serialNumber") | not)
+    and (.components | length > 0)
+    and (.dependencies | length > 0)
+' "$output_dir/iscy-backend.cdx.json" >/dev/null \
+    || { echo 'RC_ARTIFACT_ERROR[sbom]: Bundle-SBOM ist ungueltig.' >&2; exit 1; }
+
+local_home='/home/'
+local_file_scheme='file://'
+nix_root='/nix/'
+github_root='/github/'
+regex_backslash=$'\\\\'
+local_path_pattern="${local_home}[A-Za-z0-9._-]+/|C:${regex_backslash}Users${regex_backslash}|${local_file_scheme}${local_home}|${nix_root}store/|${github_root}workspace/"
+if grep -aEq "$local_path_pattern" "$output_dir"/*; then
+    echo 'RC_ARTIFACT_ERROR[local_path]: Bundle enthaelt einen lokalen Buildpfad.' >&2
+    exit 1
+fi
+secret_pattern='-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}'
+if grep -aEq -e "$secret_pattern" "$output_dir"/*; then
+    echo 'RC_ARTIFACT_ERROR[secret]: Bundle enthaelt einen sensitiven Marker.' >&2
+    exit 1
+fi
 
 echo "RC_ARTIFACTS_OK: lokale, unsignierte Artefakte unter $output_dir erzeugt; keine Veroeffentlichung."
