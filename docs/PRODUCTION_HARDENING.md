@@ -186,10 +186,16 @@ Reihenfolge. SQLite ist weiterhin ausschliesslich fuer Single-Instance-Betrieb
 vorgesehen.
 
 Der technische Zwei-Instanzen-Test verwendet PostgreSQL 16, S3-kompatibles
-MinIO, zwei Backend-Instanzen und nginx 1.27. `local_filesystem` wird nicht als
+MinIO, zwei Backend-Instanzen und nginx 1.31. `local_filesystem` wird nicht als
 HA-faehig dargestellt. PostgreSQL, MinIO und nginx bleiben in dieser
 Testtopologie jeweils Single Points of Failure; Multi-Region-, Cluster- und
 SLA-Aussagen sind daraus nicht ableitbar.
+
+Die Stage-, Production- und HA-Pfade verwenden konsistent
+`nginx:1.31-alpine`. Die bestehende Proxy-Konfiguration wird mit `nginx -t`,
+Reverse-Proxy-Smoke, Upload-/Download-Pruefung und beidseitigem Failover
+validiert. Trusted-Proxy-, Forwarded-Header- und Evidence-Grenzen bleiben
+unveraendert; es wird kein Container-Image veroeffentlicht.
 
 Ausfuehrung und Grenzen sind in
 `docs/PERFORMANCE_HA_VISUAL_TESTING.md` dokumentiert.

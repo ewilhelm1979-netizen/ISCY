@@ -279,7 +279,7 @@ Umgesetzt:
 - PostgreSQL-Advisory-Lock gegen parallele Migrationsrennen; SQLite bleibt ausdruecklich Single-Instance
 - atomare tenantgebundene Claims fuer Evidence-Worker-Laeufe und S3-Disposition
 - kurzer Performance-Smoke mit fester Parallelitaet, CI-Budgets sowie JSON-/Markdown-Bericht
-- Zwei-Instanzen-Topologie mit PostgreSQL 16, S3-kompatiblem MinIO und nginx 1.27
+- Zwei-Instanzen-Topologie mit PostgreSQL 16, S3-kompatiblem MinIO und nginx 1.31
 - Cross-Instance-Schreiben/Lesen, Evidence-Upload/Verify und Failover in beide Richtungen
 - Nix-/Playwright-basierte visuelle Regression fuer 17 Bereiche und zwei Viewports mit 34 bewusst versionierten Baselines
 - getrennte CI-Artefakte fuer Performance-Bericht und visuelle Abweichungen
