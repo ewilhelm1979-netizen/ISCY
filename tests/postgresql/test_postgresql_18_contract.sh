@@ -82,6 +82,7 @@ jq --exit-status '
 grep -Fq 'pkgs.postgresql_16' "$ROOT_DIR/flake.nix"
 grep -Fq 'pg_get_serial_sequence(' "$RUNNER"
 grep -Fq 'c.contype::text' "$RUNNER"
+grep -Fq "c.contype <> 'n'" "$RUNNER"
 grep -Fq 'c.relkind::text' "$RUNNER"
 grep -Fq "run_backend_admin app-target postgres18 \"\$RACE_DB\" seed-demo" "$RUNNER"
 

@@ -59,6 +59,13 @@ ISCY-Migrationslauf aus und vergleicht dynamisch:
 - verwaiste Foreign Keys,
 - Tenant-, Rollen-, Risiko- und Evidence-Invarianten.
 
+Die Nullability wird versionsneutral ueber
+`information_schema.columns.is_nullable` verglichen. PostgreSQL 18 bildet
+`NOT NULL` zusaetzlich als eigenen `pg_constraint`-Typ `n` ab; diese
+doppelte, in PostgreSQL 16 nicht vorhandene Katalogdarstellung wird aus dem
+separaten Constraintvergleich ausgeschlossen. Primary-Key-, Unique-, Check-
+und Foreign-Key-Constraints bleiben vollstaendig im Vergleich.
+
 Ein zweiter Restore prueft die bestehende Betreiberbackup-Semantik mit
 komprimiertem SQL-Dump, Media-Archiv, Manifest und `SHA256SUMS`. Archivpfade,
 Symlinks und Hardlinks werden vor der Extraktion fail-closed geprueft. Ein
