@@ -1948,7 +1948,7 @@ fn product_list_postgres_sql() -> &'static str {
         product.includes_ai,
         product.ot_iacs_context,
         product.automotive_context,
-        product.support_window_months,
+        product.support_window_months::bigint AS support_window_months,
         (SELECT COUNT(*) FROM product_security_productrelease rel WHERE rel.product_id = product.id AND rel.tenant_id = product.tenant_id) AS release_count,
         (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id) AS component_count,
         (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id AND component.has_sbom = TRUE) AS sbom_component_count,
@@ -2018,7 +2018,7 @@ fn product_detail_postgres_sql() -> &'static str {
         product.includes_ai,
         product.ot_iacs_context,
         product.automotive_context,
-        product.support_window_months,
+        product.support_window_months::bigint AS support_window_months,
         (SELECT COUNT(*) FROM product_security_productrelease rel WHERE rel.product_id = product.id AND rel.tenant_id = product.tenant_id) AS release_count,
         (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id) AS component_count,
         (SELECT COUNT(*) FROM product_security_component component WHERE component.product_id = product.id AND component.tenant_id = product.tenant_id AND component.has_sbom = TRUE) AS sbom_component_count,
@@ -2581,14 +2581,14 @@ fn snapshot_list_postgres_sql() -> &'static str {
         snapshot.ai_act_applicable,
         snapshot.iec62443_applicable,
         snapshot.iso_sae_21434_applicable,
-        snapshot.cra_readiness_percent,
-        snapshot.ai_act_readiness_percent,
-        snapshot.iec62443_readiness_percent,
-        snapshot.iso_sae_21434_readiness_percent,
-        snapshot.threat_model_coverage_percent,
-        snapshot.psirt_readiness_percent,
-        snapshot.open_vulnerability_count,
-        snapshot.critical_vulnerability_count,
+        snapshot.cra_readiness_percent::bigint AS cra_readiness_percent,
+        snapshot.ai_act_readiness_percent::bigint AS ai_act_readiness_percent,
+        snapshot.iec62443_readiness_percent::bigint AS iec62443_readiness_percent,
+        snapshot.iso_sae_21434_readiness_percent::bigint AS iso_sae_21434_readiness_percent,
+        snapshot.threat_model_coverage_percent::bigint AS threat_model_coverage_percent,
+        snapshot.psirt_readiness_percent::bigint AS psirt_readiness_percent,
+        snapshot.open_vulnerability_count::bigint AS open_vulnerability_count,
+        snapshot.critical_vulnerability_count::bigint AS critical_vulnerability_count,
         snapshot.summary,
         snapshot.created_at::text AS created_at,
         snapshot.updated_at::text AS updated_at
@@ -2643,14 +2643,14 @@ fn snapshot_detail_postgres_sql() -> &'static str {
         snapshot.ai_act_applicable,
         snapshot.iec62443_applicable,
         snapshot.iso_sae_21434_applicable,
-        snapshot.cra_readiness_percent,
-        snapshot.ai_act_readiness_percent,
-        snapshot.iec62443_readiness_percent,
-        snapshot.iso_sae_21434_readiness_percent,
-        snapshot.threat_model_coverage_percent,
-        snapshot.psirt_readiness_percent,
-        snapshot.open_vulnerability_count,
-        snapshot.critical_vulnerability_count,
+        snapshot.cra_readiness_percent::bigint AS cra_readiness_percent,
+        snapshot.ai_act_readiness_percent::bigint AS ai_act_readiness_percent,
+        snapshot.iec62443_readiness_percent::bigint AS iec62443_readiness_percent,
+        snapshot.iso_sae_21434_readiness_percent::bigint AS iso_sae_21434_readiness_percent,
+        snapshot.threat_model_coverage_percent::bigint AS threat_model_coverage_percent,
+        snapshot.psirt_readiness_percent::bigint AS psirt_readiness_percent,
+        snapshot.open_vulnerability_count::bigint AS open_vulnerability_count,
+        snapshot.critical_vulnerability_count::bigint AS critical_vulnerability_count,
         snapshot.summary,
         snapshot.created_at::text AS created_at,
         snapshot.updated_at::text AS updated_at
@@ -8614,4 +8614,40 @@ fn parse_json_string_array(value: String) -> Vec<String> {
 
 fn parse_json_value(value: String) -> Value {
     serde_json::from_str::<Value>(&value).unwrap_or(Value::Object(Default::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        product_detail_postgres_sql, product_list_postgres_sql, snapshot_detail_postgres_sql,
+        snapshot_list_postgres_sql,
+    };
+
+    #[test]
+    fn postgres_product_support_window_matches_i64_model() {
+        for query in [product_list_postgres_sql(), product_detail_postgres_sql()] {
+            assert!(
+                query.contains("product.support_window_months::bigint AS support_window_months")
+            );
+        }
+    }
+
+    #[test]
+    fn postgres_snapshot_metrics_match_i64_model() {
+        let fields = [
+            "cra_readiness_percent",
+            "ai_act_readiness_percent",
+            "iec62443_readiness_percent",
+            "iso_sae_21434_readiness_percent",
+            "threat_model_coverage_percent",
+            "psirt_readiness_percent",
+            "open_vulnerability_count",
+            "critical_vulnerability_count",
+        ];
+        for query in [snapshot_list_postgres_sql(), snapshot_detail_postgres_sql()] {
+            for field in fields {
+                assert!(query.contains(&format!("snapshot.{field}::bigint AS {field}")));
+            }
+        }
+    }
 }

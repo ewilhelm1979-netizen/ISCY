@@ -5532,8 +5532,22 @@ async fn list_evidence_needs_postgres(
     session_id: Option<i64>,
     limit: i64,
 ) -> anyhow::Result<Vec<RequirementEvidenceNeedSummary>> {
-    let rows = sqlx::query(
-        r#"
+    let rows = sqlx::query(evidence_need_list_postgres_sql())
+        .bind(tenant_id)
+        .bind(session_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .context("PostgreSQL-Evidenzpflichten konnten nicht gelesen werden")?;
+
+    rows.into_iter()
+        .map(evidence_need_from_pg_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+fn evidence_need_list_postgres_sql() -> &'static str {
+    r#"
         SELECT
             need.id,
             need.tenant_id,
@@ -5552,7 +5566,7 @@ async fn list_evidence_needs_postgres(
             need.is_mandatory,
             need.status,
             need.rationale,
-            need.covered_count,
+            need.covered_count::bigint AS covered_count,
             need.created_at::text AS created_at,
             need.updated_at::text AS updated_at
         FROM evidence_requirementevidenceneed need
@@ -5566,19 +5580,7 @@ async fn list_evidence_needs_postgres(
           AND ($2::bigint IS NULL OR need.session_id = $2)
         ORDER BY need.status ASC, req.framework ASC, req.code ASC, need.id ASC
         LIMIT $3
-        "#,
-    )
-    .bind(tenant_id)
-    .bind(session_id)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .context("PostgreSQL-Evidenzpflichten konnten nicht gelesen werden")?;
-
-    rows.into_iter()
-        .map(evidence_need_from_pg_row)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(Into::into)
+        "#
 }
 
 async fn list_evidence_needs_sqlite(
@@ -6686,7 +6688,7 @@ fn evidence_need_status_label(value: &str) -> &'static str {
 mod tests {
     use super::{
         create_evidence_item_postgres_sql, evidence_integrity_item_postgres_sql,
-        evidence_item_detail_postgres_sql,
+        evidence_item_detail_postgres_sql, evidence_need_list_postgres_sql,
     };
 
     #[test]
@@ -6702,5 +6704,11 @@ mod tests {
         let integrity_query = evidence_integrity_item_postgres_sql("WHERE item.tenant_id = $1");
         assert!(integrity_query.contains("item.valid_until::text AS valid_until"));
         assert!(integrity_query.contains("item.retention_until::text AS retention_until"));
+    }
+
+    #[test]
+    fn postgres_evidence_need_count_matches_i64_model() {
+        assert!(evidence_need_list_postgres_sql()
+            .contains("need.covered_count::bigint AS covered_count"));
     }
 }

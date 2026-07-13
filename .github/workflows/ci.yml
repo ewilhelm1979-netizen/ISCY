@@ -158,12 +158,15 @@ jobs:
 
   ha-integration:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - name: Run two-instance failover and migration-race test
         run: |
           make ha-integration
+      - name: Validate PostgreSQL 18 compatibility and logical upgrade
+        run: |
+          make postgresql-18-compatibility
 
   visual-regression:
     runs-on: ubuntu-24.04
@@ -199,6 +202,8 @@ jobs:
           docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml config
           docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml config
           docker compose -f tests/resilience/docker-compose.ha.yml config
+          docker compose --env-file /dev/null -f tests/postgresql/docker-compose.pg18.yml config
+          make postgresql-18-contract-tests
       - name: Build hardened application image
         run: |
           docker build --file rust/iscy-backend/Dockerfile .

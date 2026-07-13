@@ -1,0 +1,91 @@
+name: iscy-postgresql-18-compatibility
+
+x-app-common: &app-common
+  image: ${ISCY_PG18_BACKEND_IMAGE:-iscy-postgresql18-test-backend:local}
+  build:
+    context: ../..
+    dockerfile: rust/iscy-backend/Dockerfile
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,nodev,size=64m
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  environment: &app-environment
+    RUST_BACKEND_BIND: 0.0.0.0:9000
+    ISCY_APP_MODE: development
+    ISCY_TRUST_PROXY_IDENTITY_HEADERS: "0"
+    ISCY_AGENT_NOTIFICATION_INTERVAL_SECONDS: "0"
+    ISCY_EVIDENCE_ALLOW_LOCAL_TEST_ENDPOINT: "true"
+    ISCY_SHUTDOWN_TIMEOUT_SECONDS: "20"
+  healthcheck:
+    test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9000/health/ready || exit 1"]
+    interval: 2s
+    timeout: 2s
+    retries: 45
+    start_period: 5s
+
+services:
+  postgres16:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: iscy_source
+      POSTGRES_USER: iscy_test
+      POSTGRES_PASSWORD: iscy_test_password
+    volumes:
+      - pg16-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iscy_test -d iscy_source"]
+      interval: 2s
+      timeout: 2s
+      retries: 45
+
+  postgres18:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: iscy_target
+      POSTGRES_USER: iscy_test
+      POSTGRES_PASSWORD: iscy_test_password
+      PGDATA: /var/lib/postgresql/18/docker
+    volumes:
+      - pg18-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iscy_test -d iscy_target"]
+      interval: 2s
+      timeout: 2s
+      retries: 45
+
+  app-source:
+    <<: *app-common
+    environment:
+      <<: *app-environment
+      DATABASE_URL: postgresql://iscy_test:iscy_test_password@postgres16:5432/iscy_source
+      ISCY_MEDIA_ROOT: /app/media
+    depends_on:
+      postgres16:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${ISCY_PG18_SOURCE_HTTP_PORT:-19181}:9000"
+    volumes:
+      - source-media:/app/media
+
+  app-target:
+    <<: *app-common
+    environment:
+      <<: *app-environment
+      DATABASE_URL: postgresql://iscy_test:iscy_test_password@postgres18:5432/iscy_target
+      ISCY_MEDIA_ROOT: /app/media
+    depends_on:
+      postgres18:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${ISCY_PG18_TARGET_HTTP_PORT:-19180}:9000"
+    volumes:
+      - target-media:/app/media
+
+volumes:
+  pg16-data:
+  pg18-data:
+  source-media:
+  target-media:
