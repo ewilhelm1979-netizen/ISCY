@@ -5352,16 +5352,16 @@
     },
     {
       "type": "library",
-      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#spin@0.9.8",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#spin@0.9.9",
       "author": "Mathijs van de Nes <git@mathijs.vd-nes.nl>, John Ericson <git@JohnEricson.me>, Joshua Barretto <joshua.s.barretto@gmail.com>",
       "name": "spin",
-      "version": "0.9.8",
+      "version": "0.9.9",
       "description": "Spin-based synchronization primitives",
       "scope": "required",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+          "content": "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
         }
       ],
       "licenses": [
@@ -5369,7 +5369,7 @@
           "expression": "MIT"
         }
       ],
-      "purl": "pkg:cargo/spin@0.9.8",
+      "purl": "pkg:cargo/spin@0.9.9",
       "externalReferences": [
         {
           "type": "vcs",
@@ -7773,7 +7773,7 @@
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#futures-core@0.3.32",
         "registry+https://github.com/rust-lang/crates.io-index#futures-sink@0.3.32",
-        "registry+https://github.com/rust-lang/crates.io-index#spin@0.9.8"
+        "registry+https://github.com/rust-lang/crates.io-index#spin@0.9.9"
       ]
     },
     {
@@ -8083,7 +8083,7 @@
     {
       "ref": "registry+https://github.com/rust-lang/crates.io-index#lazy_static@1.5.0",
       "dependsOn": [
-        "registry+https://github.com/rust-lang/crates.io-index#spin@0.9.8"
+        "registry+https://github.com/rust-lang/crates.io-index#spin@0.9.9"
       ]
     },
     {
@@ -8596,7 +8596,7 @@
       ]
     },
     {
-      "ref": "registry+https://github.com/rust-lang/crates.io-index#spin@0.9.8",
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#spin@0.9.9",
       "dependsOn": [
         "registry+https://github.com/rust-lang/crates.io-index#lock_api@0.4.14"
       ]

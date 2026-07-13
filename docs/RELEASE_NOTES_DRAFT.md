@@ -159,6 +159,9 @@ Konformitaetsentscheidung oder Rechtsberatung.
 - Session-Lesefehler geben keine SQL-, Tabellen- oder Store-Details aus.
 - Der bestehende Secret-, Tenant-, Evidence-, Object-Storage-, Worker- und
   Supply-Chain-Pruefpfad wird in einem zentralen RC-Check zusammengefuehrt.
+- Der Release-Blocker durch die zurueckgezogene transitive Rust-Abhaengigkeit
+  `spin 0.9.8` ist mit `spin 0.9.9` ohne `cargo-deny`-Ausnahme behoben;
+  MSRV-, Datenbank- und Release-Gates wurden erneut validiert.
 
 ## Datenbank und Upgrade
 

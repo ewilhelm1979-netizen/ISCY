@@ -15,6 +15,7 @@ The project uses release tags for immutable release points. Changes under **Unre
 - aktualisiert den reproduzierbaren Nix-Entwicklungspfad auf `nixos-26.05` mit Nix-Rust `1.95.0` und behaelt die getrennten Produkt-, MSRV- und portablen Release-Builder-Grenzen bei
 - ergaenzt einen isolierten PostgreSQL-18.4-Kompatibilitaets- und Forward-Restore-Nachweis mit PG18-Clientdump, dynamischem Datenintegritaetsvergleich, Restart, Anwendungssmoke und Migrationsrennen; PostgreSQL 16 und sein Volumeziel bleiben der unveraenderte Standard
 - korrigiert PostgreSQL-SELECTs durch explizite `bigint`-Casts fuer als Rust-`i64` dekodierte Integer-Ausdruecke, ohne Datenmodell, Tenantfilter, SQLite-Semantik oder API zu aendern
+- ersetzt die zurueckgezogene transitive Version `spin 0.9.8` durch die kleinste kompatible, nicht zurueckgezogene Aufloesung `spin 0.9.9`; Produkt- und Datenbanksemantik bleiben unveraendert
 
 ### Release preparation
 
