@@ -1,4 +1,4 @@
-FROM rust:1.88-bookworm AS builder
+FROM rust:1.97-bookworm AS builder
 WORKDIR /build/rust/iscy-backend
 
 COPY rust/iscy-backend/Cargo.toml rust/iscy-backend/Cargo.lock ./
@@ -7,7 +7,8 @@ COPY rust/iscy-backend/seeds ./seeds
 COPY deploy /build/deploy
 COPY flake.lock /build/flake.lock
 
-RUN cargo build --release --locked
+RUN test "$(rustc --version | cut -d ' ' -f 2)" = "1.97.0" \
+    && cargo build --release --locked
 
 FROM debian:bookworm-slim
 RUN apt-get update \

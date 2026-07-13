@@ -9,6 +9,7 @@ The project uses release tags for immutable release points. Changes under **Unre
 ### Platform maintenance
 
 - aktualisiert den nginx-Reverse-Proxy in Stage, Production und der isolierten HA-Testtopologie von `nginx:1.27-alpine` auf `nginx:1.31-alpine`, ohne Produkt-, API-, Datenbank- oder Berechtigungslogik zu aendern
+- aktualisiert die aktuelle CI-, Clippy-, Test- und Produkt-Build-Toolchain auf Rust `1.97.0`, behaelt die deklarierte MSRV und einen verpflichtenden Kompatibilitaetsjob auf Rust `1.88.0` bei und laesst den digest-gepinnten portablen Release-Builder unveraendert auf Rust 1.88
 
 ### Release candidate preparation
 
