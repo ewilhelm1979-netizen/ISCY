@@ -3,7 +3,7 @@
 << /Type /Catalog /Pages 2 0 R >>
 endobj
 2 0 obj
-<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R 40 0 R 42 0 R 44 0 R 46 0 R 48 0 R 50 0 R 52 0 R 54 0 R 56 0 R 58 0 R 60 0 R 62 0 R] /Count 30 >>
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R 40 0 R 42 0 R 44 0 R 46 0 R 48 0 R 50 0 R 52 0 R 54 0 R 56 0 R 58 0 R 60 0 R 62 0 R 64 0 R] /Count 31 >>
 endobj
 3 0 obj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
@@ -12,7 +12,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
 endobj
 5 0 obj
-<< /Length 3407 >>
+<< /Length 3419 >>
 stream
 BT
 /F1 9 Tf
@@ -22,7 +22,7 @@ BT
 T*
 () Tj
 T*
-(Version: Arbeitsstand Juni 2026 \(ISCY V23.7.26 / Rust 0.3.22\)) Tj
+(Version: Arbeitsstand Juli 2026 \(ISCY V23.7.29 vorbereitet / Rust 0.3.22\)) Tj
 T*
 () Tj
 T*
@@ -4251,7 +4251,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 59 0 R >>
 endobj
 59 0 obj
-<< /Length 4660 >>
+<< /Length 4645 >>
 stream
 BT
 /F1 9 Tf
@@ -4347,7 +4347,7 @@ T*
 T*
 (make ha-integration prueft zwei identische Backends mit gemeinsamem) Tj
 T*
-(PostgreSQL 16 und MinIO hinter nginx 1.27. Daten und Evidence werden ueber) Tj
+(PostgreSQL 16 und MinIO hinter nginx 1.31. Daten und Evidence werden ueber) Tj
 T*
 (unterschiedliche Instanzen geschrieben, gelesen und verifiziert. Danach wird) Tj
 T*
@@ -4381,11 +4381,11 @@ T*
 T*
 () Tj
 T*
-(6.18 Finales Hardening und Release-Candidate-Vorbereitung:) Tj
+(6.18 Finales Hardening und Release-Vorbereitung:) Tj
 T*
 () Tj
 T*
-(Der vorgeschlagene Stand V23.7.28-rc.1 fuehrt die vorhandenen Pflichtpruefungen) Tj
+(Der stabile Folgerelease V23.7.29 fuehrt die vorhandenen Pflichtpruefungen) Tj
 T*
 (in make release-candidate-check zusammen, ohne einen Tag, ein GitHub Release) Tj
 T*
@@ -4408,12 +4408,32 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 61 0 R >>
 endobj
 61 0 obj
-<< /Length 4300 >>
+<< /Length 4294 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+(Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,) Tj
+T*
+(Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV) Tj
+T*
+(und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust) Tj
+T*
+(1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem) Tj
+T*
+(Bootstrap, 39 Migrationen, Restart, Migrationsrennen und einem logischen) Tj
+T*
+(Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der) Tj
+T*
+(PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder) Tj
+T*
+(ein In-place-Upgrade noch ein automatisiertes pgupgrade oder einen) Tj
+T*
+(Rueckwaertsrestore nach PostgreSQL 16.) Tj
+T*
+() Tj
+T*
 (Der Hardening-Review schliesst einen Development-Kompatibilitaetspfad: Eine) Tj
 T*
 (Session nur aus tenantid und userid kann jetzt ausschliesslich im Modus) Tj
@@ -4460,7 +4480,7 @@ T*
 T*
 (Rechtsbewertung und Behoerdenmeldung bleiben ausdruecklich ausserhalb dieses) Tj
 T*
-(Release Candidates. Die vollstaendige Matrix und alle Betriebsgrenzen stehen) Tj
+(Release. Die vollstaendige Matrix und alle Betriebsgrenzen stehen) Tj
 T*
 (in docs/RELEASECANDIDATECHECKLIST.md.) Tj
 T*
@@ -4538,6 +4558,19 @@ T*
 T*
 (- Nachweise frueh sammeln) Tj
 T*
+ET
+endstream
+endobj
+62 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 63 0 R >>
+endobj
+63 0 obj
+<< /Length 5700 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- Risiken nicht technisch, sondern geschaeftlich formulieren) Tj
 T*
 (- Produkt- und Schwachstellenlogik nur dort aktivieren, wo sie wirklich gebraucht wird) Tj
@@ -4558,19 +4591,6 @@ T*
 T*
 (Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness) Tj
 T*
-ET
-endstream
-endobj
-62 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 63 0 R >>
-endobj
-63 0 obj
-<< /Length 5228 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete) Tj
 T*
 (Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte) Tj
@@ -4669,11 +4689,9 @@ T*
 T*
 (vorbereiteten Artefakt-/Provenance- und PKI-/CSR-Governance-Modells) Tj
 T*
-(4. Den vorbereiteten Release Candidate vollstaendig pruefen und danach die) Tj
+(4. Den vorbereiteten stabilen Release V23.7.29 vollstaendig pruefen und erst) Tj
 T*
-(getrennten Rust-, PostgreSQL-, nginx- und nixpkgs-Plattform-Upgrades einzeln) Tj
-T*
-(migrieren) Tj
+(in einem getrennten Auftrag ueber Tag und Veroeffentlichung entscheiden) Tj
 T*
 () Tj
 T*
@@ -4697,6 +4715,19 @@ T*
 T*
 (- versioniert werden kann) Tj
 T*
+ET
+endstream
+endobj
+64 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 65 0 R >>
+endobj
+65 0 obj
+<< /Length 245 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- mit dem Produkt mitwaechst) Tj
 T*
 (- in Pull Requests geprueft werden kann) Tj
@@ -4713,73 +4744,75 @@ ET
 endstream
 endobj
 xref
-0 64
+0 66
 0000000000 65535 f
 0000000009 00000 n
 0000000058 00000 n
-0000000317 00000 n
-0000000387 00000 n
-0000000513 00000 n
-0000003971 00000 n
-0000004097 00000 n
-0000006914 00000 n
-0000007040 00000 n
-0000009727 00000 n
-0000009855 00000 n
-0000011743 00000 n
-0000011871 00000 n
-0000014983 00000 n
-0000015111 00000 n
-0000019337 00000 n
-0000019465 00000 n
-0000022700 00000 n
-0000022828 00000 n
-0000027041 00000 n
-0000027169 00000 n
-0000031276 00000 n
-0000031404 00000 n
-0000033451 00000 n
-0000033579 00000 n
-0000038031 00000 n
-0000038159 00000 n
-0000042250 00000 n
-0000042378 00000 n
-0000047620 00000 n
-0000047748 00000 n
-0000050709 00000 n
-0000050837 00000 n
-0000055698 00000 n
-0000055826 00000 n
-0000060022 00000 n
-0000060150 00000 n
-0000065064 00000 n
-0000065192 00000 n
-0000069266 00000 n
-0000069394 00000 n
-0000072695 00000 n
-0000072823 00000 n
-0000076981 00000 n
-0000077109 00000 n
-0000081945 00000 n
-0000082073 00000 n
-0000086502 00000 n
-0000086630 00000 n
-0000090843 00000 n
-0000090971 00000 n
-0000095356 00000 n
-0000095484 00000 n
-0000099826 00000 n
-0000099954 00000 n
-0000104658 00000 n
-0000104786 00000 n
-0000109572 00000 n
-0000109700 00000 n
-0000114412 00000 n
-0000114540 00000 n
-0000118892 00000 n
-0000119020 00000 n
+0000000324 00000 n
+0000000394 00000 n
+0000000520 00000 n
+0000003990 00000 n
+0000004116 00000 n
+0000006933 00000 n
+0000007059 00000 n
+0000009746 00000 n
+0000009874 00000 n
+0000011762 00000 n
+0000011890 00000 n
+0000015002 00000 n
+0000015130 00000 n
+0000019356 00000 n
+0000019484 00000 n
+0000022719 00000 n
+0000022847 00000 n
+0000027060 00000 n
+0000027188 00000 n
+0000031295 00000 n
+0000031423 00000 n
+0000033470 00000 n
+0000033598 00000 n
+0000038050 00000 n
+0000038178 00000 n
+0000042269 00000 n
+0000042397 00000 n
+0000047639 00000 n
+0000047767 00000 n
+0000050728 00000 n
+0000050856 00000 n
+0000055717 00000 n
+0000055845 00000 n
+0000060041 00000 n
+0000060169 00000 n
+0000065083 00000 n
+0000065211 00000 n
+0000069285 00000 n
+0000069413 00000 n
+0000072714 00000 n
+0000072842 00000 n
+0000077000 00000 n
+0000077128 00000 n
+0000081964 00000 n
+0000082092 00000 n
+0000086521 00000 n
+0000086649 00000 n
+0000090862 00000 n
+0000090990 00000 n
+0000095375 00000 n
+0000095503 00000 n
+0000099845 00000 n
+0000099973 00000 n
+0000104677 00000 n
+0000104805 00000 n
+0000109591 00000 n
+0000109719 00000 n
+0000114416 00000 n
+0000114544 00000 n
+0000118890 00000 n
+0000119018 00000 n
+0000124770 00000 n
+0000124898 00000 n
 trailer
-<< /Size 64 /Root 1 0 R >>
+<< /Size 66 /Root 1 0 R >>
 startxref
-124300
+125194
 %%EOF

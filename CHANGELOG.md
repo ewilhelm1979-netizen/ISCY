@@ -6,20 +6,26 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+## V23.7.29 - 2026-07-13
+
 ### Platform maintenance
 
 - aktualisiert den nginx-Reverse-Proxy in Stage, Production und der isolierten HA-Testtopologie von `nginx:1.27-alpine` auf `nginx:1.31-alpine`, ohne Produkt-, API-, Datenbank- oder Berechtigungslogik zu aendern
 - aktualisiert die aktuelle CI-, Clippy-, Test- und Produkt-Build-Toolchain auf Rust `1.97.0`, behaelt die deklarierte MSRV und einen verpflichtenden Kompatibilitaetsjob auf Rust `1.88.0` bei und laesst den digest-gepinnten portablen Release-Builder unveraendert auf Rust 1.88
+- aktualisiert den reproduzierbaren Nix-Entwicklungspfad auf `nixos-26.05` mit Nix-Rust `1.95.0` und behaelt die getrennten Produkt-, MSRV- und portablen Release-Builder-Grenzen bei
 - ergaenzt einen isolierten PostgreSQL-18.4-Kompatibilitaets- und Forward-Restore-Nachweis mit PG18-Clientdump, dynamischem Datenintegritaetsvergleich, Restart, Anwendungssmoke und Migrationsrennen; PostgreSQL 16 und sein Volumeziel bleiben der unveraenderte Standard
+- korrigiert PostgreSQL-SELECTs durch explizite `bigint`-Casts fuer als Rust-`i64` dekodierte Integer-Ausdruecke, ohne Datenmodell, Tenantfilter, SQLite-Semantik oder API zu aendern
 
-### Release candidate preparation
+### Release preparation
 
-- prepares the proposed platform version `V23.7.28-rc.1` without creating a tag, GitHub Release, signature, or public artifact
+- prepares the stable platform version `V23.7.29` without creating a tag, GitHub Release, signature, or public artifact
 - adds a release-readiness matrix, German release-notes draft, machine-readable release manifest, tracked SHA-256 inputs, and a local unsigned artifact bundle
 - adds `make release-candidate-check` plus a lightweight CI aggregation job that requires all existing Rust, Nix, Object Storage, Performance, HA, Visual, Compose, and hardened-build jobs without duplicating the full pipeline
 - adds only pinned build/test clients for cargo-audit, cargo-deny, cargo-cyclonedx, Docker Compose, and PostgreSQL to the existing Nix development shell; no runtime or platform version is upgraded
 - prepares a reproducible CycloneDX 1.5 dependency SBOM with deterministic source timestamp and stable local-root PURL; it remains unsigned and unpublished
 - adds a value-redacting tracked-file sensitive-data scan and deterministic checks for 39 migrations, 34 visual baselines, screenshot references, manifest fields, and checksums
+
+## V23.7.28-rc.1 - 2026-07-12
 
 ### Added
 

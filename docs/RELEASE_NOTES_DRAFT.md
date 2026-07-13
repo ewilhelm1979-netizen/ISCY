@@ -1,6 +1,8 @@
-# ISCY V23.7.28-rc.1 - Release Notes
+# ISCY V23.7.29 – Release Notes
 
-Status: Release Candidate (Prerelease; nicht als Latest Release vorgesehen).
+Status: Stabiler Release vorbereitet; Tag und GitHub Release noch nicht erstellt.
+
+Vorgänger: `V23.7.28-rc.1`.
 
 ISCY bleibt eine selbst gehostete, local-first und datenschutzbewusste
 Open-Source-Plattform unter `AGPL-3.0-only`. Die beschriebenen Funktionen
@@ -9,11 +11,57 @@ Zertifizierung, Konformitaetsbewertung oder automatische Behoerdenmeldung.
 
 ## Überblick
 
-Der vorgeschlagene Release Candidate buendelt die seit `V23.7.27`
-implementierten Roadmap-Bloecke und einen abschliessenden Hardening-Pass. Im
-Mittelpunkt stehen tenantgebundene Governance-Verknuepfungen, kontrollierte
-Evidence-Lebenszyklen, Supplier/Product Security, Agent-Governance sowie
-reproduzierbare Performance-, Mehrinstanz- und UI-Regressionspruefungen.
+`V23.7.29` ist der stabile Folgerelease zu `V23.7.28-rc.1`. Er verbindet den
+bereits veroeffentlichten Funktionsstand mit kontrollierter Platform-
+Maintenance, Portabilitaetspruefungen und einer validierten PostgreSQL-
+Upgradevorbereitung. Die Plattform unterstuetzt regulatorische Arbeits- und
+Nachweisprozesse; sie liefert keine automatische Zertifizierung,
+Konformitaetsentscheidung oder Rechtsberatung.
+
+## nginx 1.31
+
+- Stage, Production und die isolierte HA-Testtopologie verwenden
+  `nginx:1.31-alpine`.
+- Proxy-, Trusted-Header-, Authentifizierungs-, Tenant- und Evidence-Grenzen
+  bleiben unveraendert.
+- Ohne einen vom Betreiber bereitgestellten Cluster bleibt nginx ein Single
+  Point of Failure; daraus folgt keine allgemeine HA-Zusage.
+
+## Rust 1.97 und MSRV
+
+- CI, Build, Test, Clippy und Produktcontainer verwenden Rust `1.97.0`.
+- Die deklarierte MSRV bleibt Rust `1.88.0` und wird durch einen verpflichtenden
+  CI-Job mit `cargo check --all-targets` und `cargo test --no-run` geprueft.
+- Der portable Release-Builder bleibt separat und digest-gepinnt auf Rust 1.88
+  mit Debian Bookworm. Produkt- und Release-Builder werden nicht automatisch
+  gleichgesetzt.
+
+## nixpkgs 26.05
+
+- Der Nix-Pfad verwendet `nixos-26.05`, Nix-Rust `1.95.0` und `pkgs.nixfmt`.
+- Playwright-, Chromium-, PDF- und Visual-Pfade wurden mit diesem Stand
+  geprueft; die Visual Regression umfasst 34/34 Baselines.
+
+## PostgreSQL 18
+
+- PostgreSQL 16 bleibt der Standard- und Produktionspfad.
+- PostgreSQL 18.4 ist als zusaetzlicher Kompatibilitaets- und Upgradezielpfad
+  geprueft. Das PG18-Volume wird auf `/var/lib/postgresql` gemountet; PGDATA
+  liegt bei `/var/lib/postgresql/18/docker`.
+- Der getestete Forward-Upgradepfad verwendet PostgreSQL-18-Clientwerkzeuge,
+  einen Custom-Format-Dump der PostgreSQL-16-Quelle, Restore in eine frische
+  PostgreSQL-18-Datenbank, `ANALYZE` und den ISCY-Migrationslauf.
+- Im Test wurden 110 Anwendungstabellen sowie Inhaltschecksummen, Sequenzen,
+  Indizes, Constraints und Foreign Keys verglichen.
+- Es gibt kein automatisches In-place-Upgrade, kein automatisiertes
+  `pg_upgrade` und keine Rueckwaertsrestore-Garantie von PostgreSQL 18 nach 16.
+
+## Datenbankkorrekturen
+
+- PostgreSQL-Abfragen casten zuvor als Rust-`i64` dekodierte `INTEGER`-
+  Ausdruecke explizit auf `bigint`.
+- Datenmodell, Tenantfilter, SQLite-Semantik und API-Vertraege bleiben
+  unveraendert.
 
 ## Governance und Compliance-Unterstuetzung
 
@@ -102,7 +150,7 @@ reproduzierbare Performance-, Mehrinstanz- und UI-Regressionspruefungen.
 - Das Binary zielt auf kompatible x86_64-glibc-Systeme; daraus folgt keine
   Aussage, dass es auf jeder Linux-Distribution oder Architektur laeuft.
 
-## Security-Hardening dieses Release Candidates
+## Security-Hardening
 
 - Passwortlose `tenant_id`-/`user_id`-Sessionerzeugung ist auf den expliziten
   Development-Kompatibilitaetspfad beschraenkt.
@@ -122,6 +170,9 @@ reproduzierbare Performance-, Mehrinstanz- und UI-Regressionspruefungen.
   Instanz inklusive Restore-, Migration- und Rollback-Verfahren geprueft werden.
 - SQLite bleibt ein lokaler Single-Instance-Pfad. Mehrinstanzbetrieb setzt
   PostgreSQL und gemeinsam erreichbaren S3-kompatiblen Evidence Storage voraus.
+- PostgreSQL 16 bleibt Standard. Der PostgreSQL-18.4-Nachweis prueft frischen
+  Bootstrap, Restart, 39 Migrationen, zweiten idempotenten Migrationslauf,
+  Migrationsrennen und den logischen Forward-Restore von Version 16 nach 18.
 
 ## Betriebsanforderungen
 
@@ -146,18 +197,17 @@ reproduzierbare Performance-, Mehrinstanz- und UI-Regressionspruefungen.
 - Monitoring-Beispielimages sowie mehrere GitHub Actions sind noch nicht durch
   immutable Digests beziehungsweise Commit-SHAs gepinnt.
 - Eine reproduzierbare CycloneDX-1.5-SBOM ist vorbereitet. Eine
-  kryptografische Release-Signatur ist fuer diesen Candidate nicht
+  kryptografische Release-Signatur ist fuer diesen Release nicht
   konfiguriert; SBOM, Cargo.lock, Checksums und Provenance-Status werden
   transparent ausgewiesen.
-- Die separaten Upgrade-Bloecke fuer Rust-Toolchain, PostgreSQL 18, nginx und
-  nixpkgs sind bewusst nicht enthalten.
 
 ## Versionsstatus
 
-- Letzte veröffentlichte Plattformversion: `V23.7.27`
-- Release Candidate: `V23.7.28-rc.1`
+- Vorgänger: `V23.7.28-rc.1`
+- Ziel: `V23.7.29`
 - Internes Rust-Paket: `0.3.22`
-- Git-Tag: `V23.7.28-rc.1`
-- GitHub-Release-Typ: Prerelease, nicht als Latest Release markiert
-- SBOM: CycloneDX 1.5, als Release-Asset beigefuegt
+- Geplanter Git-Tag: `V23.7.29`; noch nicht erstellt
+- Geplanter GitHub-Release-Typ: Stable und Latest; noch nicht veroeffentlicht
+- Vorbereitungsstatus: `prepared_not_published`
+- SBOM: CycloneDX 1.5
 - Signatur: `unsigned`

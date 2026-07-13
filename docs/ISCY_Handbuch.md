@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juni 2026 (ISCY V23.7.26 / Rust 0.3.22)
+Version: Arbeitsstand Juli 2026 (ISCY V23.7.29 vorbereitet / Rust 0.3.22)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -1703,7 +1703,7 @@ Fehlerrate. Die grosszuegigen Grenzen sind CI-Regressionsbudgets und keine
 Produktions-SLOs.
 
 `make ha-integration` prueft zwei identische Backends mit gemeinsamem
-PostgreSQL 16 und MinIO hinter nginx 1.27. Daten und Evidence werden ueber
+PostgreSQL 16 und MinIO hinter nginx 1.31. Daten und Evidence werden ueber
 unterschiedliche Instanzen geschrieben, gelesen und verifiziert. Danach wird
 Failover in beide Richtungen sowie ein paralleler Migrationsstart geprueft.
 Lokaler Dateispeicher und SQLite werden nicht als HA-faehig dargestellt.
@@ -1720,15 +1720,25 @@ PostgreSQL, MinIO und nginx sind in der Testtopologie selbst jeweils
 Einzelinstanzen. ISCY behauptet damit weder Multi-Region-HA noch beliebige
 Skalierbarkeit, SLA-Erfuellung, Zertifizierung oder Rechtskonformitaet.
 
-### 6.18 Finales Hardening und Release-Candidate-Vorbereitung
+### 6.18 Finales Hardening und Release-Vorbereitung
 
-Der vorgeschlagene Stand `V23.7.28-rc.1` fuehrt die vorhandenen Pflichtpruefungen
+Der stabile Folgerelease `V23.7.29` fuehrt die vorhandenen Pflichtpruefungen
 in `make release-candidate-check` zusammen, ohne einen Tag, ein GitHub Release
 oder eine oeffentliche Veroeffentlichung zu erzeugen. GitHub-CI behaelt die
 getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und Docker-Jobs und
 aggregiert deren Ergebnis erst am Ende. Lokal erzeugte RC-Artefakte bleiben
 unter `artifacts/release-candidate/`, sind unsigniert und werden nicht
 hochgeladen.
+
+Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
+Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
+und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust
+1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem
+Bootstrap, 39 Migrationen, Restart, Migrationsrennen und einem logischen
+Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der
+PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder
+ein In-place-Upgrade noch ein automatisiertes `pg_upgrade` oder einen
+Rueckwaertsrestore nach PostgreSQL 16.
 
 Der Hardening-Review schliesst einen Development-Kompatibilitaetspfad: Eine
 Session nur aus `tenant_id` und `user_id` kann jetzt ausschliesslich im Modus
@@ -1753,7 +1763,7 @@ vorgetaeuscht; `Cargo.lock`, SBOM, Manifest und Checksums bilden die
 vorbereiteten Provenance-Eingaben. Produktive Agent-Paketsignierung, CA-Ausstellung,
 Cloud-native Secret-Manager, Multi-Region-HA, automatische Zertifizierung,
 Rechtsbewertung und Behoerdenmeldung bleiben ausdruecklich ausserhalb dieses
-Release Candidates. Die vollstaendige Matrix und alle Betriebsgrenzen stehen
+Release. Die vollstaendige Matrix und alle Betriebsgrenzen stehen
 in `docs/RELEASE_CANDIDATE_CHECKLIST.md`.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
@@ -1803,9 +1813,8 @@ Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 1. Supplier/Product-Security-Workflow fachlich weiter polishen, z. B. feinere Import-Vorbereitung fuer Hersteller-Advisorys, Contract-/Exit-Reifegrade und Review-Pack-Gliederung
 2. Den S3-kompatiblen Evidence-Storage nach menschlicher Security-Review in einer isolierten Betreiberumgebung mit produktiven Endpoint-, Secret-Root- und Restore-Vorgaben pilotieren
 3. Produktive Agent-Paketsignierung und eine spaetere produktive CA-/PKI-Stufe auf Basis des vorbereiteten Artefakt-/Provenance- und PKI-/CSR-Governance-Modells
-4. Den vorbereiteten Release Candidate vollstaendig pruefen und danach die
-   getrennten Rust-, PostgreSQL-, nginx- und nixpkgs-Plattform-Upgrades einzeln
-   migrieren
+4. Den vorbereiteten stabilen Release `V23.7.29` vollstaendig pruefen und erst
+   in einem getrennten Auftrag ueber Tag und Veroeffentlichung entscheiden
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 
