@@ -209,8 +209,8 @@ und wird in der verpflichtenden CI-Aggregation durch `cargo check --all-targets`
 sowie `cargo test --no-run` mit Rust 1.88 abgesichert.
 
 Der portable Release-Builder bleibt fuer den veroeffentlichten Stand bewusst
-auf dem bestehenden digest-gepinnten Rust-1.88-Bookworm-Image. Die lokale Nix-
-Development-Shell verwendet den separat gepinnten nixpkgs-26.05-Flake. Dieser
+auf dem bestehenden digest-gepinnten Rust-1.88-Bookworm-Image. Die Nix-
+Toolchain stammt weiterhin aus dem unveraenderten nixpkgs-25.11-Flake. Dieser
 Wartungsschritt aendert weder Cargo-Abhaengigkeiten noch Produktfunktionalitaet
 und veroeffentlicht kein Container- oder Release-Artefakt. Die Entscheidung
 ueber eine spaetere Release-Builder-Aktualisierung gehoert in die getrennte
