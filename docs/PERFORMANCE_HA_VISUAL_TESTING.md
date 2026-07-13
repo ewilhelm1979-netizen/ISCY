@@ -73,7 +73,7 @@ sind CI-Regressionsbudgets und keine Produktions-SLOs.
 - PostgreSQL 16
 - das bereits gepinnte MinIO und `mc`
 - Backend A und B aus demselben hardened Image
-- nginx 1.27 mit zwei Upstreams
+- nginx 1.31 mit zwei Upstreams
 - ausschliesslich Dummy-Credentials und Loopback-veroeffentlichte Testports
 
 Der Test schreibt ueber A und liest ueber B, laedt Evidence ueber A in MinIO,
@@ -89,6 +89,12 @@ Migrationen hinterlassen; beide Aufrufe muessen erfolgreich enden.
 Der Test belegt nur den geprueften Anwendungsbetrieb mit gemeinsamem PostgreSQL
 und S3-kompatiblem Storage. Er belegt keine PostgreSQL-, MinIO- oder nginx-HA,
 keine Multi-Region-Architektur und keine automatische horizontale Skalierung.
+
+Der nginx-1.31-Pfad nutzt unveraendert die bestehenden Proxy-, Header- und
+Timeout-Grenzen. Die wirksamen Stage-, Production- und HA-Konfigurationen
+werden syntaktisch geprueft; Performance-Smoke und Zwei-Instanzen-Test decken
+Proxy-Requests, Sessions, S3-Evidence und Failover ab. Die Messwerte bleiben
+CI-Regressionsbudgets und sind keine Produktions-SLOs.
 
 ## Visuelle Regression
 

@@ -6,6 +6,10 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Platform maintenance
+
+- aktualisiert den nginx-Reverse-Proxy in Stage, Production und der isolierten HA-Testtopologie von `nginx:1.27-alpine` auf `nginx:1.31-alpine`, ohne Produkt-, API-, Datenbank- oder Berechtigungslogik zu aendern
+
 ### Release candidate preparation
 
 - prepares the proposed platform version `V23.7.28-rc.1` without creating a tag, GitHub Release, signature, or public artifact
@@ -19,7 +23,7 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 - ergaenzt getrennte Liveness-, Readiness- und Startup-Systempruefungen mit sicherer DB-/Migrationsklassifizierung, nicht sensitiver Runtime-ID und begrenztem Graceful Shutdown
 - ergaenzt einen kurzen PostgreSQL-/MinIO-Performance-Smoke mit fester Parallelitaet, grosszuegigen CI-Regressionsbudgets sowie JSON-/Markdown-Artefakten fuer p50, p95, p99, Maximum und Fehlerrate
-- ergaenzt einen isolierten Zwei-Instanzen-Test mit PostgreSQL 16, MinIO, Backend A/B, nginx-1.27-Proxy, Cross-Instance-S3-Read/Verify, beidseitigem Failover und parallelem Migrationsstart
+- ergaenzt einen isolierten Zwei-Instanzen-Test mit PostgreSQL 16, MinIO, Backend A/B, nginx-1.31-Proxy, Cross-Instance-S3-Read/Verify, beidseitigem Failover und parallelem Migrationsstart
 - ergaenzt 34 Nix-/Playwright-Baselines fuer 17 zentrale Webbereiche bei 1440 x 1200 und 1024 x 900 mit Pixel-Diff, Overflow-/Clipping-/Secret-Pruefung und CI-Diff-Artefakten
 - dokumentiert Performance-, HA-, Worker-/Side-Effect-, Shutdown- und Visual-Regression-Grenzen ohne SLA-, Multi-Region- oder allgemeine Hochverfuegbarkeitsaussage
 - ergaenzt den echten S3-kompatiblen Evidence-Storage-Runtime-Client ueber additive Migration `0039_rust_evidence_s3_runtime_client` mit tenantgebundenen opaque Object-IDs, Upload-/Verify-/Orphan-/Delete-Status und Tombstone-Nachweis
