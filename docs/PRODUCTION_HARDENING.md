@@ -200,6 +200,22 @@ unveraendert; es wird kein Container-Image veroeffentlicht.
 Ausfuehrung und Grenzen sind in
 `docs/PERFORMANCE_HA_VISUAL_TESTING.md` dokumentiert.
 
+## Rust-Toolchain-Pfade
+
+Die aktuelle CI-, Clippy-, Test- und Produkt-Build-Spur verwendet exakt Rust
+`1.97.0`. Der gehärtete Produkt-Builder prueft die Compiler-Version vor dem
+Locked Release-Build fail-closed. Die deklarierte MSRV bleibt Rust `1.88.0`
+und wird in der verpflichtenden CI-Aggregation durch `cargo check --all-targets`
+sowie `cargo test --no-run` mit Rust 1.88 abgesichert.
+
+Der portable Release-Builder bleibt fuer den veroeffentlichten Stand bewusst
+auf dem bestehenden digest-gepinnten Rust-1.88-Bookworm-Image. Die Nix-
+Toolchain stammt weiterhin aus dem unveraenderten nixpkgs-25.11-Flake. Dieser
+Wartungsschritt aendert weder Cargo-Abhaengigkeiten noch Produktfunktionalitaet
+und veroeffentlicht kein Container- oder Release-Artefakt. Die Entscheidung
+ueber eine spaetere Release-Builder-Aktualisierung gehoert in die getrennte
+Release-Vorbereitung fuer `V23.7.29`.
+
 ## Release-Candidate-Prüfung
 
 `make release-candidate-check` fasst die lokale Pflichtmatrix zusammen und
