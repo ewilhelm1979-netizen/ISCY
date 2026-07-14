@@ -50,7 +50,7 @@ make graceful-shutdown-smoke
 make object-storage-integration
 make performance-smoke
 make ha-integration
-make postgresql-18-compatibility
+./scripts/run_postgresql_18_compatibility_isolated.sh
 make visual-regression
 nix flake check
 COMPOSE_ENV_FILE=.env.example make docker-check
