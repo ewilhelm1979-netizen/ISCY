@@ -32,6 +32,7 @@ fi
 if [[ "${ISCY_SKIP_RELEASE_REGRESSION_TESTS:-false}" != 'true' ]]; then
     ./tests/release/test_release_notes_completeness.sh
     ./tests/release/test_release_candidate_metadata.sh
+    ./tests/release/test_pg18_release_environment_isolation.sh
 fi
 
 jq -e '
