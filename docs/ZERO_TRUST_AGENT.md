@@ -72,6 +72,26 @@ POST /api/v1/agents/pki/certificates/{certificate_id}/rotation-required
 POST /api/v1/agents/pki/certificates/{certificate_id}/revocation-request
 GET  /api/v1/agents/{agent_id}/pki
 GET  /api/v1/agents/onboarding/pki
+GET  /api/v1/agents/rollouts
+POST /api/v1/agents/rollouts
+GET   /api/v1/agents/rollouts/{rollout_id}
+PATCH /api/v1/agents/rollouts/{rollout_id}
+POST /api/v1/agents/rollouts/{rollout_id}/target-preview
+GET  /api/v1/agents/rollouts/{rollout_id}/targets
+POST /api/v1/agents/rollouts/{rollout_id}/targets
+POST /api/v1/agents/rollouts/{rollout_id}/validate
+POST /api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/preflight
+POST /api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/start
+POST /api/v1/agents/rollouts/{rollout_id}/targets/{target_id}/deployment-result
+POST /api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/postflight
+POST /api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/evaluate
+POST /api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/promote
+POST /api/v1/agents/rollouts/{rollout_id}/pause
+POST /api/v1/agents/rollouts/{rollout_id}/resume
+POST /api/v1/agents/rollouts/{rollout_id}/abort
+POST /api/v1/agents/rollouts/{rollout_id}/rollback
+POST /api/v1/agents/rollouts/{rollout_id}/rollback/complete
+GET  /api/v1/agents/rollouts/{rollout_id}/events
 ```
 
 Admin-/Demo-Headers:
@@ -324,6 +344,38 @@ Redirects werden nicht verfolgt. Der Hintergrundworker wertet standardmaessig
 alle 300 Sekunden aus. `ISCY_AGENT_NOTIFICATION_INTERVAL_SECONDS=0` deaktiviert
 ihn, andere positive Werte werden auf mindestens 60 Sekunden begrenzt.
 
+## Agent Rollout 2.0 - Phase 1
+
+Migration `0040_rust_agent_rollout_governance` ergaenzt eine tenantgebundene
+Rollout-Control-Plane fuer bereits registrierte Agent Devices. Jeder Plan
+enthaelt genau die serverseitig definierten Ringe Lab, Canary, Pilot,
+Production und Critical in dieser Reihenfolge. Targets werden aus vorhandenen
+Devices vorgeschlagen und danach explizit einem Ring zugewiesen; die Vorschau
+persistiert nichts und ist auf 500 Ergebnisse begrenzt.
+
+Der kontrollierte Ablauf besteht aus Preflight, organisatorischer Freigabe des
+Ringstarts, externer Verteilung, dokumentiertem Deployment-Ergebnis,
+Postflight, Beobachtungszeit und Gate-Evaluierung. Ein bestandener Ring wird
+nicht automatisch weitergeschaltet: Nur Admins koennen die naechste Stufe nach
+erneuter Pruefung und expliziter Bestaetigung freigeben. Pause, Resume, Abbruch,
+Rollback-Anforderung und Rollback-Abschluss sind serverseitig validierte,
+auditierte Statuswechsel. Rollback bleibt ein operatorgefuehrter Prozess.
+
+Admin-Rollen steuern Plan, Targets, Ringstart, Promotion und Rollback. Die
+vorhandene Schreibrolle darf Preflight/Postflight ausloesen und sichere externe
+Ergebnisse dokumentieren; Read-only-Rollen koennen die Fallakte lesen. Jede
+Abfrage ist tenantgebunden. Fremde Rollout-, Device-, Policy-, Artefakt- oder
+Owner-IDs werden ohne Fremddaten offenzulegen abgewiesen. Management-Reviews
+frieren nur sichere Rollout-Aggregate ein; Operations und Prometheus verwenden
+keine Tenantnamen oder hochkardinalen Labels.
+
+Die Oberflaeche liegt unter `/zero-trust/rollouts/`. ISCY installiert oder
+deinstalliert keine Software, sendet keine Befehle an Agenten, uebertraegt
+keine Pakete und fuehrt keinen technischen Rollback aus. Phase 1 enthaelt
+keine Wazuh-Anbindung, IOC-/Behavioral Detection, automatisches Threat
+Modeling oder automatische Promotion. Sie garantiert weder fehlerfreie
+produktive Rollouts noch eine Produktions-SLO.
+
 ## Windows-Agent
 
 Der Windows-Agent ist kein eigener Python-Zweig, sondern dasselbe Rust-Binary `iscy-agent`. Der Quellcode ist bereits im Repository enthalten. Ein `.exe` wird auf Windows so gebaut:
@@ -445,7 +497,7 @@ Remediation sollte erst als eigener, policy-signierter und auditierbarer Schritt
 
 ## Plattform-Integration
 
-Die Migrationen `0007_rust_zero_trust_agent_core`, `0008_rust_agent_enrollment_hardening`, `0025_rust_agent_fleet_governance` und `0028_rust_guided_agent_onboarding` fuegen hinzu:
+Die Migrationen `0007_rust_zero_trust_agent_core`, `0008_rust_agent_enrollment_hardening`, `0025_rust_agent_fleet_governance`, `0028_rust_guided_agent_onboarding` und `0040_rust_agent_rollout_governance` fuegen hinzu:
 
 - `zero_trust_agent_device`
 - `zero_trust_agent_heartbeat`
@@ -456,6 +508,11 @@ Die Migrationen `0007_rust_zero_trust_agent_core`, `0008_rust_agent_enrollment_h
 - `zero_trust_agent_notification_channel`
 - `zero_trust_agent_notification_delivery`
 - `zero_trust_agent_enrollment_audit`
+- `zero_trust_agent_rollout`
+- `zero_trust_agent_rollout_ring`
+- `zero_trust_agent_rollout_target`
+- `zero_trust_agent_rollout_check`
+- `zero_trust_agent_rollout_event`
 
 Die Webansicht ist unter `/zero-trust/` verfuegbar.
 
@@ -467,6 +524,7 @@ zusaetzlich:
 - kritische und hohe offene Agent-Findings
 - Policy-Konformitaet und erwartete Coverage ueber alle konfigurierten Scopes
 - aktivierte Notification-Kanaele und fehlende Secret-Konfiguration
+- aktive oder pausierte Rollouts, Rollback-Pflichten, blockierte Ringe und fehlgeschlagene Targets
 
 ## Agent-PKI, CSR und mTLS-Governance
 

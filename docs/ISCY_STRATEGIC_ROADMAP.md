@@ -250,6 +250,10 @@ Umgesetzt:
 - sichere Agent-PKI-APIs fuer Provider, CSR-Review, Zertifikatsstatus, agentbezogene PKI-Uebersicht und Onboarding-PKI-Status
 - Zero-Trust-Webansicht und Onboarding-Assistent zeigen PKI-/CSR-/mTLS-Governance als Metadata-only-Betriebscheck ohne produktive CA-Ausstellung
 - Management-/Regulatory-Review-Pakete nehmen Agent-PKI-, CSR-, Zertifikats-, mTLS-, Rotations- und Widerruf-Gaps als Governance-Signale auf
+- additive Migration `0040_rust_agent_rollout_governance` fuer tenantgebundene Rollout-Plaene, die festen Ringe Lab, Canary, Pilot, Production und Critical, Targets, Checks und Audit-Events
+- serverseitige Preflight-/Postflight-Gates, Observation, explizite menschliche Promotion, Pause/Resume, Abbruch und operatorgefuehrte Rollback-Dokumentation
+- Rollout-Uebersicht und -Detailakte unter `/zero-trust/rollouts/` sowie eingefrorene Management-Review-Aggregate und niedrig-kardinale Operations-Signale
+- klare Betriebsgrenze ohne Remote-Installation, Agent-Befehle, automatische Softwareverteilung, automatische Promotion oder technische Rollback-Ausfuehrung
 
 Offen:
 
@@ -282,7 +286,7 @@ Umgesetzt:
 - Zwei-Instanzen-Topologie mit PostgreSQL 16, S3-kompatiblem MinIO und nginx 1.31
 - Cross-Instance-Schreiben/Lesen, Evidence-Upload/Verify und Failover in beide Richtungen
 - isolierter PostgreSQL-18-Kompatibilitaets- und PG16-zu-PG18-Forward-Restore-Test mit getrennten Volumes, dynamischem Datenintegritaetsvergleich, Anwendungssmoke und Migrationsrennen; PostgreSQL 16 bleibt Standard
-- Nix-/Playwright-basierte visuelle Regression fuer 17 Bereiche und zwei Viewports mit 34 bewusst versionierten Baselines
+- Nix-/Playwright-basierte visuelle Regression fuer 18 Bereiche und zwei Viewports mit 36 bewusst versionierten Baselines
 - getrennte CI-Artefakte fuer Performance-Bericht und visuelle Abweichungen
 
 Bewusste Grenze:
@@ -317,12 +321,13 @@ Erfolgskriterium:
 | Implementiert / Veroeffentlichung ausstehend | Supplier/Product-Security-Deepening | Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs sind tenantgebunden verbunden. |
 | Implementiert / Veroeffentlichung ausstehend | Agent-Artefakte und Release-Provenance | Vorhandene Agent-Deployment-Artefakte sind als Manifest mit SHA-256, Signaturstatus, Provenance und Review-Pack-Gaps sichtbar; echte Produktionssignaturen bleiben ein separater Security-Meilenstein. |
 | Implementiert / Veroeffentlichung ausstehend | Agent-PKI, CSR und mTLS-Governance | CA-Provider, CSR-Review, Zertifikatsstatus, mTLS-Bindung, Rotation und Widerruf sind tenantgebunden als Metadata-only-Governance sichtbar; echte CA-Ausstellung bleibt ein separater Security-Meilenstein. |
+| Implementiert / Veroeffentlichung ausstehend | Agent Rollout 2.0 - Phase 1 | Feste Rollout-Ringe, tenantgebundene Targets, Preflight-/Postflight-Gates, menschliche Promotion und operatorgefuehrter Rollback steuern bestehende Agenten ohne Remote-Ausfuehrung. |
 | Umgesetzt / Vertiefung | Management-/Regulatory-Templates | Wiederholbare ISO-27001-, NIS2-, DORA-, KRITIS- und Governance-Pakete werden aus bestehenden Snapshots erzeugt; feinere Varianten koennen spaeter folgen. |
 | Implementiert / Veroeffentlichung ausstehend | Evidence Integrity & Disposition Phase 1 | Manuelle und begrenzte Batch-Re-Hash-Pruefung, Legal Hold, metadata-only Disposition und auditierbare Integritaetsereignisse sind tenantgebunden verfuegbar. |
 | Implementiert / Veroeffentlichung ausstehend | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |
 | Implementiert / Veroeffentlichung ausstehend | Evidence-Worker, kontrollierte physische Disposition und Object-Storage-Vorbereitung | Begrenzte Integritaets-Worker-Laeufe, Approval-gebundene physische Disposition, Tombstone-Metadaten und vorbereitete Object-Storage-Konfiguration sind tenantgebunden auditierbar. |
 | Implementiert / Veroeffentlichung ausstehend | S3-kompatibler Evidence-Storage-Runtime-Client | Explizite Secret-Referenzen, SigV4, DNS-/SSRF-Revalidierung, kanonische Object-IDs, begrenzte PUT-/HEAD-/GET-Operationen und kontrolliertes Remote-DELETE sind mit MinIO-Integrationstest umgesetzt. |
-| Implementiert / Veroeffentlichung ausstehend | Performance, HA und visuelle Regression | Grosszuegige CI-Budgets, gepruefter PostgreSQL-/S3-Zwei-Instanzen-Betrieb und 34 UI-Baselines machen grobe Regressionen sichtbar, ohne allgemeine HA oder SLA zu behaupten. |
+| Implementiert / Veroeffentlichung ausstehend | Performance, HA und visuelle Regression | Grosszuegige CI-Budgets, gepruefter PostgreSQL-/S3-Zwei-Instanzen-Betrieb und 36 UI-Baselines machen grobe Regressionen sichtbar, ohne allgemeine HA oder SLA zu behaupten. |
 | Release Candidate vorbereitet | Finales Hardening und Release Readiness | Zentrale RC-Pruefung, Readiness-Matrix, Release Notes, Manifest, Checksums, Sensitive-Data-Scan und CI-Aggregation sind vorbereitet; Tag und Veroeffentlichung bleiben ausstehend. |
 
 ## Abgrenzung

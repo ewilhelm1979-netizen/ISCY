@@ -2740,7 +2740,7 @@ async fn agent_posture_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result
         + mtls_binding_gaps
         + rotation_required_certificates
         + revocation_requested_certificates;
-    Ok(serde_json::json!({
+    let mut posture = serde_json::json!({
         "devices": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_device WHERE tenant_id = $1", tenant_id).await?,
         "active_devices": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_device WHERE tenant_id = $1 AND enrollment_status = 'ACTIVE'", tenant_id).await?,
         "open_findings": count_postgres(pool, "SELECT COUNT(*)::bigint AS count_value FROM zero_trust_agent_finding WHERE tenant_id = $1 AND status = 'OPEN'", tenant_id).await?,
@@ -2767,7 +2767,12 @@ async fn agent_posture_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result
         "rotation_required_certificates": rotation_required_certificates,
         "revocation_requested_certificates": revocation_requested_certificates,
         "agent_pki_governance_gaps": agent_pki_governance_gaps
-    }))
+    });
+    merge_json_object(
+        &mut posture,
+        agent_rollout_review_postgres(pool, tenant_id).await?,
+    );
+    Ok(posture)
 }
 
 async fn agent_posture_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Result<Value> {
@@ -2870,7 +2875,7 @@ async fn agent_posture_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Resu
         + mtls_binding_gaps
         + rotation_required_certificates
         + revocation_requested_certificates;
-    Ok(serde_json::json!({
+    let mut posture = serde_json::json!({
         "devices": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM zero_trust_agent_device WHERE tenant_id = ?", tenant_id).await?,
         "active_devices": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM zero_trust_agent_device WHERE tenant_id = ? AND enrollment_status = 'ACTIVE'", tenant_id).await?,
         "open_findings": count_sqlite(pool, "SELECT COUNT(*) AS count_value FROM zero_trust_agent_finding WHERE tenant_id = ? AND status = 'OPEN'", tenant_id).await?,
@@ -2897,7 +2902,111 @@ async fn agent_posture_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Resu
         "rotation_required_certificates": rotation_required_certificates,
         "revocation_requested_certificates": revocation_requested_certificates,
         "agent_pki_governance_gaps": agent_pki_governance_gaps
+    });
+    merge_json_object(
+        &mut posture,
+        agent_rollout_review_sqlite(pool, tenant_id).await?,
+    );
+    Ok(posture)
+}
+
+async fn agent_rollout_review_postgres(pool: &PgPool, tenant_id: i64) -> anyhow::Result<Value> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout WHERE tenant_id = $1) AS agent_rollout_count,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout WHERE tenant_id = $1 AND status = 'active') AS agent_rollouts_active,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout WHERE tenant_id = $1 AND status = 'paused') AS agent_rollouts_paused,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout rollout WHERE tenant_id = $1 AND EXISTS (
+                SELECT 1 FROM zero_trust_agent_rollout_target target
+                WHERE target.tenant_id = rollout.tenant_id AND target.rollout_id = rollout.id AND target.status = 'failed'
+            )) AS agent_rollouts_with_failures,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout WHERE tenant_id = $1 AND status = 'rollback_required') AS agent_rollouts_rollback_required,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_ring WHERE tenant_id = $1 AND status IN ('failed', 'rollback_required')) AS agent_rollout_blocked_rings,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_target WHERE tenant_id = $1 AND status = 'failed') AS agent_rollout_failed_targets,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_target WHERE tenant_id = $1 AND status = 'blocked' AND preflight_status = 'failed') AS agent_rollout_open_preflight_blockers,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout WHERE tenant_id = $1 AND owner_id IS NULL) AS agent_rollouts_without_owner,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout WHERE tenant_id = $1 AND BTRIM(rollback_plan) = '') AS agent_rollouts_without_rollback_plan,
+            COALESCE((
+                SELECT ring_name FROM zero_trust_agent_rollout_ring
+                WHERE tenant_id = $1 AND status IN ('active', 'observing', 'passed', 'failed', 'rollback_required', 'rolled_back')
+                ORDER BY sequence_number DESC LIMIT 1
+            ), 'none') AS agent_rollout_highest_ring
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+    agent_rollout_review_from_postgres_row(&row)
+}
+
+async fn agent_rollout_review_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyhow::Result<Value> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout WHERE tenant_id = ?1) AS agent_rollout_count,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout WHERE tenant_id = ?1 AND status = 'active') AS agent_rollouts_active,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout WHERE tenant_id = ?1 AND status = 'paused') AS agent_rollouts_paused,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout rollout WHERE tenant_id = ?1 AND EXISTS (
+                SELECT 1 FROM zero_trust_agent_rollout_target target
+                WHERE target.tenant_id = rollout.tenant_id AND target.rollout_id = rollout.id AND target.status = 'failed'
+            )) AS agent_rollouts_with_failures,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout WHERE tenant_id = ?1 AND status = 'rollback_required') AS agent_rollouts_rollback_required,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout_ring WHERE tenant_id = ?1 AND status IN ('failed', 'rollback_required')) AS agent_rollout_blocked_rings,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout_target WHERE tenant_id = ?1 AND status = 'failed') AS agent_rollout_failed_targets,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout_target WHERE tenant_id = ?1 AND status = 'blocked' AND preflight_status = 'failed') AS agent_rollout_open_preflight_blockers,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout WHERE tenant_id = ?1 AND owner_id IS NULL) AS agent_rollouts_without_owner,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout WHERE tenant_id = ?1 AND TRIM(rollback_plan) = '') AS agent_rollouts_without_rollback_plan,
+            COALESCE((
+                SELECT ring_name FROM zero_trust_agent_rollout_ring
+                WHERE tenant_id = ?1 AND status IN ('active', 'observing', 'passed', 'failed', 'rollback_required', 'rolled_back')
+                ORDER BY sequence_number DESC LIMIT 1
+            ), 'none') AS agent_rollout_highest_ring
+        "#,
+    )
+    .bind(tenant_id)
+    .fetch_one(pool)
+    .await?;
+    agent_rollout_review_from_sqlite_row(&row)
+}
+
+fn agent_rollout_review_from_postgres_row(row: &PgRow) -> anyhow::Result<Value> {
+    Ok(serde_json::json!({
+        "agent_rollout_count": row.try_get::<i64, _>("agent_rollout_count")?,
+        "agent_rollouts_active": row.try_get::<i64, _>("agent_rollouts_active")?,
+        "agent_rollouts_paused": row.try_get::<i64, _>("agent_rollouts_paused")?,
+        "agent_rollouts_with_failures": row.try_get::<i64, _>("agent_rollouts_with_failures")?,
+        "agent_rollouts_rollback_required": row.try_get::<i64, _>("agent_rollouts_rollback_required")?,
+        "agent_rollout_blocked_rings": row.try_get::<i64, _>("agent_rollout_blocked_rings")?,
+        "agent_rollout_failed_targets": row.try_get::<i64, _>("agent_rollout_failed_targets")?,
+        "agent_rollout_open_preflight_blockers": row.try_get::<i64, _>("agent_rollout_open_preflight_blockers")?,
+        "agent_rollouts_without_owner": row.try_get::<i64, _>("agent_rollouts_without_owner")?,
+        "agent_rollouts_without_rollback_plan": row.try_get::<i64, _>("agent_rollouts_without_rollback_plan")?,
+        "agent_rollout_highest_ring": row.try_get::<String, _>("agent_rollout_highest_ring")?
     }))
+}
+
+fn agent_rollout_review_from_sqlite_row(row: &SqliteRow) -> anyhow::Result<Value> {
+    Ok(serde_json::json!({
+        "agent_rollout_count": row.try_get::<i64, _>("agent_rollout_count")?,
+        "agent_rollouts_active": row.try_get::<i64, _>("agent_rollouts_active")?,
+        "agent_rollouts_paused": row.try_get::<i64, _>("agent_rollouts_paused")?,
+        "agent_rollouts_with_failures": row.try_get::<i64, _>("agent_rollouts_with_failures")?,
+        "agent_rollouts_rollback_required": row.try_get::<i64, _>("agent_rollouts_rollback_required")?,
+        "agent_rollout_blocked_rings": row.try_get::<i64, _>("agent_rollout_blocked_rings")?,
+        "agent_rollout_failed_targets": row.try_get::<i64, _>("agent_rollout_failed_targets")?,
+        "agent_rollout_open_preflight_blockers": row.try_get::<i64, _>("agent_rollout_open_preflight_blockers")?,
+        "agent_rollouts_without_owner": row.try_get::<i64, _>("agent_rollouts_without_owner")?,
+        "agent_rollouts_without_rollback_plan": row.try_get::<i64, _>("agent_rollouts_without_rollback_plan")?,
+        "agent_rollout_highest_ring": row.try_get::<String, _>("agent_rollout_highest_ring")?
+    }))
+}
+
+fn merge_json_object(target: &mut Value, additional: Value) {
+    let (Some(target), Some(additional)) = (target.as_object_mut(), additional.as_object()) else {
+        return;
+    };
+    target.extend(additional.clone());
 }
 
 async fn count_postgres(pool: &PgPool, sql: &str, tenant_id: i64) -> anyhow::Result<i64> {

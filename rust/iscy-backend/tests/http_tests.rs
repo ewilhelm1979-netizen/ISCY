@@ -10,6 +10,7 @@ use iscy_backend::{
     agent_governance_store::AgentGovernanceStore,
     agent_pki_store::AgentPkiStore,
     agent_release_store::AgentReleaseStore,
+    agent_rollout_store::AgentRolloutStore,
     agent_store::AgentStore,
     ai_governance_store::AiGovernanceStore,
     app_router, app_router_with_state,
@@ -848,8 +849,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0039_rust_evidence_s3_runtime_client"));
-    assert!(html.contains("39/39 angewendet"));
+    assert!(html.contains("0040_rust_agent_rollout_governance"));
+    assert!(html.contains("40/40 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -1189,6 +1190,7 @@ async fn development_auth_keeps_passwordless_compatibility_payload() {
     );
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -3011,6 +3013,714 @@ async fn agent_release_artifacts_enforce_roles_tenants_and_feed_reviews() {
             .unwrap()
             > 0
     );
+}
+
+#[tokio::test]
+async fn agent_rollout_api_enforces_roles_tenants_and_explicit_start() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO organizations_tenant (id,name,slug) VALUES (1,'Tenant One','tenant-one'),(2,'Tenant Two','tenant-two')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_device (
+            id,tenant_id,stable_device_id,hostname,os_family,agent_version,
+            deployment_channel,enrollment_status,zero_trust_score,last_seen_at
+        ) VALUES
+            (401,1,'rollout-device-one','rollout-device-one','LINUX','1.3.0',
+             'systemd','ACTIVE',98,CURRENT_TIMESTAMP),
+            (403,1,'rollout-device-three','rollout-device-three','LINUX','1.3.0',
+             'systemd','ACTIVE',98,CURRENT_TIMESTAMP),
+            (402,2,'rollout-device-two','rollout-device-two','LINUX','1.3.0',
+             'systemd','ACTIVE',98,CURRENT_TIMESTAMP)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_agent_rollout_store(Some(AgentRolloutStore::from_sqlite_pool(pool.clone()))),
+    );
+    let payload = serde_json::json!({
+        "name": "Linux Agent 1.4.0",
+        "target_agent_version": "1.4.0",
+        "rollback_plan": "Operator follows the approved recovery procedure.",
+        "os_family_filter": "LINUX",
+        "deployment_channel_filter": "systemd",
+        "require_verified_artifact_checksum": false,
+        "signature_requirement": "not_required",
+        "certificate_requirement": "not_required",
+        "not_applicable_rings": ["canary", "pilot", "production", "critical"],
+        "ring_overrides": [{
+            "ring_name": "lab",
+            "minimum_success_percent": 100,
+            "observation_minutes": 0,
+            "max_failed_targets": 0,
+            "minimum_target_count": 1
+        }]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/rollouts")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "3")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/rollouts")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let rollout_id = created["data"]["rollout"]["id"].as_i64().unwrap();
+    assert_eq!(created["data"]["rings"].as_array().unwrap().len(), 5);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/target-preview"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(r#"{"device_ids":[401,402],"limit":10}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let preview: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(preview["data"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["data"][0]["device_id"], 401);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/rollouts/{rollout_id}/targets"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"assignments":[{"device_id":402,"ring_name":"lab"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/rollouts/{rollout_id}/targets"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"assignments":[{"device_id":401,"ring_name":"lab"}]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/rings/lab/preflight"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/agents/rollouts/{rollout_id}/validate"))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/rings/lab/start"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"confirmed":false,"reason":"reviewed"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let first_start = app.clone().oneshot(
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/agents/rollouts/{rollout_id}/rings/lab/start"
+            ))
+            .header("content-type", "application/json")
+            .header("x-iscy-tenant-id", "1")
+            .header("x-iscy-user-id", "1")
+            .header("x-iscy-roles", "ADMIN")
+            .body(Body::from(r#"{"confirmed":true,"reason":"reviewed"}"#))
+            .unwrap(),
+    );
+    let second_start = app.clone().oneshot(
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/agents/rollouts/{rollout_id}/rings/lab/start"
+            ))
+            .header("content-type", "application/json")
+            .header("x-iscy-tenant-id", "1")
+            .header("x-iscy-user-id", "1")
+            .header("x-iscy-roles", "ADMIN")
+            .body(Body::from(r#"{"confirmed":true,"reason":"reviewed"}"#))
+            .unwrap(),
+    );
+    let (first_start, second_start) = tokio::join!(first_start, second_start);
+    let first_start = first_start.unwrap();
+    let second_start = second_start.unwrap();
+    let mut start_statuses = [first_start.status(), second_start.status()];
+    start_statuses.sort();
+    assert_eq!(
+        start_statuses,
+        [StatusCode::OK, StatusCode::CONFLICT],
+        "exactly one concurrent ring start must win"
+    );
+
+    for (action, expected_status) in [("pause", "paused"), ("resume", "active")] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/agents/rollouts/{rollout_id}/{action}"))
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::from(format!(
+                        r#"{{"confirmed":true,"reason":"{} reviewed"}}"#,
+                        action
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let changed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(changed["data"]["rollout"]["status"], expected_status);
+    }
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/agents/rollouts/{rollout_id}/events"))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "3")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let events: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(events["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["event_type"] == "ring_started"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/agents/rollouts/{rollout_id}"))
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "4")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/zero-trust/rollouts/")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Agent-Rollouts"));
+    assert!(html.contains("Linux Agent 1.4.0"));
+    assert!(html.contains("Rollout anlegen"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/zero-trust/rollouts/{rollout_id}/"))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Ring-Timeline und Gates"));
+    assert!(html.contains("ISCY dokumentiert Freigaben und Ergebnisse"));
+    assert!(!html.contains("Authorization:"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/status/operations")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "3")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let operations: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(operations["agent_rollouts"]["active_rollouts"], 1);
+    assert_eq!(operations["agent_rollouts"]["paused_rollouts"], 0);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "3")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let metrics = String::from_utf8(body.to_vec()).unwrap();
+    assert!(metrics.contains("iscy_agent_rollouts_active 1"));
+    assert!(metrics.contains("iscy_agent_rollout_failed_targets 0"));
+    assert!(!metrics.contains("rollout_id="));
+
+    let target_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM zero_trust_agent_rollout_target WHERE tenant_id = 1 AND rollout_id = ?",
+    )
+    .bind(rollout_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let response = app.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/targets/{target_id}/deployment-result"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(format!(
+                    r#"{{"result":"succeeded","observed_agent_version":"1.4.0","operator_note":"Log at /{}/operator/output.txt"}}"#,
+                    "home"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let deployment_payload = r#"{"result":"succeeded","observed_agent_version":"1.4.0","operator_note":"Externes Ergebnis geprueft."}"#;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/targets/{target_id}/deployment-result"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(deployment_payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let result_event_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM zero_trust_agent_rollout_event WHERE tenant_id = 1 AND rollout_id = ? AND event_type = 'deployment_result_recorded'",
+    )
+    .bind(rollout_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/targets/{target_id}/deployment-result"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(deployment_payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let repeated_event_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM zero_trust_agent_rollout_event WHERE tenant_id = 1 AND rollout_id = ? AND event_type = 'deployment_result_recorded'",
+    )
+    .bind(rollout_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(repeated_event_count, result_event_count);
+
+    sqlx::query(
+        "UPDATE zero_trust_agent_device SET agent_version = '1.4.0', last_seen_at = CURRENT_TIMESTAMP WHERE tenant_id = 1 AND id = 401",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/rings/lab/postflight"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/rings/lab/evaluate"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/rings/lab/promote"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"confirmed":false,"reason":"reviewed"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let first_promotion = app.clone().oneshot(
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/agents/rollouts/{rollout_id}/rings/lab/promote"
+            ))
+            .header("content-type", "application/json")
+            .header("x-iscy-tenant-id", "1")
+            .header("x-iscy-user-id", "1")
+            .header("x-iscy-roles", "ADMIN")
+            .body(Body::from(r#"{"confirmed":true,"reason":"reviewed"}"#))
+            .unwrap(),
+    );
+    let second_promotion = app.clone().oneshot(
+        Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/api/v1/agents/rollouts/{rollout_id}/rings/lab/promote"
+            ))
+            .header("content-type", "application/json")
+            .header("x-iscy-tenant-id", "1")
+            .header("x-iscy-user-id", "1")
+            .header("x-iscy-roles", "ADMIN")
+            .body(Body::from(r#"{"confirmed":true,"reason":"reviewed"}"#))
+            .unwrap(),
+    );
+    let (first_promotion, second_promotion) = tokio::join!(first_promotion, second_promotion);
+    let first_promotion = first_promotion.unwrap();
+    let second_promotion = second_promotion.unwrap();
+    let mut promotion_statuses = [first_promotion.status(), second_promotion.status()];
+    promotion_statuses.sort();
+    assert_eq!(
+        promotion_statuses,
+        [StatusCode::OK, StatusCode::CONFLICT],
+        "exactly one concurrent promotion must win"
+    );
+    let completed_response = if first_promotion.status() == StatusCode::OK {
+        first_promotion
+    } else {
+        second_promotion
+    };
+    let body = to_bytes(completed_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let completed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(completed["data"]["rollout"]["status"], "completed");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/rings/lab/promote"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"confirmed":true,"reason":"repeated"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let store = AgentRolloutStore::from_sqlite_pool(pool.clone());
+    let mut abort_payload = payload.clone();
+    abort_payload["name"] = serde_json::json!("Abbruch-Test");
+    let abort_rollout = store
+        .create_rollout(1, 1, serde_json::from_value(abort_payload).unwrap())
+        .await
+        .unwrap();
+    let aborted = store
+        .abort(
+            1,
+            abort_rollout.rollout.id,
+            1,
+            serde_json::from_value(serde_json::json!({
+                "confirmed": true,
+                "reason": "Abbruch fachlich bestaetigt"
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(aborted.rollout.status, "aborted");
+
+    let mut rollback_payload = payload;
+    rollback_payload["name"] = serde_json::json!("Rollback-Test");
+    rollback_payload["target_agent_version"] = serde_json::json!("1.5.0");
+    let rollback_rollout = store
+        .create_rollout(1, 1, serde_json::from_value(rollback_payload).unwrap())
+        .await
+        .unwrap();
+    let rollback_id = rollback_rollout.rollout.id;
+    store
+        .assign_targets(
+            1,
+            rollback_id,
+            1,
+            serde_json::from_value(serde_json::json!({
+                "assignments": [
+                    {"device_id": 401, "ring_name": "lab"},
+                    {"device_id": 403, "ring_name": "lab"}
+                ]
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    store.run_preflight(1, rollback_id, "lab", 2).await.unwrap();
+    let validation = store.validate_rollout(1, rollback_id, 1).await.unwrap();
+    assert!(validation.valid);
+    let started = store
+        .start_ring(
+            1,
+            rollback_id,
+            "lab",
+            1,
+            serde_json::from_value(serde_json::json!({
+                "confirmed": true,
+                "reason": "Rollback-Test gestartet"
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let rollback_target_ids: Vec<i64> = started.targets.iter().map(|target| target.id).collect();
+    let requested = store
+        .request_rollback(
+            1,
+            rollback_id,
+            1,
+            serde_json::from_value(serde_json::json!({
+                "confirmed": true,
+                "reason": "Operatorgefuehrter Rollback erforderlich",
+                "target_ids": rollback_target_ids
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(requested.rollout.status, "rollback_required");
+    let first_target = requested.targets[0].id;
+    let second_target = requested.targets[1].id;
+    let completed = store
+        .complete_rollback(
+            1,
+            rollback_id,
+            1,
+            serde_json::from_value(serde_json::json!({
+                "confirmed": true,
+                "results": [
+                    {
+                        "target_id": first_target,
+                        "status": "rolled_back",
+                        "observed_version": "1.3.0",
+                        "summary": "Extern bestaetigt"
+                    },
+                    {
+                        "target_id": second_target,
+                        "status": "failed",
+                        "observed_version": "1.5.0",
+                        "summary": "Rollback extern fehlgeschlagen"
+                    }
+                ]
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(completed.rollout.status, "rollback_required");
+    assert_eq!(completed.rollout.rollback_status, "failed");
+    assert!(completed
+        .targets
+        .iter()
+        .any(|target| target.status == "rolled_back"));
+    assert!(completed
+        .targets
+        .iter()
+        .any(|target| target.status == "failed"));
 }
 
 #[tokio::test]
@@ -12755,6 +13465,60 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
         .unwrap();
     db_admin::run_sqlite_migrations(&pool).await.unwrap();
     db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_device (
+            tenant_id, stable_device_id, hostname, os_family, agent_version,
+            deployment_channel, enrollment_status, zero_trust_score, last_seen_at
+        ) VALUES (
+            1, 'management-review-rollout-device', 'management-review-rollout-device',
+            'LINUX', '1.3.0', 'systemd', 'ACTIVE', 98, CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let device_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM zero_trust_agent_device WHERE tenant_id = 1 ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_rollout (
+            id, tenant_id, name, target_agent_version, status,
+            active_ring_name, rollback_plan, created_by_id
+        ) VALUES (9100, 1, 'Review snapshot rollout', '1.4.0', 'active', 'lab',
+                  'Operator follows the approved recovery procedure.', 1)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_rollout_ring (
+            id, tenant_id, rollout_id, ring_name, sequence_number, status
+        ) VALUES (9101, 1, 9100, 'lab', 10, 'active')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_rollout_target (
+            tenant_id, rollout_id, ring_id, device_id, status,
+            preflight_status, deployment_status, expected_agent_version
+        ) VALUES (1, 9100, 9101, ?, 'failed', 'passed', 'failed', '1.4.0')
+        "#,
+    )
+    .bind(device_id)
+    .execute(&pool)
+    .await
+    .unwrap();
     let app = app_router_with_state(
         AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
     );
@@ -12901,12 +13665,31 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
         "ai_governance_system"
     );
     assert!(payload["package"]["ai_governance_json"]["systems"][0]["risk_links"].is_number());
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollout_count"],
+        1
+    );
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollouts_active"],
+        1
+    );
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollouts_with_failures"],
+        1
+    );
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollout_highest_ring"],
+        "lab"
+    );
     let review_id = payload["package"]["id"].as_i64().unwrap();
     let frozen_name = payload["package"]["ai_governance_json"]["systems"][0]["name"]
         .as_str()
         .unwrap()
         .to_string();
     let frozen_risk_links = payload["package"]["ai_governance_json"]["systems"][0]["risk_links"]
+        .as_i64()
+        .unwrap();
+    let frozen_active_rollouts = payload["package"]["agent_posture_json"]["agent_rollouts_active"]
         .as_i64()
         .unwrap();
 
@@ -12916,6 +13699,12 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
         .unwrap();
     sqlx::query(
         "INSERT INTO ai_governance_system_risk (tenant_id, system_id, risk_id, created_by_id) VALUES (1, 3000, 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE zero_trust_agent_rollout SET status = 'paused', active_ring_name = NULL WHERE tenant_id = 1 AND id = 9100",
     )
     .execute(&pool)
     .await
@@ -12945,6 +13734,10 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
     assert_eq!(
         frozen_payload["package"]["ai_governance_json"]["systems"][0]["risk_links"],
         frozen_risk_links
+    );
+    assert_eq!(
+        frozen_payload["package"]["agent_posture_json"]["agent_rollouts_active"],
+        frozen_active_rollouts
     );
 
     for (suffix, content_type) in [
@@ -13010,6 +13803,14 @@ async fn management_review_generate_creates_demo_audit_snapshot() {
     assert_eq!(
         payload["package"]["ai_governance_json"]["systems"][0]["risk_links"],
         frozen_risk_links + 1
+    );
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollouts_active"],
+        0
+    );
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollouts_paused"],
+        1
     );
 }
 
@@ -15386,7 +16187,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0036_rust_agent_release_artifact_provenance",
             "0037_rust_agent_pki_csr_governance",
             "0038_rust_evidence_object_storage_client",
-            "0039_rust_evidence_s3_runtime_client"
+            "0039_rust_evidence_s3_runtime_client",
+            "0040_rust_agent_rollout_governance"
         ]
     );
     assert!(

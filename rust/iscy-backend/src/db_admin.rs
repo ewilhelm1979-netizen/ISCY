@@ -260,6 +260,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_EVIDENCE_S3_RUNTIME_CLIENT_SCHEMA,
         postgres_sql: POSTGRES_EVIDENCE_S3_RUNTIME_CLIENT_SCHEMA,
     },
+    Migration {
+        version: "0040_rust_agent_rollout_governance",
+        sqlite_sql: SQLITE_AGENT_ROLLOUT_GOVERNANCE_SCHEMA,
+        postgres_sql: POSTGRES_AGENT_ROLLOUT_GOVERNANCE_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1432,6 +1437,388 @@ CREATE INDEX IF NOT EXISTS idx_evidence_s3_runtime_verification
     ON evidence_s3_runtime_object(tenant_id, runtime_verification_status, last_runtime_operation_at);
 CREATE INDEX IF NOT EXISTS idx_evidence_s3_runtime_orphan
     ON evidence_s3_runtime_object(tenant_id, orphan_review_required, updated_at);
+"#;
+
+const SQLITE_AGENT_ROLLOUT_GOVERNANCE_SCHEMA: &str = r#"
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_device_tenant_id_unique
+    ON zero_trust_agent_device(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_policy_tenant_id_unique
+    ON zero_trust_agent_policy_profile(tenant_id, id);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    name varchar(160) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    target_agent_version varchar(64) NOT NULL,
+    artifact_id varchar(128) NULL,
+    policy_profile_id INTEGER NULL,
+    owner_id INTEGER NULL,
+    status varchar(32) NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft','ready','active','paused','completed','aborted','rollback_required','rolled_back')),
+    active_ring_name varchar(32) NULL
+        CHECK (active_ring_name IS NULL OR active_ring_name IN ('lab','canary','pilot','production','critical')),
+    os_family_filter varchar(32) NOT NULL DEFAULT '',
+    deployment_channel_filter varchar(64) NOT NULL DEFAULT '',
+    minimum_zero_trust_score INTEGER NOT NULL DEFAULT 80 CHECK (minimum_zero_trust_score BETWEEN 0 AND 100),
+    heartbeat_freshness_minutes INTEGER NOT NULL DEFAULT 1440 CHECK (heartbeat_freshness_minutes BETWEEN 1 AND 525600),
+    maximum_critical_findings INTEGER NOT NULL DEFAULT 0 CHECK (maximum_critical_findings >= 0),
+    require_mtls bool NOT NULL DEFAULT 0,
+    require_pki_ready bool NOT NULL DEFAULT 0,
+    require_verified_artifact_checksum bool NOT NULL DEFAULT 1,
+    signature_policy varchar(32) NOT NULL DEFAULT 'metadata_only'
+        CHECK (signature_policy IN ('not_required','metadata_only','verified_required')),
+    certificate_requirement varchar(32) NOT NULL DEFAULT 'not_required'
+        CHECK (certificate_requirement IN ('not_required','active_required','mtls_bound_required')),
+    minimum_success_percent INTEGER NOT NULL DEFAULT 95 CHECK (minimum_success_percent BETWEEN 1 AND 100),
+    observation_minutes INTEGER NOT NULL DEFAULT 30 CHECK (observation_minutes BETWEEN 0 AND 10080),
+    max_failed_targets INTEGER NOT NULL DEFAULT 0 CHECK (max_failed_targets >= 0),
+    rollback_plan TEXT NOT NULL,
+    rollback_status varchar(32) NOT NULL DEFAULT 'not_required'
+        CHECK (rollback_status IN ('not_required','prepared','requested','in_progress','completed','failed')),
+    rollback_reason TEXT NOT NULL DEFAULT '',
+    created_by_id INTEGER NULL,
+    approved_by_id INTEGER NULL,
+    approved_at TEXT NULL,
+    paused_at TEXT NULL,
+    completed_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, name),
+    UNIQUE (tenant_id, id),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, policy_profile_id)
+        REFERENCES zero_trust_agent_policy_profile(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, artifact_id)
+        REFERENCES agent_release_artifact(tenant_id, artifact_id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_tenant_status
+    ON zero_trust_agent_rollout(tenant_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_ring (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    rollout_id INTEGER NOT NULL,
+    ring_name varchar(32) NOT NULL
+        CHECK (ring_name IN ('lab','canary','pilot','production','critical')),
+    sequence_number INTEGER NOT NULL CHECK (sequence_number IN (10,20,30,40,50)),
+    status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','ready','active','observing','passed','failed','not_applicable','rollback_required','rolled_back')),
+    minimum_success_percent INTEGER NOT NULL DEFAULT 95 CHECK (minimum_success_percent BETWEEN 1 AND 100),
+    observation_minutes INTEGER NOT NULL DEFAULT 30 CHECK (observation_minutes BETWEEN 0 AND 10080),
+    max_failed_targets INTEGER NOT NULL DEFAULT 0 CHECK (max_failed_targets >= 0),
+    minimum_target_count INTEGER NOT NULL DEFAULT 1 CHECK (minimum_target_count >= 1),
+    started_at TEXT NULL,
+    observation_started_at TEXT NULL,
+    evaluated_at TEXT NULL,
+    approved_by_id INTEGER NULL,
+    approved_at TEXT NULL,
+    completed_at TEXT NULL,
+    failure_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, rollout_id, ring_name),
+    UNIQUE (tenant_id, rollout_id, sequence_number),
+    UNIQUE (tenant_id, rollout_id, id),
+    FOREIGN KEY (tenant_id, rollout_id)
+        REFERENCES zero_trust_agent_rollout(tenant_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_ring_state
+    ON zero_trust_agent_rollout_ring(tenant_id, rollout_id, status, sequence_number);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_target (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    rollout_id INTEGER NOT NULL,
+    ring_id INTEGER NOT NULL,
+    device_id INTEGER NOT NULL,
+    status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','eligible','blocked','scheduled','in_progress','succeeded','failed','excluded','rollback_required','rolled_back')),
+    eligibility_reason TEXT NOT NULL DEFAULT '',
+    preflight_status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (preflight_status IN ('pending','passed','failed','warning','not_applicable')),
+    postflight_status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (postflight_status IN ('pending','passed','failed','warning','not_applicable')),
+    deployment_status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (deployment_status IN ('pending','scheduled','in_progress','succeeded','failed','excluded','rollback_required','rolled_back')),
+    previous_agent_version varchar(64) NOT NULL DEFAULT '',
+    expected_agent_version varchar(64) NOT NULL DEFAULT '',
+    observed_agent_version varchar(64) NOT NULL DEFAULT '',
+    deployment_reference varchar(255) NOT NULL DEFAULT '',
+    result_summary TEXT NOT NULL DEFAULT '',
+    eligibility_status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (eligibility_status IN ('pending','eligible','blocked','excluded')),
+    rollback_status varchar(32) NOT NULL DEFAULT 'not_required'
+        CHECK (rollback_status IN ('not_required','prepared','requested','in_progress','completed','failed')),
+    error_class varchar(64) NOT NULL DEFAULT '',
+    operator_note TEXT NOT NULL DEFAULT '',
+    scheduled_at TEXT NULL,
+    deployment_started_at TEXT NULL,
+    deployment_recorded_at TEXT NULL,
+    rollback_requested_at TEXT NULL,
+    rollback_completed_at TEXT NULL,
+    completed_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, rollout_id, device_id),
+    UNIQUE (tenant_id, rollout_id, id),
+    FOREIGN KEY (tenant_id, rollout_id)
+        REFERENCES zero_trust_agent_rollout(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, ring_id)
+        REFERENCES zero_trust_agent_rollout_ring(tenant_id, rollout_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, device_id)
+        REFERENCES zero_trust_agent_device(tenant_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_target_state
+    ON zero_trust_agent_rollout_target(tenant_id, rollout_id, ring_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_target_device
+    ON zero_trust_agent_rollout_target(tenant_id, device_id, status);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_check (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    rollout_id INTEGER NOT NULL,
+    ring_id INTEGER NULL,
+    target_id INTEGER NULL,
+    phase varchar(16) NOT NULL CHECK (phase IN ('preflight','postflight')),
+    check_type varchar(96) NOT NULL,
+    status varchar(24) NOT NULL CHECK (status IN ('passed','failed','warning','not_applicable')),
+    source varchar(16) NOT NULL DEFAULT 'computed' CHECK (source IN ('computed','operator')),
+    summary TEXT NOT NULL DEFAULT '',
+    safe_detail_json TEXT NOT NULL DEFAULT '{}',
+    observed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    actor_id INTEGER NULL,
+    FOREIGN KEY (tenant_id, rollout_id)
+        REFERENCES zero_trust_agent_rollout(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, ring_id)
+        REFERENCES zero_trust_agent_rollout_ring(tenant_id, rollout_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, target_id)
+        REFERENCES zero_trust_agent_rollout_target(tenant_id, rollout_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_check_scope
+    ON zero_trust_agent_rollout_check(tenant_id, rollout_id, phase, observed_at);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_check_target
+    ON zero_trust_agent_rollout_check(tenant_id, target_id, phase, observed_at);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    rollout_id INTEGER NOT NULL,
+    ring_id INTEGER NULL,
+    target_id INTEGER NULL,
+    device_id INTEGER NULL,
+    event_type varchar(64) NOT NULL,
+    from_status varchar(32) NOT NULL DEFAULT '',
+    to_status varchar(32) NOT NULL DEFAULT '',
+    actor_id INTEGER NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    safe_detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id, rollout_id)
+        REFERENCES zero_trust_agent_rollout(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, ring_id)
+        REFERENCES zero_trust_agent_rollout_ring(tenant_id, rollout_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, target_id)
+        REFERENCES zero_trust_agent_rollout_target(tenant_id, rollout_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, device_id)
+        REFERENCES zero_trust_agent_device(tenant_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_event_tenant
+    ON zero_trust_agent_rollout_event(tenant_id, rollout_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_event_device
+    ON zero_trust_agent_rollout_event(tenant_id, device_id, created_at);
+"#;
+
+const POSTGRES_AGENT_ROLLOUT_GOVERNANCE_SCHEMA: &str = r#"
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_device_tenant_id_unique
+    ON zero_trust_agent_device(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_policy_tenant_id_unique
+    ON zero_trust_agent_policy_profile(tenant_id, id);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    name varchar(160) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    target_agent_version varchar(64) NOT NULL,
+    artifact_id varchar(128) NULL,
+    policy_profile_id BIGINT NULL,
+    owner_id BIGINT NULL,
+    status varchar(32) NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft','ready','active','paused','completed','aborted','rollback_required','rolled_back')),
+    active_ring_name varchar(32) NULL
+        CHECK (active_ring_name IS NULL OR active_ring_name IN ('lab','canary','pilot','production','critical')),
+    os_family_filter varchar(32) NOT NULL DEFAULT '',
+    deployment_channel_filter varchar(64) NOT NULL DEFAULT '',
+    minimum_zero_trust_score INTEGER NOT NULL DEFAULT 80 CHECK (minimum_zero_trust_score BETWEEN 0 AND 100),
+    heartbeat_freshness_minutes INTEGER NOT NULL DEFAULT 1440 CHECK (heartbeat_freshness_minutes BETWEEN 1 AND 525600),
+    maximum_critical_findings INTEGER NOT NULL DEFAULT 0 CHECK (maximum_critical_findings >= 0),
+    require_mtls BOOLEAN NOT NULL DEFAULT FALSE,
+    require_pki_ready BOOLEAN NOT NULL DEFAULT FALSE,
+    require_verified_artifact_checksum BOOLEAN NOT NULL DEFAULT TRUE,
+    signature_policy varchar(32) NOT NULL DEFAULT 'metadata_only'
+        CHECK (signature_policy IN ('not_required','metadata_only','verified_required')),
+    certificate_requirement varchar(32) NOT NULL DEFAULT 'not_required'
+        CHECK (certificate_requirement IN ('not_required','active_required','mtls_bound_required')),
+    minimum_success_percent INTEGER NOT NULL DEFAULT 95 CHECK (minimum_success_percent BETWEEN 1 AND 100),
+    observation_minutes INTEGER NOT NULL DEFAULT 30 CHECK (observation_minutes BETWEEN 0 AND 10080),
+    max_failed_targets INTEGER NOT NULL DEFAULT 0 CHECK (max_failed_targets >= 0),
+    rollback_plan TEXT NOT NULL,
+    rollback_status varchar(32) NOT NULL DEFAULT 'not_required'
+        CHECK (rollback_status IN ('not_required','prepared','requested','in_progress','completed','failed')),
+    rollback_reason TEXT NOT NULL DEFAULT '',
+    created_by_id BIGINT NULL,
+    approved_by_id BIGINT NULL,
+    approved_at TEXT NULL,
+    paused_at TEXT NULL,
+    completed_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, name),
+    UNIQUE (tenant_id, id),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, policy_profile_id)
+        REFERENCES zero_trust_agent_policy_profile(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, artifact_id)
+        REFERENCES agent_release_artifact(tenant_id, artifact_id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_tenant_status
+    ON zero_trust_agent_rollout(tenant_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_ring (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    rollout_id BIGINT NOT NULL,
+    ring_name varchar(32) NOT NULL
+        CHECK (ring_name IN ('lab','canary','pilot','production','critical')),
+    sequence_number INTEGER NOT NULL CHECK (sequence_number IN (10,20,30,40,50)),
+    status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','ready','active','observing','passed','failed','not_applicable','rollback_required','rolled_back')),
+    minimum_success_percent INTEGER NOT NULL DEFAULT 95 CHECK (minimum_success_percent BETWEEN 1 AND 100),
+    observation_minutes INTEGER NOT NULL DEFAULT 30 CHECK (observation_minutes BETWEEN 0 AND 10080),
+    max_failed_targets INTEGER NOT NULL DEFAULT 0 CHECK (max_failed_targets >= 0),
+    minimum_target_count INTEGER NOT NULL DEFAULT 1 CHECK (minimum_target_count >= 1),
+    started_at TEXT NULL,
+    observation_started_at TEXT NULL,
+    evaluated_at TEXT NULL,
+    approved_by_id BIGINT NULL,
+    approved_at TEXT NULL,
+    completed_at TEXT NULL,
+    failure_reason TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, rollout_id, ring_name),
+    UNIQUE (tenant_id, rollout_id, sequence_number),
+    UNIQUE (tenant_id, rollout_id, id),
+    FOREIGN KEY (tenant_id, rollout_id)
+        REFERENCES zero_trust_agent_rollout(tenant_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_ring_state
+    ON zero_trust_agent_rollout_ring(tenant_id, rollout_id, status, sequence_number);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_target (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    rollout_id BIGINT NOT NULL,
+    ring_id BIGINT NOT NULL,
+    device_id BIGINT NOT NULL,
+    status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','eligible','blocked','scheduled','in_progress','succeeded','failed','excluded','rollback_required','rolled_back')),
+    eligibility_reason TEXT NOT NULL DEFAULT '',
+    preflight_status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (preflight_status IN ('pending','passed','failed','warning','not_applicable')),
+    postflight_status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (postflight_status IN ('pending','passed','failed','warning','not_applicable')),
+    deployment_status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (deployment_status IN ('pending','scheduled','in_progress','succeeded','failed','excluded','rollback_required','rolled_back')),
+    previous_agent_version varchar(64) NOT NULL DEFAULT '',
+    expected_agent_version varchar(64) NOT NULL DEFAULT '',
+    observed_agent_version varchar(64) NOT NULL DEFAULT '',
+    deployment_reference varchar(255) NOT NULL DEFAULT '',
+    result_summary TEXT NOT NULL DEFAULT '',
+    eligibility_status varchar(32) NOT NULL DEFAULT 'pending'
+        CHECK (eligibility_status IN ('pending','eligible','blocked','excluded')),
+    rollback_status varchar(32) NOT NULL DEFAULT 'not_required'
+        CHECK (rollback_status IN ('not_required','prepared','requested','in_progress','completed','failed')),
+    error_class varchar(64) NOT NULL DEFAULT '',
+    operator_note TEXT NOT NULL DEFAULT '',
+    scheduled_at TEXT NULL,
+    deployment_started_at TEXT NULL,
+    deployment_recorded_at TEXT NULL,
+    rollback_requested_at TEXT NULL,
+    rollback_completed_at TEXT NULL,
+    completed_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, rollout_id, device_id),
+    UNIQUE (tenant_id, rollout_id, id),
+    FOREIGN KEY (tenant_id, rollout_id)
+        REFERENCES zero_trust_agent_rollout(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, ring_id)
+        REFERENCES zero_trust_agent_rollout_ring(tenant_id, rollout_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, device_id)
+        REFERENCES zero_trust_agent_device(tenant_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_target_state
+    ON zero_trust_agent_rollout_target(tenant_id, rollout_id, ring_id, status);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_target_device
+    ON zero_trust_agent_rollout_target(tenant_id, device_id, status);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_check (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    rollout_id BIGINT NOT NULL,
+    ring_id BIGINT NULL,
+    target_id BIGINT NULL,
+    phase varchar(16) NOT NULL CHECK (phase IN ('preflight','postflight')),
+    check_type varchar(96) NOT NULL,
+    status varchar(24) NOT NULL CHECK (status IN ('passed','failed','warning','not_applicable')),
+    source varchar(16) NOT NULL DEFAULT 'computed' CHECK (source IN ('computed','operator')),
+    summary TEXT NOT NULL DEFAULT '',
+    safe_detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    observed_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    actor_id BIGINT NULL,
+    FOREIGN KEY (tenant_id, rollout_id)
+        REFERENCES zero_trust_agent_rollout(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, ring_id)
+        REFERENCES zero_trust_agent_rollout_ring(tenant_id, rollout_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, target_id)
+        REFERENCES zero_trust_agent_rollout_target(tenant_id, rollout_id, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_check_scope
+    ON zero_trust_agent_rollout_check(tenant_id, rollout_id, phase, observed_at);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_check_target
+    ON zero_trust_agent_rollout_check(tenant_id, target_id, phase, observed_at);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    rollout_id BIGINT NOT NULL,
+    ring_id BIGINT NULL,
+    target_id BIGINT NULL,
+    device_id BIGINT NULL,
+    event_type varchar(64) NOT NULL,
+    from_status varchar(32) NOT NULL DEFAULT '',
+    to_status varchar(32) NOT NULL DEFAULT '',
+    actor_id BIGINT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    safe_detail_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    FOREIGN KEY (tenant_id, rollout_id)
+        REFERENCES zero_trust_agent_rollout(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, ring_id)
+        REFERENCES zero_trust_agent_rollout_ring(tenant_id, rollout_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, target_id)
+        REFERENCES zero_trust_agent_rollout_target(tenant_id, rollout_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, device_id)
+        REFERENCES zero_trust_agent_device(tenant_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_event_tenant
+    ON zero_trust_agent_rollout_event(tenant_id, rollout_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_event_device
+    ON zero_trust_agent_rollout_event(tenant_id, device_id, created_at);
 "#;
 
 const SQLITE_AGENT_RELEASE_ARTIFACT_PROVENANCE_SCHEMA: &str = r#"
@@ -8293,5 +8680,140 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(index_count, 3);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0040_is_restartable_and_preserves_existing_agent_data() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query("INSERT INTO organizations_tenant (id,name,slug) VALUES (140,'Rollout Fixture','rollout-fixture')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            r#"
+            INSERT INTO zero_trust_agent_device (
+                id, tenant_id, stable_device_id, hostname, os_family,
+                agent_version, deployment_channel, enrollment_status,
+                zero_trust_score, last_seen_at
+            ) VALUES (
+                14001, 140, 'rollout-device', 'rollout-device', 'LINUX',
+                '1.3.0', 'systemd', 'ACTIVE', 96, '2026-07-17T10:00:00Z'
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO zero_trust_agent_heartbeat (tenant_id,device_id,observed_at,agent_version) VALUES (140,14001,'2026-07-17T10:00:00Z','1.3.0')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO zero_trust_agent_finding (tenant_id,device_id,check_id,severity,status,title) VALUES (140,14001,'rollout-check','MEDIUM','OPEN','Existing finding')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO zero_trust_agent_rollout (id,tenant_id,name,target_agent_version,rollback_plan) VALUES (14001,140,'Existing rollout','1.4.0','Operator follows the approved recovery procedure.')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO zero_trust_agent_rollout_ring (id,tenant_id,rollout_id,ring_name,sequence_number) VALUES (14001,140,14001,'lab',10)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO zero_trust_agent_rollout_target (id,tenant_id,rollout_id,ring_id,device_id,previous_agent_version,expected_agent_version) VALUES (14001,140,14001,14001,14001,'1.3.0','1.4.0')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("DROP TABLE zero_trust_agent_rollout_event")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version='0040_rust_agent_rollout_governance'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0040_rust_agent_rollout_governance"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let device: (String, String, i64) = sqlx::query_as(
+            "SELECT hostname,agent_version,zero_trust_score FROM zero_trust_agent_device WHERE tenant_id=140 AND id=14001",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            device,
+            ("rollout-device".to_string(), "1.3.0".to_string(), 96)
+        );
+        let heartbeat_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM zero_trust_agent_heartbeat WHERE tenant_id=140 AND device_id=14001",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let finding_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM zero_trust_agent_finding WHERE tenant_id=140 AND device_id=14001",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let target_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM zero_trust_agent_rollout_target WHERE tenant_id=140 AND rollout_id=14001",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let event_table_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='zero_trust_agent_rollout_event'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (
+                heartbeat_count,
+                finding_count,
+                target_count,
+                event_table_count
+            ),
+            (1, 1, 1, 1)
+        );
+
+        sqlx::query("PRAGMA foreign_keys=ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let duplicate = sqlx::query(
+            "INSERT INTO zero_trust_agent_rollout_target (tenant_id,rollout_id,ring_id,device_id) VALUES (140,14001,14001,14001)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(duplicate.is_err());
+        let foreign_tenant = sqlx::query(
+            "INSERT INTO zero_trust_agent_rollout (tenant_id,name,target_agent_version,rollback_plan) VALUES (999,'Foreign rollout','1.4.0','Approved recovery procedure.')",
+        )
+        .execute(&pool)
+        .await;
+        assert!(foreign_tenant.is_err());
     }
 }

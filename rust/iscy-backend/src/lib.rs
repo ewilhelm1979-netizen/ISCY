@@ -37,6 +37,7 @@ pub mod account_store;
 pub mod agent_governance_store;
 pub mod agent_pki_store;
 pub mod agent_release_store;
+pub mod agent_rollout_store;
 pub mod agent_store;
 pub mod ai_governance_store;
 pub mod assessment_store;
@@ -75,6 +76,13 @@ use account_store::AccountStore;
 use agent_governance_store::AgentGovernanceStore;
 use agent_pki_store::AgentPkiStore;
 use agent_release_store::AgentReleaseStore;
+use agent_rollout_store::{
+    AgentRolloutConfirmationRequest, AgentRolloutDeploymentResultRequest, AgentRolloutError,
+    AgentRolloutErrorKind, AgentRolloutListFilter, AgentRolloutOperationsSummary,
+    AgentRolloutRollbackCompleteRequest, AgentRolloutRollbackRequest, AgentRolloutStore,
+    AgentRolloutTargetAssignmentRequest, AgentRolloutTargetPreviewRequest,
+    AgentRolloutWriteRequest,
+};
 use agent_store::AgentStore;
 use ai_governance_store::AiGovernanceStore;
 use assessment_store::AssessmentStore;
@@ -125,6 +133,7 @@ pub struct AppState {
     pub agent_governance_store: Option<AgentGovernanceStore>,
     pub agent_pki_store: Option<AgentPkiStore>,
     pub agent_release_store: Option<AgentReleaseStore>,
+    pub agent_rollout_store: Option<AgentRolloutStore>,
     pub agent_store: Option<AgentStore>,
     pub asset_store: Option<AssetStore>,
     pub assessment_store: Option<AssessmentStore>,
@@ -194,6 +203,7 @@ impl AppState {
             agent_governance_store: None,
             agent_pki_store: None,
             agent_release_store: None,
+            agent_rollout_store: None,
             agent_store: None,
             asset_store: None,
             assessment_store: None,
@@ -233,6 +243,7 @@ impl AppState {
             agent_governance_store: None,
             agent_pki_store: None,
             agent_release_store: None,
+            agent_rollout_store: None,
             agent_store: None,
             asset_store: None,
             assessment_store: None,
@@ -311,6 +322,14 @@ impl AppState {
         agent_release_store: Option<AgentReleaseStore>,
     ) -> Self {
         self.agent_release_store = agent_release_store;
+        self
+    }
+
+    pub fn with_agent_rollout_store(
+        mut self,
+        agent_rollout_store: Option<AgentRolloutStore>,
+    ) -> Self {
+        self.agent_rollout_store = agent_rollout_store;
         self
     }
 
@@ -472,6 +491,13 @@ pub struct ApiErrorResponse {
     pub api_version: &'static str,
     pub error_code: &'static str,
     pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentRolloutApiResponse<T> {
+    accepted: bool,
+    api_version: &'static str,
+    data: T,
 }
 
 #[derive(Debug, Serialize)]
@@ -2231,6 +2257,74 @@ pub struct WebContextQuery {
     pub limit: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebAgentRolloutCreateForm {
+    name: String,
+    #[serde(default)]
+    description: String,
+    target_agent_version: String,
+    rollback_plan: String,
+    #[serde(default)]
+    artifact_id: Option<String>,
+    #[serde(default)]
+    policy_profile_id: Option<i64>,
+    #[serde(default)]
+    owner_id: Option<i64>,
+    #[serde(default)]
+    os_family_filter: String,
+    #[serde(default)]
+    deployment_channel_filter: String,
+    minimum_zero_trust_score: i64,
+    heartbeat_freshness_minutes: i64,
+    maximum_critical_findings: i64,
+    minimum_success_percent: i64,
+    observation_minutes: i64,
+    max_failed_targets: i64,
+    #[serde(default)]
+    require_verified_artifact_checksum: Option<String>,
+    signature_requirement: String,
+    certificate_requirement: String,
+    #[serde(default)]
+    canary_not_applicable: Option<String>,
+    #[serde(default)]
+    pilot_not_applicable: Option<String>,
+    #[serde(default)]
+    production_not_applicable: Option<String>,
+    #[serde(default)]
+    critical_not_applicable: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentRolloutActionForm {
+    #[serde(default)]
+    ring_name: String,
+    #[serde(default)]
+    reason: String,
+    #[serde(default)]
+    confirmed: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentRolloutTargetForm {
+    device_id: i64,
+    ring_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentRolloutResultForm {
+    status: String,
+    #[serde(default)]
+    observed_agent_version: String,
+    #[serde(default)]
+    error_class: String,
+    #[serde(default)]
+    operator_note: String,
+    #[serde(default)]
+    rollback_completion: Option<String>,
+    #[serde(default)]
+    confirmed: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct WebAiGovernanceCreateForm {
     pub product_id: Option<i64>,
@@ -2395,6 +2489,8 @@ struct StatusOperationsJsonResponse {
     alertmanager_incident_details: Option<Vec<StatusAlertmanagerIncidentDetail>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     product_security_trends: Option<product_security_store::ProductSecurityTrendDashboard>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_rollouts: Option<AgentRolloutOperationsSummary>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4140,6 +4236,471 @@ fn is_agent_payload_error(details: &str) -> bool {
     ]
     .iter()
     .any(|message| details.contains(message))
+}
+
+#[derive(Clone, Copy)]
+enum AgentRolloutPermission {
+    Read,
+    Write,
+    Admin,
+}
+
+async fn agent_rollout_access(
+    state: &AppState,
+    headers: &HeaderMap,
+    permission: AgentRolloutPermission,
+) -> Result<(AuthenticatedTenantContext, AgentRolloutStore), Response> {
+    let context = authenticated_tenant_context(state, headers)
+        .await
+        .map_err(required_context_error_response)?;
+    let denied = match permission {
+        AgentRolloutPermission::Read => None,
+        AgentRolloutPermission::Write => write_permission_error(&context),
+        AgentRolloutPermission::Admin => admin_permission_error(&context),
+    };
+    if let Some(response) = denied {
+        return Err(response);
+    }
+    let store = state.agent_rollout_store.clone().ok_or_else(|| {
+        api_database_not_configured("Rust-Agent-Rollout-Store ist nicht konfiguriert.")
+    })?;
+    Ok((context, store))
+}
+
+fn agent_rollout_error_response(error: AgentRolloutError) -> Response {
+    let (status, error_code) = match error.kind {
+        AgentRolloutErrorKind::InvalidInput => (StatusCode::BAD_REQUEST, "rollout_invalid_input"),
+        AgentRolloutErrorKind::NotFound | AgentRolloutErrorKind::ForeignReference => {
+            (StatusCode::NOT_FOUND, "rollout_not_found")
+        }
+        AgentRolloutErrorKind::InvalidTransition => {
+            (StatusCode::CONFLICT, "rollout_invalid_transition")
+        }
+        AgentRolloutErrorKind::ConcurrentChange => {
+            (StatusCode::CONFLICT, "rollout_concurrent_transition")
+        }
+        AgentRolloutErrorKind::GateBlocked => (StatusCode::CONFLICT, "rollout_gate_not_met"),
+        AgentRolloutErrorKind::Database => (StatusCode::INTERNAL_SERVER_ERROR, "database_error"),
+    };
+    (
+        status,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: error.safe_message,
+        }),
+    )
+        .into_response()
+}
+
+fn agent_rollout_response<T: Serialize>(status: StatusCode, data: T) -> Response {
+    (
+        status,
+        Json(AgentRolloutApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data,
+        }),
+    )
+        .into_response()
+}
+
+async fn agent_rollouts_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(filter): Query<AgentRolloutListFilter>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store.list(context.tenant_id, filter).await {
+        Ok(rollouts) => agent_rollout_response(StatusCode::OK, rollouts),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutWriteRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .create_rollout(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::CREATED, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_detail(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store.detail(context.tenant_id, rollout_id).await {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_update(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutWriteRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .update_rollout(context.tenant_id, rollout_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_target_preview(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutTargetPreviewRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .target_preview(context.tenant_id, rollout_id, payload)
+        .await
+    {
+        Ok(targets) => agent_rollout_response(StatusCode::OK, targets),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_targets(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store.detail(context.tenant_id, rollout_id).await {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail.targets),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_targets_assign(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutTargetAssignmentRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .assign_targets(context.tenant_id, rollout_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::CREATED, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_validate(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .validate_rollout(context.tenant_id, rollout_id, context.user_id)
+        .await
+    {
+        Ok(validation) => agent_rollout_response(StatusCode::OK, validation),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_preflight(
+    Path((rollout_id, ring_name)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .run_preflight(context.tenant_id, rollout_id, &ring_name, context.user_id)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_ring_start(
+    Path((rollout_id, ring_name)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutConfirmationRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .start_ring(
+            context.tenant_id,
+            rollout_id,
+            &ring_name,
+            context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_deployment_result(
+    Path((rollout_id, target_id)): Path<(i64, i64)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutDeploymentResultRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .record_deployment_result(
+            context.tenant_id,
+            rollout_id,
+            target_id,
+            context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_postflight(
+    Path((rollout_id, ring_name)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .run_postflight(context.tenant_id, rollout_id, &ring_name, context.user_id)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_evaluate(
+    Path((rollout_id, ring_name)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .evaluate_ring(context.tenant_id, rollout_id, &ring_name, context.user_id)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_promote(
+    Path((rollout_id, ring_name)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutConfirmationRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .promote_ring(
+            context.tenant_id,
+            rollout_id,
+            &ring_name,
+            context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_pause(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutConfirmationRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .pause(context.tenant_id, rollout_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_resume(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutConfirmationRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .resume(context.tenant_id, rollout_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_abort(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutConfirmationRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .abort(context.tenant_id, rollout_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_rollback(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutRollbackRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .request_rollback(context.tenant_id, rollout_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_rollback_complete(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutRollbackCompleteRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .complete_rollback(context.tenant_id, rollout_id, context.user_id, payload)
+        .await
+    {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_events(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store.detail(context.tenant_id, rollout_id).await {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail.events),
+        Err(error) => agent_rollout_error_response(error),
+    }
 }
 
 fn agent_governance_store_missing_response() -> Response {
@@ -16887,6 +17448,25 @@ async fn web_zero_trust(
         },
         None => r#"<section class="panel wide"><h2>Agent-PKI, CSR und mTLS-Governance</h2><p>Agent-PKI-Store ist nicht konfiguriert.</p></section>"#.to_string(),
     };
+    let rollout_href = web_path_with_context("/zero-trust/rollouts/", Some(&context));
+    let rollout_section = match state.agent_rollout_store.as_ref() {
+        Some(rollout_store) => match rollout_store.operations_summary(context.tenant_id).await {
+            Ok(summary) => format!(
+                r#"<section class="panel wide"><div class="section-heading"><div><h2>Agent-Rollouts</h2><p class="muted">Kontrollierte Ringe, Preflight-/Postflight-Gates und operatorgefuehrter Rollback.</p></div><a class="button" href="{}">Rollouts oeffnen</a></div><section class="metrics">{}{}{}{}{}</section></section>"#,
+                html_escape(&rollout_href),
+                metric_card("Aktiv", summary.active_rollouts),
+                metric_card("Pausiert", summary.paused_rollouts),
+                metric_card("Rollback erforderlich", summary.rollback_required_rollouts),
+                metric_card("Blockierte Ringe", summary.blocked_rings),
+                metric_card("Fehlgeschlagene Ziele", summary.failed_targets),
+            ),
+            Err(_) => format!(
+                r#"<section class="panel wide"><h2>Agent-Rollouts</h2><p>Rollout-Daten sind derzeit nicht verfuegbar.</p><a class="button" href="{}">Rollouts oeffnen</a></section>"#,
+                html_escape(&rollout_href)
+            ),
+        },
+        None => String::new(),
+    };
     match store.posture_overview(context.tenant_id).await {
         Ok(posture) => {
             let pillar_rows = posture
@@ -16958,7 +17538,7 @@ async fn web_zero_trust(
             let onboarding_href = web_path_with_context("/zero-trust/onboarding/", Some(&context));
             let body = format!(
                 r#"
-                <section class="hero compact"><h1>Zero Trust</h1><p>Tenant {}</p><a class="button" href="{}">Agent hinzufuegen</a></section>
+                <section class="hero compact"><h1>Zero Trust</h1><p>Tenant {}</p><div class="actions"><a class="button" href="{}">Agent hinzufuegen</a><a class="button secondary" href="{}">Agent-Rollouts</a></div></section>
                 <section class="zt-focus">
                   <article class="panel zt-score">
                     <span class="eyebrow">Zero-Trust-Reife</span>
@@ -16971,6 +17551,7 @@ async fn web_zero_trust(
                     <p>{}</p>
                   </article>
                 </section>
+                {}
                 {}
                 {}
                 {}
@@ -17015,6 +17596,7 @@ async fn web_zero_trust(
                 "#,
                 context.tenant_id,
                 html_escape(&onboarding_href),
+                html_escape(&rollout_href),
                 score_text_class(posture.average_zero_trust_score),
                 posture.average_zero_trust_score,
                 score_band_badge(posture.average_zero_trust_score),
@@ -17024,6 +17606,7 @@ async fn web_zero_trust(
                 artifacts_section,
                 pki_section,
                 onboarding_section,
+                rollout_section,
                 metric_card("ZT Score", posture.average_zero_trust_score),
                 metric_card("Devices", posture.device_count),
                 metric_card("Aktiv", posture.active_device_count),
@@ -17056,6 +17639,947 @@ async fn web_zero_trust(
             web_page("Zero Trust", "/zero-trust/", Some(&context), &body)
         }
         Err(err) => web_error_page("Zero Trust", "/zero-trust/", &context, &err.to_string()),
+    }
+}
+
+async fn web_agent_rollouts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent-Rollouts", "/zero-trust/rollouts/");
+    };
+    let auth_context = authenticated_tenant_context(&state, &headers).await.ok();
+    let can_admin = auth_context.as_ref().is_some_and(context_is_admin);
+    let Some(store) = state.agent_rollout_store.as_ref() else {
+        return web_store_missing(
+            "Agent-Rollouts",
+            "/zero-trust/rollouts/",
+            &context,
+            "Agent-Rollout",
+        );
+    };
+    let filter = AgentRolloutListFilter {
+        status: query.status.clone(),
+        limit: Some(200),
+        ..AgentRolloutListFilter::default()
+    };
+    let rollouts = match store.list(context.tenant_id, filter).await {
+        Ok(rollouts) => rollouts,
+        Err(error) => {
+            return web_error_page(
+                "Agent-Rollouts",
+                "/zero-trust/rollouts/",
+                &context,
+                &error.safe_message,
+            )
+        }
+    };
+    let summary = store.operations_summary(context.tenant_id).await.ok();
+    let rows = rollouts
+        .iter()
+        .map(|rollout| {
+            let href = web_path_with_context(
+                &format!("/zero-trust/rollouts/{}/", rollout.id),
+                Some(&context),
+            );
+            format!(
+                r#"<tr><td><a href="{}">{}</a></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&href),
+                html_escape(&rollout.name),
+                agent_rollout_status_badge(&rollout.status),
+                html_escape(rollout.active_ring_name.as_deref().unwrap_or("-")),
+                html_escape(&rollout.target_agent_version),
+                rollout.owner_id.map_or_else(|| "-".to_string(), |id| id.to_string()),
+                agent_rollout_status_badge(&rollout.rollback_status),
+                html_escape(&rollout.updated_at),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let metrics = summary.map_or_else(String::new, |summary| {
+        format!(
+            "{}{}{}{}{}",
+            metric_card("Aktiv", summary.active_rollouts),
+            metric_card("Pausiert", summary.paused_rollouts),
+            metric_card("Rollback erforderlich", summary.rollback_required_rollouts),
+            metric_card("Blockierte Ringe", summary.blocked_rings),
+            metric_card("Fehlgeschlagene Ziele", summary.failed_targets),
+        )
+    });
+    let create_form = if can_admin {
+        agent_rollout_create_form(&context)
+    } else {
+        r#"<section class="panel wide"><p class="muted">Lesemodus: Nur Administratoren koennen Rollouts anlegen oder steuern.</p></section>"#.to_string()
+    };
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>Agent-Rollouts</h1><p>Kontrollierte Rollout-Ringe fuer bestehende Agenten. ISCY fuehrt keine Remote-Installation aus.</p></section>
+        <section class="metrics">{}</section>
+        <section class="panel wide">
+          <div class="section-heading"><h2>Rollout-Akten</h2><form method="get" action="/zero-trust/rollouts/" class="inline-form"><select name="status"><option value="">Alle Status</option>{}</select><button type="submit">Filtern</button></form></div>
+          <table><thead><tr><th>Name</th><th>Status</th><th>Aktiver Ring</th><th>Zielversion</th><th>Owner</th><th>Rollback</th><th>Aktualisiert</th></tr></thead><tbody>{}</tbody></table>
+        </section>
+        {}
+        "#,
+        metrics,
+        rollout_status_options(query.status.as_deref().unwrap_or("")),
+        if rows.is_empty() {
+            web_empty_row(7, "Keine Rollouts fuer diesen Filter vorhanden.")
+        } else {
+            rows
+        },
+        create_form,
+    );
+    web_page("Agent-Rollouts", "/zero-trust/", Some(&context), &body)
+}
+
+fn agent_rollout_create_form(context: &WebContext) -> String {
+    let action = web_path_with_context("/zero-trust/rollouts/", Some(context));
+    format!(
+        r#"
+        <section class="panel wide">
+          <h2>Rollout anlegen</h2>
+          <form method="post" action="{}">
+            <fieldset><legend>1. Zielversion, Policy, Artefakt und Scope</legend><div class="form-grid rollout-form-grid">
+              <label>Name<input name="name" maxlength="160" required></label>
+              <label>Ziel-Agent-Version<input name="target_agent_version" maxlength="64" required placeholder="1.4.0"></label>
+              <label>OS-Familie<select name="os_family_filter"><option value="">Alle</option><option value="LINUX">Linux</option><option value="WINDOWS">Windows</option><option value="MACOS">macOS</option></select></label>
+              <label>Deployment-Kanal<select name="deployment_channel_filter"><option value="">Alle</option><option value="manual">Manuell</option><option value="systemd">systemd</option><option value="nixos">NixOS</option><option value="intune">Intune</option><option value="jamf">Jamf</option><option value="other">Andere</option></select></label>
+              <label>Policy-Profil-ID<input type="number" min="1" name="policy_profile_id"></label>
+              <label>Artefakt-ID<input name="artifact_id" maxlength="128"></label>
+              <label>Owner-ID<input type="number" min="1" name="owner_id"></label>
+              <label>Beschreibung<textarea class="rollout-description" name="description" maxlength="10000"></textarea></label>
+            </div></fieldset>
+            <fieldset><legend>2. Devices und Ringzuordnung</legend><p>Nach dem Anlegen werden geeignete bestehende Devices in der Detailakte vorgeschlagen und explizit einem Ring zugeordnet.</p><div class="toggle-row"><label class="checkbox-row"><input type="checkbox" name="canary_not_applicable"> Canary nicht anwendbar</label><label class="checkbox-row"><input type="checkbox" name="pilot_not_applicable"> Pilot nicht anwendbar</label><label class="checkbox-row"><input type="checkbox" name="production_not_applicable"> Production nicht anwendbar</label><label class="checkbox-row"><input type="checkbox" name="critical_not_applicable"> Critical nicht anwendbar</label></div></fieldset>
+            <fieldset><legend>3. Gate-Schwellenwerte und Rollback-Plan</legend><div class="form-grid rollout-form-grid">
+              <label>Mindestscore<input type="number" min="0" max="100" name="minimum_zero_trust_score" value="80" required></label>
+              <label>Heartbeat-Frische Minuten<input type="number" min="1" max="525600" name="heartbeat_freshness_minutes" value="1440" required></label>
+              <label>Max. kritische Findings<input type="number" min="0" name="maximum_critical_findings" value="0" required></label>
+              <label>Mindest-Erfolg %<input type="number" min="1" max="100" name="minimum_success_percent" value="95" required></label>
+              <label>Beobachtung Minuten<input type="number" min="0" max="10080" name="observation_minutes" value="30" required></label>
+              <label>Max. fehlgeschlagene Ziele<input type="number" min="0" name="max_failed_targets" value="0" required></label>
+              <label>Signaturpolicy<select name="signature_requirement"><option value="not_required">Nicht erforderlich</option><option value="metadata_only" selected>Metadaten pruefen</option><option value="verified_required">Verifiziert erforderlich</option></select></label>
+              <label>Zertifikatsanforderung<select name="certificate_requirement"><option value="not_required">Nicht erforderlich</option><option value="active_required">Aktives Zertifikat</option><option value="mtls_bound_required">mTLS-Bindung</option></select></label>
+              <label class="checkbox-row"><input type="checkbox" name="require_verified_artifact_checksum" checked> Verifizierte Artefakt-Checksumme erforderlich</label>
+            </div><label>Rollback-Plan<textarea class="rollout-plan" name="rollback_plan" maxlength="10000" required placeholder="Operatorgefuehrtes Vorgehen ohne Befehle oder URLs"></textarea></label></fieldset>
+            <fieldset><legend>4. Zusammenfassung</legend><p>Beim Speichern entstehen genau die Ringe Lab, Canary, Pilot, Production und Critical. Der Rollout bleibt im Entwurf und startet keine Verteilung.</p><button type="submit">Rollout-Entwurf anlegen</button></fieldset>
+          </form>
+        </section>
+        "#,
+        html_escape(&action),
+    )
+}
+
+async fn web_agent_rollout_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebAgentRolloutCreateForm>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent-Rollouts", "/zero-trust/rollouts/").into_response();
+    };
+    let (auth_context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(_) => {
+                return web_error_page(
+                    "Agent-Rollouts",
+                    "/zero-trust/rollouts/",
+                    &context,
+                    "Diese Aktion benoetigt eine Admin-Rolle.",
+                )
+                .into_response()
+            }
+        };
+    let mut not_applicable_rings = Vec::new();
+    for (selected, ring_name) in [
+        (form.canary_not_applicable.is_some(), "canary"),
+        (form.pilot_not_applicable.is_some(), "pilot"),
+        (form.production_not_applicable.is_some(), "production"),
+        (form.critical_not_applicable.is_some(), "critical"),
+    ] {
+        if selected {
+            not_applicable_rings.push(ring_name.to_string());
+        }
+    }
+    let payload = AgentRolloutWriteRequest {
+        name: form.name,
+        description: form.description,
+        target_agent_version: form.target_agent_version,
+        rollback_plan: form.rollback_plan,
+        artifact_id: form.artifact_id,
+        policy_profile_id: form.policy_profile_id,
+        owner_id: form.owner_id,
+        os_family_filter: form.os_family_filter,
+        deployment_channel_filter: form.deployment_channel_filter,
+        minimum_zero_trust_score: form.minimum_zero_trust_score,
+        heartbeat_freshness_minutes: form.heartbeat_freshness_minutes,
+        maximum_critical_findings: form.maximum_critical_findings,
+        require_verified_artifact_checksum: form.require_verified_artifact_checksum.is_some(),
+        signature_requirement: form.signature_requirement,
+        certificate_requirement: form.certificate_requirement,
+        minimum_success_percent: form.minimum_success_percent,
+        observation_minutes: form.observation_minutes,
+        max_failed_targets: form.max_failed_targets,
+        ring_overrides: Vec::new(),
+        not_applicable_rings,
+    };
+    match store
+        .create_rollout(context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(detail) => Redirect::to(&web_path_with_context(
+            &format!("/zero-trust/rollouts/{}/", detail.rollout.id),
+            Some(&context),
+        ))
+        .into_response(),
+        Err(error) => web_error_page(
+            "Agent-Rollouts",
+            "/zero-trust/rollouts/",
+            &context,
+            &error.safe_message,
+        )
+        .into_response(),
+    }
+}
+
+fn rollout_status_options(selected: &str) -> String {
+    [
+        "draft",
+        "ready",
+        "active",
+        "paused",
+        "completed",
+        "aborted",
+        "rollback_required",
+        "rolled_back",
+    ]
+    .iter()
+    .map(|status| {
+        format!(
+            r#"<option value="{}" {}>{}</option>"#,
+            status,
+            if *status == selected { "selected" } else { "" },
+            status.replace('_', " ")
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("")
+}
+
+fn agent_rollout_status_badge(status: &str) -> String {
+    let class_name = match status {
+        "active" | "ready" | "passed" | "succeeded" | "eligible" | "completed" => "ok-badge",
+        "paused" | "observing" | "in_progress" | "scheduled" | "pending" | "prepared" => {
+            "warning-badge"
+        }
+        "failed" | "blocked" | "rollback_required" => "danger-badge",
+        _ => "muted-badge",
+    };
+    web_badge(&status.replace('_', " "), class_name)
+}
+
+async fn web_agent_rollout_detail(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+) -> Html<String> {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent-Rollout", "/zero-trust/rollouts/");
+    };
+    let auth_context = authenticated_tenant_context(&state, &headers).await.ok();
+    let can_write = auth_context
+        .as_ref()
+        .is_some_and(AuthenticatedTenantContext::can_write);
+    let can_admin = auth_context.as_ref().is_some_and(context_is_admin);
+    let Some(store) = state.agent_rollout_store.as_ref() else {
+        return web_store_missing(
+            "Agent-Rollout",
+            "/zero-trust/rollouts/",
+            &context,
+            "Agent-Rollout",
+        );
+    };
+    let detail = match store.detail(context.tenant_id, rollout_id).await {
+        Ok(detail) => detail,
+        Err(error) => {
+            return web_error_page(
+                "Agent-Rollout",
+                "/zero-trust/rollouts/",
+                &context,
+                &error.safe_message,
+            )
+        }
+    };
+    let preview = if detail.rollout.status == "draft" {
+        store
+            .target_preview(
+                context.tenant_id,
+                rollout_id,
+                AgentRolloutTargetPreviewRequest {
+                    limit: Some(100),
+                    ..AgentRolloutTargetPreviewRequest::default()
+                },
+            )
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let ring_rows = detail
+        .rings
+        .iter()
+        .map(|ring| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}%</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&ring.ring_name),
+                agent_rollout_status_badge(&ring.status),
+                ring.target_count,
+                ring.minimum_success_percent,
+                ring.max_failed_targets,
+                ring.observation_minutes,
+                format_args!("{} / {}", ring.succeeded_count, ring.failed_count),
+                agent_rollout_ring_actions(&context, &detail, ring, can_write, can_admin),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let target_rows = detail
+        .targets
+        .iter()
+        .map(|target| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&target.hostname),
+                html_escape(&target.os_family),
+                html_escape(&target.ring_name),
+                agent_rollout_status_badge(&target.status),
+                agent_rollout_status_badge(&target.preflight_status),
+                agent_rollout_status_badge(&target.deployment_status),
+                agent_rollout_status_badge(&target.postflight_status),
+                agent_rollout_status_badge(&target.rollback_status),
+                agent_rollout_target_actions(&context, rollout_id, target, can_write, can_admin),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let preview_rows = preview
+        .iter()
+        .map(|target| {
+            let reasons = if target.reasons.is_empty() {
+                "Keine Blocker".to_string()
+            } else {
+                target.reasons.join("; ")
+            };
+            let assign = if can_admin {
+                format!(
+                    r#"<form method="post" action="{}" class="inline-form"><input type="hidden" name="device_id" value="{}"><select name="ring_name">{}</select><button type="submit">Zuordnen</button></form>"#,
+                    html_escape(&web_path_with_context(
+                        &format!("/zero-trust/rollouts/{rollout_id}/targets"),
+                        Some(&context),
+                    )),
+                    target.device_id,
+                    detail
+                        .rings
+                        .iter()
+                        .filter(|ring| ring.status != "not_applicable")
+                        .map(|ring| format!(
+                            r#"<option value="{}">{}</option>"#,
+                            html_escape(&ring.ring_name),
+                            html_escape(&ring.ring_name)
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(""),
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&target.hostname),
+                html_escape(&target.os_family),
+                html_escape(&target.deployment_channel),
+                if target.eligible { agent_rollout_status_badge("eligible") } else { agent_rollout_status_badge("blocked") },
+                format_args!("{}{}", html_escape(&reasons), assign),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let check_rows = detail
+        .checks
+        .iter()
+        .map(|check| {
+            let target_name = check
+                .target_id
+                .and_then(|target_id| {
+                    detail
+                        .targets
+                        .iter()
+                        .find(|target| target.id == target_id)
+                        .map(|target| target.hostname.as_str())
+                })
+                .unwrap_or("Ring");
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(target_name),
+                html_escape(&check.phase),
+                html_escape(&check.check_type),
+                agent_rollout_status_badge(&check.status),
+                html_escape(&check.summary),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let event_rows = detail
+        .events
+        .iter()
+        .map(|event| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&event.created_at),
+                html_escape(&event.event_type.replace('_', " ")),
+                html_escape(&event.summary),
+                event
+                    .actor_id
+                    .map_or_else(|| "System".to_string(), |id| format!("User {id}")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let overall_actions = agent_rollout_overall_actions(&context, &detail, can_admin);
+    let owner = detail
+        .rollout
+        .owner_id
+        .map_or_else(|| "Nicht zugewiesen".to_string(), |id| format!("User {id}"));
+    let body = format!(
+        r#"
+        <section class="hero compact"><h1>{}</h1><p>Zielversion {} · {}</p><a class="button secondary" href="{}">Zurueck zur Uebersicht</a></section>
+        <section class="panel wide"><div class="section-heading"><h2>Rolloutstatus</h2>{}</div><section class="metrics">{}{}{}{}{}</section><dl class="detail-list"><dt>Owner</dt><dd>{}</dd><dt>Scope</dt><dd>{} · {}</dd><dt>Signatur</dt><dd>{}</dd><dt>Zertifikat/mTLS</dt><dd>{}</dd><dt>Rollback-Plan</dt><dd>{}</dd></dl><p class="warning">ISCY dokumentiert Freigaben und Ergebnisse. Es werden keine Remote-Installationen, Agent-Befehle oder technischen Rollbacks ausgefuehrt.</p>{}</section>
+        <section class="panel wide"><h2>Ring-Timeline und Gates</h2><table><thead><tr><th>Ring</th><th>Status</th><th>Ziele</th><th>Erfolg</th><th>Max. Fehler</th><th>Beobachtung</th><th>Erfolg/Fehler</th><th>Aktion</th></tr></thead><tbody>{}</tbody></table></section>
+        <section class="panel wide"><h2>Ziel-Devices</h2><table><thead><tr><th>Device</th><th>OS</th><th>Ring</th><th>Status</th><th>Preflight</th><th>Deployment</th><th>Postflight</th><th>Rollback</th><th>Aktion</th></tr></thead><tbody>{}</tbody></table></section>
+        <section class="panel wide"><h2>Verfuegbare Devices</h2><table><thead><tr><th>Device</th><th>OS</th><th>Kanal</th><th>Eligibility</th><th>Gruende / Zuordnung</th></tr></thead><tbody>{}</tbody></table></section>
+        <section class="panel wide"><h2>Preflight und Postflight</h2><table><thead><tr><th>Ziel</th><th>Phase</th><th>Check</th><th>Status</th><th>Bewertung</th></tr></thead><tbody>{}</tbody></table></section>
+        <section class="panel wide"><h2>Audit-Historie</h2><table><thead><tr><th>Zeit</th><th>Ereignis</th><th>Zusammenfassung</th><th>Akteur</th></tr></thead><tbody>{}</tbody></table></section>
+        "#,
+        html_escape(&detail.rollout.name),
+        html_escape(&detail.rollout.target_agent_version),
+        agent_rollout_status_badge(&detail.rollout.status),
+        html_escape(&web_path_with_context(
+            "/zero-trust/rollouts/",
+            Some(&context)
+        )),
+        agent_rollout_status_badge(&detail.rollout.status),
+        metric_card("Ringe", detail.rings.len() as i64),
+        metric_card("Ziele", detail.targets.len() as i64),
+        metric_card(
+            "Erfolgreich",
+            detail
+                .targets
+                .iter()
+                .filter(|target| target.status == "succeeded")
+                .count() as i64
+        ),
+        metric_card(
+            "Fehlgeschlagen",
+            detail
+                .targets
+                .iter()
+                .filter(|target| target.status == "failed")
+                .count() as i64
+        ),
+        metric_card(
+            "Blockiert",
+            detail
+                .targets
+                .iter()
+                .filter(|target| target.status == "blocked")
+                .count() as i64
+        ),
+        html_escape(&owner),
+        html_escape(if detail.rollout.os_family_filter.is_empty() {
+            "Alle OS"
+        } else {
+            &detail.rollout.os_family_filter
+        }),
+        html_escape(if detail.rollout.deployment_channel_filter.is_empty() {
+            "Alle Kanaele"
+        } else {
+            &detail.rollout.deployment_channel_filter
+        }),
+        html_escape(&detail.rollout.signature_requirement),
+        html_escape(&detail.rollout.certificate_requirement),
+        html_escape(&detail.rollout.rollback_plan),
+        overall_actions,
+        if ring_rows.is_empty() {
+            web_empty_row(8, "Keine Ringe vorhanden.")
+        } else {
+            ring_rows
+        },
+        if target_rows.is_empty() {
+            web_empty_row(9, "Noch keine Ziele zugeordnet.")
+        } else {
+            target_rows
+        },
+        if preview_rows.is_empty() {
+            web_empty_row(5, "Keine weiteren geeigneten Devices verfuegbar.")
+        } else {
+            preview_rows
+        },
+        if check_rows.is_empty() {
+            web_empty_row(5, "Noch keine Gate-Pruefungen vorhanden.")
+        } else {
+            check_rows
+        },
+        if event_rows.is_empty() {
+            web_empty_row(4, "Noch keine Audit-Ereignisse vorhanden.")
+        } else {
+            event_rows
+        },
+    );
+    web_page("Agent-Rollout", "/zero-trust/", Some(&context), &body)
+}
+
+fn agent_rollout_ring_actions(
+    context: &WebContext,
+    detail: &agent_rollout_store::AgentRolloutDetail,
+    ring: &agent_rollout_store::AgentRolloutRing,
+    can_write: bool,
+    can_admin: bool,
+) -> String {
+    let action = |name: &str| {
+        web_path_with_context(
+            &format!("/zero-trust/rollouts/{}/actions/{name}", detail.rollout.id),
+            Some(context),
+        )
+    };
+    let hidden_ring = format!(
+        r#"<input type="hidden" name="ring_name" value="{}">"#,
+        html_escape(&ring.ring_name)
+    );
+    let mut forms = Vec::new();
+    if can_write && matches!(ring.status.as_str(), "pending" | "ready") {
+        forms.push(format!(
+            r#"<form method="post" action="{}">{}<button type="submit">Preflight</button></form>"#,
+            html_escape(&action("preflight")),
+            hidden_ring
+        ));
+    }
+    if can_admin && ring.status == "ready" {
+        forms.push(agent_rollout_confirm_form(
+            &action("start"),
+            &hidden_ring,
+            "Ring starten",
+            "Externe Verteilung ist organisatorisch freigegeben.",
+        ));
+    }
+    if can_write && matches!(ring.status.as_str(), "active" | "observing") {
+        forms.push(format!(
+            r#"<form method="post" action="{}">{}<button type="submit">Postflight</button></form>"#,
+            html_escape(&action("postflight")),
+            hidden_ring
+        ));
+    }
+    if can_write && ring.status == "observing" {
+        forms.push(format!(r#"<form method="post" action="{}">{}<button type="submit">Gate auswerten</button></form>"#, html_escape(&action("evaluate")), hidden_ring));
+    }
+    if can_admin && ring.status == "passed" && ring.approved_at.is_none() {
+        forms.push(agent_rollout_confirm_form(
+            &action("promote"),
+            &hidden_ring,
+            "Promotion",
+            "Menschliche Ring-Freigabe erteilen.",
+        ));
+    }
+    forms.join("")
+}
+
+fn agent_rollout_confirm_form(
+    action: &str,
+    hidden_fields: &str,
+    label: &str,
+    default_reason: &str,
+) -> String {
+    format!(
+        r#"<details><summary>{}</summary><form method="post" action="{}">{}<label>Begruendung<input name="reason" maxlength="1000" value="{}" required></label><label><input type="checkbox" name="confirmed" value="yes" required> Aktion nochmals bestaetigen</label><button type="submit" class="danger">Bestaetigen</button></form></details>"#,
+        html_escape(label),
+        html_escape(action),
+        hidden_fields,
+        html_escape(default_reason),
+    )
+}
+
+fn agent_rollout_overall_actions(
+    context: &WebContext,
+    detail: &agent_rollout_store::AgentRolloutDetail,
+    can_admin: bool,
+) -> String {
+    if !can_admin {
+        return String::new();
+    }
+    let action = |name: &str| {
+        web_path_with_context(
+            &format!("/zero-trust/rollouts/{}/actions/{name}", detail.rollout.id),
+            Some(context),
+        )
+    };
+    let mut forms = Vec::new();
+    if matches!(detail.rollout.status.as_str(), "draft" | "ready") {
+        forms.push(format!(r#"<form method="post" action="{}"><button type="submit">Readiness validieren</button></form>"#, html_escape(&action("validate"))));
+    }
+    if detail.rollout.status == "active" {
+        forms.push(format!(r#"<form method="post" action="{}"><input type="hidden" name="confirmed" value="yes"><label>Pause-Grund<input name="reason" maxlength="1000" required></label><button type="submit">Pausieren</button></form>"#, html_escape(&action("pause"))));
+    }
+    if detail.rollout.status == "paused" {
+        forms.push(format!(r#"<form method="post" action="{}"><input type="hidden" name="confirmed" value="yes"><label>Resume-Grund<input name="reason" maxlength="1000" required></label><button type="submit">Fortsetzen</button></form>"#, html_escape(&action("resume"))));
+    }
+    if matches!(detail.rollout.status.as_str(), "active" | "paused") {
+        let ring_name = detail.rollout.active_ring_name.as_deref().unwrap_or("");
+        let hidden = format!(
+            r#"<input type="hidden" name="ring_name" value="{}">"#,
+            html_escape(ring_name)
+        );
+        forms.push(agent_rollout_confirm_form(
+            &action("rollback"),
+            &hidden,
+            "Rollback anfordern",
+            "Operatorgefuehrten Rollback fuer den aktiven Ring anfordern.",
+        ));
+    }
+    if matches!(
+        detail.rollout.status.as_str(),
+        "draft" | "ready" | "active" | "paused" | "rollback_required"
+    ) {
+        forms.push(agent_rollout_confirm_form(
+            &action("abort"),
+            "",
+            "Rollout abbrechen",
+            "Rollout organisatorisch abbrechen; keine technische Deinstallation.",
+        ));
+    }
+    format!(r#"<div class="actions">{}</div>"#, forms.join(""))
+}
+
+fn agent_rollout_target_actions(
+    context: &WebContext,
+    rollout_id: i64,
+    target: &agent_rollout_store::AgentRolloutTarget,
+    can_write: bool,
+    can_admin: bool,
+) -> String {
+    let action = web_path_with_context(
+        &format!(
+            "/zero-trust/rollouts/{rollout_id}/targets/{}/result",
+            target.id
+        ),
+        Some(context),
+    );
+    if can_admin && target.status == "rollback_required" {
+        return format!(
+            r#"<details><summary>Rollback abschliessen</summary><form method="post" action="{}"><input type="hidden" name="rollback_completion" value="yes"><select name="status"><option value="rolled_back">Zurueckgerollt</option><option value="failed">Fehlgeschlagen</option></select><label>Beobachtete Version<input name="observed_agent_version" maxlength="64"></label><label>Zusammenfassung<textarea name="operator_note" maxlength="4000" required></textarea></label><label><input type="checkbox" name="confirmed" value="yes" required> Abschluss nochmals bestaetigen</label><button type="submit" class="danger">Rollback-Ergebnis speichern</button></form></details>"#,
+            html_escape(&action)
+        );
+    }
+    if can_write && matches!(target.status.as_str(), "scheduled" | "in_progress") {
+        return format!(
+            r#"<details><summary>Externes Ergebnis</summary><form method="post" action="{}"><select name="status"><option value="in_progress">In Arbeit</option><option value="succeeded">Erfolgreich dokumentiert</option><option value="failed">Fehlgeschlagen</option></select><label>Beobachtete Version<input name="observed_agent_version" maxlength="64"></label><label>Fehlerklasse<select name="error_class"><option value="">Keine</option><option value="network">Netzwerk</option><option value="package">Paket</option><option value="verification">Verifikation</option><option value="policy">Policy</option><option value="timeout">Timeout</option><option value="unknown">Unbekannt</option></select></label><label>Operator-Notiz<textarea name="operator_note" maxlength="4000"></textarea></label><button type="submit">Ergebnis speichern</button></form></details>"#,
+            html_escape(&action)
+        );
+    }
+    String::new()
+}
+
+async fn web_agent_rollout_action(
+    Path((rollout_id, action)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebAgentRolloutActionForm>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent-Rollout", "/zero-trust/rollouts/").into_response();
+    };
+    let permission = match action.as_str() {
+        "preflight" | "postflight" | "evaluate" => AgentRolloutPermission::Write,
+        "validate" | "start" | "promote" | "pause" | "resume" | "abort" | "rollback" => {
+            AgentRolloutPermission::Admin
+        }
+        _ => {
+            return web_error_page(
+                "Agent-Rollout",
+                "/zero-trust/rollouts/",
+                &context,
+                "Unbekannte Rollout-Aktion.",
+            )
+            .into_response()
+        }
+    };
+    let (auth_context, store) = match agent_rollout_access(&state, &headers, permission).await {
+        Ok(value) => value,
+        Err(_) => {
+            return web_error_page(
+                "Agent-Rollout",
+                "/zero-trust/rollouts/",
+                &context,
+                "Die Rolle ist fuer diese Aktion nicht berechtigt.",
+            )
+            .into_response()
+        }
+    };
+    let confirmation = AgentRolloutConfirmationRequest {
+        confirmed: form.confirmed.is_some(),
+        reason: form.reason.clone(),
+    };
+    let result = match action.as_str() {
+        "validate" => store
+            .validate_rollout(context.tenant_id, rollout_id, auth_context.user_id)
+            .await
+            .map(|validation| validation.detail),
+        "preflight" => {
+            store
+                .run_preflight(
+                    context.tenant_id,
+                    rollout_id,
+                    &form.ring_name,
+                    auth_context.user_id,
+                )
+                .await
+        }
+        "start" => {
+            store
+                .start_ring(
+                    context.tenant_id,
+                    rollout_id,
+                    &form.ring_name,
+                    auth_context.user_id,
+                    confirmation,
+                )
+                .await
+        }
+        "postflight" => {
+            store
+                .run_postflight(
+                    context.tenant_id,
+                    rollout_id,
+                    &form.ring_name,
+                    auth_context.user_id,
+                )
+                .await
+        }
+        "evaluate" => {
+            store
+                .evaluate_ring(
+                    context.tenant_id,
+                    rollout_id,
+                    &form.ring_name,
+                    auth_context.user_id,
+                )
+                .await
+        }
+        "promote" => {
+            store
+                .promote_ring(
+                    context.tenant_id,
+                    rollout_id,
+                    &form.ring_name,
+                    auth_context.user_id,
+                    confirmation,
+                )
+                .await
+        }
+        "pause" => {
+            store
+                .pause(
+                    context.tenant_id,
+                    rollout_id,
+                    auth_context.user_id,
+                    confirmation,
+                )
+                .await
+        }
+        "resume" => {
+            store
+                .resume(
+                    context.tenant_id,
+                    rollout_id,
+                    auth_context.user_id,
+                    confirmation,
+                )
+                .await
+        }
+        "abort" => {
+            store
+                .abort(
+                    context.tenant_id,
+                    rollout_id,
+                    auth_context.user_id,
+                    confirmation,
+                )
+                .await
+        }
+        "rollback" => {
+            store
+                .request_rollback(
+                    context.tenant_id,
+                    rollout_id,
+                    auth_context.user_id,
+                    AgentRolloutRollbackRequest {
+                        confirmed: confirmation.confirmed,
+                        reason: confirmation.reason,
+                        ring_name: (!form.ring_name.trim().is_empty())
+                            .then(|| form.ring_name.trim().to_string()),
+                        target_ids: Vec::new(),
+                    },
+                )
+                .await
+        }
+        _ => unreachable!(),
+    };
+    match result {
+        Ok(_) => Redirect::to(&web_path_with_context(
+            &format!("/zero-trust/rollouts/{rollout_id}/"),
+            Some(&context),
+        ))
+        .into_response(),
+        Err(error) => web_error_page(
+            "Agent-Rollout",
+            "/zero-trust/rollouts/",
+            &context,
+            &error.safe_message,
+        )
+        .into_response(),
+    }
+}
+
+async fn web_agent_rollout_target_assign(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebAgentRolloutTargetForm>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent-Rollout", "/zero-trust/rollouts/").into_response();
+    };
+    let (auth_context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(_) => {
+                return web_error_page(
+                    "Agent-Rollout",
+                    "/zero-trust/rollouts/",
+                    &context,
+                    "Diese Aktion benoetigt eine Admin-Rolle.",
+                )
+                .into_response()
+            }
+        };
+    let result = store
+        .assign_targets(
+            context.tenant_id,
+            rollout_id,
+            auth_context.user_id,
+            AgentRolloutTargetAssignmentRequest {
+                assignments: vec![agent_rollout_store::AgentRolloutTargetAssignment {
+                    device_id: form.device_id,
+                    ring_name: form.ring_name,
+                }],
+            },
+        )
+        .await;
+    match result {
+        Ok(_) => Redirect::to(&web_path_with_context(
+            &format!("/zero-trust/rollouts/{rollout_id}/"),
+            Some(&context),
+        ))
+        .into_response(),
+        Err(error) => web_error_page(
+            "Agent-Rollout",
+            "/zero-trust/rollouts/",
+            &context,
+            &error.safe_message,
+        )
+        .into_response(),
+    }
+}
+
+async fn web_agent_rollout_target_result(
+    Path((rollout_id, target_id)): Path<(i64, i64)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebAgentRolloutResultForm>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent-Rollout", "/zero-trust/rollouts/").into_response();
+    };
+    let permission = if form.rollback_completion.is_some() {
+        AgentRolloutPermission::Admin
+    } else {
+        AgentRolloutPermission::Write
+    };
+    let (auth_context, store) = match agent_rollout_access(&state, &headers, permission).await {
+        Ok(value) => value,
+        Err(_) => {
+            return web_error_page(
+                "Agent-Rollout",
+                "/zero-trust/rollouts/",
+                &context,
+                "Die Rolle ist fuer diese Aktion nicht berechtigt.",
+            )
+            .into_response()
+        }
+    };
+    let result = if form.rollback_completion.is_some() {
+        store
+            .complete_rollback(
+                context.tenant_id,
+                rollout_id,
+                auth_context.user_id,
+                AgentRolloutRollbackCompleteRequest {
+                    confirmed: form.confirmed.is_some(),
+                    results: vec![agent_rollout_store::AgentRolloutRollbackTargetResult {
+                        target_id,
+                        status: form.status,
+                        observed_version: form.observed_agent_version,
+                        summary: form.operator_note,
+                    }],
+                },
+            )
+            .await
+    } else {
+        store
+            .record_deployment_result(
+                context.tenant_id,
+                rollout_id,
+                target_id,
+                auth_context.user_id,
+                AgentRolloutDeploymentResultRequest {
+                    status: form.status,
+                    observed_version: form.observed_agent_version,
+                    error_class: form.error_class,
+                    operator_note: form.operator_note,
+                    observed_at: None,
+                },
+            )
+            .await
+    };
+    match result {
+        Ok(_) => Redirect::to(&web_path_with_context(
+            &format!("/zero-trust/rollouts/{rollout_id}/"),
+            Some(&context),
+        ))
+        .into_response(),
+        Err(error) => web_error_page(
+            "Agent-Rollout",
+            "/zero-trust/rollouts/",
+            &context,
+            &error.safe_message,
+        )
+        .into_response(),
     }
 }
 
@@ -26928,6 +28452,7 @@ async fn status_operations_payload(
         alertmanager_incident_metrics_for_status(state, context.as_ref()).await;
     let alertmanager_incident_details =
         alertmanager_incident_details_for_status(state, context.as_ref()).await;
+    let agent_rollouts = agent_rollout_metrics_for_status(state, context.as_ref()).await;
     StatusOperationsJsonResponse {
         accepted: true,
         api_version: "v1",
@@ -26970,6 +28495,7 @@ async fn status_operations_payload(
         alertmanager_incidents,
         alertmanager_incident_details,
         product_security_trends,
+        agent_rollouts,
     }
 }
 
@@ -27135,7 +28661,53 @@ fn status_operations_metrics_body(payload: &StatusOperationsJsonResponse) -> Str
     if let Some(trends) = payload.product_security_trends.as_ref() {
         push_product_security_trend_metrics(&mut body, trends);
     }
+    if let Some(metrics) = payload.agent_rollouts.as_ref() {
+        push_agent_rollout_metrics(&mut body, metrics);
+    }
     body
+}
+
+async fn agent_rollout_metrics_for_status(
+    state: &AppState,
+    context: Option<&WebContext>,
+) -> Option<AgentRolloutOperationsSummary> {
+    let context = context?;
+    let store = state.agent_rollout_store.as_ref()?;
+    store.operations_summary(context.tenant_id).await.ok()
+}
+
+fn push_agent_rollout_metrics(body: &mut String, metrics: &AgentRolloutOperationsSummary) {
+    for (name, help, value) in [
+        (
+            "iscy_agent_rollouts_active",
+            "Number of active tenant-scoped agent rollouts.",
+            metrics.active_rollouts,
+        ),
+        (
+            "iscy_agent_rollouts_paused",
+            "Number of paused tenant-scoped agent rollouts.",
+            metrics.paused_rollouts,
+        ),
+        (
+            "iscy_agent_rollouts_rollback_required",
+            "Number of tenant-scoped agent rollouts requiring operator-guided rollback.",
+            metrics.rollback_required_rollouts,
+        ),
+        (
+            "iscy_agent_rollout_blocked_rings",
+            "Number of failed or rollback-required rollout rings.",
+            metrics.blocked_rings,
+        ),
+        (
+            "iscy_agent_rollout_failed_targets",
+            "Number of failed agent rollout targets.",
+            metrics.failed_targets,
+        ),
+    ] {
+        body.push_str(&format!(
+            "# HELP {name} {help}\n# TYPE {name} gauge\n{name} {value}\n"
+        ));
+    }
 }
 
 async fn alertmanager_incident_metrics_for_status(
@@ -36595,6 +38167,9 @@ fn web_page(
     input[type="checkbox"] {{ width:auto; }}
     .checkbox-row {{ display:flex; align-items:center; gap:8px; }}
     .form-grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px; }}
+    .rollout-form-grid {{ align-items:start; }}
+    .rollout-description {{ min-height:96px; font-family:inherit; }}
+    .rollout-plan {{ min-height:140px; font-family:inherit; }}
     .editor-stack {{ display:grid; gap:16px; }}
     .user-editor {{ padding:14px 0; border-top:1px solid var(--line); }}
     .user-editor:first-child {{ padding-top:0; border-top:0; }}
@@ -41017,6 +42592,74 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/agents/posture", get(agent_posture))
         .route("/api/v1/agents/governance", get(agent_fleet_governance))
+        .route(
+            "/api/v1/agents/rollouts",
+            get(agent_rollouts_list).post(agent_rollout_create),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}",
+            get(agent_rollout_detail).patch(agent_rollout_update),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/target-preview",
+            post(agent_rollout_target_preview),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/targets",
+            get(agent_rollout_targets).post(agent_rollout_targets_assign),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/validate",
+            post(agent_rollout_validate),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/preflight",
+            post(agent_rollout_preflight),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/start",
+            post(agent_rollout_ring_start),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/targets/{target_id}/deployment-result",
+            post(agent_rollout_deployment_result),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/postflight",
+            post(agent_rollout_postflight),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/evaluate",
+            post(agent_rollout_evaluate),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/promote",
+            post(agent_rollout_promote),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/pause",
+            post(agent_rollout_pause),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/resume",
+            post(agent_rollout_resume),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/abort",
+            post(agent_rollout_abort),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/rollback",
+            post(agent_rollout_rollback),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/rollback/complete",
+            post(agent_rollout_rollback_complete),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/events",
+            get(agent_rollout_events),
+        )
         .route("/api/v1/agents/policies", post(agent_policy_create))
         .route(
             "/api/v1/agents/policies/{policy_id}",
@@ -41645,6 +43288,26 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/operations/incidents/", get(web_operations_incidents))
         .route("/zero-trust/", get(web_zero_trust))
+        .route(
+            "/zero-trust/rollouts/",
+            get(web_agent_rollouts).post(web_agent_rollout_create),
+        )
+        .route(
+            "/zero-trust/rollouts/{rollout_id}/",
+            get(web_agent_rollout_detail),
+        )
+        .route(
+            "/zero-trust/rollouts/{rollout_id}/actions/{action}",
+            post(web_agent_rollout_action),
+        )
+        .route(
+            "/zero-trust/rollouts/{rollout_id}/targets",
+            post(web_agent_rollout_target_assign),
+        )
+        .route(
+            "/zero-trust/rollouts/{rollout_id}/targets/{target_id}/result",
+            post(web_agent_rollout_target_result),
+        )
         .route("/zero-trust/onboarding/", get(web_agent_onboarding))
         .route(
             "/zero-trust/onboarding/preview",
