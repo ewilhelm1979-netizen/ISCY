@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 docker.io/library/rust:1.88-bookworm@sha256:4727898c104ecd2e22d780925832502faee9fe4e70581b8572af081370b315a0 AS builder
+FROM --platform=linux/amd64 docker.io/library/rust:1.97-bookworm@sha256:77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa AS builder
 
 ARG SOURCE_DATE_EPOCH
 WORKDIR /usr/src/iscy/rust/iscy-backend
