@@ -132,7 +132,9 @@ expect_failure invalid_structure structure
 
 # Development: lokale Buildpfade ablehnen, ohne sie auszugeben.
 write_valid_sbom
-jq '.metadata.component.name = "/home/test/build"' "$sbom" >"$tmp_dir/local-path-sbom.json"
+test_local_path="$(printf '/%s/%s/%s' home test build)"
+jq --arg path "$test_local_path" '.metadata.component.name = $path' \
+    "$sbom" >"$tmp_dir/local-path-sbom.json"
 mv "$tmp_dir/local-path-sbom.json" "$sbom"
 write_manifest development_unreleased "$(sha256sum "$sbom" | cut -d ' ' -f 1)"
 rm -f "$make_log"
