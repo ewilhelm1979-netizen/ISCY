@@ -15,6 +15,21 @@ for command in cargo cargo-audit cargo-cyclonedx cargo-deny docker file jq ldd n
     require_command "$command"
 done
 
+release_status="$(jq -er '.release_status | select(type == "string")' release/release-manifest.json)" || {
+    echo 'RC_CHECK_ERROR[release_status]: Release-Status fehlt oder ist ungueltig.' >&2
+    exit 1
+}
+case "$release_status" in
+    development_unreleased)
+        rm -rf artifacts/release-candidate
+        ;;
+    prepared_not_published) ;;
+    *)
+        echo 'RC_CHECK_ERROR[release_status]: Nicht unterstuetzter Root-Release-Status.' >&2
+        exit 1
+        ;;
+esac
+
 if [[ -z "${ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL:-}" \
     || -z "${ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL:-}" ]]; then
     echo 'RC_CHECK_ERROR[postgres_restore]: Zwei wegwerfbare PostgreSQL-Drill-URLs muessen gesetzt sein.' >&2
@@ -56,9 +71,19 @@ nix flake check
 COMPOSE_ENV_FILE=.env.example make docker-check
 docker build --file rust/iscy-backend/Dockerfile .
 make docs-pdf
-make release-sbom
+./scripts/handle_release_sbom_lifecycle.sh
 make release-binary-gate
-make release-candidate-artifacts
+if [[ "$release_status" == 'prepared_not_published' ]]; then
+    make release-candidate-artifacts
+fi
 make release-candidate-metadata-check
 
-echo 'RC_CHECK_OK: vollstaendige lokale Release-Candidate-Pruefung erfolgreich; nichts veroeffentlicht.'
+if [[ "$release_status" == 'development_unreleased' ]]; then
+    [[ ! -e artifacts/release-candidate ]] || {
+        echo 'RC_CHECK_ERROR[release_status]: Development-Gate hat unerwartet ein Release-Bundle hinterlassen.' >&2
+        exit 1
+    }
+    echo 'DEV_CHECK_OK: vollstaendiger Entwicklungsstand geprueft; kein Release-Bundle erzeugt und nichts veroeffentlicht.'
+else
+    echo 'RC_CHECK_OK: vollstaendige lokale Release-Candidate-Pruefung erfolgreich; nichts veroeffentlicht.'
+fi

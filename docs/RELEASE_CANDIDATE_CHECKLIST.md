@@ -1,15 +1,18 @@
-# ISCY V23.7.29 Release-Checkliste
+# ISCY Development- und Release-Candidate-Checkliste
 
-Diese Checkliste beschreibt den vorbereiteten stabilen Stand fuer `V23.7.29`.
+Diese Checkliste beschreibt den kontrollierten Development-Zyklus fuer
+`V23.7.30` und die davon getrennte spaetere Release-Candidate-Vorbereitung.
 Sie ist ein technischer und fachlicher Review-Nachweis, keine Freigabe,
-Zertifizierung, Rechtsberatung oder Veroeffentlichung.
+Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
 
 ## Geprüfter Ausgangsstand
 
-- Basis: `origin/main` nach den Platform-Maintenance-PRs #56 bis #59
-- Basis-Commit: `97cebb48a6e0ef581fe5de35b7625c7cc368351e`
-- Vorgängerrelease: `V23.7.28-rc.1`
-- Zielversion: `V23.7.29`
+- Basis: veroeffentlichtes Stable Release `V23.7.29`
+- Basis-Commit: `ba47201885435d57efc5042acde665f42dc000df`
+- Release-ID: `353634425`
+- Published-Snapshot: `release/published/V23.7.29.json`
+- Development-Zielversion: `V23.7.30`
+- Root-Status: `development_unreleased`
 - Internes Rust-Paket: `0.3.22`
 - Rust-Haupttoolchain: `1.97.0`
 - MSRV und portabler Release-Builder: Rust `1.88`
@@ -20,9 +23,35 @@ Zertifizierung, Rechtsberatung oder Veroeffentlichung.
 - Visual Regression: 34 Baselines
 - Lizenz: `AGPL-3.0-only`
 
-Die vorgeschlagene Patch-Fortschreibung folgt der bestehenden
-projektspezifischen `V23.7.x`-Konvention. `V23.7.29` ist als stabiler
-Folgerelease vorbereitet; Tag und GitHub Release sind noch nicht erstellt.
+`V23.7.29`, sein Tag, seine Release-ID und seine sechs Assets bleiben
+unveraenderlich. Der Snapshot dokumentiert ausschliesslich bereits
+veroeffentlichte Metadaten und ist keine Signatur oder Attestation.
+
+## Lifecycle-Modi
+
+`development_unreleased` ist der normale Root-Status fuer Feature-PRs. Der
+vollstaendige technische Pruefpfad bleibt verpflichtend, erzeugt aber kein
+Release-Bundle. Ein Aufruf von `make release-candidate-artifacts` bricht in
+diesem Modus fail-closed mit `RC_ARTIFACT_ERROR[release_status]` ab. Ein
+erfolgreiches Vollgate endet mit `DEV_CHECK_OK`.
+
+In diesem Development-Status bleibt die getrackte SBOM des letzten
+veroeffentlichten Releases byteidentisch und wird per SHA-256 sowie
+CycloneDX-Struktur validiert. Eine neue Release-SBOM wird erst im Status
+`prepared_not_published` erzeugt; Development erzeugt weder Bundle noch neue
+Release-SBOM.
+
+`prepared_not_published` wird erst in einem separaten Release-Prep-PR gesetzt.
+Dieser Modus verlangt vollstaendige Candidate Notes und erlaubt nach dem
+Binary-Gate die lokale, unsignierte Bundle-Erzeugung. Eine automatische
+Umwandlung aus dem Development-Modus, ein Tag oder eine GitHub-
+Veroeffentlichung findet nicht statt. Das Candidate-Vollgate endet mit
+`RC_CHECK_OK`.
+
+Beide Modi lesen ihren Status ausschliesslich aus dem validierten Root-
+Manifest. Migrationenzahl und Visual-Baselines werden gegen die dort
+dokumentierten Integerwerte geprueft; Migrations-IDs muessen ab `0001`
+lueckenlos, eindeutig und aufsteigend sein.
 
 ## Enthaltene Platform-Maintenance
 
@@ -131,6 +160,11 @@ export ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL=postgresql://iscy@127.0.0.1:5432/
 make release-candidate-check
 ```
 
+Mit dem Root-Status `development_unreleased` erzeugt dieser Aufruf kein
+Verzeichnis `artifacts/release-candidate/`. Der Uebergang zu
+`prepared_not_published` erfolgt ausschliesslich in einer separaten,
+menschlich geprueften Release-Vorbereitung.
+
 Der gepinnte Nix-Dev-Shell stellt die benoetigten Clients und Pruefwerkzeuge
 bereit. Der Aufruf verlangt absichtlich einen erreichbaren lokalen Docker-
 Daemon und zwei explizite Wegwerf-PostgreSQL-Datenbanken. Fehlende
@@ -150,9 +184,9 @@ muessen fehlen und lokale Home-, Worktree-, Runner- sowie Nix-Store-Pfade sind
 verboten. Als dynamische Laufzeitbibliotheken werden `libgcc_s.so.1`,
 `libm.so.6`, `libc.so.6` und `ld-linux-x86-64.so.2` erwartet.
 
-## Lokale Artefakte
+## Lokale Candidate-Artefakte
 
-Nach einem erfolgreichen Release-Build erzeugt
+Nur im validierten Status `prepared_not_published` erzeugt
 `make release-candidate-artifacts` ausschließlich unter
 `artifacts/release-candidate/`:
 
@@ -205,5 +239,6 @@ freigegebene Vulnerability-Assertion vorliegt.
 - [ ] Erst danach darf separat über Ready-for-review, Merge, Tag und Release
   entschieden werden.
 
-Dieser PR erstellt keinen Tag, kein GitHub Release, keine produktive Signatur
-und keine öffentliche Veröffentlichung.
+Das Oeffnen eines Development-Zyklus erstellt keinen neuen Tag, kein neues
+GitHub Release, kein Asset, keine produktive Signatur und keine oeffentliche
+Veroeffentlichung. Der veroeffentlichte Snapshot `V23.7.29` bleibt immutable.

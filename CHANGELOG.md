@@ -6,6 +6,13 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Release lifecycle
+
+- beginnt den Entwicklungszyklus fuer `V23.7.30` auf Basis des unveraenderten, veroeffentlichten Stands `V23.7.29`
+- trennt den nicht veroeffentlichten Development-Modus fail-closed von einer spaeteren, separaten Release-Candidate-Vorbereitung
+- dokumentiert den bereits auf `main` gemergten Pin des Produkt-Builders auf das offizielle Rust-1.97.0-Bookworm-Multiarch-Image per Digest; Toolchain und Produktfunktion bleiben unveraendert
+- enthaelt in diesem PR keine Produkt-, Migrations- oder Dependency-Aenderung
+
 ## V23.7.29 - 2026-07-13
 
 ### Platform maintenance

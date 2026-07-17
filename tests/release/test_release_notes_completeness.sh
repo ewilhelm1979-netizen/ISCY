@@ -5,6 +5,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 source_notes='docs/RELEASE_NOTES_DRAFT.md'
+source_manifest='release/release-manifest.json'
 guard='./scripts/check_release_notes_completeness.sh'
 tmp_dir="$(mktemp -d)"
 cleanup() {
@@ -12,35 +13,40 @@ cleanup() {
 }
 trap cleanup EXIT
 
-expect_missing_rejected() {
+candidate_manifest="$tmp_dir/candidate-manifest.json"
+jq '
+    .release_status = "prepared_not_published"
+    | .test_suite_summary.status = "validated_by_release_candidate_check_and_ci"
+    | .release_artifact.reproducibility_status = "required_two_build_sha256"
+' "$source_manifest" >"$candidate_manifest"
+
+candidate_notes="$tmp_dir/candidate-notes.md"
+cat >"$candidate_notes" <<'EOF'
+# ISCY V23.7.30 - Release Notes
+
+Status: Stabiler Release vorbereitet; Tag und GitHub Release noch nicht erstellt.
+
+Vorgänger: `V23.7.29`.
+
+nginx:1.31-alpine, Rust `1.97.0`, MSRV bleibt Rust `1.88.0` und nixos-26.05
+bleiben die geprueften Plattformgrenzen. PostgreSQL 16 bleibt der Standard;
+PostgreSQL 18.4 bleibt der zusaetzliche Kompatibilitaetspfad.
+
+Der NIS2-Relevanz-Wizard dokumentiert eine Applicability-Begruendung im
+NIS2- und KRITIS-Kontext, liefert aber keine rechtsverbindliche Einstufung.
+Eine DORA-Konformitaetsbewertung erfolgt nicht. Fuer den Cyber Resilience Act
+(CRA) gibt es keine automatische Konformitaetsbewertung oder CE-Freigabe.
+ISCY liefert keine automatische Zertifizierung und keine Rechtsberatung.
+EOF
+
+expect_rejected() {
     local label="$1"
-    local needle="$2"
-    local replacement="$3"
+    local manifest="$2"
+    local notes="$3"
     local expected_category="$4"
-    local candidate="$tmp_dir/$label.md"
     local output
 
-    sed "s|$needle|$replacement|g" "$source_notes" >"$candidate"
-    if output="$($guard "$candidate" 2>&1)"; then
-        printf 'RELEASE_NOTES_TEST_ERROR[%s]: Unvollstaendige Notes wurden akzeptiert.\n' "$label" >&2
-        exit 1
-    fi
-    [[ "$output" == *"RC_NOTES_ERROR[$expected_category]"* ]] || {
-        printf 'RELEASE_NOTES_TEST_ERROR[%s]: Unerwartete Fehlerklasse.\n' "$label" >&2
-        exit 1
-    }
-}
-
-expect_forbidden_rejected() {
-    local label="$1"
-    local phrase="$2"
-    local expected_category="$3"
-    local candidate="$tmp_dir/$label.md"
-    local output
-
-    cp "$source_notes" "$candidate"
-    printf '\n%s\n' "$phrase" >>"$candidate"
-    if output="$($guard "$candidate" 2>&1)"; then
+    if output="$(ISCY_RELEASE_MANIFEST_PATH="$manifest" "$guard" "$notes" 2>&1)"; then
         printf 'RELEASE_NOTES_TEST_ERROR[%s]: Widerspruechliche Notes wurden akzeptiert.\n' "$label" >&2
         exit 1
     fi
@@ -50,24 +56,27 @@ expect_forbidden_rejected() {
     }
 }
 
-$guard "$source_notes" >/dev/null
-expect_missing_rejected target_version 'ISCY V23.7.29' 'ISCY Zielversion' target_version
-expect_missing_rejected predecessor "Vorgänger: \`V23.7.28-rc.1\`" 'Vorgänger fehlt' predecessor
-expect_missing_rejected nginx 'nginx:1.31-alpine' 'nginx:1.31' nginx
-expect_missing_rejected rust_toolchain "Rust \`1.97.0\`" "Rust \`1.96.0\`" rust_toolchain
-expect_missing_rejected msrv "MSRV bleibt Rust \`1.88.0\`" "MSRV bleibt Rust \`1.89.0\`" msrv
-expect_missing_rejected nixpkgs 'nixos-26.05' 'nixos-25.11' nixpkgs
-expect_missing_rejected postgresql_18 'PostgreSQL 18.4' 'PostgreSQL Zielversion' postgresql_18
-expect_missing_rejected postgresql_standard 'PostgreSQL 16 bleibt der Standard' 'Datenbankstandard fehlt' postgresql_standard
-expect_missing_rejected nis2 'NIS2-Relevanz-Wizard' 'Regelwerk-Zwei-Wizard' nis2_wizard
-expect_missing_rejected kritis 'NIS2- und KRITIS-Kontext' 'NIS2-Kontext' nis2_kritis
-expect_missing_rejected dora 'DORA-Konformitaetsbewertung' 'DORA-Pruefung' dora_boundary
-expect_missing_rejected cra_name 'Cyber Resilience Act (CRA)' 'Produktregulierung' cra_name
-expect_missing_rejected cra_boundary 'CE-Freigabe' 'Produktfreigabe' cra_boundary
-expect_missing_rejected legal_boundary 'keine automatische Zertifizierung' 'keine automatische Freigabe' certification_boundary
-expect_forbidden_rejected prerelease 'GitHub-Release-Typ: Prerelease' prerelease
-expect_forbidden_rejected latest 'V23.7.29 ist nicht als Latest Release vorgesehen' latest
-expect_forbidden_rejected obsolete_latest "Letzte veröffentlichte Plattformversion: \`V23.7.27\`" obsolete_latest
-expect_forbidden_rejected obsolete_target "Release Candidate: \`V23.7.28-rc.1\`" obsolete_target
+ISCY_RELEASE_MANIFEST_PATH="$source_manifest" "$guard" "$source_notes" >/dev/null
 
-echo 'Release-Notes-Completeness Positiv- und Negativtests OK'
+wrong_development_version="$tmp_dir/wrong-development-version.md"
+sed 's/ISCY V23\.7\.30/ISCY V23.7.31/' "$source_notes" >"$wrong_development_version"
+expect_rejected wrong_development_version "$source_manifest" "$wrong_development_version" target_version
+
+development_published="$tmp_dir/development-published.md"
+cp "$source_notes" "$development_published"
+printf '\nStable Release veroeffentlicht.\n' >>"$development_published"
+expect_rejected development_published "$source_manifest" "$development_published" stable_published
+
+ISCY_RELEASE_MANIFEST_PATH="$candidate_manifest" "$guard" "$candidate_notes" >/dev/null
+
+candidate_missing_regulatory="$tmp_dir/candidate-missing-regulatory.md"
+sed 's/NIS2-Relevanz-Wizard/NIS2-Arbeitsablauf/' "$candidate_notes" >"$candidate_missing_regulatory"
+expect_rejected candidate_missing_regulatory "$candidate_manifest" "$candidate_missing_regulatory" nis2_wizard
+
+candidate_with_development_placeholder="$tmp_dir/candidate-development-placeholder.md"
+cp "$candidate_notes" "$candidate_with_development_placeholder"
+printf '\nStatus: Development / Unreleased. Aenderungen werden unter Unreleased dokumentiert.\n' \
+    >>"$candidate_with_development_placeholder"
+expect_rejected candidate_development_placeholder "$candidate_manifest" "$candidate_with_development_placeholder" development_status
+
+echo 'Release-Notes-Modustests OK'
