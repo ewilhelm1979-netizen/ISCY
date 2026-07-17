@@ -224,6 +224,7 @@ release-binary-reproducibility:
 release-binary-gate: release-binary-reproducibility
 
 release-candidate-artifacts:
+	./scripts/prepare_release_candidate_artifacts.sh --check-status
 	@test -x artifacts/portable-release/iscy-backend || $(MAKE) release-binary-gate
 	./scripts/prepare_release_candidate_artifacts.sh
 

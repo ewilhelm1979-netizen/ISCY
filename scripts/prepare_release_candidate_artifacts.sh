@@ -5,9 +5,39 @@ export LC_ALL=C
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
+manifest_path="${ISCY_RELEASE_MANIFEST_PATH:-release/release-manifest.json}"
 output_dir="${ISCY_RC_ARTIFACT_DIR:-artifacts/release-candidate}"
 binary="artifacts/portable-release/iscy-backend"
 reproducibility="artifacts/portable-release/reproducibility.json"
+
+[[ -f "$manifest_path" ]] || {
+    echo 'RC_ARTIFACT_ERROR[manifest]: Release-Manifest fehlt.' >&2
+    exit 1
+}
+release_status="$(jq -er '.release_status | select(type == "string")' "$manifest_path")" || {
+    echo 'RC_ARTIFACT_ERROR[release_status]: Release-Status fehlt oder ist ungueltig.' >&2
+    exit 1
+}
+case "$release_status" in
+    development_unreleased)
+        echo 'RC_ARTIFACT_ERROR[release_status]: Development-Stand darf nicht als Release-Bundle vorbereitet werden.' >&2
+        exit 1
+        ;;
+    prepared_not_published) ;;
+    *)
+        echo 'RC_ARTIFACT_ERROR[release_status]: Nur prepared_not_published darf ein Release-Bundle erzeugen.' >&2
+        exit 1
+        ;;
+esac
+if [[ "${1:-}" == '--check-status' ]]; then
+    exit 0
+fi
+[[ "$#" -eq 0 ]] || {
+    echo 'RC_ARTIFACT_ERROR[arguments]: Nicht unterstuetztes Argument.' >&2
+    exit 1
+}
+proposed_version="$(jq -er '.proposed_version | select(type == "string")' "$manifest_path")"
+migration_count="$(jq -er '.migration_count | select(type == "number")' "$manifest_path")"
 
 case "$output_dir" in
     artifacts/*) ;;
@@ -66,7 +96,7 @@ jq \
     | .release_status = "stable_release_prepared"
     | .release_artifact.binary_sha256 = $binary_sha256
     | .release_artifact.reproducibility_status = "verified_two_build_sha256"' \
-    release/release-manifest.json >"$output_dir/release-manifest.json"
+    "$manifest_path" >"$output_dir/release-manifest.json"
 
 (
     cd "$output_dir"
@@ -99,12 +129,14 @@ done
 jq -e \
     --arg source_commit "$commit" \
     --arg binary_sha256 "$binary_sha256" \
+    --arg proposed_version "$proposed_version" \
+    --argjson migration_count "$migration_count" \
     '.schema_version == 2
-    and .proposed_version == "V23.7.29"
+    and .proposed_version == $proposed_version
     and .release_status == "stable_release_prepared"
     and .source_commit == $source_commit
     and (.source_date_epoch | type == "number")
-    and .migration_count == 39
+    and .migration_count == $migration_count
     and .signature_status == "unsigned"
     and .provenance_status == "prepared_unsigned"
     and .release_artifact.binary_sha256 == $binary_sha256
