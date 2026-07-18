@@ -1,0 +1,184 @@
+name: ISCY Codex command
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  guard:
+    if: >-
+      github.event.issue.pull_request != null &&
+      github.event.sender.login == 'ewilhelm1979-netizen' &&
+      contains(github.event.comment.body, '/iscy')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      command: ${{ steps.guard.outputs.command }}
+      pr-number: ${{ steps.guard.outputs.pr-number }}
+      head-sha: ${{ steps.guard.outputs.head-sha }}
+    steps:
+      - name: Check out trusted automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Validate exact command and pull-request boundary
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISCY_COMMAND_TEXT: ${{ github.event.comment.body }}
+          ISCY_EVENT_ACTOR: ${{ github.event.sender.login }}
+          ISCY_EVENT_ASSOCIATION: ${{ github.event.comment.author_association }}
+          ISCY_PR_NUMBER: ${{ github.event.issue.number }}
+          ISCY_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          command="$(bash .github/scripts/iscy_codex_guard.sh command)"
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$tmp_dir"' EXIT
+          gh api "repos/$ISCY_REPOSITORY/pulls/$ISCY_PR_NUMBER" >"$tmp_dir/pr.json"
+          ISCY_COMMAND="$command"
+          ISCY_PR_AUTHOR="$(jq -er '.user.login' "$tmp_dir/pr.json")"
+          ISCY_PR_STATE="$(jq -er '.state' "$tmp_dir/pr.json")"
+          ISCY_PR_DRAFT="$(jq -er '.draft' "$tmp_dir/pr.json")"
+          ISCY_PR_BASE_REF="$(jq -er '.base.ref' "$tmp_dir/pr.json")"
+          ISCY_PR_BASE_SHA="$(jq -er '.base.sha' "$tmp_dir/pr.json")"
+          ISCY_PR_HEAD_REPOSITORY="$(jq -er '.head.repo.full_name' "$tmp_dir/pr.json")"
+          ISCY_PR_HEAD_REF="$(jq -er '.head.ref' "$tmp_dir/pr.json")"
+          ISCY_PR_HEAD_SHA="$(jq -er '.head.sha' "$tmp_dir/pr.json")"
+          ISCY_PR_LABELS="$(jq -r '.labels[].name' "$tmp_dir/pr.json")"
+          export ISCY_COMMAND ISCY_PR_AUTHOR ISCY_PR_STATE ISCY_PR_DRAFT
+          export ISCY_PR_BASE_REF ISCY_PR_BASE_SHA ISCY_PR_HEAD_REPOSITORY
+          export ISCY_PR_HEAD_REF ISCY_PR_HEAD_SHA ISCY_PR_LABELS
+          bash .github/scripts/iscy_codex_guard.sh pr manual
+          {
+            printf 'command=%s\n' "$command"
+            printf 'pr-number=%s\n' "$ISCY_PR_NUMBER"
+            printf 'head-sha=%s\n' "$ISCY_PR_HEAD_SHA"
+          } >>"$GITHUB_OUTPUT"
+
+  status:
+    needs: guard
+    if: needs.guard.outputs.command == 'status'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+      actions: read
+      checks: read
+    steps:
+      - name: Check out trusted automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Publish compact status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISCY_PR_NUMBER: ${{ needs.guard.outputs.pr-number }}
+          ISCY_EXPECTED_HEAD: ${{ needs.guard.outputs.head-sha }}
+          ISCY_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$tmp_dir"' EXIT
+          gh api "repos/$ISCY_REPOSITORY/pulls/$ISCY_PR_NUMBER" >"$tmp_dir/pr.json"
+          test "$(jq -er '.head.sha' "$tmp_dir/pr.json")" = "$ISCY_EXPECTED_HEAD"
+          gh api --paginate --slurp "repos/$ISCY_REPOSITORY/issues/$ISCY_PR_NUMBER/comments?per_page=100" \
+            | jq 'add // []' >"$tmp_dir/comments.json"
+          bash .github/scripts/iscy_codex_collect_ci.sh fetch \
+            "$ISCY_REPOSITORY" "$ISCY_EXPECTED_HEAD" "$tmp_dir/ci" false
+          bash .github/scripts/iscy_codex_guard.sh attempts "$tmp_dir/comments.json" \
+            >"$tmp_dir/attempts.json"
+
+          labels="$(jq -r '[.labels[].name] | if length == 0 then "-" else join(", ") end' "$tmp_dir/pr.json")"
+          mode="$(jq -r 'if any(.labels[]; .name == "codex-managed") then "codex-managed" else "manual" end' "$tmp_dir/pr.json")"
+          ci_status="$(jq -r '
+            [.checks[] | select(((.name | startswith("Analyze (")) or .name == "CodeQL") | not)]
+            | if all(.[]; .present and .status == "completed" and .conclusion == "success") then "success"
+              elif any(.[]; .present and .status == "completed" and .conclusion != "success") then "failure"
+              else "pending" end
+          ' "$tmp_dir/ci/summary.json")"
+          codeql_status="$(jq -r '
+            [.checks[] | select((.name | startswith("Analyze (")) or .name == "CodeQL")]
+            | if all(.[]; .present and .status == "completed" and .conclusion == "success") then "success"
+              elif any(.[]; .present and .status == "completed" and .conclusion != "success") then "failure"
+              else "pending" end
+          ' "$tmp_dir/ci/summary.json")"
+          blockers="$(jq -r '[.missing[], .pending[], (.failed[] | .name)] | unique | if length == 0 then "-" else join(", ") end' "$tmp_dir/ci/summary.json")"
+          remaining="$(jq -r '.remaining' "$tmp_dir/attempts.json")"
+          used="$(jq -r '.used' "$tmp_dir/attempts.json")"
+          {
+            printf '## ISCY Codex status\n\n'
+            printf -- '- PR: #%s (Draft: %s)\n' "$ISCY_PR_NUMBER" "$(jq -r '.draft' "$tmp_dir/pr.json")"
+            printf -- '- Base: main at %s\n' "$(jq -r '.base.sha' "$tmp_dir/pr.json")"
+            printf -- '- Head: %s at %s\n' "$(jq -r '.head.ref' "$tmp_dir/pr.json")" "$ISCY_EXPECTED_HEAD"
+            printf -- '- Mergeability: %s\n' "$(jq -r '.mergeable_state // "unknown"' "$tmp_dir/pr.json")"
+            printf -- '- Labels: %s\n' "$labels"
+            printf -- '- CI: %s; CodeQL: %s\n' "$ci_status" "$codeql_status"
+            printf -- '- Modus: %s; Fix-Versuche: %s/2; verbleibend: %s\n' "$mode" "$used" "$remaining"
+            printf -- '- Blocker: %s\n' "$blockers"
+          } >"$tmp_dir/body.md"
+          jq -n --rawfile body "$tmp_dir/body.md" '{body:$body}' >"$tmp_dir/comment.json"
+          gh api --method POST "repos/$ISCY_REPOSITORY/issues/$ISCY_PR_NUMBER/comments" \
+            --input "$tmp_dir/comment.json" >/dev/null
+
+  review:
+    needs: guard
+    if: needs.guard.outputs.command == 'review'
+    uses: ./.github/workflows/iscy-codex-reusable.yml
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+      actions: read
+      checks: read
+    with:
+      action: review
+      pr_number: ${{ fromJSON(needs.guard.outputs.pr-number) }}
+      expected_head: ${{ needs.guard.outputs.head-sha }}
+      trigger_actor: ${{ github.event.sender.login }}
+    secrets:
+      openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+
+  fix-ci:
+    needs: guard
+    if: needs.guard.outputs.command == 'fix-ci'
+    uses: ./.github/workflows/iscy-codex-reusable.yml
+    permissions:
+      contents: write
+      pull-requests: read
+      issues: write
+      actions: read
+      checks: read
+    with:
+      action: fix-ci
+      pr_number: ${{ fromJSON(needs.guard.outputs.pr-number) }}
+      expected_head: ${{ needs.guard.outputs.head-sha }}
+      trigger_actor: ${{ github.event.sender.login }}
+    secrets:
+      openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+
+  verify:
+    needs: guard
+    if: needs.guard.outputs.command == 'verify'
+    uses: ./.github/workflows/iscy-codex-reusable.yml
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+      actions: read
+      checks: read
+    with:
+      action: verify
+      pr_number: ${{ fromJSON(needs.guard.outputs.pr-number) }}
+      expected_head: ${{ needs.guard.outputs.head-sha }}
+      trigger_actor: ${{ github.event.sender.login }}
+    secrets:
+      openai_api_key: ${{ secrets.OPENAI_API_KEY }}

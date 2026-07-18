@@ -1,0 +1,79 @@
+name: ISCY Codex CI loop
+
+on:
+  workflow_run:
+    workflows: [CI, CodeQL]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  locate-pull-request:
+    if: >-
+      github.event.workflow_run.head_repository.full_name == 'ewilhelm1979-netizen/ISCY' &&
+      github.event.workflow_run.head_branch != 'main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      active: ${{ steps.locate.outputs.active }}
+      pr-number: ${{ steps.locate.outputs.pr-number }}
+      head-sha: ${{ steps.locate.outputs.head-sha }}
+      trigger-actor: ${{ steps.locate.outputs.trigger-actor }}
+    steps:
+      - name: Locate one current same-repository pull request
+        id: locate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISCY_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          ISCY_REPOSITORY: ${{ github.repository }}
+          ISCY_TRIGGER_ACTOR: ${{ github.event.workflow_run.actor.login }}
+        run: |
+          set -euo pipefail
+          tmp_file="$(mktemp)"
+          trap 'rm -f -- "$tmp_file"' EXIT
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$ISCY_REPOSITORY/commits/$ISCY_HEAD_SHA/pulls" \
+            | jq --arg repo "$ISCY_REPOSITORY" --arg head "$ISCY_HEAD_SHA" '
+                [
+                  .[]
+                  | select(.state == "open")
+                  | select(.draft == true)
+                  | select(.base.ref == "main")
+                  | select(.head.repo.full_name == $repo)
+                  | select(.head.sha == $head)
+                  | select(.user.login == "ewilhelm1979-netizen")
+                  | select(.head.ref != "main")
+                  | select(.head.ref | startswith("dependabot/") | not)
+                ]
+              ' >"$tmp_file"
+          count="$(jq -r 'length' "$tmp_file")"
+          if [[ "$count" != '1' ]]; then
+            printf 'active=false\n' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            printf 'active=true\n'
+            printf 'pr-number=%s\n' "$(jq -r '.[0].number' "$tmp_file")"
+            printf 'head-sha=%s\n' "$ISCY_HEAD_SHA"
+            printf 'trigger-actor=%s\n' "$ISCY_TRIGGER_ACTOR"
+          } >>"$GITHUB_OUTPUT"
+
+  orchestrate:
+    needs: locate-pull-request
+    if: needs.locate-pull-request.outputs.active == 'true'
+    uses: ./.github/workflows/iscy-codex-reusable.yml
+    permissions:
+      contents: write
+      pull-requests: read
+      issues: write
+      actions: read
+      checks: read
+    with:
+      action: auto
+      pr_number: ${{ fromJSON(needs.locate-pull-request.outputs.pr-number) }}
+      expected_head: ${{ needs.locate-pull-request.outputs.head-sha }}
+      trigger_actor: ${{ needs.locate-pull-request.outputs.trigger-actor }}
+    secrets:
+      openai_api_key: ${{ secrets.OPENAI_API_KEY }}
