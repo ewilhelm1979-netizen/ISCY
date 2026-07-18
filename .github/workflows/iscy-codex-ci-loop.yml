@@ -73,7 +73,7 @@ jobs:
     with:
       action: auto
       pr_number: ${{ fromJSON(needs.locate-pull-request.outputs.pr-number) }}
-      expected_head: ${{ needs.locate-pull-request.outputs.head-sha }}
+      commit_sha: ${{ needs.locate-pull-request.outputs.head-sha }}
       trigger_actor: ${{ needs.locate-pull-request.outputs.trigger-actor }}
     secrets:
       openai_api_key: ${{ secrets.OPENAI_API_KEY }}

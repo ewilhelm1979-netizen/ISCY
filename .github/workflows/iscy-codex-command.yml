@@ -142,7 +142,7 @@ jobs:
     with:
       action: review
       pr_number: ${{ fromJSON(needs.guard.outputs.pr-number) }}
-      expected_head: ${{ needs.guard.outputs.head-sha }}
+      commit_sha: ${{ needs.guard.outputs.head-sha }}
       trigger_actor: ${{ github.event.sender.login }}
     secrets:
       openai_api_key: ${{ secrets.OPENAI_API_KEY }}
@@ -160,7 +160,7 @@ jobs:
     with:
       action: fix-ci
       pr_number: ${{ fromJSON(needs.guard.outputs.pr-number) }}
-      expected_head: ${{ needs.guard.outputs.head-sha }}
+      commit_sha: ${{ needs.guard.outputs.head-sha }}
       trigger_actor: ${{ github.event.sender.login }}
     secrets:
       openai_api_key: ${{ secrets.OPENAI_API_KEY }}
@@ -178,7 +178,7 @@ jobs:
     with:
       action: verify
       pr_number: ${{ fromJSON(needs.guard.outputs.pr-number) }}
-      expected_head: ${{ needs.guard.outputs.head-sha }}
+      commit_sha: ${{ needs.guard.outputs.head-sha }}
       trigger_actor: ${{ github.event.sender.login }}
     secrets:
       openai_api_key: ${{ secrets.OPENAI_API_KEY }}

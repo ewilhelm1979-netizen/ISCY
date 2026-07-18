@@ -9,7 +9,7 @@ on:
       pr_number:
         required: true
         type: number
-      expected_head:
+      commit_sha:
         required: true
         type: string
       trigger_actor:
@@ -50,7 +50,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISCY_ACTION: ${{ inputs.action }}
-          ISCY_EXPECTED_HEAD: ${{ inputs.expected_head }}
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
           ISCY_PR_NUMBER: ${{ inputs.pr_number }}
           ISCY_REPOSITORY: ${{ github.repository }}
           ISCY_TRIGGER_ACTOR: ${{ inputs.trigger_actor }}
@@ -151,7 +151,7 @@ jobs:
       - name: Check out exact pull-request head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ inputs.expected_head }}
+          ref: ${{ inputs.commit_sha }}
           fetch-depth: 0
           path: worktree
           persist-credentials: false
@@ -159,7 +159,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISCY_BASE_SHA: ${{ needs.route.outputs.base_sha }}
-          ISCY_EXPECTED_HEAD: ${{ inputs.expected_head }}
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
           ISCY_PR_NUMBER: ${{ inputs.pr_number }}
           ISCY_REPOSITORY: ${{ github.repository }}
           ISCY_REVIEW_QUERY: >-
@@ -240,7 +240,7 @@ jobs:
       - name: Create or update one result comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
-          ISCY_EXPECTED_HEAD: ${{ inputs.expected_head }}
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
           ISCY_PR_NUMBER: ${{ inputs.pr_number }}
           ISCY_ROUTE: ${{ needs.route.outputs.route }}
         with:
@@ -308,7 +308,7 @@ jobs:
         run: |
           set -euo pipefail
           result="$(bash .github/scripts/iscy_codex_guard.sh reserve-attempt \
-            '${{ github.repository }}' '${{ inputs.pr_number }}' '${{ inputs.expected_head }}')"
+            '${{ github.repository }}' '${{ inputs.pr_number }}' '${{ inputs.commit_sha }}')"
           printf 'attempt=%s\n' "$(jq -r '.attempt' <<<"$result")" >>"$GITHUB_OUTPUT"
 
   fix-agent:
@@ -340,7 +340,7 @@ jobs:
       - name: Check out exact pull-request head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ inputs.expected_head }}
+          ref: ${{ inputs.commit_sha }}
           fetch-depth: 0
           path: worktree
           persist-credentials: false
@@ -348,7 +348,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ISCY_BASE_SHA: ${{ needs.route.outputs.base_sha }}
-          ISCY_EXPECTED_HEAD: ${{ inputs.expected_head }}
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
           ISCY_PR_NUMBER: ${{ inputs.pr_number }}
           ISCY_REPOSITORY: ${{ github.repository }}
         run: |
@@ -382,7 +382,7 @@ jobs:
       - name: Validate result and patch
         id: validate
         env:
-          ISCY_EXPECTED_HEAD: ${{ inputs.expected_head }}
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
           ISCY_HEAD_REF: ${{ needs.route.outputs.head_ref }}
           ISCY_MAINTENANCE: ${{ needs.route.outputs.maintenance }}
         run: |
@@ -437,7 +437,7 @@ jobs:
       - name: Check out unchanged pull-request head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ inputs.expected_head }}
+          ref: ${{ inputs.commit_sha }}
           fetch-depth: 0
           path: worktree
           persist-credentials: false
@@ -457,7 +457,7 @@ jobs:
           bash trusted/.github/scripts/iscy_codex_commit_push.sh \
             "$GITHUB_WORKSPACE/worktree" \
             "$GITHUB_WORKSPACE/fix-result/fix.patch" \
-            '${{ inputs.expected_head }}' \
+            '${{ inputs.commit_sha }}' \
             '${{ needs.route.outputs.head_ref }}' \
             '${{ inputs.pr_number }}' \
             '${{ needs.reserve-fix-attempt.outputs.attempt }}' \
@@ -481,7 +481,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           ISCY_ATTEMPT: ${{ needs.reserve-fix-attempt.outputs.attempt }}
-          ISCY_EXPECTED_HEAD: ${{ inputs.expected_head }}
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
           ISCY_NEW_HEAD: ${{ needs.push-fix.outputs.new_head }}
           ISCY_PR_NUMBER: ${{ inputs.pr_number }}
           ISCY_PUSH_RESULT: ${{ needs.push-fix.result }}

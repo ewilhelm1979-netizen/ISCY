@@ -42,6 +42,17 @@ if grep -En 'pull_request_target|auto-merge|mergePullRequest|markPullRequestRead
   echo 'CODEX_AUTOMATION_CHECK prohibited_workflow_capability_detected' >&2
   exit 1
 fi
+sha_checkout_count="$(grep -Fc 'ref: ${{ inputs.commit_sha }}' \
+  .github/workflows/iscy-codex-reusable.yml)"
+if [[ "$sha_checkout_count" != '3' ]]; then
+  echo 'CODEX_AUTOMATION_CHECK immutable_pr_checkout_count_invalid' >&2
+  exit 1
+fi
+if grep -En 'ref:[[:space:]]+\$\{\{[[:space:]]*inputs\.(expected_head|head_ref)' \
+  .github/workflows/iscy-codex-reusable.yml; then
+  echo 'CODEX_AUTOMATION_CHECK mutable_pr_checkout_input_detected' >&2
+  exit 1
+fi
 
 for test_file in "${tests[@]}"; do
   bash "$test_file"
