@@ -6,7 +6,7 @@ Diese Screenshots dokumentieren die aktuelle serverseitige ISCY-Weboberflaeche f
 
 Die getrennten Visual-Regression-Baselines unter `../tests/visual/baselines/`
 werden mit dem durch `flake.lock` gepinnten Playwright-/Chromium-Pfad erzeugt.
-Sie pruefen 17 zentrale Bereiche bei 1440 x 1200 und 1024 x 900. Die
+Sie pruefen 18 zentrale Bereiche bei 1440 x 1200 und 1024 x 900. Die
 Dokumentationsbilder in `docs/assets/` werden nicht automatisch als
 Testbaselines verwendet oder durch CI ueberschrieben. Update- und Diff-Prozess
 sind in `PERFORMANCE_HA_VISUAL_TESTING.md` beschrieben.
@@ -37,6 +37,16 @@ ohne produktive CA-Ausstellung.
 ## Zero Trust Mobile
 
 ![Zero Trust Mobile](assets/iscy-zero-trust-mobile.png)
+
+## Agent-Rollouts
+
+![Agent-Rollouts](assets/iscy-agent-rollouts.png)
+
+Die Rollout-Ansicht plant bestehende Agent Devices in den festen Ringen Lab,
+Canary, Pilot, Production und Critical. Sie dokumentiert Preflight,
+Postflight, Gate-Evaluierung, menschliche Promotion und operatorgefuehrten
+Rollback. ISCY fuehrt dabei keine Remote-Installation, Agent-Befehle oder
+automatische Softwareverteilung aus.
 
 ## CVEs
 

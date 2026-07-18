@@ -86,4 +86,37 @@ grep -Fq "c.contype <> 'n'" "$RUNNER"
 grep -Fq 'c.relkind::text' "$RUNNER"
 grep -Fq "run_backend_admin app-target postgres18 \"\$RACE_DB\" seed-demo" "$RUNNER"
 
+source_constraints="$TMP_DIR/source.constraints"
+target_constraints="$TMP_DIR/target.constraints"
+different_constraints="$TMP_DIR/different.constraints"
+source_canonical="$TMP_DIR/source.canonical"
+target_canonical="$TMP_DIR/target.canonical"
+different_canonical="$TMP_DIR/different.canonical"
+constraint_prefix=$'zero_trust_agent_rollout\tstatus_check\tc\ttrue\tCHECK (status::text = ANY ('
+constraint_suffix='))'
+printf '%s%s%s\n' \
+  "$constraint_prefix" \
+  "ARRAY['draft'::character varying, 'active'::character varying]::text[]" \
+  "$constraint_suffix" >"$source_constraints"
+printf '%s%s%s\n' \
+  "$constraint_prefix" \
+  "ARRAY['draft'::character varying::text, 'active'::character varying::text]" \
+  "$constraint_suffix" >"$target_constraints"
+printf '%s%s%s\n' \
+  "$constraint_prefix" \
+  "ARRAY['draft'::character varying::text, 'paused'::character varying::text]" \
+  "$constraint_suffix" >"$different_constraints"
+
+RUNNER="$RUNNER" INPUT="$source_constraints" OUTPUT="$source_canonical" \
+  bash -c 'source "$RUNNER"; canonicalize_constraint_snapshot "$INPUT" >"$OUTPUT"'
+RUNNER="$RUNNER" INPUT="$target_constraints" OUTPUT="$target_canonical" \
+  bash -c 'source "$RUNNER"; canonicalize_constraint_snapshot "$INPUT" >"$OUTPUT"'
+RUNNER="$RUNNER" INPUT="$different_constraints" OUTPUT="$different_canonical" \
+  bash -c 'source "$RUNNER"; canonicalize_constraint_snapshot "$INPUT" >"$OUTPUT"'
+cmp --silent "$source_canonical" "$target_canonical"
+if cmp --silent "$source_canonical" "$different_canonical"; then
+  echo 'PG18_CONTRACT_TEST_ERROR: Eine echte Constraint-Abweichung wurde normalisiert.' >&2
+  exit 1
+fi
+
 echo 'PostgreSQL 18 compatibility guards OK'

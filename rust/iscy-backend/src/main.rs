@@ -9,6 +9,7 @@ use iscy_backend::{
     agent_governance_store::AgentGovernanceStore,
     agent_pki_store::AgentPkiStore,
     agent_release_store::AgentReleaseStore,
+    agent_rollout_store::AgentRolloutStore,
     agent_store::AgentStore,
     ai_governance_store::AiGovernanceStore,
     app_router_with_state,
@@ -90,6 +91,7 @@ async fn main() -> anyhow::Result<()> {
         agent_governance_store,
         agent_pki_store,
         agent_release_store,
+        agent_rollout_store,
         agent_store,
         auth_store,
         tenant_store,
@@ -120,6 +122,7 @@ async fn main() -> anyhow::Result<()> {
             let agent_governance_store = AgentGovernanceStore::connect(database_url).await?;
             let agent_pki_store = AgentPkiStore::connect(database_url).await?;
             let agent_release_store = AgentReleaseStore::connect(database_url).await?;
+            let agent_rollout_store = AgentRolloutStore::connect(database_url).await?;
             let agent_store = AgentStore::connect(database_url).await?;
             let auth_store = AuthStore::connect(database_url).await?;
             let tenant_store = TenantStore::connect(database_url).await?;
@@ -150,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(agent_governance_store),
                 Some(agent_pki_store),
                 Some(agent_release_store),
+                Some(agent_rollout_store),
                 Some(agent_store),
                 Some(auth_store),
                 Some(tenant_store),
@@ -178,6 +182,7 @@ async fn main() -> anyhow::Result<()> {
         _ => (
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
             None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+            None,
         ),
     };
     let notification_worker_store = agent_governance_store.clone();
@@ -186,6 +191,7 @@ async fn main() -> anyhow::Result<()> {
         .with_agent_governance_store(agent_governance_store)
         .with_agent_pki_store(agent_pki_store)
         .with_agent_release_store(agent_release_store)
+        .with_agent_rollout_store(agent_rollout_store)
         .with_agent_store(agent_store)
         .with_auth_store(auth_store)
         .with_dashboard_store(dashboard_store)

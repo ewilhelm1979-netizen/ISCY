@@ -27,8 +27,21 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
   Freigabe.
 - Neue Produktfunktionen werden erst nach ihrer Implementierung und Pruefung
   unter `Unreleased` dokumentiert.
-- Agent Rollout 2.0, eine Wazuh-Integration und IOC Detection werden durch
-  diese Lifecycle-Umstellung nicht als implementiert ausgewiesen.
+- Eine Wazuh-Integration, IOC-/Behavioral Detection und automatisches Threat
+  Modeling sind nicht implementiert.
+
+## Agent Rollout 2.0 - Phase 1
+
+Der Entwicklungsstand ergaenzt eine tenantgebundene, auditierbare
+Rollout-Control-Plane fuer bereits registrierte Agenten. Rollouts verwenden die
+festen Ringe Lab, Canary, Pilot, Production und Critical sowie serverseitige
+Preflight-/Postflight-Pruefungen, Gate-Evaluierung, explizite menschliche
+Promotion, Pause/Resume, Abbruch und operatorgefuehrte Rollback-Dokumentation.
+
+ISCY dokumentiert die extern durchgefuehrte Verteilung und ihre Ergebnisse,
+fuehrt jedoch keine Remote-Installation, Agent-Befehle, Paketuebertragung oder
+technische Rollback-Ausfuehrung aus. Die Funktion garantiert keine fehlerfreien
+produktiven Rollouts und begruendet keine Produktions-SLO.
 
 ## Technische Basis
 
@@ -38,7 +51,7 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
 - MSRV und portabler Release-Builder: Rust `1.88.0`
 - PostgreSQL 16 bleibt der Standard.
 - PostgreSQL 18.4 bleibt ein zusaetzlicher Kompatibilitaetspfad.
-- Aktuell 39 fortlaufende Migrationen, `0001` bis `0039`
-- 34 Visual-Baselines
+- Aktuell 40 fortlaufende Migrationen, `0001` bis `0040`
+- 36 Visual-Baselines
 - Signaturstatus: `unsigned`
 - Provenance-Status: `prepared_unsigned`

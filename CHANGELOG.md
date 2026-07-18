@@ -13,6 +13,14 @@ The project uses release tags for immutable release points. Changes under **Unre
 - dokumentiert den bereits auf `main` gemergten Pin des Produkt-Builders auf das offizielle Rust-1.97.0-Bookworm-Multiarch-Image per Digest; Toolchain und Produktfunktion bleiben unveraendert
 - enthaelt in diesem PR keine Produkt-, Migrations- oder Dependency-Aenderung
 
+### Agent Rollout 2.0 - Phase 1
+
+- ergaenzt mit Migration `0040_rust_agent_rollout_governance` eine tenantgebundene Rollout-Control-Plane fuer bestehende Agent Devices mit den festen Ringen Lab, Canary, Pilot, Production und Critical
+- ergaenzt serverseitige Preflight-/Postflight-Pruefungen, Ring-Gates, explizite menschliche Promotion, Pause/Resume, Abbruch sowie operatorgefuehrte Rollback-Dokumentation
+- integriert Rollout-Uebersicht und -Detailakte unter `/zero-trust/rollouts/`, eingefrorene Management-Review-Aggregate und niedrig-kardinale Operations-/Prometheus-Signale
+- sichert Rollen, Tenantgrenzen, Statusuebergaenge, Audit-Events und konkurrierende Start-/Promotion-Aktionen fail-closed ab
+- fuehrt keine Remote-Installation, Agent-Befehle, automatische Softwareverteilung oder technische Rollback-Ausfuehrung aus und fuegt weder Wazuh-, IOC-, Behavioral-Detection- noch Threat-Modeling-Funktionen hinzu
+
 ## V23.7.29 - 2026-07-13
 
 ### Platform maintenance

@@ -1165,6 +1165,38 @@ Was aktuell belastbar vorhanden ist:
 - SHA-256-Pruefsummen, Signaturstatus, Verification-Status und Release-Provenance-Metadaten fuer diese Agent-Deployment-Artefakte
 - Zero-Trust-Webansicht und Onboarding-Assistent mit Artefakt-, Pruefsummen-, Signatur- und Provenance-Hinweisen
 - Review-Pack-Signale fuer fehlende Pruefsummen, unsignierte Agent-Artefakte, fehlende Provenance und unverifizierte Deployment-Artefakte
+- tenantgebundene Rollout-Plaene mit den festen Ringen Lab, Canary, Pilot, Production und Critical
+- Preflight-/Postflight-Gates, menschliche Promotion, Pause/Resume, Abbruch und operatorgefuehrte Rollback-Dokumentation ohne Remote-Ausfuehrung
+
+#### Agent Rollout 2.0 - Phase 1
+
+Migration `0040_rust_agent_rollout_governance` ergaenzt Rollout-Plaene,
+kanonische Ringzeilen, explizite Targets aus vorhandenen Agent Devices,
+strukturierte Checks und Audit-Events. Die Weboberflaeche unter
+`/zero-trust/rollouts/` fuehrt durch Zielversion, Scope, Ringzuordnung,
+Gate-Schwellenwerte und Rollback-Plan. Fremde Tenant-, Device-, Policy-,
+Artefakt- und Owner-Bezuege werden serverseitig abgewiesen.
+
+Preflight bewertet vorhandene Enrollment-, OS-, Channel-, Policy-, Heartbeat-,
+Score-, Finding-, Artefakt-, Signatur-, mTLS- und PKI-Signale. Nach einer
+externen Verteilung werden das Deployment-Ergebnis und ein eigener Postflight
+dokumentiert. Observation und Gate-Evaluierung koennen einen Ring bestehen
+lassen, die naechste Stufe erfordert jedoch immer eine explizite menschliche
+Promotion und einen getrennten Ringstart.
+
+Pause, Resume, Abbruch, Rollback-Anforderung und Rollback-Abschluss sind
+auditierte Statuswechsel. ISCY fuehrt den Rollback nicht technisch aus und
+speichert keine Befehle, Rohlogs, Agent-Secrets oder Enrollment-Tokens in den
+Rollout-Tabellen. Es gibt keine Remote-Installation, Agent-Befehlswarteschlange,
+automatische Softwareverteilung oder automatische Promotion.
+
+Neue Management-Reviews frieren nur sichere Rollout-Aggregate ein; bestehende
+Snapshots bleiben unveraendert. Die Betriebszentrale und Prometheus zeigen
+aktive und pausierte Rollouts, Rollback-Pflichten, blockierte Ringe und
+fehlgeschlagene Targets ohne Tenantnamen oder hochkardinale Labels. Diese
+Governance-Unterstuetzung garantiert weder fehlerfreie produktive Rollouts noch
+eine Produktions-SLO und umfasst keine Wazuh-, IOC-, Behavioral-Detection-
+oder automatische Threat-Modeling-Funktion.
 
 Was als naechstes fachlich am meisten bringt:
 
@@ -1184,7 +1216,7 @@ Was als naechstes fachlich am meisten bringt:
    Automatische Aenderungen am Endgeraet sollten erst spaeter als signierter, auditierbarer Policy-Schritt kommen.
 
 Fachliches Kurzurteil:
-ISCY ist fuer Zero Trust jetzt gut positioniert. Sollabdeckung, aktive Policy-Benachrichtigungen, gefuehrtes Onboarding und das Agent-Artefakt-/Provenance-Modell sind vorhanden; die naechste Reife entsteht durch Nachweisverknuepfung, Connectoren und echte produktive Signierprozesse.
+ISCY ist fuer Zero Trust jetzt gut positioniert. Sollabdeckung, aktive Policy-Benachrichtigungen, gefuehrtes Onboarding, das Agent-Artefakt-/Provenance-Modell und kontrollierte Rollout-Governance sind vorhanden; die naechste Reife entsteht durch Nachweisverknuepfung, Connectoren und echte produktive Signierprozesse.
 
 #### Agent-Artefakte, Pruefsummen und Release-Provenance
 
@@ -1708,8 +1740,8 @@ unterschiedliche Instanzen geschrieben, gelesen und verifiziert. Danach wird
 Failover in beide Richtungen sowie ein paralleler Migrationsstart geprueft.
 Lokaler Dateispeicher und SQLite werden nicht als HA-faehig dargestellt.
 
-`make visual-regression` vergleicht 34 bewusst versionierte Playwright-
-Baselines fuer 17 zentrale Seiten bei Desktop- und kleinem Laptop-Viewport.
+`make visual-regression` vergleicht 36 bewusst versionierte Playwright-
+Baselines fuer 18 zentrale Seiten bei Desktop- und kleinem Laptop-Viewport.
 Neben Pixelabweichungen prueft die Suite leere Hauptbereiche, 500-Seiten,
 horizontalen Ueberlauf, abgeschnittene Tabellenueberschriften und sichtbare
 Secrets. CI aktualisiert Baselines nie automatisch.
@@ -1734,7 +1766,7 @@ Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
 Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
 und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust
 1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem
-Bootstrap, 39 Migrationen, Restart, Migrationsrennen und einem logischen
+Bootstrap, 40 Migrationen, Restart, Migrationsrennen und einem logischen
 Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der
 PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder
 ein In-place-Upgrade noch ein automatisiertes `pg_upgrade` oder einen
@@ -1748,7 +1780,7 @@ Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-
 Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder
 internen Store-Details.
 
-Die RC-Metadatenpruefung bestaetigt 39 fortlaufende Migrationen, 34 visuelle
+Die RC-Metadatenpruefung bestaetigt 40 fortlaufende Migrationen, 36 visuelle
 Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen
 wertredigierten Sensitive-Data-Scan. `release/release-manifest.json` nutzt
 `git:HEAD` als reproduzierbaren Quellmarker; die lokale Artefakterzeugung loest
@@ -1807,6 +1839,11 @@ ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muess
 ## 10. Strategische Weiterentwicklung
 
 Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil als erster strategischer Baustein umgesetzt; V23.7.20 ergaenzt Management-Review- und Audit-Pakete als steuerbaren Review-Workflow; V23.7.21 liefert Exporte, Snapshot-Ruecklinks und Evidence-Qualitaet; V23.7.22 setzt Third-Party-/Supplier-Risk als eigenes Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte Product-Security-Evidence-Pakete. Migration `0027_rust_ai_governance_links` verbindet AI-Systeme tenantgebunden mit Risiken, Roadmap-Tasks, Incidents und Changes. Migration `0028_rust_guided_agent_onboarding` ergaenzt den gefuehrten, tenantgebundenen Agent-Rollout mit Token-Lifecycle, Policy-Zuordnung und Auditspur. Migration `0029_rust_cross_domain_notifications` fuehrt Evidence-, CVE-, Incident- und Roadmap-Signale in denselben sicheren Kanalbetrieb. Migration `0031_rust_supplier_review_workflow` ergaenzt Supplier-Reviews mit Freigabehistorie, Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten Evidence-/Control-/Risk-Links. Migration `0032_rust_management_regulatory_templates` ergaenzt Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische Security-Governance-Reviews. Kontextsensitive Regulatory Review Packs fuer NIS2, DORA und DSGVO nutzen diese bestehende Snapshot-Schicht und nehmen Evidence-Integrity-/Storage-Aggregate auf, ohne ein neues Compliance-Silo oder ein zweites Evidence-System anzulegen. Migration `0033_rust_evidence_integrity_disposition` ergaenzt Evidence Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung, Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen. Evidence Object Storage & Restore Drill Phase 2 nutzt diese bestehenden Metadaten fuer eine interne lokale Storage-Abstraktion, sichere Artefaktreferenzen und tenantgebundene Restore-/Integritaetsdrills ohne neues Speichersystem. Migration `0034_rust_supplier_product_security_governance` verbindet Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs tenantgebunden, ohne externe Live-Feeds einzufuehren. Migration `0035_rust_evidence_worker_disposition_storage` ergaenzt begrenzte Evidence-Worker-Laeufe, kontrollierte physische Disposition mit Tombstone-Metadaten und ein vorbereitetes Object-Storage-Statusmodell ohne echte Cloud-Credentials. Migration `0036_rust_agent_release_artifact_provenance` ergaenzt Agent-Artefaktmanifest, SHA-256-Pruefsummen, Signaturstatus, Release-Provenance und Verification-Audit fuer vorhandene Deployment-Artefakte, ohne echte Produktionsschluessel, externe PKI/CA oder GitHub-Release-Veroeffentlichung einzufuehren. Migration `0037_rust_agent_pki_csr_governance` ergaenzt Agent-PKI-/CSR-/mTLS-Governance als Metadata-only-Modell ohne produktive CA, private Schluessel, CA-Secrets, externe Ausstellung oder automatische mTLS-Aktivierung. Migration `0038_rust_evidence_object_storage_client` ergaenzt tenantgebundene Object-Storage-Backend-Metadaten, Secret-Referenzstatus, sichere Object-Referenzen, SSRF-/Key-Validierung, Contract-Drills und Review-Pack-Signale. Migration `0039_rust_evidence_s3_runtime_client` aktiviert darauf echte, begrenzte S3-kompatible Runtime-Operationen mit expliziter Secret-Aufloesung, DNS-/SSRF-Revalidierung, kanonischen Object-IDs und kontrolliertem Remote-Delete. Die weitere ISCY-Agenda konzentriert sich deshalb nicht mehr auf Abloesung alter Python-/Django-Pfade, sondern auf fachliche Produktreife.
+
+Migration `0040_rust_agent_rollout_governance` ergaenzt darauf kontrollierte
+Rollout-Ringe, Preflight-/Postflight-Gates, menschliche Promotion und
+operatorgefuehrten Rollback fuer bestehende Agenten, ohne Remote-Ausfuehrung
+oder automatische Softwareverteilung einzufuehren.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
