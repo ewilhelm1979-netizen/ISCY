@@ -66,8 +66,7 @@ jobs:
     uses: ./.github/workflows/iscy-codex-reusable.yml
     permissions:
       contents: write
-      pull-requests: read
-      issues: write
+      pull-requests: write
       actions: read
       checks: read
     with:
