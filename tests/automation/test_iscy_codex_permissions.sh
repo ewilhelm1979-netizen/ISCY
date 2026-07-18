@@ -21,6 +21,13 @@ read_only_jobs = {
     %w[route review-or-verify fix-agent push-fix]
 }
 
+reusable_callers = {
+  ".github/workflows/iscy-codex-command.yml" =>
+    %w[review fix-ci verify],
+  ".github/workflows/iscy-codex-ci-loop.yml" =>
+    %w[orchestrate]
+}
+
 write_jobs.each do |path, expected_jobs|
   workflow = YAML.safe_load(File.read(path), aliases: true)
   abort("global permissions changed: #{path}") unless workflow["permissions"] == {}
@@ -45,6 +52,23 @@ read_only_jobs.each do |path, expected_jobs|
     abort("read-only job changed: #{path}:#{name}") \
       unless permissions["pull-requests"] == "read"
   end
+end
+
+reusable_callers.each do |path, caller_names|
+  jobs = YAML.safe_load(File.read(path), aliases: true).fetch("jobs")
+  caller_names.each do |name|
+    permissions = jobs.fetch(name).fetch("permissions")
+    abort("reusable caller gained issue permission: #{path}:#{name}") \
+      if permissions.key?("issues")
+  end
+end
+
+reusable_jobs = YAML.safe_load(
+  File.read(".github/workflows/iscy-codex-reusable.yml"), aliases: true
+).fetch("jobs")
+reusable_jobs.each do |name, job|
+  abort("nested issue permission exceeds caller ceiling: #{name}") \
+    if job.fetch("permissions", {}).key?("issues")
 end
 RUBY
 
