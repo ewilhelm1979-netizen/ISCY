@@ -19,8 +19,8 @@ jobs:
       issues: read
     outputs:
       command: ${{ steps.guard.outputs.command }}
-      pr-number: ${{ steps.guard.outputs.pr-number }}
-      head-sha: ${{ steps.guard.outputs.head-sha }}
+      pr_number: ${{ steps.guard.outputs.pr_number }}
+      head_sha: ${{ steps.guard.outputs.head_sha }}
     steps:
       - name: Check out trusted automation
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -58,8 +58,8 @@ jobs:
           bash .github/scripts/iscy_codex_guard.sh pr manual
           {
             printf 'command=%s\n' "$command"
-            printf 'pr-number=%s\n' "$ISCY_PR_NUMBER"
-            printf 'head-sha=%s\n' "$ISCY_PR_HEAD_SHA"
+            printf 'pr_number=%s\n' "$ISCY_PR_NUMBER"
+            printf 'head_sha=%s\n' "$ISCY_PR_HEAD_SHA"
           } >>"$GITHUB_OUTPUT"
 
   status:
@@ -81,15 +81,24 @@ jobs:
       - name: Publish compact status
         env:
           GH_TOKEN: ${{ github.token }}
-          ISCY_PR_NUMBER: ${{ needs.guard.outputs.pr-number }}
-          ISCY_EXPECTED_HEAD: ${{ needs.guard.outputs.head-sha }}
+          ISCY_PR_NUMBER: ${{ needs.guard.outputs.pr_number }}
+          ISCY_EXPECTED_HEAD: ${{ needs.guard.outputs.head_sha }}
           ISCY_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           tmp_dir="$(mktemp -d)"
           trap 'rm -rf -- "$tmp_dir"' EXIT
           gh api "repos/$ISCY_REPOSITORY/pulls/$ISCY_PR_NUMBER" >"$tmp_dir/pr.json"
-          test "$(jq -er '.head.sha' "$tmp_dir/pr.json")" = "$ISCY_EXPECTED_HEAD"
+          actual_head="$(jq -er '.head.sha' "$tmp_dir/pr.json")"
+          if [[ -z "$ISCY_EXPECTED_HEAD" ]]; then
+            echo '::error title=ISCY Codex head check::Expected PR head SHA is empty.'
+            exit 1
+          fi
+          if [[ "$actual_head" != "$ISCY_EXPECTED_HEAD" ]]; then
+            printf '::error title=ISCY Codex head check::PR head changed (expected %s, actual %s).\n' \
+              "$ISCY_EXPECTED_HEAD" "$actual_head"
+            exit 1
+          fi
           gh api --paginate --slurp "repos/$ISCY_REPOSITORY/issues/$ISCY_PR_NUMBER/comments?per_page=100" \
             | jq 'add // []' >"$tmp_dir/comments.json"
           bash .github/scripts/iscy_codex_collect_ci.sh fetch \
@@ -141,8 +150,8 @@ jobs:
       checks: read
     with:
       action: review
-      pr_number: ${{ fromJSON(needs.guard.outputs.pr-number) }}
-      commit_sha: ${{ needs.guard.outputs.head-sha }}
+      pr_number: ${{ fromJSON(needs.guard.outputs.pr_number) }}
+      commit_sha: ${{ needs.guard.outputs.head_sha }}
       trigger_actor: ${{ github.event.sender.login }}
     secrets:
       openai_api_key: ${{ secrets.OPENAI_API_KEY }}
@@ -159,8 +168,8 @@ jobs:
       checks: read
     with:
       action: fix-ci
-      pr_number: ${{ fromJSON(needs.guard.outputs.pr-number) }}
-      commit_sha: ${{ needs.guard.outputs.head-sha }}
+      pr_number: ${{ fromJSON(needs.guard.outputs.pr_number) }}
+      commit_sha: ${{ needs.guard.outputs.head_sha }}
       trigger_actor: ${{ github.event.sender.login }}
     secrets:
       openai_api_key: ${{ secrets.OPENAI_API_KEY }}
@@ -177,8 +186,8 @@ jobs:
       checks: read
     with:
       action: verify
-      pr_number: ${{ fromJSON(needs.guard.outputs.pr-number) }}
-      commit_sha: ${{ needs.guard.outputs.head-sha }}
+      pr_number: ${{ fromJSON(needs.guard.outputs.pr_number) }}
+      commit_sha: ${{ needs.guard.outputs.head_sha }}
       trigger_actor: ${{ github.event.sender.login }}
     secrets:
       openai_api_key: ${{ secrets.OPENAI_API_KEY }}
