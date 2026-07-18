@@ -134,7 +134,7 @@ jobs:
     if: needs.guard.outputs.command == 'review'
     uses: ./.github/workflows/iscy-codex-reusable.yml
     permissions:
-      contents: read
+      contents: write
       pull-requests: read
       issues: write
       actions: read
@@ -170,7 +170,7 @@ jobs:
     if: needs.guard.outputs.command == 'verify'
     uses: ./.github/workflows/iscy-codex-reusable.yml
     permissions:
-      contents: read
+      contents: write
       pull-requests: read
       issues: write
       actions: read
