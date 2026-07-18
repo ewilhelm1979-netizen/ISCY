@@ -94,14 +94,14 @@ wrong_head='3333333333333333333333333333333333333333'
 expected_head='4444444444444444444444444444444444444444'
 jq -n \
   --arg head "$wrong_head" \
-  '{check_runs:[
+  '{check_runs: ([
     "rust-backend-tests", "rust-msrv-1.88", "rust-bootstrap-smoke",
     "nix-rust-smoke", "object-storage-integration", "performance-smoke",
     "ha-integration", "visual-regression", "docker-config",
     "release-binary-portability", "codex-automation-tests", "release-candidate-check",
     "Analyze (actions)", "Analyze (javascript-typescript)", "Analyze (rust)"
   ] | map({name:., app:{slug:"github-actions"}, head_sha:$head, status:"completed", conclusion:"success"})
-  + [{name:"CodeQL", app:{slug:"github-advanced-security"}, head_sha:$head, status:"completed", conclusion:"success"}]}' \
+  + [{name:"CodeQL", app:{slug:"github-advanced-security"}, head_sha:$head, status:"completed", conclusion:"success"}])}' \
   >"$tmp_dir/checks.json"
 bash "$collector" summarize "$tmp_dir/checks.json" "$expected_head" "$tmp_dir/summary.json"
 [[ "$(jq -r '.all_green' "$tmp_dir/summary.json")" == 'false' ]] \
