@@ -10,6 +10,7 @@ __pycache__/
 .env.production
 .env.stage
 .runtime/
+.codex/runtime/
 db.sqlite3
 media/
 staticfiles/

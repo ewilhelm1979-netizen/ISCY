@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ISCY Codex orchestration result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "action",
+    "status",
+    "summary",
+    "root_cause",
+    "changed_files",
+    "tests_run",
+    "tests_passed",
+    "blockers",
+    "security_notes",
+    "scope_notes",
+    "recommended_human_action"
+  ],
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["review", "fix-ci", "verify"]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "READY_FOR_HUMAN_REVIEW",
+        "FIX_PREPARED",
+        "BLOCKED",
+        "INCOMPLETE",
+        "SECURITY_REVIEW_REQUIRED"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "root_cause": {
+      "type": "string",
+      "maxLength": 4000
+    },
+    "changed_files": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "tests_run": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {"type": "string", "minLength": 1, "maxLength": 1000}
+    },
+    "tests_passed": {"type": "boolean"},
+    "blockers": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "security_notes": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "scope_notes": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {"type": "string", "minLength": 1, "maxLength": 2000}
+    },
+    "recommended_human_action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    }
+  }
+}

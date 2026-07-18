@@ -6,6 +6,13 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Automation
+
+- adds an owner-controlled, same-repository Draft-PR orchestrator for the exact commands `/iscy status`, `/iscy review`, `/iscy fix-ci`, and `/iscy verify`
+- separates read-only Codex review/verification, workspace-only correction, diff validation, bot commit, and Fast-Forward push into least-privilege jobs without automatic merge or Ready-for-review transitions
+- limits managed CI correction to two bot-recorded attempts, blocks forks, Dependabot, foreign actors, protected automation/security paths, secrets, local paths, runtime artifacts, symlinks, submodules, and unexpected binaries
+- adds offline guard, injection, attempt-limit, workflow-head, and diff regression tests; normal pull-request CI performs no OpenAI API request
+
 ### Release lifecycle
 
 - beginnt den Entwicklungszyklus fuer `V23.7.30` auf Basis des unveraenderten, veroeffentlichten Stands `V23.7.29`

@@ -1,0 +1,523 @@
+name: ISCY Codex reusable
+
+on:
+  workflow_call:
+    inputs:
+      action:
+        required: true
+        type: string
+      pr_number:
+        required: true
+        type: number
+      commit_sha:
+        required: true
+        type: string
+      trigger_actor:
+        required: true
+        type: string
+    secrets:
+      openai_api_key:
+        required: false
+
+permissions: {}
+
+concurrency:
+  group: iscy-codex-pr-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  route:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+    outputs:
+      route: ${{ steps.route.outputs.route }}
+      base_sha: ${{ steps.route.outputs.base_sha }}
+      head_ref: ${{ steps.route.outputs.head_ref }}
+      maintenance: ${{ steps.route.outputs.maintenance }}
+    steps:
+      - name: Check out trusted automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
+      - name: Validate current pull request and select action
+        id: route
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISCY_ACTION: ${{ inputs.action }}
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
+          ISCY_PR_NUMBER: ${{ inputs.pr_number }}
+          ISCY_REPOSITORY: ${{ github.repository }}
+          ISCY_TRIGGER_ACTOR: ${{ inputs.trigger_actor }}
+        run: |
+          set -euo pipefail
+          case "$ISCY_ACTION" in
+            review|fix-ci|verify|auto) ;;
+            *) echo 'Unbekannte Orchestrator-Aktion.' >&2; exit 1 ;;
+          esac
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$tmp_dir"' EXIT
+          gh api "repos/$ISCY_REPOSITORY/pulls/$ISCY_PR_NUMBER" >"$tmp_dir/pr.json"
+          gh api --paginate --slurp "repos/$ISCY_REPOSITORY/issues/$ISCY_PR_NUMBER/comments?per_page=100" \
+            | jq 'add // []' >"$tmp_dir/comments.json"
+          ISCY_EVENT_ACTOR="$ISCY_TRIGGER_ACTOR"
+          ISCY_EVENT_ASSOCIATION='OWNER'
+          ISCY_COMMAND="$ISCY_ACTION"
+          ISCY_PR_AUTHOR="$(jq -er '.user.login' "$tmp_dir/pr.json")"
+          ISCY_PR_STATE="$(jq -er '.state' "$tmp_dir/pr.json")"
+          ISCY_PR_DRAFT="$(jq -er '.draft' "$tmp_dir/pr.json")"
+          ISCY_PR_BASE_REF="$(jq -er '.base.ref' "$tmp_dir/pr.json")"
+          ISCY_PR_BASE_SHA="$(jq -er '.base.sha' "$tmp_dir/pr.json")"
+          ISCY_PR_HEAD_REPOSITORY="$(jq -er '.head.repo.full_name' "$tmp_dir/pr.json")"
+          ISCY_PR_HEAD_REF="$(jq -er '.head.ref' "$tmp_dir/pr.json")"
+          ISCY_PR_HEAD_SHA="$(jq -er '.head.sha' "$tmp_dir/pr.json")"
+          ISCY_PR_LABELS="$(jq -r '.labels[].name' "$tmp_dir/pr.json")"
+          export ISCY_REPOSITORY ISCY_EVENT_ACTOR ISCY_EVENT_ASSOCIATION ISCY_COMMAND
+          export ISCY_PR_AUTHOR ISCY_PR_STATE ISCY_PR_DRAFT ISCY_PR_BASE_REF
+          export ISCY_PR_BASE_SHA ISCY_PR_HEAD_REPOSITORY ISCY_PR_HEAD_REF
+          export ISCY_PR_HEAD_SHA ISCY_PR_LABELS
+          mode='manual'
+          [[ "$ISCY_ACTION" != 'auto' ]] || mode='automatic'
+          bash trusted/.github/scripts/iscy_codex_guard.sh pr "$mode"
+          test "$ISCY_PR_HEAD_SHA" = "$ISCY_EXPECTED_HEAD"
+
+          bash trusted/.github/scripts/iscy_codex_collect_ci.sh fetch \
+            "$ISCY_REPOSITORY" "$ISCY_EXPECTED_HEAD" "$tmp_dir/ci" false
+          terminal="$(jq -r '.terminal' "$tmp_dir/ci/summary.json")"
+          all_green="$(jq -r '.all_green' "$tmp_dir/ci/summary.json")"
+          has_failure="$(jq -r '.has_failure' "$tmp_dir/ci/summary.json")"
+          route="$ISCY_ACTION"
+          if [[ "$ISCY_ACTION" == 'fix-ci' && "$has_failure" != 'true' ]]; then
+            echo 'Kein fehlgeschlagener Pflichtcheck fuer /iscy fix-ci vorhanden.' >&2
+            exit 1
+          elif [[ "$ISCY_ACTION" == 'auto' ]]; then
+            verify_marker="<!-- iscy-codex-verify:${ISCY_EXPECTED_HEAD} -->"
+            already_verified="$(jq -r --arg marker "$verify_marker" '
+              any(.[]; .user.login == "github-actions[bot]" and (.body | startswith($marker)))
+            ' "$tmp_dir/comments.json")"
+            if [[ "$already_verified" == 'true' ]]; then
+              route='none'
+            elif [[ "$terminal" != 'true' ]]; then
+              route='pending'
+            elif [[ "$all_green" == 'true' ]]; then
+              route='verify'
+            elif [[ "$has_failure" == 'true' ]]; then
+              route='fix-ci'
+            else
+              route='pending'
+            fi
+          fi
+          maintenance='false'
+          if grep -Fxq 'codex-automation-maintenance' <<<"$ISCY_PR_LABELS"; then
+            maintenance='true'
+          fi
+          {
+            printf 'route=%s\n' "$route"
+            printf 'base_sha=%s\n' "$ISCY_PR_BASE_SHA"
+            printf 'head_ref=%s\n' "$ISCY_PR_HEAD_REF"
+            printf 'maintenance=%s\n' "$maintenance"
+          } >>"$GITHUB_OUTPUT"
+
+  review-or-verify:
+    needs: route
+    if: needs.route.outputs.route == 'review' || needs.route.outputs.route == 'verify'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: read
+      checks: read
+    steps:
+      - name: Require configured OpenAI secret
+        env:
+          OPENAI_SECRET_PRESENT: ${{ secrets.openai_api_key != '' }}
+        run: |
+          test "$OPENAI_SECRET_PRESENT" = 'true' || {
+            echo 'OPENAI_API_KEY fehlt; Codex-Lauf sicher gestoppt.' >&2
+            exit 1
+          }
+      - name: Check out trusted automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
+      - name: Check out exact pull-request head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+          path: worktree
+          persist-credentials: false
+      - name: Prepare trusted read-only context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISCY_BASE_SHA: ${{ needs.route.outputs.base_sha }}
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
+          ISCY_PR_NUMBER: ${{ inputs.pr_number }}
+          ISCY_REPOSITORY: ${{ github.repository }}
+          ISCY_REVIEW_QUERY: >-
+            query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved comments(first:20){nodes{author{login} path line body}}}}}}}
+          ISCY_ROUTE: ${{ needs.route.outputs.route }}
+        run: |
+          set -euo pipefail
+          test "$(git -C worktree rev-parse HEAD)" = "$ISCY_EXPECTED_HEAD"
+          git -C worktree fetch --no-tags origin "$ISCY_BASE_SHA"
+          printf '/.codex/runtime/\n' >>worktree/.git/info/exclude
+          mkdir -p worktree/.codex/runtime/context worktree/.codex/runtime/ci "$RUNNER_TEMP/iscy-codex-input"
+          gh api "repos/$ISCY_REPOSITORY/pulls/$ISCY_PR_NUMBER" \
+            >worktree/.codex/runtime/context/pr.json
+          gh api --paginate --slurp "repos/$ISCY_REPOSITORY/pulls/$ISCY_PR_NUMBER/reviews?per_page=100" \
+            | jq 'add // []' >worktree/.codex/runtime/context/reviews.json
+          gh api graphql \
+            -f query="$ISCY_REVIEW_QUERY" \
+            -f owner='ewilhelm1979-netizen' -f name='ISCY' -F number="$ISCY_PR_NUMBER" \
+            >worktree/.codex/runtime/context/review-threads.json
+          gh api --paginate --slurp "repos/$ISCY_REPOSITORY/issues/$ISCY_PR_NUMBER/comments?per_page=100" \
+            | jq 'add // []' >worktree/.codex/runtime/context/comments.json
+          git -C worktree diff --name-only "$ISCY_BASE_SHA...$ISCY_EXPECTED_HEAD" \
+            >worktree/.codex/runtime/context/changed-files.txt
+          bash trusted/.github/scripts/iscy_codex_collect_ci.sh fetch \
+            "$ISCY_REPOSITORY" "$ISCY_EXPECTED_HEAD" worktree/.codex/runtime/ci false
+          if [[ "$ISCY_ROUTE" == 'review' ]]; then
+            cp trusted/.codex/prompts/review-pr.md "$RUNNER_TEMP/iscy-codex-input/prompt.md"
+          else
+            cp trusted/.codex/prompts/verify-pr.md "$RUNNER_TEMP/iscy-codex-input/prompt.md"
+          fi
+          cp trusted/.codex/schemas/result.schema.json "$RUNNER_TEMP/iscy-codex-input/result.schema.json"
+      - name: Run Codex without write or GitHub credentials
+        id: codex
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1 verified 2026-07-18
+        with:
+          openai-api-key: ${{ secrets.openai_api_key }}
+          prompt-file: ${{ runner.temp }}/iscy-codex-input/prompt.md
+          output-file: ${{ runner.temp }}/iscy-codex-input/result.json
+          output-schema-file: ${{ runner.temp }}/iscy-codex-input/result.schema.json
+          working-directory: worktree
+          permission-profile: ":read-only"
+          safety-strategy: drop-sudo
+          allow-users: ewilhelm1979-netizen
+          allow-bots: false
+          codex-version: 0.144.5
+      - name: Validate structured result
+        env:
+          ISCY_ROUTE: ${{ needs.route.outputs.route }}
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/iscy-codex-input/result.json"
+          bash trusted/.github/scripts/iscy_codex_guard.sh result "$result" "$ISCY_ROUTE"
+          test -z "$(git -C worktree status --porcelain --untracked-files=no)"
+          mkdir -p "$RUNNER_TEMP/iscy-codex-result"
+          cp "$result" "$RUNNER_TEMP/iscy-codex-result/result.json"
+      - name: Upload bounded result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: iscy-codex-result-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pr_number }}
+          path: ${{ runner.temp }}/iscy-codex-result/result.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-review-or-verify:
+    needs: [route, review-or-verify]
+    if: needs.review-or-verify.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - name: Download structured result
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: iscy-codex-result-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pr_number }}
+          path: result
+      - name: Create or update one result comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
+          ISCY_PR_NUMBER: ${{ inputs.pr_number }}
+          ISCY_ROUTE: ${{ needs.route.outputs.route }}
+        with:
+          script: |
+            const fs = require('fs');
+            const result = JSON.parse(fs.readFileSync('result/result.json', 'utf8'));
+            const clean = (value, limit = 4000) => String(value ?? '')
+              .replaceAll('<!--', '&lt;!--').replaceAll('-->', '--&gt;').slice(0, limit);
+            const bullets = (values) => values.length
+              ? values.slice(0, 20).map((value) => `- ${clean(value, 2000)}`).join('\n')
+              : '- Keine';
+            const markerKind = process.env.ISCY_ROUTE === 'review' ? 'review' : 'verify';
+            const marker = `<!-- iscy-codex-${markerKind}:${process.env.ISCY_EXPECTED_HEAD} -->`;
+            const body = `${marker}\n## ISCY Codex ${markerKind}\n\n` +
+              `**Status:** \`${clean(result.status, 100)}\`\n\n${clean(result.summary)}\n\n` +
+              `### Blocker\n${bullets(result.blockers)}\n\n` +
+              `### Security\n${bullets(result.security_notes)}\n\n` +
+              `### Scope\n${bullets(result.scope_notes)}\n\n` +
+              `**Empfohlene menschliche Aktion:** ${clean(result.recommended_human_action, 2000)}`;
+            const issue_number = Number(process.env.ISCY_PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number, per_page: 100
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number, body
+              });
+            }
+
+  reserve-fix-attempt:
+    needs: route
+    if: needs.route.outputs.route == 'fix-ci'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    outputs:
+      attempt: ${{ steps.reserve.outputs.attempt }}
+    steps:
+      - name: Require configured OpenAI secret before reserving an attempt
+        env:
+          OPENAI_SECRET_PRESENT: ${{ secrets.openai_api_key != '' }}
+        run: |
+          test "$OPENAI_SECRET_PRESENT" = 'true' || {
+            echo 'OPENAI_API_KEY fehlt; kein Fix-Versuch reserviert.' >&2
+            exit 1
+          }
+      - name: Check out trusted automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Reserve one of two attempts
+        id: reserve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          result="$(bash .github/scripts/iscy_codex_guard.sh reserve-attempt \
+            '${{ github.repository }}' '${{ inputs.pr_number }}' '${{ inputs.commit_sha }}')"
+          printf 'attempt=%s\n' "$(jq -r '.attempt' <<<"$result")" >>"$GITHUB_OUTPUT"
+
+  fix-agent:
+    needs: [route, reserve-fix-attempt]
+    if: needs.reserve-fix-attempt.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+    outputs:
+      has_patch: ${{ steps.validate.outputs.has_patch }}
+    steps:
+      - name: Require configured OpenAI secret
+        env:
+          OPENAI_SECRET_PRESENT: ${{ secrets.openai_api_key != '' }}
+        run: |
+          test "$OPENAI_SECRET_PRESENT" = 'true' || {
+            echo 'OPENAI_API_KEY fehlt; Codex-Lauf sicher gestoppt.' >&2
+            exit 1
+          }
+      - name: Check out trusted automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
+      - name: Check out exact pull-request head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+          path: worktree
+          persist-credentials: false
+      - name: Prepare redacted CI context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISCY_BASE_SHA: ${{ needs.route.outputs.base_sha }}
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
+          ISCY_PR_NUMBER: ${{ inputs.pr_number }}
+          ISCY_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          test "$(git -C worktree rev-parse HEAD)" = "$ISCY_EXPECTED_HEAD"
+          git -C worktree fetch --no-tags origin "$ISCY_BASE_SHA"
+          printf '/.codex/runtime/\n' >>worktree/.git/info/exclude
+          mkdir -p worktree/.codex/runtime/context worktree/.codex/runtime/ci "$RUNNER_TEMP/iscy-codex-input"
+          gh api "repos/$ISCY_REPOSITORY/pulls/$ISCY_PR_NUMBER" \
+            >worktree/.codex/runtime/context/pr.json
+          git -C worktree diff --name-only "$ISCY_BASE_SHA...$ISCY_EXPECTED_HEAD" \
+            >worktree/.codex/runtime/context/changed-files.txt
+          bash trusted/.github/scripts/iscy_codex_collect_ci.sh fetch \
+            "$ISCY_REPOSITORY" "$ISCY_EXPECTED_HEAD" worktree/.codex/runtime/ci true
+          cp trusted/.codex/prompts/fix-ci.md "$RUNNER_TEMP/iscy-codex-input/prompt.md"
+          cp trusted/.codex/schemas/result.schema.json "$RUNNER_TEMP/iscy-codex-input/result.schema.json"
+      - name: Run Codex without push credentials
+        id: codex
+        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1 verified 2026-07-18
+        with:
+          openai-api-key: ${{ secrets.openai_api_key }}
+          prompt-file: ${{ runner.temp }}/iscy-codex-input/prompt.md
+          output-file: ${{ runner.temp }}/iscy-codex-input/result.json
+          output-schema-file: ${{ runner.temp }}/iscy-codex-input/result.schema.json
+          working-directory: worktree
+          permission-profile: ":workspace"
+          safety-strategy: drop-sudo
+          allow-users: ewilhelm1979-netizen
+          allow-bots: false
+          codex-version: 0.144.5
+      - name: Validate result and patch
+        id: validate
+        env:
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
+          ISCY_HEAD_REF: ${{ needs.route.outputs.head_ref }}
+          ISCY_MAINTENANCE: ${{ needs.route.outputs.maintenance }}
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/iscy-codex-input/result.json"
+          bash trusted/.github/scripts/iscy_codex_guard.sh result "$result" fix-ci
+          set +e
+          ISCY_TRUSTED_SCANNER="$GITHUB_WORKSPACE/trusted/scripts/check_release_sensitive_data.sh" \
+            bash trusted/.github/scripts/iscy_codex_validate_diff.sh \
+              "$GITHUB_WORKSPACE/worktree" "$ISCY_EXPECTED_HEAD" "$ISCY_HEAD_REF" "$ISCY_MAINTENANCE"
+          guard_status=$?
+          set -e
+          mkdir -p "$RUNNER_TEMP/iscy-codex-result"
+          cp "$result" "$RUNNER_TEMP/iscy-codex-result/result.json"
+          if [[ "$guard_status" -eq 3 ]]; then
+            test "$(jq -r '.status' "$result")" != 'FIX_PREPARED'
+            printf 'has_patch=false\n' >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test "$guard_status" -eq 0
+          test "$(jq -r '.status' "$result")" = 'FIX_PREPARED'
+          test "$(jq -r '.tests_passed' "$result")" = 'true'
+          git -C worktree diff --binary HEAD -- . ':!.codex/runtime' \
+            >"$RUNNER_TEMP/iscy-codex-result/fix.patch"
+          test -s "$RUNNER_TEMP/iscy-codex-result/fix.patch"
+          printf 'has_patch=true\n' >>"$GITHUB_OUTPUT"
+      - name: Upload bounded fix result
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
+        with:
+          name: iscy-codex-fix-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pr_number }}
+          path: ${{ runner.temp }}/iscy-codex-result/
+          if-no-files-found: error
+          retention-days: 1
+
+  push-fix:
+    needs: [route, reserve-fix-attempt, fix-agent]
+    if: needs.fix-agent.outputs.has_patch == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: read
+      actions: read
+    outputs:
+      new_head: ${{ steps.push.outputs.new_head }}
+    steps:
+      - name: Check out trusted automation
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
+      - name: Check out unchanged pull-request head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 0
+          path: worktree
+          persist-credentials: false
+      - name: Download validated patch
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: iscy-codex-fix-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pr_number }}
+          path: fix-result
+      - name: Commit and fast-forward push in credential-bearing step
+        id: push
+        env:
+          ISCY_MAINTENANCE_ALLOWED: ${{ needs.route.outputs.maintenance }}
+          ISCY_PUSH_TOKEN: ${{ github.token }}
+          ISCY_TRUSTED_DIFF_GUARD: ${{ github.workspace }}/trusted/.github/scripts/iscy_codex_validate_diff.sh
+          ISCY_TRUSTED_SCANNER: ${{ github.workspace }}/trusted/scripts/check_release_sensitive_data.sh
+        run: |
+          bash trusted/.github/scripts/iscy_codex_commit_push.sh \
+            "$GITHUB_WORKSPACE/worktree" \
+            "$GITHUB_WORKSPACE/fix-result/fix.patch" \
+            '${{ inputs.commit_sha }}' \
+            '${{ needs.route.outputs.head_ref }}' \
+            '${{ inputs.pr_number }}' \
+            '${{ needs.reserve-fix-attempt.outputs.attempt }}' \
+            '${{ github.repository }}'
+
+  publish-fix-result:
+    needs: [route, reserve-fix-attempt, fix-agent, push-fix]
+    if: always() && needs.fix-agent.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - name: Download structured fix result
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.0
+        with:
+          name: iscy-codex-fix-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pr_number }}
+          path: result
+      - name: Create or update bounded fix report
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          ISCY_ATTEMPT: ${{ needs.reserve-fix-attempt.outputs.attempt }}
+          ISCY_EXPECTED_HEAD: ${{ inputs.commit_sha }}
+          ISCY_NEW_HEAD: ${{ needs.push-fix.outputs.new_head }}
+          ISCY_PR_NUMBER: ${{ inputs.pr_number }}
+          ISCY_PUSH_RESULT: ${{ needs.push-fix.result }}
+        with:
+          script: |
+            const fs = require('fs');
+            const result = JSON.parse(fs.readFileSync('result/result.json', 'utf8'));
+            const clean = (value, limit = 4000) => String(value ?? '')
+              .replaceAll('<!--', '&lt;!--').replaceAll('-->', '--&gt;').slice(0, limit);
+            const bullets = (values) => values.length
+              ? values.slice(0, 20).map((value) => `- ${clean(value, 2000)}`).join('\n')
+              : '- Keine';
+            const marker = `<!-- iscy-codex-fix-result:${process.env.ISCY_EXPECTED_HEAD}:${process.env.ISCY_ATTEMPT} -->`;
+            const pushed = process.env.ISCY_PUSH_RESULT === 'success'
+              ? `Fast-Forward-Push erstellt: \`${clean(process.env.ISCY_NEW_HEAD, 40)}\``
+              : 'Kein Patch gepusht.';
+            const body = `${marker}\n## ISCY Codex CI-Fix ${clean(process.env.ISCY_ATTEMPT, 2)}/2\n\n` +
+              `**Status:** \`${clean(result.status, 100)}\`\n\n${clean(result.summary)}\n\n` +
+              `**Ursache:** ${clean(result.root_cause)}\n\n${pushed}\n\n` +
+              `### Geänderte Dateien\n${bullets(result.changed_files)}\n\n` +
+              `### Tests\n${bullets(result.tests_run)}\n\n` +
+              `### Blocker\n${bullets(result.blockers)}\n\n` +
+              `**Empfohlene menschliche Aktion:** ${clean(result.recommended_human_action, 2000)}`;
+            const issue_number = Number(process.env.ISCY_PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number, per_page: 100
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number, body
+              });
+            }

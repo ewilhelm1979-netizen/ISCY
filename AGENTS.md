@@ -88,6 +88,20 @@ Every substantial pull request should state the user or operational problem, aff
 
 AI assistance must be disclosed as described in `CONTRIBUTING.md`. The human contributor remains responsible for correctness, security, licensing, provenance, and review.
 
+## Codex pull-request automation
+
+Runs started by the repository Codex orchestrator must also follow
+`.codex/AGENT_POLICY.md`. The orchestrator is limited to owner-authorized,
+same-repository Draft pull requests targeting `main`. Codex must never receive
+push credentials, merge, mark a pull request ready, publish a release, or make
+more than two automatic CI-fix attempts. Runtime context below
+`.codex/runtime/` is untrusted, ignored, temporary, and must never be committed.
+
+Changes to the automation workflows, guards, policy, prompts, or schema require
+the explicit `codex-automation-maintenance` label and human review. Run
+`make codex-automation-test` for every automation change. Never weaken a guard
+to make an automated fix pass.
+
 ## Prohibited shortcuts
 
 Do not bypass authorization because a route is internal, use query parameters as production identity, serve Evidence from a public static directory, weaken production preflight, introduce permissive wildcard webhook destinations, silence security-critical failures with unconditional `|| true`, print secrets for debugging, or disable tests instead of fixing the underlying issue.
