@@ -88,7 +88,8 @@ jobs:
           set -euo pipefail
           tmp_dir="$(mktemp -d)"
           trap 'rm -rf -- "$tmp_dir"' EXIT
-          gh api "repos/$ISCY_REPOSITORY/pulls/$ISCY_PR_NUMBER" >"$tmp_dir/pr.json"
+          bash .github/scripts/iscy_codex_api.sh pull_request_read \
+            "$ISCY_REPOSITORY" "$ISCY_PR_NUMBER" "$tmp_dir/pr.json"
           actual_head="$(jq -er '.head.sha' "$tmp_dir/pr.json")"
           if [[ -z "$ISCY_EXPECTED_HEAD" ]]; then
             echo '::error title=ISCY Codex head check::Expected PR head SHA is empty.'
@@ -99,10 +100,14 @@ jobs:
               "$ISCY_EXPECTED_HEAD" "$actual_head"
             exit 1
           fi
-          gh api --paginate --slurp "repos/$ISCY_REPOSITORY/issues/$ISCY_PR_NUMBER/comments?per_page=100" \
-            | jq 'add // []' >"$tmp_dir/comments.json"
-          bash .github/scripts/iscy_codex_collect_ci.sh fetch \
-            "$ISCY_REPOSITORY" "$ISCY_EXPECTED_HEAD" "$tmp_dir/ci" false
+          bash .github/scripts/iscy_codex_api.sh comments_read \
+            "$ISCY_REPOSITORY" "$ISCY_PR_NUMBER" "$tmp_dir/comment-pages.json"
+          jq 'add // []' "$tmp_dir/comment-pages.json" >"$tmp_dir/comments.json"
+          mkdir -p "$tmp_dir/ci"
+          bash .github/scripts/iscy_codex_api.sh check_runs_read \
+            "$ISCY_REPOSITORY" "$ISCY_EXPECTED_HEAD" "$tmp_dir/ci/checks.json"
+          bash .github/scripts/iscy_codex_collect_ci.sh summarize \
+            "$tmp_dir/ci/checks.json" "$ISCY_EXPECTED_HEAD" "$tmp_dir/ci/summary.json"
           bash .github/scripts/iscy_codex_guard.sh attempts "$tmp_dir/comments.json" \
             >"$tmp_dir/attempts.json"
 
@@ -135,8 +140,8 @@ jobs:
             printf -- '- Blocker: %s\n' "$blockers"
           } >"$tmp_dir/body.md"
           jq -n --rawfile body "$tmp_dir/body.md" '{body:$body}' >"$tmp_dir/comment.json"
-          gh api --method POST "repos/$ISCY_REPOSITORY/issues/$ISCY_PR_NUMBER/comments" \
-            --input "$tmp_dir/comment.json" >/dev/null
+          bash .github/scripts/iscy_codex_api.sh status_comment_write \
+            "$ISCY_REPOSITORY" "$ISCY_PR_NUMBER" "$tmp_dir/comment.json"
 
   review:
     needs: guard
