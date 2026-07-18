@@ -319,13 +319,28 @@ snapshot_database() {
   done
 }
 
+canonicalize_constraint_snapshot() {
+  LC_ALL=C sed -E \
+    -e 's/::character varying::text/::character varying/g' \
+    -e 's/(ARRAY\[[^]]*::character varying[^]]*\])::text\[\]/\1/g' \
+    "$1"
+}
+
 compare_snapshots() {
   local source_prefix="$1"
   local target_prefix="$2"
   local suffix
   for suffix in tables rows columns constraints indexes sequences objects; do
-    if ! cmp --silent "$source_prefix.$suffix" "$target_prefix.$suffix"; then
-      diff --unified "$source_prefix.$suffix" "$target_prefix.$suffix" >&2 || true
+    local source_snapshot="$source_prefix.$suffix"
+    local target_snapshot="$target_prefix.$suffix"
+    if [[ "$suffix" == "constraints" ]]; then
+      source_snapshot="$TMP_DIR/source-constraints.canonical"
+      target_snapshot="$TMP_DIR/target-constraints.canonical"
+      canonicalize_constraint_snapshot "$source_prefix.$suffix" >"$source_snapshot"
+      canonicalize_constraint_snapshot "$target_prefix.$suffix" >"$target_snapshot"
+    fi
+    if ! cmp --silent "$source_snapshot" "$target_snapshot"; then
+      diff --unified "$source_snapshot" "$target_snapshot" >&2 || true
       fail integrity "Datenbankvergleich fuer $suffix ist abgewichen."
     fi
   done
@@ -772,4 +787,6 @@ main() {
   printf 'integrity=rows,content_hashes,sequences,constraints,indexes,foreign_keys,media\n'
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

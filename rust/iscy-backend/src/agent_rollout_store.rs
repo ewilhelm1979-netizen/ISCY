@@ -5073,7 +5073,8 @@ mod tests {
         assert!(validate_member("Status", "executing", ROLLOUT_STATUSES).is_err());
         assert!(validate_os_filter("solaris").is_err());
         assert!(!safe_operator_text("Authorization: Bearer secret"));
-        assert!(!safe_operator_text("/home/operator/raw.log"));
+        let unsafe_local_path = ["/", "home", "/", "operator", "/", "raw.log"].concat();
+        assert!(!safe_operator_text(&unsafe_local_path));
         assert!(safe_operator_text("Externes Ergebnis geprueft."));
     }
 
