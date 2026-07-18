@@ -19,8 +19,6 @@ on:
       openai_api_key:
         required: false
 
-permissions: {}
-
 concurrency:
   group: iscy-codex-pr-${{ inputs.pr_number }}
   cancel-in-progress: false
