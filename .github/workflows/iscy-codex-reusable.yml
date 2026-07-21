@@ -239,7 +239,7 @@ jobs:
           safety-strategy: drop-sudo
           allow-users: ewilhelm1979-netizen
           allow-bots: false
-          codex-version: 0.144.5
+          codex-version: 0.144.4
       - name: Validate structured result
         env:
           ISCY_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message }}
@@ -436,7 +436,7 @@ jobs:
           safety-strategy: drop-sudo
           allow-users: ewilhelm1979-netizen
           allow-bots: false
-          codex-version: 0.144.5
+          codex-version: 0.144.4
       - name: Validate result and patch
         id: validate
         env:
