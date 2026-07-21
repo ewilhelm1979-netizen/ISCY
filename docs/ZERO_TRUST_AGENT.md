@@ -376,6 +376,45 @@ keine Wazuh-Anbindung, IOC-/Behavioral Detection, automatisches Threat
 Modeling oder automatische Promotion. Sie garantiert weder fehlerfreie
 produktive Rollouts noch eine Produktions-SLO.
 
+## Agent Rollout 2.0 - Phase 2
+
+Migration `0041_rust_agent_rollout_manifest_handoff` erweitert die vorhandene
+Rollout-Control-Plane um unveraenderliche Ring-Manifeste und passive externe
+Deployment-Handoffs. Eine Read-only-Vorschau persistiert nichts. Nur Admins
+duerfen ein Manifest nach bestandenem Preflight und expliziter Bestaetigung
+einfrieren oder vor dem Ringstart durch eine neue Version ersetzen.
+
+Das kanonische Manifest ist kompaktes UTF-8-JSON aus kontrollierten
+Rust-Strukturen. Es enthaelt Ringposition, Zielversion und Channel,
+Artefakt-SHA-256 und vorhandene Provenance-/Signaturstatus, Policy-Revision,
+stabil sortierte Targets, sichere Plattform- und PKI-/mTLS-Metadaten sowie
+Preflight-Aggregate. Der SHA-256 wird ueber exakt die exportierten
+Manifest-Bytes berechnet. Der Ringstart verifiziert Hash, Scope, Artefakt,
+Policy und aktuelle Zielzuordnung erneut und bleibt bei jeder Abweichung ohne
+Statusaenderung blockiert.
+
+Ein Handoff referenziert genau ein Manifest und stellt ein manuell
+uebertragbares JSON-Paket bereit. ISCY speichert dabei keine externen
+Credentials, Pakete, Skripte, Rohlogs oder lokalen Pfade und ruft keine
+externen Systeme auf. Admins steuern Vorbereitung, Bestaetigung, Abschluss und
+Invalidierung; Auditoren koennen sichere Metadaten und Exporte lesen.
+
+Externe Result-Pakete sind auf 1 MiB und 500 Targets begrenzt. ISCY validiert
+Schema, Tenant, Manifest-/Handoff-Bezug, Hash, Targets, Device-Referenzen,
+Zeitfenster, Statuswerte und Textgrenzen vor jeder Uebernahme. Identische
+Batch-ID und identischer Payload-Hash sind idempotent; eine abweichende
+Wiederholung oder ein widerspruechliches Target wird mit `409 Conflict`
+abgewiesen. Import, bestehende Target-Result-Logik, Checks, Aggregate und Audit
+werden gemeinsam transaktional geschrieben; der Roh-Request wird nicht
+gespeichert.
+
+Management-/Regulatory-Reviews, Betriebszentrale und Prometheus zeigen nur
+sichere Aggregate fuer aktive Manifeste und Handoffs, fehlende oder
+fehlgeschlagene Rueckmeldungen sowie Versionsabweichungen. Bestehende Review-
+Snapshots bleiben unveraendert. Phase 2 ist keine MDM-/RMM-,
+Command-and-Control- oder Deployment-Integration und fuehrt weder Remote-
+Installation noch automatische Promotion oder technischen Rollback aus.
+
 ## Windows-Agent
 
 Der Windows-Agent ist kein eigener Python-Zweig, sondern dasselbe Rust-Binary `iscy-agent`. Der Quellcode ist bereits im Repository enthalten. Ein `.exe` wird auf Windows so gebaut:
@@ -497,7 +536,7 @@ Remediation sollte erst als eigener, policy-signierter und auditierbarer Schritt
 
 ## Plattform-Integration
 
-Die Migrationen `0007_rust_zero_trust_agent_core`, `0008_rust_agent_enrollment_hardening`, `0025_rust_agent_fleet_governance`, `0028_rust_guided_agent_onboarding` und `0040_rust_agent_rollout_governance` fuegen hinzu:
+Die Migrationen `0007_rust_zero_trust_agent_core`, `0008_rust_agent_enrollment_hardening`, `0025_rust_agent_fleet_governance`, `0028_rust_guided_agent_onboarding`, `0040_rust_agent_rollout_governance` und `0041_rust_agent_rollout_manifest_handoff` fuegen hinzu:
 
 - `zero_trust_agent_device`
 - `zero_trust_agent_heartbeat`
@@ -513,6 +552,10 @@ Die Migrationen `0007_rust_zero_trust_agent_core`, `0008_rust_agent_enrollment_h
 - `zero_trust_agent_rollout_target`
 - `zero_trust_agent_rollout_check`
 - `zero_trust_agent_rollout_event`
+- `zero_trust_agent_rollout_manifest`
+- `zero_trust_agent_rollout_manifest_target`
+- `zero_trust_agent_rollout_handoff`
+- `zero_trust_agent_rollout_result_import`
 
 Die Webansicht ist unter `/zero-trust/` verfuegbar.
 

@@ -265,6 +265,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AGENT_ROLLOUT_GOVERNANCE_SCHEMA,
         postgres_sql: POSTGRES_AGENT_ROLLOUT_GOVERNANCE_SCHEMA,
     },
+    Migration {
+        version: "0041_rust_agent_rollout_manifest_handoff",
+        sqlite_sql: SQLITE_AGENT_ROLLOUT_MANIFEST_HANDOFF_SCHEMA,
+        postgres_sql: POSTGRES_AGENT_ROLLOUT_MANIFEST_HANDOFF_SCHEMA,
+    },
 ];
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
@@ -1819,6 +1824,306 @@ CREATE INDEX IF NOT EXISTS idx_agent_rollout_event_tenant
     ON zero_trust_agent_rollout_event(tenant_id, rollout_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_agent_rollout_event_device
     ON zero_trust_agent_rollout_event(tenant_id, device_id, created_at);
+"#;
+
+const SQLITE_AGENT_ROLLOUT_MANIFEST_HANDOFF_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_manifest (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    manifest_id varchar(36) NOT NULL,
+    tenant_id INTEGER NOT NULL,
+    rollout_id INTEGER NOT NULL,
+    ring_id INTEGER NOT NULL,
+    manifest_version INTEGER NOT NULL CHECK (manifest_version >= 1),
+    schema_version varchar(64) NOT NULL DEFAULT 'iscy.agent-rollout-manifest.v1',
+    status varchar(24) NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active','superseded')),
+    manifest_sha256 varchar(64) NOT NULL CHECK (length(manifest_sha256) = 64),
+    canonical_json TEXT NOT NULL,
+    artifact_id varchar(128) NULL,
+    artifact_sha256 varchar(64) NOT NULL DEFAULT '',
+    artifact_signature_status varchar(32) NOT NULL DEFAULT '',
+    artifact_verification_status varchar(32) NOT NULL DEFAULT '',
+    artifact_provenance_status varchar(32) NOT NULL DEFAULT '',
+    policy_profile_id INTEGER NULL,
+    policy_revision varchar(64) NOT NULL DEFAULT '',
+    target_count INTEGER NOT NULL CHECK (target_count >= 1),
+    preflight_passed_count INTEGER NOT NULL DEFAULT 0 CHECK (preflight_passed_count >= 0),
+    preflight_warning_count INTEGER NOT NULL DEFAULT 0 CHECK (preflight_warning_count >= 0),
+    preflight_failed_count INTEGER NOT NULL DEFAULT 0 CHECK (preflight_failed_count >= 0),
+    created_by_id INTEGER NOT NULL,
+    frozen_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, manifest_id),
+    UNIQUE (tenant_id, rollout_id, ring_id, manifest_version),
+    UNIQUE (tenant_id, rollout_id, ring_id, id),
+    FOREIGN KEY (tenant_id, rollout_id)
+        REFERENCES zero_trust_agent_rollout(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, ring_id)
+        REFERENCES zero_trust_agent_rollout_ring(tenant_id, rollout_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, policy_profile_id)
+        REFERENCES zero_trust_agent_policy_profile(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, artifact_id)
+        REFERENCES agent_release_artifact(tenant_id, artifact_id) ON DELETE RESTRICT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_rollout_manifest_active
+    ON zero_trust_agent_rollout_manifest(tenant_id, rollout_id, ring_id)
+    WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_manifest_state
+    ON zero_trust_agent_rollout_manifest(tenant_id, rollout_id, ring_id, status, manifest_version);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_manifest_target (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    rollout_id INTEGER NOT NULL,
+    ring_id INTEGER NOT NULL,
+    manifest_db_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    device_id INTEGER NOT NULL,
+    target_position INTEGER NOT NULL CHECK (target_position >= 1),
+    stable_device_id varchar(128) NOT NULL,
+    expected_agent_version varchar(64) NOT NULL,
+    current_agent_version varchar(64) NOT NULL DEFAULT '',
+    os_family varchar(32) NOT NULL DEFAULT '',
+    architecture varchar(64) NOT NULL DEFAULT '',
+    certificate_status varchar(32) NOT NULL DEFAULT '',
+    mtls_binding_status varchar(32) NOT NULL DEFAULT '',
+    preflight_status varchar(24) NOT NULL
+        CHECK (preflight_status IN ('passed','warning')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, manifest_db_id, target_id),
+    UNIQUE (tenant_id, manifest_db_id, stable_device_id),
+    UNIQUE (tenant_id, manifest_db_id, target_position),
+    FOREIGN KEY (tenant_id, rollout_id, ring_id, manifest_db_id)
+        REFERENCES zero_trust_agent_rollout_manifest(tenant_id, rollout_id, ring_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, target_id)
+        REFERENCES zero_trust_agent_rollout_target(tenant_id, rollout_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, device_id)
+        REFERENCES zero_trust_agent_device(tenant_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_manifest_target_scope
+    ON zero_trust_agent_rollout_manifest_target(tenant_id, rollout_id, ring_id, manifest_db_id, target_position);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_handoff (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    handoff_id varchar(36) NOT NULL,
+    tenant_id INTEGER NOT NULL,
+    rollout_id INTEGER NOT NULL,
+    ring_id INTEGER NOT NULL,
+    manifest_db_id INTEGER NOT NULL,
+    status varchar(32) NOT NULL DEFAULT 'prepared'
+        CHECK (status IN ('prepared','exported','awaiting_results','partially_reported','completed','failed','expired','invalidated')),
+    source_system varchar(96) NOT NULL,
+    external_batch_id varchar(128) NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    expected_result_count INTEGER NOT NULL CHECK (expected_result_count >= 1),
+    reported_result_count INTEGER NOT NULL DEFAULT 0 CHECK (reported_result_count >= 0),
+    succeeded_count INTEGER NOT NULL DEFAULT 0 CHECK (succeeded_count >= 0),
+    failed_count INTEGER NOT NULL DEFAULT 0 CHECK (failed_count >= 0),
+    skipped_count INTEGER NOT NULL DEFAULT 0 CHECK (skipped_count >= 0),
+    timed_out_count INTEGER NOT NULL DEFAULT 0 CHECK (timed_out_count >= 0),
+    unknown_count INTEGER NOT NULL DEFAULT 0 CHECK (unknown_count >= 0),
+    version_mismatch_count INTEGER NOT NULL DEFAULT 0 CHECK (version_mismatch_count >= 0),
+    expires_at TEXT NULL,
+    exported_at TEXT NULL,
+    acknowledged_at TEXT NULL,
+    completed_at TEXT NULL,
+    invalidated_at TEXT NULL,
+    created_by_id INTEGER NOT NULL,
+    updated_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, handoff_id),
+    UNIQUE (tenant_id, rollout_id, ring_id, id),
+    FOREIGN KEY (tenant_id, rollout_id, ring_id, manifest_db_id)
+        REFERENCES zero_trust_agent_rollout_manifest(tenant_id, rollout_id, ring_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_handoff_state
+    ON zero_trust_agent_rollout_handoff(tenant_id, rollout_id, ring_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_result_import (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    import_id varchar(36) NOT NULL,
+    tenant_id INTEGER NOT NULL,
+    rollout_id INTEGER NOT NULL,
+    ring_id INTEGER NOT NULL,
+    manifest_db_id INTEGER NOT NULL,
+    handoff_db_id INTEGER NOT NULL,
+    source_system varchar(96) NOT NULL,
+    external_batch_id varchar(128) NOT NULL,
+    generated_at TEXT NOT NULL,
+    payload_sha256 varchar(64) NOT NULL CHECK (length(payload_sha256) = 64),
+    status varchar(24) NOT NULL DEFAULT 'accepted'
+        CHECK (status IN ('accepted','replayed')),
+    item_count INTEGER NOT NULL CHECK (item_count BETWEEN 1 AND 500),
+    succeeded_count INTEGER NOT NULL DEFAULT 0 CHECK (succeeded_count >= 0),
+    failed_count INTEGER NOT NULL DEFAULT 0 CHECK (failed_count >= 0),
+    skipped_count INTEGER NOT NULL DEFAULT 0 CHECK (skipped_count >= 0),
+    timed_out_count INTEGER NOT NULL DEFAULT 0 CHECK (timed_out_count >= 0),
+    unknown_count INTEGER NOT NULL DEFAULT 0 CHECK (unknown_count >= 0),
+    version_mismatch_count INTEGER NOT NULL DEFAULT 0 CHECK (version_mismatch_count >= 0),
+    replay_count INTEGER NOT NULL DEFAULT 0 CHECK (replay_count >= 0),
+    imported_by_id INTEGER NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_replayed_at TEXT NULL,
+    UNIQUE (tenant_id, import_id),
+    UNIQUE (tenant_id, handoff_db_id, source_system, external_batch_id),
+    FOREIGN KEY (tenant_id, rollout_id, ring_id, manifest_db_id)
+        REFERENCES zero_trust_agent_rollout_manifest(tenant_id, rollout_id, ring_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, rollout_id, ring_id, handoff_db_id)
+        REFERENCES zero_trust_agent_rollout_handoff(tenant_id, rollout_id, ring_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_result_import_scope
+    ON zero_trust_agent_rollout_result_import(tenant_id, rollout_id, ring_id, imported_at);
+"#;
+
+const POSTGRES_AGENT_ROLLOUT_MANIFEST_HANDOFF_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_manifest (
+    id BIGSERIAL PRIMARY KEY,
+    manifest_id varchar(36) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    rollout_id BIGINT NOT NULL,
+    ring_id BIGINT NOT NULL,
+    manifest_version INTEGER NOT NULL CHECK (manifest_version >= 1),
+    schema_version varchar(64) NOT NULL DEFAULT 'iscy.agent-rollout-manifest.v1',
+    status varchar(24) NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active','superseded')),
+    manifest_sha256 varchar(64) NOT NULL CHECK (length(manifest_sha256) = 64),
+    canonical_json TEXT NOT NULL,
+    artifact_id varchar(128) NULL,
+    artifact_sha256 varchar(64) NOT NULL DEFAULT '',
+    artifact_signature_status varchar(32) NOT NULL DEFAULT '',
+    artifact_verification_status varchar(32) NOT NULL DEFAULT '',
+    artifact_provenance_status varchar(32) NOT NULL DEFAULT '',
+    policy_profile_id BIGINT NULL,
+    policy_revision varchar(64) NOT NULL DEFAULT '',
+    target_count INTEGER NOT NULL CHECK (target_count >= 1),
+    preflight_passed_count INTEGER NOT NULL DEFAULT 0 CHECK (preflight_passed_count >= 0),
+    preflight_warning_count INTEGER NOT NULL DEFAULT 0 CHECK (preflight_warning_count >= 0),
+    preflight_failed_count INTEGER NOT NULL DEFAULT 0 CHECK (preflight_failed_count >= 0),
+    created_by_id BIGINT NOT NULL,
+    frozen_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, manifest_id),
+    UNIQUE (tenant_id, rollout_id, ring_id, manifest_version),
+    UNIQUE (tenant_id, rollout_id, ring_id, id),
+    FOREIGN KEY (tenant_id, rollout_id)
+        REFERENCES zero_trust_agent_rollout(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, ring_id)
+        REFERENCES zero_trust_agent_rollout_ring(tenant_id, rollout_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, policy_profile_id)
+        REFERENCES zero_trust_agent_policy_profile(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, artifact_id)
+        REFERENCES agent_release_artifact(tenant_id, artifact_id) ON DELETE RESTRICT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_rollout_manifest_active
+    ON zero_trust_agent_rollout_manifest(tenant_id, rollout_id, ring_id)
+    WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_manifest_state
+    ON zero_trust_agent_rollout_manifest(tenant_id, rollout_id, ring_id, status, manifest_version);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_manifest_target (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    rollout_id BIGINT NOT NULL,
+    ring_id BIGINT NOT NULL,
+    manifest_db_id BIGINT NOT NULL,
+    target_id BIGINT NOT NULL,
+    device_id BIGINT NOT NULL,
+    target_position INTEGER NOT NULL CHECK (target_position >= 1),
+    stable_device_id varchar(128) NOT NULL,
+    expected_agent_version varchar(64) NOT NULL,
+    current_agent_version varchar(64) NOT NULL DEFAULT '',
+    os_family varchar(32) NOT NULL DEFAULT '',
+    architecture varchar(64) NOT NULL DEFAULT '',
+    certificate_status varchar(32) NOT NULL DEFAULT '',
+    mtls_binding_status varchar(32) NOT NULL DEFAULT '',
+    preflight_status varchar(24) NOT NULL
+        CHECK (preflight_status IN ('passed','warning')),
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, manifest_db_id, target_id),
+    UNIQUE (tenant_id, manifest_db_id, stable_device_id),
+    UNIQUE (tenant_id, manifest_db_id, target_position),
+    FOREIGN KEY (tenant_id, rollout_id, ring_id, manifest_db_id)
+        REFERENCES zero_trust_agent_rollout_manifest(tenant_id, rollout_id, ring_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, rollout_id, target_id)
+        REFERENCES zero_trust_agent_rollout_target(tenant_id, rollout_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, device_id)
+        REFERENCES zero_trust_agent_device(tenant_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_manifest_target_scope
+    ON zero_trust_agent_rollout_manifest_target(tenant_id, rollout_id, ring_id, manifest_db_id, target_position);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_handoff (
+    id BIGSERIAL PRIMARY KEY,
+    handoff_id varchar(36) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    rollout_id BIGINT NOT NULL,
+    ring_id BIGINT NOT NULL,
+    manifest_db_id BIGINT NOT NULL,
+    status varchar(32) NOT NULL DEFAULT 'prepared'
+        CHECK (status IN ('prepared','exported','awaiting_results','partially_reported','completed','failed','expired','invalidated')),
+    source_system varchar(96) NOT NULL,
+    external_batch_id varchar(128) NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    expected_result_count INTEGER NOT NULL CHECK (expected_result_count >= 1),
+    reported_result_count INTEGER NOT NULL DEFAULT 0 CHECK (reported_result_count >= 0),
+    succeeded_count INTEGER NOT NULL DEFAULT 0 CHECK (succeeded_count >= 0),
+    failed_count INTEGER NOT NULL DEFAULT 0 CHECK (failed_count >= 0),
+    skipped_count INTEGER NOT NULL DEFAULT 0 CHECK (skipped_count >= 0),
+    timed_out_count INTEGER NOT NULL DEFAULT 0 CHECK (timed_out_count >= 0),
+    unknown_count INTEGER NOT NULL DEFAULT 0 CHECK (unknown_count >= 0),
+    version_mismatch_count INTEGER NOT NULL DEFAULT 0 CHECK (version_mismatch_count >= 0),
+    expires_at TEXT NULL,
+    exported_at TEXT NULL,
+    acknowledged_at TEXT NULL,
+    completed_at TEXT NULL,
+    invalidated_at TEXT NULL,
+    created_by_id BIGINT NOT NULL,
+    updated_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE (tenant_id, handoff_id),
+    UNIQUE (tenant_id, rollout_id, ring_id, id),
+    FOREIGN KEY (tenant_id, rollout_id, ring_id, manifest_db_id)
+        REFERENCES zero_trust_agent_rollout_manifest(tenant_id, rollout_id, ring_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_handoff_state
+    ON zero_trust_agent_rollout_handoff(tenant_id, rollout_id, ring_id, status, updated_at);
+
+CREATE TABLE IF NOT EXISTS zero_trust_agent_rollout_result_import (
+    id BIGSERIAL PRIMARY KEY,
+    import_id varchar(36) NOT NULL,
+    tenant_id BIGINT NOT NULL,
+    rollout_id BIGINT NOT NULL,
+    ring_id BIGINT NOT NULL,
+    manifest_db_id BIGINT NOT NULL,
+    handoff_db_id BIGINT NOT NULL,
+    source_system varchar(96) NOT NULL,
+    external_batch_id varchar(128) NOT NULL,
+    generated_at TEXT NOT NULL,
+    payload_sha256 varchar(64) NOT NULL CHECK (length(payload_sha256) = 64),
+    status varchar(24) NOT NULL DEFAULT 'accepted'
+        CHECK (status IN ('accepted','replayed')),
+    item_count INTEGER NOT NULL CHECK (item_count BETWEEN 1 AND 500),
+    succeeded_count INTEGER NOT NULL DEFAULT 0 CHECK (succeeded_count >= 0),
+    failed_count INTEGER NOT NULL DEFAULT 0 CHECK (failed_count >= 0),
+    skipped_count INTEGER NOT NULL DEFAULT 0 CHECK (skipped_count >= 0),
+    timed_out_count INTEGER NOT NULL DEFAULT 0 CHECK (timed_out_count >= 0),
+    unknown_count INTEGER NOT NULL DEFAULT 0 CHECK (unknown_count >= 0),
+    version_mismatch_count INTEGER NOT NULL DEFAULT 0 CHECK (version_mismatch_count >= 0),
+    replay_count INTEGER NOT NULL DEFAULT 0 CHECK (replay_count >= 0),
+    imported_by_id BIGINT NOT NULL,
+    imported_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    last_replayed_at TEXT NULL,
+    UNIQUE (tenant_id, import_id),
+    UNIQUE (tenant_id, handoff_db_id, source_system, external_batch_id),
+    FOREIGN KEY (tenant_id, rollout_id, ring_id, manifest_db_id)
+        REFERENCES zero_trust_agent_rollout_manifest(tenant_id, rollout_id, ring_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, rollout_id, ring_id, handoff_db_id)
+        REFERENCES zero_trust_agent_rollout_handoff(tenant_id, rollout_id, ring_id, id) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rollout_result_import_scope
+    ON zero_trust_agent_rollout_result_import(tenant_id, rollout_id, ring_id, imported_at);
 "#;
 
 const SQLITE_AGENT_RELEASE_ARTIFACT_PROVENANCE_SCHEMA: &str = r#"
@@ -8815,5 +9120,58 @@ mod tests {
         .execute(&pool)
         .await;
         assert!(foreign_tenant.is_err());
+    }
+
+    #[tokio::test]
+    async fn sqlite_0041_is_restartable_and_preserves_manifest_handoff_data() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query("PRAGMA foreign_keys=ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO organizations_tenant (id,name,slug) VALUES (141,'Manifest Fixture','manifest-fixture')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zero_trust_agent_device (id,tenant_id,stable_device_id,hostname,os_family,architecture,agent_version) VALUES (14101,141,'stable-141','fixture-141','LINUX','x86_64','1.3.0')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zero_trust_agent_rollout (id,tenant_id,name,target_agent_version,rollback_plan,status) VALUES (14101,141,'Manifest rollout','1.4.0','Approved operator recovery.','ready')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zero_trust_agent_rollout_ring (id,tenant_id,rollout_id,ring_name,sequence_number,status) VALUES (14101,141,14101,'lab',10,'ready')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zero_trust_agent_rollout_target (id,tenant_id,rollout_id,ring_id,device_id,status,preflight_status,eligibility_status,expected_agent_version) VALUES (14101,141,14101,14101,14101,'eligible','passed','eligible','1.4.0')")
+            .execute(&pool).await.unwrap();
+        let canonical = r#"{"schema_version":"iscy.agent-rollout-manifest.v1"}"#;
+        sqlx::query("INSERT INTO zero_trust_agent_rollout_manifest (id,manifest_id,tenant_id,rollout_id,ring_id,manifest_version,manifest_sha256,canonical_json,target_count,preflight_passed_count,created_by_id,frozen_at) VALUES (14101,'11111111-1111-4111-8111-111111111111',141,14101,14101,1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',?1,1,1,14101,'2026-07-21T10:00:00Z')")
+            .bind(canonical).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zero_trust_agent_rollout_manifest_target (tenant_id,rollout_id,ring_id,manifest_db_id,target_id,device_id,target_position,stable_device_id,expected_agent_version,preflight_status) VALUES (141,14101,14101,14101,14101,14101,1,'stable-141','1.4.0','passed')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zero_trust_agent_rollout_handoff (id,handoff_id,tenant_id,rollout_id,ring_id,manifest_db_id,source_system,expected_result_count,created_by_id,updated_by_id) VALUES (14101,'22222222-2222-4222-8222-222222222222',141,14101,14101,14101,'fixture',1,14101,14101)")
+            .execute(&pool).await.unwrap();
+
+        sqlx::query("DROP TABLE zero_trust_agent_rollout_result_import")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM iscy_schema_migrations WHERE version='0041_rust_agent_rollout_manifest_handoff'")
+            .execute(&pool).await.unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(applied, vec!["0041_rust_agent_rollout_manifest_handoff"]);
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+        let preserved: (String, String, String) = sqlx::query_as("SELECT m.manifest_id,m.canonical_json,h.handoff_id FROM zero_trust_agent_rollout_manifest m JOIN zero_trust_agent_rollout_handoff h ON h.tenant_id=m.tenant_id AND h.manifest_db_id=m.id WHERE m.tenant_id=141")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(preserved.0, "11111111-1111-4111-8111-111111111111");
+        assert_eq!(preserved.1, canonical);
+        assert_eq!(preserved.2, "22222222-2222-4222-8222-222222222222");
+        let table_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('zero_trust_agent_rollout_manifest','zero_trust_agent_rollout_manifest_target','zero_trust_agent_rollout_handoff','zero_trust_agent_rollout_result_import')")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(table_count, 4);
+        let foreign_manifest = sqlx::query("INSERT INTO zero_trust_agent_rollout_manifest (manifest_id,tenant_id,rollout_id,ring_id,manifest_version,manifest_sha256,canonical_json,target_count,created_by_id,frozen_at) VALUES ('33333333-3333-4333-8333-333333333333',999,14101,14101,2,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','{}',1,1,'2026-07-21T10:00:00Z')")
+            .execute(&pool).await;
+        assert!(foreign_manifest.is_err());
     }
 }

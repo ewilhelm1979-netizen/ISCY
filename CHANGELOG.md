@@ -28,6 +28,15 @@ The project uses release tags for immutable release points. Changes under **Unre
 - sichert Rollen, Tenantgrenzen, Statusuebergaenge, Audit-Events und konkurrierende Start-/Promotion-Aktionen fail-closed ab
 - fuehrt keine Remote-Installation, Agent-Befehle, automatische Softwareverteilung oder technische Rollback-Ausfuehrung aus und fuegt weder Wazuh-, IOC-, Behavioral-Detection- noch Threat-Modeling-Funktionen hinzu
 
+### Agent Rollout 2.0 - Phase 2
+
+- ergaenzt mit Migration `0041_rust_agent_rollout_manifest_handoff` unveraenderliche, versionierte und tenantgebundene Ring-Manifeste mit kanonischem kompaktem JSON, stabil sortierten Targets und reproduzierbarem SHA-256
+- verlangt vor jedem Ringstart ein integres aktives Manifest und friert Artefakt-, Provenance-, Policy-, Plattform-, PKI-/mTLS- und Preflight-Metadaten ein
+- ergaenzt passive externe Deployment-Handoffs, sichere JSON-Exporte und einen strikt validierten, transaktionalen Result-Import mit 1-MiB-/500-Target-Grenzen, Replay-Schutz und Wiederverwendung der bestehenden Deployment-Result-Logik
+- integriert Manifest-, Handoff-, Rueckmeldungs-, Fehler- und Versionsabweichungssignale in Rollout-Audit, Postflight, Management-/Regulatory-Reviews, Betriebszentrale und niedrig-kardinale Prometheus-Metriken
+- erweitert die bestehende Rollout-Detailakte um Manifest-Freeze, Export, Handoff-Lifecycle und Importhistorie; kritische Aktionen bleiben rollen- und bestaetigungsgebunden
+- behaelt ISCY als Governance- und Evidence-Control-Plane ohne Remote-Ausfuehrung, Paketuebertragung, externe Credentials, automatische Promotion oder technische Deployment-Integration
+
 ## V23.7.29 - 2026-07-13
 
 ### Platform maintenance

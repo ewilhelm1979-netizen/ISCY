@@ -1167,6 +1167,8 @@ Was aktuell belastbar vorhanden ist:
 - Review-Pack-Signale fuer fehlende Pruefsummen, unsignierte Agent-Artefakte, fehlende Provenance und unverifizierte Deployment-Artefakte
 - tenantgebundene Rollout-Plaene mit den festen Ringen Lab, Canary, Pilot, Production und Critical
 - Preflight-/Postflight-Gates, menschliche Promotion, Pause/Resume, Abbruch und operatorgefuehrte Rollback-Dokumentation ohne Remote-Ausfuehrung
+- unveraenderliche kanonische Ring-Manifeste mit stabil sortierten Targets und reproduzierbarem SHA-256
+- passive externe Deployment-Handoffs und kontrollierte Result-Importe mit Replay-Schutz, ohne externe Credentials oder Remote-Ausfuehrung
 
 #### Agent Rollout 2.0 - Phase 1
 
@@ -1197,6 +1199,50 @@ fehlgeschlagene Targets ohne Tenantnamen oder hochkardinale Labels. Diese
 Governance-Unterstuetzung garantiert weder fehlerfreie produktive Rollouts noch
 eine Produktions-SLO und umfasst keine Wazuh-, IOC-, Behavioral-Detection-
 oder automatische Threat-Modeling-Funktion.
+
+#### Agent Rollout 2.0 - Phase 2
+
+Migration `0041_rust_agent_rollout_manifest_handoff` erweitert die bestehende
+Rollout-Fallakte um unveraenderliche, versionierte Ring-Manifeste. Eine
+Manifest-Vorschau persistiert nichts. Nach bestandenem Preflight kann nur eine
+Admin-Rolle das Manifest mit zweiter Bestaetigung einfrieren; vor dem Ringstart
+darf eine neue Version das bisherige Manifest kontrolliert abloesen. Nach dem
+Start ist ein erneuter Freeze gesperrt.
+
+Das Manifest ist kanonisches kompaktes UTF-8-JSON aus kontrollierten
+Rust-Strukturen. Targets werden nach stabiler Device-ID und Target-ID sortiert.
+Eingefroren werden Ringposition, Zielversion, Deployment-Channel,
+Artefakt-SHA-256 und vorhandene Provenance-/Signaturstatus, Policy-Revision,
+sichere Plattform-/Architektur- und PKI-/mTLS-Metadaten sowie
+Preflight-Aggregate. Der SHA-256 bezieht sich exakt auf die exportierten
+Manifest-Bytes. Vor dem Ringstart verifiziert ISCY Hash, Tenant-/Ring-Scope,
+Artefakt, Policy und Zielmenge erneut und veraendert bei einem Blocker keinen
+Rollout-Status.
+
+Ein passiver Handoff verweist auf genau ein aktives Manifest. Das sichere
+JSON-Uebergabepaket enthaelt Manifest-ID und -SHA-256, Rollout-/Ringbezug,
+Artefakt-/Policy-Snapshot und sortierte Targets. ISCY speichert keine externen
+Credentials, ruft keine URLs auf und uebertraegt weder Pakete noch Befehle.
+Vorbereitung, Export, Bestaetigung, Abschluss und Invalidierung sind
+serverseitig begrenzte, auditierte Statuswechsel.
+
+Result-Pakete sind auf 1 MiB und 500 Target-Ergebnisse begrenzt. Vor der
+Transaktion prueft ISCY Schema, Zeitfenster, Tenant, Manifest-/Handoff-Bezug,
+Payload-/Manifest-Hash, bekannte Targets und Device-Referenzen, Statuswerte,
+Reason-Codes und Textgrenzen. Gleiche externe Batch-ID plus gleicher
+Payload-Hash ist idempotent; ein abweichender Hash oder ein widerspruechliches
+Target ergibt `409 Conflict`. Die Uebernahme verwendet dieselbe interne
+Deployment-Result-Logik wie Phase 1 und schreibt Targetstatus, Checks,
+Aggregate, Import-Provenance und Audit gemeinsam. Der vollstaendige Roh-Request
+wird nicht gespeichert.
+
+Die Rollout-Detailseite zeigt Manifeste, sichere Exporte, Handoffs,
+Importhistorie, fehlende Rueckmeldungen, Fehler und Versionsabweichungen.
+Management-/Regulatory-Review-Snapshots und niedrig-kardinale
+Operations-/Prometheus-Signale nehmen dieselben sicheren Aggregate auf.
+Bestehende Snapshots bleiben eingefroren. Phase 2 ist keine MDM-/RMM- oder
+Command-and-Control-Funktion, keine automatische Softwareverteilung und keine
+automatische Promotion.
 
 Was als naechstes fachlich am meisten bringt:
 
@@ -1844,6 +1890,12 @@ Migration `0040_rust_agent_rollout_governance` ergaenzt darauf kontrollierte
 Rollout-Ringe, Preflight-/Postflight-Gates, menschliche Promotion und
 operatorgefuehrten Rollback fuer bestehende Agenten, ohne Remote-Ausfuehrung
 oder automatische Softwareverteilung einzufuehren.
+
+Migration `0041_rust_agent_rollout_manifest_handoff` ergaenzt darauf
+unveraenderliche Ring-Manifeste, reproduzierbare SHA-256, passive externe
+Deployment-Handoffs und begrenzte transaktionale Result-Importe. ISCY bleibt
+dabei Governance- und Evidence-Control-Plane ohne externe Credentials,
+Remote-Ausfuehrung oder automatische Verteilung.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 

@@ -2927,6 +2927,15 @@ async fn agent_rollout_review_postgres(pool: &PgPool, tenant_id: i64) -> anyhow:
             (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_target WHERE tenant_id = $1 AND status = 'blocked' AND preflight_status = 'failed') AS agent_rollout_open_preflight_blockers,
             (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout WHERE tenant_id = $1 AND owner_id IS NULL) AS agent_rollouts_without_owner,
             (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout WHERE tenant_id = $1 AND BTRIM(rollback_plan) = '') AS agent_rollouts_without_rollback_plan,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_manifest WHERE tenant_id = $1 AND status = 'active') AS agent_rollout_active_manifests,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_ring ring WHERE tenant_id = $1 AND status = 'ready' AND NOT EXISTS (
+                SELECT 1 FROM zero_trust_agent_rollout_manifest manifest WHERE manifest.tenant_id=ring.tenant_id AND manifest.rollout_id=ring.rollout_id AND manifest.ring_id=ring.id AND manifest.status='active'
+            )) AS agent_rollout_rings_without_manifest,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_handoff WHERE tenant_id = $1 AND status NOT IN ('completed','failed','expired','invalidated')) AS agent_rollout_active_handoffs,
+            (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_handoff WHERE tenant_id = $1 AND status IN ('exported','awaiting_results','partially_reported')) AS agent_rollout_handoffs_awaiting_results,
+            (SELECT COALESCE(SUM(expected_result_count-reported_result_count),0)::bigint FROM zero_trust_agent_rollout_handoff WHERE tenant_id = $1 AND status IN ('exported','awaiting_results','partially_reported')) AS agent_rollout_missing_handoff_results,
+            (SELECT COALESCE(SUM(failed_count+timed_out_count+unknown_count),0)::bigint FROM zero_trust_agent_rollout_handoff WHERE tenant_id = $1) AS agent_rollout_failed_import_results,
+            (SELECT COALESCE(SUM(version_mismatch_count),0)::bigint FROM zero_trust_agent_rollout_handoff WHERE tenant_id = $1) AS agent_rollout_version_mismatches,
             COALESCE((
                 SELECT ring_name FROM zero_trust_agent_rollout_ring
                 WHERE tenant_id = $1 AND status IN ('active', 'observing', 'passed', 'failed', 'rollback_required', 'rolled_back')
@@ -2957,6 +2966,15 @@ async fn agent_rollout_review_sqlite(pool: &SqlitePool, tenant_id: i64) -> anyho
             (SELECT COUNT(*) FROM zero_trust_agent_rollout_target WHERE tenant_id = ?1 AND status = 'blocked' AND preflight_status = 'failed') AS agent_rollout_open_preflight_blockers,
             (SELECT COUNT(*) FROM zero_trust_agent_rollout WHERE tenant_id = ?1 AND owner_id IS NULL) AS agent_rollouts_without_owner,
             (SELECT COUNT(*) FROM zero_trust_agent_rollout WHERE tenant_id = ?1 AND TRIM(rollback_plan) = '') AS agent_rollouts_without_rollback_plan,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout_manifest WHERE tenant_id = ?1 AND status = 'active') AS agent_rollout_active_manifests,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout_ring ring WHERE tenant_id = ?1 AND status = 'ready' AND NOT EXISTS (
+                SELECT 1 FROM zero_trust_agent_rollout_manifest manifest WHERE manifest.tenant_id=ring.tenant_id AND manifest.rollout_id=ring.rollout_id AND manifest.ring_id=ring.id AND manifest.status='active'
+            )) AS agent_rollout_rings_without_manifest,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout_handoff WHERE tenant_id = ?1 AND status NOT IN ('completed','failed','expired','invalidated')) AS agent_rollout_active_handoffs,
+            (SELECT COUNT(*) FROM zero_trust_agent_rollout_handoff WHERE tenant_id = ?1 AND status IN ('exported','awaiting_results','partially_reported')) AS agent_rollout_handoffs_awaiting_results,
+            (SELECT COALESCE(SUM(expected_result_count-reported_result_count),0) FROM zero_trust_agent_rollout_handoff WHERE tenant_id = ?1 AND status IN ('exported','awaiting_results','partially_reported')) AS agent_rollout_missing_handoff_results,
+            (SELECT COALESCE(SUM(failed_count+timed_out_count+unknown_count),0) FROM zero_trust_agent_rollout_handoff WHERE tenant_id = ?1) AS agent_rollout_failed_import_results,
+            (SELECT COALESCE(SUM(version_mismatch_count),0) FROM zero_trust_agent_rollout_handoff WHERE tenant_id = ?1) AS agent_rollout_version_mismatches,
             COALESCE((
                 SELECT ring_name FROM zero_trust_agent_rollout_ring
                 WHERE tenant_id = ?1 AND status IN ('active', 'observing', 'passed', 'failed', 'rollback_required', 'rolled_back')
@@ -2982,6 +3000,13 @@ fn agent_rollout_review_from_postgres_row(row: &PgRow) -> anyhow::Result<Value> 
         "agent_rollout_open_preflight_blockers": row.try_get::<i64, _>("agent_rollout_open_preflight_blockers")?,
         "agent_rollouts_without_owner": row.try_get::<i64, _>("agent_rollouts_without_owner")?,
         "agent_rollouts_without_rollback_plan": row.try_get::<i64, _>("agent_rollouts_without_rollback_plan")?,
+        "agent_rollout_active_manifests": row.try_get::<i64, _>("agent_rollout_active_manifests")?,
+        "agent_rollout_rings_without_manifest": row.try_get::<i64, _>("agent_rollout_rings_without_manifest")?,
+        "agent_rollout_active_handoffs": row.try_get::<i64, _>("agent_rollout_active_handoffs")?,
+        "agent_rollout_handoffs_awaiting_results": row.try_get::<i64, _>("agent_rollout_handoffs_awaiting_results")?,
+        "agent_rollout_missing_handoff_results": row.try_get::<i64, _>("agent_rollout_missing_handoff_results")?,
+        "agent_rollout_failed_import_results": row.try_get::<i64, _>("agent_rollout_failed_import_results")?,
+        "agent_rollout_version_mismatches": row.try_get::<i64, _>("agent_rollout_version_mismatches")?,
         "agent_rollout_highest_ring": row.try_get::<String, _>("agent_rollout_highest_ring")?
     }))
 }
@@ -2998,6 +3023,13 @@ fn agent_rollout_review_from_sqlite_row(row: &SqliteRow) -> anyhow::Result<Value
         "agent_rollout_open_preflight_blockers": row.try_get::<i64, _>("agent_rollout_open_preflight_blockers")?,
         "agent_rollouts_without_owner": row.try_get::<i64, _>("agent_rollouts_without_owner")?,
         "agent_rollouts_without_rollback_plan": row.try_get::<i64, _>("agent_rollouts_without_rollback_plan")?,
+        "agent_rollout_active_manifests": row.try_get::<i64, _>("agent_rollout_active_manifests")?,
+        "agent_rollout_rings_without_manifest": row.try_get::<i64, _>("agent_rollout_rings_without_manifest")?,
+        "agent_rollout_active_handoffs": row.try_get::<i64, _>("agent_rollout_active_handoffs")?,
+        "agent_rollout_handoffs_awaiting_results": row.try_get::<i64, _>("agent_rollout_handoffs_awaiting_results")?,
+        "agent_rollout_missing_handoff_results": row.try_get::<i64, _>("agent_rollout_missing_handoff_results")?,
+        "agent_rollout_failed_import_results": row.try_get::<i64, _>("agent_rollout_failed_import_results")?,
+        "agent_rollout_version_mismatches": row.try_get::<i64, _>("agent_rollout_version_mismatches")?,
         "agent_rollout_highest_ring": row.try_get::<String, _>("agent_rollout_highest_ring")?
     }))
 }

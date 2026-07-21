@@ -45,8 +45,10 @@ ohne produktive CA-Ausstellung.
 Die Rollout-Ansicht plant bestehende Agent Devices in den festen Ringen Lab,
 Canary, Pilot, Production und Critical. Sie dokumentiert Preflight,
 Postflight, Gate-Evaluierung, menschliche Promotion und operatorgefuehrten
-Rollback. ISCY fuehrt dabei keine Remote-Installation, Agent-Befehle oder
-automatische Softwareverteilung aus.
+Rollback. Die Detailakte zeigt ausserdem unveraenderliche Ring-Manifeste,
+Manifest-SHA-256, sichere Exporte, passive externe Handoffs sowie begrenzte
+Result-Importe und ihre Aggregate. ISCY fuehrt dabei keine Remote-Installation,
+Agent-Befehle oder automatische Softwareverteilung aus.
 
 ## CVEs
 

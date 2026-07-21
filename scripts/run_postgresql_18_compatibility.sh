@@ -230,10 +230,10 @@ assert_migrations() {
   local database="$2"
   local count
   count="$(db_scalar "$service" "$database" 'SELECT COUNT(*) FROM iscy_schema_migrations;')"
-  [[ "$count" == "40" ]] || fail migrations "Erwartet 40 Migrationen, gefunden $count."
+  [[ "$count" == "41" ]] || fail migrations "Erwartet 41 Migrationen, gefunden $count."
   local latest
   latest="$(db_scalar "$service" "$database" 'SELECT MAX(version) FROM iscy_schema_migrations;')"
-  [[ "$latest" == 0040_* ]] || fail migrations "Die erwartete Migration 0040 fehlt."
+  [[ "$latest" == 0041_* ]] || fail migrations "Die erwartete Migration 0041 fehlt."
 }
 
 snapshot_database() {
@@ -781,7 +781,7 @@ main() {
   printf 'source_server_version=%s\n' "$source_version"
   printf 'target_server_version=%s\n' "$target_version"
   printf 'target_data_directory=%s\n' "$target_data_dir"
-  printf 'migration_count=40\n'
+  printf 'migration_count=41\n'
   printf 'application_table_count=%s\n' "$table_count"
   printf 'application_row_count=%s\n' "$row_count"
   printf 'integrity=rows,content_hashes,sequences,constraints,indexes,foreign_keys,media\n'
