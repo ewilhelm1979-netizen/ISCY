@@ -192,6 +192,34 @@ jobs:
           fi
           cp trusted/.codex/schemas/result.schema.json \
             worktree/.codex/runtime/input/result.schema.json
+      - name: Resolve pinned Codex runtime packages
+        run: |
+          set -euo pipefail
+          package_dir="$(mktemp -d "$RUNNER_TEMP/iscy-codex-packages.XXXXXX")"
+          cleanup() {
+            rm -rf -- "$package_dir"
+          }
+          trap cleanup EXIT INT TERM
+          resolve_package() {
+            local phase="$1"
+            local package="$2"
+            local output_file="$package_dir/${phase}.txt"
+            local version=''
+            if npm view "$package" version >"$output_file" 2>&1; then
+              version="$(tr -d '\r\n' <"$output_file")"
+            fi
+            rm -f -- "$output_file"
+            if [[ "$version" != '0.144.4' ]]; then
+              printf '%s\n' \
+                "::error title=ISCY Codex runtime::ISCY_CODEX_RUNTIME_ERROR[$phase]: package resolution failed" >&2
+              exit 1
+            fi
+            printf 'ISCY_CODEX_RUNTIME[%s]: OK\n' "$phase"
+          }
+          resolve_package CLI_PACKAGE_RESOLUTION '@openai/codex@0.144.4'
+          resolve_package PROXY_PACKAGE_RESOLUTION '@openai/codex-responses-api-proxy@0.144.4'
+          cleanup
+          trap - EXIT INT TERM
       - name: Authenticate OpenAI API without model request
         env:
           OPENAI_API_KEY: ${{ secrets.openai_api_key }}
@@ -229,6 +257,7 @@ jobs:
           fi
       - name: Run Codex without write or GitHub credentials
         id: codex
+        continue-on-error: true
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1 verified 2026-07-18
         with:
           openai-api-key: ${{ secrets.openai_api_key }}
@@ -240,6 +269,57 @@ jobs:
           allow-users: ewilhelm1979-netizen
           allow-bots: false
           codex-version: 0.144.4
+      - name: Diagnose Codex action runtime
+        if: always()
+        env:
+          ISCY_CODEX_OUTCOME: ${{ steps.codex.outcome }}
+          ISCY_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message }}
+        run: |
+          set -euo pipefail
+          cli_status='FAILED'
+          proxy_status='FAILED'
+          exec_status='FAILED'
+          message_status='EMPTY'
+          message_bytes="$(LC_ALL=C printf '%s' "${ISCY_FINAL_MESSAGE:-}" | wc -c)"
+
+          if command -v codex >/dev/null 2>&1 \
+            && codex --version >/dev/null 2>&1; then
+            cli_status='OK'
+          fi
+          if command -v codex-responses-api-proxy >/dev/null 2>&1 \
+            && codex-responses-api-proxy --help >/dev/null 2>&1; then
+            proxy_status='OK'
+          fi
+          if [[ "$ISCY_CODEX_OUTCOME" == 'success' ]]; then
+            exec_status='OK'
+          fi
+          if (( message_bytes > 0 )); then
+            message_status='PRESENT'
+          fi
+
+          printf 'ISCY_CODEX_RUNTIME[CLI_INSTALL_OR_LAUNCH]: %s\n' "$cli_status"
+          printf 'ISCY_CODEX_RUNTIME[PROXY_INSTALL_OR_LAUNCH]: %s\n' "$proxy_status"
+          printf 'ISCY_CODEX_RUNTIME[CODEX_EXEC]: %s\n' "$exec_status"
+          printf 'ISCY_CODEX_RUNTIME[FINAL_MESSAGE]: %s\n' "$message_status"
+          printf 'ISCY_CODEX_RUNTIME[FINAL_MESSAGE_BYTES]: %s\n' "$message_bytes"
+
+          failed_phase=''
+          if [[ "$cli_status" != 'OK' ]]; then
+            failed_phase='CLI_INSTALL_OR_LAUNCH'
+          elif [[ "$proxy_status" != 'OK' ]]; then
+            failed_phase='PROXY_INSTALL_OR_LAUNCH'
+          elif [[ "$exec_status" != 'OK' ]]; then
+            failed_phase='CODEX_EXEC'
+          fi
+          if [[ -n "$failed_phase" ]]; then
+            printf '%s\n' \
+              "::error title=ISCY Codex runtime::ISCY_CODEX_RUNTIME_ERROR[$failed_phase]: FAILED" >&2
+            exit 1
+          fi
+          if [[ "$message_status" != 'PRESENT' ]]; then
+            echo '::error title=ISCY Codex result::ISCY_CODEX_RESULT_ERROR: final-message is empty' >&2
+            exit 1
+          fi
       - name: Validate structured result
         env:
           ISCY_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message }}

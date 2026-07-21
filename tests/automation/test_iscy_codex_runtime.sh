@@ -25,10 +25,12 @@ step_by_name = steps.to_h { |step| [step.fetch("name"), step] }
 fix_steps = workflow.fetch("jobs").fetch("fix-agent").fetch("steps")
 
 prepare = step_by_name.fetch("Prepare trusted read-only context").fetch("run")
+package_preflight = step_by_name.fetch("Resolve pinned Codex runtime packages")
 preflight = step_by_name.fetch("Authenticate OpenAI API without model request")
 codex = steps.find { |step| step["id"] == "codex" }
 abort("Codex step missing") unless codex
 codex_with = codex.fetch("with")
+diagnose = step_by_name.fetch("Diagnose Codex action runtime")
 fix_codex = fix_steps.find { |step| step["id"] == "codex" }
 abort("Fix-agent Codex step missing") unless fix_codex
 fix_codex_with = fix_codex.fetch("with")
@@ -53,6 +55,16 @@ abort("fix-agent Codex version changed") unless
   fix_codex_with["codex-version"] == "0.144.4"
 abort("Codex versions differ between review and fix-agent") unless
   codex_with["codex-version"] == fix_codex_with["codex-version"]
+abort("Codex action is not diagnostic-only continue-on-error") unless
+  codex["continue-on-error"] == true
+
+continue_steps = workflow.fetch("jobs").flat_map do |job_name, job|
+  job.fetch("steps", []).filter_map do |step|
+    [job_name, step["id"]] if step["continue-on-error"] == true
+  end
+end
+abort("continue-on-error is not restricted to the review Codex action") unless
+  continue_steps == [["review-or-verify", "codex"]]
 
 [
   "worktree/.codex/runtime/input/prompt.md",
@@ -62,6 +74,19 @@ abort("Codex versions differ between review and fix-agent") unless
 end
 abort("legacy runner-temp input retained") if prepare.include?("iscy-codex-input")
 
+package_run = package_preflight.fetch("run")
+abort("CLI package preflight missing") unless
+  package_run.include?("npm view \"$package\" version") &&
+  package_run.include?("'@openai/codex@0.144.4'")
+abort("proxy package preflight missing") unless
+  package_run.include?("'@openai/codex-responses-api-proxy@0.144.4'")
+abort("package preflight is not fail closed") unless
+  package_run.include?('ISCY_CODEX_RUNTIME_ERROR[$phase]') &&
+  package_run.include?("exit 1")
+abort("package preflight does not clean temporary output") unless
+  package_run.include?('rm -f -- "$output_file"') &&
+  package_run.include?('rm -rf -- "$package_dir"')
+
 preflight_env = preflight.fetch("env")
 abort("OpenAI key is not sourced from the existing secret") unless
   preflight_env["OPENAI_API_KEY"] == "${{ secrets.openai_api_key }}"
@@ -70,6 +95,40 @@ abort("OpenAI models preflight missing") unless
   preflight_run.include?("https://api.openai.com/v1/models")
 abort("paid Responses request introduced") if preflight_run.include?("/v1/responses")
 abort("shell tracing would expose secrets") if preflight_run.include?("set -x")
+
+diagnose_env = diagnose.fetch("env")
+abort("Codex outcome is not wired to runtime diagnosis") unless
+  diagnose_env["ISCY_CODEX_OUTCOME"] == "${{ steps.codex.outcome }}"
+abort("final-message is not wired to runtime diagnosis") unless
+  diagnose_env["ISCY_FINAL_MESSAGE"] == "${{ steps.codex.outputs.final-message }}"
+abort("runtime diagnosis is not unconditional") unless diagnose["if"] == "always()"
+diagnose_run = diagnose.fetch("run")
+[
+  "command -v codex",
+  "codex --version",
+  "command -v codex-responses-api-proxy",
+  "codex-responses-api-proxy --help",
+  "ISCY_CODEX_RUNTIME[CLI_INSTALL_OR_LAUNCH]",
+  "ISCY_CODEX_RUNTIME[PROXY_INSTALL_OR_LAUNCH]",
+  "ISCY_CODEX_RUNTIME[CODEX_EXEC]",
+  "ISCY_CODEX_RUNTIME[FINAL_MESSAGE]",
+  "ISCY_CODEX_RUNTIME[FINAL_MESSAGE_BYTES]"
+].each do |fragment|
+  abort("runtime diagnosis missing: #{fragment}") unless diagnose_run.include?(fragment)
+end
+abort("runtime diagnosis is not fail closed") unless
+  diagnose_run.include?('ISCY_CODEX_RUNTIME_ERROR[$failed_phase]') &&
+  diagnose_run.include?("ISCY_CODEX_RESULT_ERROR: final-message is empty") &&
+  diagnose_run.scan("exit 1").length >= 2
+abort("runtime diagnosis enables shell tracing") if diagnose_run.include?("set -x")
+
+codex_index = steps.index(codex)
+diagnose_index = steps.index(diagnose)
+validate_index = steps.index(validate)
+abort("runtime diagnosis is not directly after the Codex action") unless
+  diagnose_index == codex_index + 1
+abort("structured validation can run before runtime diagnosis") unless
+  validate_index == diagnose_index + 1
 
 validate_env = validate.fetch("env")
 abort("final-message output is not wired to validation") unless
@@ -83,6 +142,8 @@ abort("upload path changed") unless
   upload.fetch("path") == "${{ runner.temp }}/iscy-codex-result/result.json"
 
 File.write(File.join(ARGV.fetch(1), "preflight.sh"), preflight_run)
+File.write(File.join(ARGV.fetch(1), "package-preflight.sh"), package_run)
+File.write(File.join(ARGV.fetch(1), "diagnose.sh"), diagnose_run)
 File.write(File.join(ARGV.fetch(1), "validate.sh"), validate_run)
 RUBY
 
@@ -240,5 +301,167 @@ run_preflight_case unauthorized 401
 (( preflight_status != 0 )) || fail 'HTTP 401 preflight succeeded'
 grep -Fq 'ISCY_CODEX_OPENAI_PREFLIGHT_ERROR: HTTP 401' "$preflight_log" \
   || fail 'HTTP 401 preflight annotation absent'
+
+package_fake_bin="$tmp_dir/package-fake-bin"
+mkdir -p "$package_fake_bin"
+cat >"$package_fake_bin/npm" <<'FAKE_NPM'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == 'view' && "${3:-}" == 'version' ]]
+case "${2:-}" in
+  '@openai/codex@0.144.4')
+    phase='cli'
+    ;;
+  '@openai/codex-responses-api-proxy@0.144.4')
+    phase='proxy'
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+if [[ "${FAKE_NPM_MISSING:-}" == "$phase" ]]; then
+  printf 'npm-package-metadata-canary\n'
+  printf 'npm-package-error-canary\n' >&2
+  exit 1
+fi
+printf '0.144.4\n'
+FAKE_NPM
+chmod +x "$package_fake_bin/npm"
+
+run_package_case() {
+  local name="$1"
+  local missing="$2"
+  package_root="$tmp_dir/package-$name"
+  package_log="$package_root/output.log"
+  mkdir -p "$package_root/runner"
+  if PATH="$package_fake_bin:$PATH" \
+    RUNNER_TEMP="$package_root/runner" \
+    FAKE_NPM_MISSING="$missing" \
+    bash "$tmp_dir/package-preflight.sh" >"$package_log" 2>&1; then
+    package_status=0
+  else
+    package_status=$?
+  fi
+  grep -Fq 'npm-package-metadata-canary' "$package_log" \
+    && fail "npm metadata leaked in $name package preflight"
+  grep -Fq 'npm-package-error-canary' "$package_log" \
+    && fail "npm error output leaked in $name package preflight"
+  leftover="$(find "$package_root/runner" -type f -print -quit)"
+  [[ -z "$leftover" ]] || fail "npm output file retained in $name package preflight"
+}
+
+run_package_case cli-missing cli
+(( package_status != 0 )) || fail 'missing CLI package was accepted'
+grep -Fq 'ISCY_CODEX_RUNTIME_ERROR[CLI_PACKAGE_RESOLUTION]' "$package_log" \
+  || fail 'missing CLI package annotation absent'
+
+run_package_case proxy-missing proxy
+(( package_status != 0 )) || fail 'missing proxy package was accepted'
+grep -Fxq 'ISCY_CODEX_RUNTIME[CLI_PACKAGE_RESOLUTION]: OK' "$package_log" \
+  || fail 'CLI package success was not reported before proxy failure'
+grep -Fq 'ISCY_CODEX_RUNTIME_ERROR[PROXY_PACKAGE_RESOLUTION]' "$package_log" \
+  || fail 'missing proxy package annotation absent'
+
+run_package_case success ''
+(( package_status == 0 )) || fail 'valid pinned packages were rejected'
+grep -Fxq 'ISCY_CODEX_RUNTIME[CLI_PACKAGE_RESOLUTION]: OK' "$package_log" \
+  || fail 'CLI package success notice absent'
+grep -Fxq 'ISCY_CODEX_RUNTIME[PROXY_PACKAGE_RESOLUTION]: OK' "$package_log" \
+  || fail 'proxy package success notice absent'
+[[ "$(wc -l <"$package_log")" -eq 2 ]] \
+  || fail 'successful package preflight logged unexpected data'
+
+diagnose_script="$tmp_dir/diagnose.sh"
+bash_path="$(command -v bash)"
+wc_path="$(command -v wc)"
+
+run_diagnose_case() {
+  local name="$1"
+  local cli_present="$2"
+  local proxy_present="$3"
+  local action_outcome="$4"
+  local final_message="$5"
+  diagnose_root="$tmp_dir/diagnose-$name"
+  diagnose_bin="$diagnose_root/bin"
+  diagnose_log="$diagnose_root/output.log"
+  mkdir -p "$diagnose_bin"
+  ln -s "$wc_path" "$diagnose_bin/wc"
+  if [[ "$cli_present" == 'true' ]]; then
+    cat >"$diagnose_bin/codex" <<'FAKE_CODEX'
+#!/bin/sh
+printf 'codex-version-output-canary\n'
+exit 0
+FAKE_CODEX
+    chmod +x "$diagnose_bin/codex"
+  fi
+  if [[ "$proxy_present" == 'true' ]]; then
+    cat >"$diagnose_bin/codex-responses-api-proxy" <<'FAKE_PROXY'
+#!/bin/sh
+printf 'proxy-help-output-canary\n'
+exit 0
+FAKE_PROXY
+    chmod +x "$diagnose_bin/codex-responses-api-proxy"
+  fi
+  if PATH="$diagnose_bin" \
+    OPENAI_API_KEY='runtime-auth-key-canary' \
+    ISCY_PROMPT='runtime-prompt-canary' \
+    ISCY_CODEX_OUTCOME="$action_outcome" \
+    ISCY_FINAL_MESSAGE="$final_message" \
+    "$bash_path" "$diagnose_script" >"$diagnose_log" 2>&1; then
+    diagnose_status=0
+  else
+    diagnose_status=$?
+  fi
+  for forbidden in \
+    'runtime-auth-key-canary' \
+    'runtime-prompt-canary' \
+    'codex-version-output-canary' \
+    'proxy-help-output-canary' \
+    "$final_message"; do
+    [[ -z "$forbidden" ]] && continue
+    grep -Fq "$forbidden" "$diagnose_log" \
+      && fail "sensitive or command output leaked in $name diagnosis"
+  done
+  return 0
+}
+
+diagnostic_message='runtime-final-message-diagnostic-canary'
+run_diagnose_case cli-missing false true failure "$diagnostic_message"
+(( diagnose_status != 0 )) || fail 'missing Codex binary was accepted'
+grep -Fq 'ISCY_CODEX_RUNTIME_ERROR[CLI_INSTALL_OR_LAUNCH]' "$diagnose_log" \
+  || fail 'missing Codex binary phase annotation absent'
+
+run_diagnose_case proxy-missing true false failure "$diagnostic_message"
+(( diagnose_status != 0 )) || fail 'missing proxy binary was accepted'
+grep -Fq 'ISCY_CODEX_RUNTIME_ERROR[PROXY_INSTALL_OR_LAUNCH]' "$diagnose_log" \
+  || fail 'missing proxy binary phase annotation absent'
+
+run_diagnose_case action-failure true true failure "$diagnostic_message"
+(( diagnose_status != 0 )) || fail 'failed Codex action outcome was accepted'
+grep -Fq 'ISCY_CODEX_RUNTIME_ERROR[CODEX_EXEC]' "$diagnose_log" \
+  || fail 'Codex action failure phase annotation absent'
+
+run_diagnose_case empty-message true true success ''
+(( diagnose_status != 0 )) || fail 'empty diagnostic final-message was accepted'
+grep -Fxq 'ISCY_CODEX_RUNTIME[FINAL_MESSAGE]: EMPTY' "$diagnose_log" \
+  || fail 'empty diagnostic final-message status absent'
+grep -Fq 'ISCY_CODEX_RESULT_ERROR: final-message is empty' "$diagnose_log" \
+  || fail 'existing empty final-message annotation absent after diagnosis'
+
+run_diagnose_case success true true success "$diagnostic_message"
+(( diagnose_status == 0 )) || fail 'successful runtime diagnosis failed'
+grep -Fxq 'ISCY_CODEX_RUNTIME[CLI_INSTALL_OR_LAUNCH]: OK' "$diagnose_log" \
+  || fail 'successful Codex binary diagnosis absent'
+grep -Fxq 'ISCY_CODEX_RUNTIME[PROXY_INSTALL_OR_LAUNCH]: OK' "$diagnose_log" \
+  || fail 'successful proxy binary diagnosis absent'
+grep -Fxq 'ISCY_CODEX_RUNTIME[CODEX_EXEC]: OK' "$diagnose_log" \
+  || fail 'successful action outcome diagnosis absent'
+grep -Fxq 'ISCY_CODEX_RUNTIME[FINAL_MESSAGE]: PRESENT' "$diagnose_log" \
+  || fail 'present final-message diagnosis absent'
+expected_bytes="$(LC_ALL=C printf '%s' "$diagnostic_message" | wc -c)"
+grep -Fxq "ISCY_CODEX_RUNTIME[FINAL_MESSAGE_BYTES]: $expected_bytes" "$diagnose_log" \
+  || fail 'final-message byte count is incorrect'
+[[ "$(wc -l <"$diagnose_log")" -eq 5 ]] \
+  || fail 'successful runtime diagnosis logged unexpected data'
 
 echo 'test_iscy_codex_runtime: OK'
