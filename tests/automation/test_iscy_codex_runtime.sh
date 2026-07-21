@@ -47,14 +47,19 @@ abort("drop-sudo strategy changed") unless codex_with["safety-strategy"] == "dro
 abort("allowed user changed") unless codex_with["allow-users"] == "ewilhelm1979-netizen"
 abort("bot boundary changed") unless codex_with["allow-bots"] == false
 abort("review Codex version changed") unless codex_with["codex-version"] == "0.144.4"
+abort("review Codex model changed") unless codex_with["model"] == "gpt-5.6-sol"
 abort("fix-agent permission profile changed") unless
   fix_codex_with["permission-profile"] == ":workspace"
 abort("fix-agent drop-sudo strategy changed") unless
   fix_codex_with["safety-strategy"] == "drop-sudo"
 abort("fix-agent Codex version changed") unless
   fix_codex_with["codex-version"] == "0.144.4"
+abort("fix-agent Codex model changed") unless
+  fix_codex_with["model"] == "gpt-5.6-sol"
 abort("Codex versions differ between review and fix-agent") unless
   codex_with["codex-version"] == fix_codex_with["codex-version"]
+abort("Codex models differ between review and fix-agent") unless
+  codex_with["model"] == fix_codex_with["model"]
 abort("Codex action is not diagnostic-only continue-on-error") unless
   codex["continue-on-error"] == true
 
