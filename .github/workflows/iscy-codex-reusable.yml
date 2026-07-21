@@ -269,6 +269,7 @@ jobs:
           allow-users: ewilhelm1979-netizen
           allow-bots: false
           codex-version: 0.144.4
+          model: gpt-5.6-sol
       - name: Diagnose Codex action runtime
         if: always()
         env:
@@ -517,6 +518,7 @@ jobs:
           allow-users: ewilhelm1979-netizen
           allow-bots: false
           codex-version: 0.144.4
+          model: gpt-5.6-sol
       - name: Validate result and patch
         id: validate
         env:
