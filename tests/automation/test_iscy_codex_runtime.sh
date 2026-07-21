@@ -22,12 +22,16 @@ require "yaml"
 workflow = YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)
 steps = workflow.fetch("jobs").fetch("review-or-verify").fetch("steps")
 step_by_name = steps.to_h { |step| [step.fetch("name"), step] }
+fix_steps = workflow.fetch("jobs").fetch("fix-agent").fetch("steps")
 
 prepare = step_by_name.fetch("Prepare trusted read-only context").fetch("run")
 preflight = step_by_name.fetch("Authenticate OpenAI API without model request")
 codex = steps.find { |step| step["id"] == "codex" }
 abort("Codex step missing") unless codex
 codex_with = codex.fetch("with")
+fix_codex = fix_steps.find { |step| step["id"] == "codex" }
+abort("Fix-agent Codex step missing") unless fix_codex
+fix_codex_with = fix_codex.fetch("with")
 validate = step_by_name.fetch("Validate structured result")
 upload = step_by_name.fetch("Upload bounded result").fetch("with")
 
@@ -40,7 +44,15 @@ abort("read-only permission profile changed") unless codex_with["permission-prof
 abort("drop-sudo strategy changed") unless codex_with["safety-strategy"] == "drop-sudo"
 abort("allowed user changed") unless codex_with["allow-users"] == "ewilhelm1979-netizen"
 abort("bot boundary changed") unless codex_with["allow-bots"] == false
-abort("Codex version changed") unless codex_with["codex-version"] == "0.144.5"
+abort("review Codex version changed") unless codex_with["codex-version"] == "0.144.4"
+abort("fix-agent permission profile changed") unless
+  fix_codex_with["permission-profile"] == ":workspace"
+abort("fix-agent drop-sudo strategy changed") unless
+  fix_codex_with["safety-strategy"] == "drop-sudo"
+abort("fix-agent Codex version changed") unless
+  fix_codex_with["codex-version"] == "0.144.4"
+abort("Codex versions differ between review and fix-agent") unless
+  codex_with["codex-version"] == fix_codex_with["codex-version"]
 
 [
   "worktree/.codex/runtime/input/prompt.md",
