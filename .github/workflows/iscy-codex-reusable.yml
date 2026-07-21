@@ -167,7 +167,10 @@ jobs:
           test "$(git -C worktree rev-parse HEAD)" = "$ISCY_EXPECTED_HEAD"
           git -C worktree fetch --no-tags origin "$ISCY_BASE_SHA"
           printf '/.codex/runtime/\n' >>worktree/.git/info/exclude
-          mkdir -p worktree/.codex/runtime/context worktree/.codex/runtime/ci "$RUNNER_TEMP/iscy-codex-input"
+          mkdir -p \
+            worktree/.codex/runtime/context \
+            worktree/.codex/runtime/ci \
+            worktree/.codex/runtime/input
           gh api "repos/$ISCY_REPOSITORY/pulls/$ISCY_PR_NUMBER" \
             >worktree/.codex/runtime/context/pr.json
           gh api --paginate --slurp "repos/$ISCY_REPOSITORY/pulls/$ISCY_PR_NUMBER/reviews?per_page=100" \
@@ -183,19 +186,54 @@ jobs:
           bash trusted/.github/scripts/iscy_codex_collect_ci.sh fetch \
             "$ISCY_REPOSITORY" "$ISCY_EXPECTED_HEAD" worktree/.codex/runtime/ci false
           if [[ "$ISCY_ROUTE" == 'review' ]]; then
-            cp trusted/.codex/prompts/review-pr.md "$RUNNER_TEMP/iscy-codex-input/prompt.md"
+            cp trusted/.codex/prompts/review-pr.md worktree/.codex/runtime/input/prompt.md
           else
-            cp trusted/.codex/prompts/verify-pr.md "$RUNNER_TEMP/iscy-codex-input/prompt.md"
+            cp trusted/.codex/prompts/verify-pr.md worktree/.codex/runtime/input/prompt.md
           fi
-          cp trusted/.codex/schemas/result.schema.json "$RUNNER_TEMP/iscy-codex-input/result.schema.json"
+          cp trusted/.codex/schemas/result.schema.json \
+            worktree/.codex/runtime/input/result.schema.json
+      - name: Authenticate OpenAI API without model request
+        env:
+          OPENAI_API_KEY: ${{ secrets.openai_api_key }}
+        run: |
+          set -euo pipefail
+          response_file="$(mktemp "$RUNNER_TEMP/iscy-codex-openai-preflight.XXXXXX")"
+          cleanup() {
+            rm -f -- "$response_file"
+          }
+          trap cleanup EXIT INT TERM
+          status=''
+          if status="$(curl \
+            --silent \
+            --request GET \
+            --proto '=https' \
+            --tlsv1.2 \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --header "Authorization: Bearer $OPENAI_API_KEY" \
+            https://api.openai.com/v1/models)"; then
+            :
+          else
+            status="${status:-000}"
+          fi
+          cleanup
+          trap - EXIT INT TERM
+          [[ "$status" =~ ^[0-9]{3}$ ]] || status='000'
+          printf 'OpenAI preflight HTTP %s\n' "$status"
+          if [[ "$status" != '200' ]]; then
+            printf '%s\n' \
+              "::error title=ISCY Codex OpenAI preflight::ISCY_CODEX_OPENAI_PREFLIGHT_ERROR: HTTP $status" >&2
+            exit 1
+          fi
       - name: Run Codex without write or GitHub credentials
         id: codex
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1 verified 2026-07-18
         with:
           openai-api-key: ${{ secrets.openai_api_key }}
-          prompt-file: ${{ runner.temp }}/iscy-codex-input/prompt.md
-          output-file: ${{ runner.temp }}/iscy-codex-input/result.json
-          output-schema-file: ${{ runner.temp }}/iscy-codex-input/result.schema.json
+          prompt-file: ${{ github.workspace }}/worktree/.codex/runtime/input/prompt.md
+          output-schema-file: ${{ github.workspace }}/worktree/.codex/runtime/input/result.schema.json
           working-directory: worktree
           permission-profile: ":read-only"
           safety-strategy: drop-sudo
@@ -204,14 +242,39 @@ jobs:
           codex-version: 0.144.5
       - name: Validate structured result
         env:
+          ISCY_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message }}
           ISCY_ROUTE: ${{ needs.route.outputs.route }}
         run: |
           set -euo pipefail
-          result="$RUNNER_TEMP/iscy-codex-input/result.json"
+          umask 077
+          if [[ -z "${ISCY_FINAL_MESSAGE:-}" ]]; then
+            echo '::error title=ISCY Codex result::ISCY_CODEX_RESULT_ERROR: final-message is empty' >&2
+            exit 1
+          fi
+          result_size="$(LC_ALL=C printf '%s' "$ISCY_FINAL_MESSAGE" | wc -c)"
+          if (( result_size <= 0 || result_size > 65536 )); then
+            echo '::error title=ISCY Codex result::ISCY_CODEX_RESULT_ERROR: final-message size is outside 1..65536 bytes' >&2
+            exit 1
+          fi
+          result_dir="$RUNNER_TEMP/iscy-codex-result"
+          result="$result_dir/result.json"
+          mkdir -p "$result_dir"
+          printf '%s' "$ISCY_FINAL_MESSAGE" >"$result"
+          unset ISCY_FINAL_MESSAGE
+          result_size="$(wc -c <"$result")"
+          if (( result_size <= 0 || result_size > 65536 )); then
+            echo '::error title=ISCY Codex result::ISCY_CODEX_RESULT_ERROR: materialized result size is outside 1..65536 bytes' >&2
+            exit 1
+          fi
+          jq -e . "$result" >/dev/null 2>&1 || {
+            echo '::error title=ISCY Codex result::ISCY_CODEX_RESULT_ERROR: final-message is not valid JSON' >&2
+            exit 1
+          }
           bash trusted/.github/scripts/iscy_codex_guard.sh result "$result" "$ISCY_ROUTE"
-          test -z "$(git -C worktree status --porcelain --untracked-files=no)"
-          mkdir -p "$RUNNER_TEMP/iscy-codex-result"
-          cp "$result" "$RUNNER_TEMP/iscy-codex-result/result.json"
+          if [[ -n "$(git -C worktree status --porcelain --untracked-files=no)" ]]; then
+            echo '::error title=ISCY Codex result::ISCY_CODEX_RESULT_ERROR: tracked worktree changes detected' >&2
+            exit 1
+          fi
       - name: Upload bounded result
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
