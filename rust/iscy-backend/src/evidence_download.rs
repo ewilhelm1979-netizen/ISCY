@@ -540,6 +540,7 @@ mod tests {
             user_id,
             user_email: Some(format!("user-{user_id}@example.test")),
             roles: vec![role.to_string()],
+            permissions: Vec::new(),
             is_staff: false,
             is_superuser: false,
         }

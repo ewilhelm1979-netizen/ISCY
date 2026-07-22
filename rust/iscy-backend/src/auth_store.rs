@@ -32,6 +32,7 @@ pub struct AuthUser {
     pub email: String,
     pub role: String,
     pub roles: Vec<String>,
+    pub permissions: Vec<String>,
     pub job_title: String,
     pub is_staff: bool,
     pub is_superuser: bool,
@@ -299,6 +300,7 @@ impl AuthSession {
             user_id: self.user_id,
             user_email: self.user_email.clone(),
             roles: self.user.roles.clone(),
+            permissions: self.user.permissions.clone(),
             is_staff: self.user.is_staff,
             is_superuser: self.user.is_superuser,
         }
@@ -325,6 +327,21 @@ fn active_user_postgres_sql() -> &'static str {
                   AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = $1)
             ) scoped_roles
         ), '') AS role_codes,
+        COALESCE((
+            SELECT string_agg(permission_code, ',' ORDER BY permission_code)
+            FROM (
+                SELECT p.codename AS permission_code
+                FROM accounts_user_user_permissions up
+                JOIN auth_permission p ON p.id = up.permission_id
+                WHERE up.user_id = u.id
+                UNION
+                SELECT p.codename AS permission_code
+                FROM accounts_user_groups ug
+                JOIN auth_group_permissions gp ON gp.group_id = ug.group_id
+                JOIN auth_permission p ON p.id = gp.permission_id
+                WHERE ug.user_id = u.id
+            ) effective_permissions
+        ), '') AS permission_codes,
         u.job_title,
         u.is_staff,
         u.is_superuser
@@ -356,6 +373,22 @@ fn active_user_sqlite_sql() -> &'static str {
                 ORDER BY r.code
             )
         ), '') AS role_codes,
+        COALESCE((
+            SELECT group_concat(permission_code, ',')
+            FROM (
+                SELECT p.codename AS permission_code
+                FROM accounts_user_user_permissions up
+                JOIN auth_permission p ON p.id = up.permission_id
+                WHERE up.user_id = u.id
+                UNION
+                SELECT p.codename AS permission_code
+                FROM accounts_user_groups ug
+                JOIN auth_group_permissions gp ON gp.group_id = ug.group_id
+                JOIN auth_permission p ON p.id = gp.permission_id
+                WHERE ug.user_id = u.id
+                ORDER BY permission_code
+            )
+        ), '') AS permission_codes,
         u.job_title,
         u.is_staff,
         u.is_superuser
@@ -386,6 +419,21 @@ fn login_user_postgres_sql() -> &'static str {
                   AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = $2)
             ) scoped_roles
         ), '') AS role_codes,
+        COALESCE((
+            SELECT string_agg(permission_code, ',' ORDER BY permission_code)
+            FROM (
+                SELECT p.codename AS permission_code
+                FROM accounts_user_user_permissions up
+                JOIN auth_permission p ON p.id = up.permission_id
+                WHERE up.user_id = u.id
+                UNION
+                SELECT p.codename AS permission_code
+                FROM accounts_user_groups ug
+                JOIN auth_group_permissions gp ON gp.group_id = ug.group_id
+                JOIN auth_permission p ON p.id = gp.permission_id
+                WHERE ug.user_id = u.id
+            ) effective_permissions
+        ), '') AS permission_codes,
         u.job_title,
         u.is_staff,
         u.is_superuser,
@@ -420,6 +468,22 @@ fn login_user_sqlite_sql() -> &'static str {
                 ORDER BY r.code
             )
         ), '') AS role_codes,
+        COALESCE((
+            SELECT group_concat(permission_code, ',')
+            FROM (
+                SELECT p.codename AS permission_code
+                FROM accounts_user_user_permissions up
+                JOIN auth_permission p ON p.id = up.permission_id
+                WHERE up.user_id = u.id
+                UNION
+                SELECT p.codename AS permission_code
+                FROM accounts_user_groups ug
+                JOIN auth_group_permissions gp ON gp.group_id = ug.group_id
+                JOIN auth_permission p ON p.id = gp.permission_id
+                WHERE ug.user_id = u.id
+                ORDER BY permission_code
+            )
+        ), '') AS permission_codes,
         u.job_title,
         u.is_staff,
         u.is_superuser,
@@ -458,6 +522,21 @@ fn session_select_postgres_sql() -> &'static str {
                   AND (ur.scope_tenant_id IS NULL OR ur.scope_tenant_id = s.tenant_id)
             ) scoped_roles
         ), '') AS role_codes,
+        COALESCE((
+            SELECT string_agg(permission_code, ',' ORDER BY permission_code)
+            FROM (
+                SELECT p.codename AS permission_code
+                FROM accounts_user_user_permissions up
+                JOIN auth_permission p ON p.id = up.permission_id
+                WHERE up.user_id = u.id
+                UNION
+                SELECT p.codename AS permission_code
+                FROM accounts_user_groups ug
+                JOIN auth_group_permissions gp ON gp.group_id = ug.group_id
+                JOIN auth_permission p ON p.id = gp.permission_id
+                WHERE ug.user_id = u.id
+            ) effective_permissions
+        ), '') AS permission_codes,
         u.job_title,
         u.is_staff,
         u.is_superuser
@@ -497,6 +576,22 @@ fn session_select_sqlite_sql() -> &'static str {
                 ORDER BY r.code
             )
         ), '') AS role_codes,
+        COALESCE((
+            SELECT group_concat(permission_code, ',')
+            FROM (
+                SELECT p.codename AS permission_code
+                FROM accounts_user_user_permissions up
+                JOIN auth_permission p ON p.id = up.permission_id
+                WHERE up.user_id = u.id
+                UNION
+                SELECT p.codename AS permission_code
+                FROM accounts_user_groups ug
+                JOIN auth_group_permissions gp ON gp.group_id = ug.group_id
+                JOIN auth_permission p ON p.id = gp.permission_id
+                WHERE ug.user_id = u.id
+                ORDER BY permission_code
+            )
+        ), '') AS permission_codes,
         u.job_title,
         u.is_staff,
         u.is_superuser
@@ -516,6 +611,7 @@ fn user_from_pg_row(row: PgRow) -> Result<AuthUser, sqlx::Error> {
     let username: String = row.try_get("username")?;
     let role: String = row.try_get("role")?;
     let role_codes: String = row.try_get("role_codes")?;
+    let permission_codes: String = row.try_get("permission_codes")?;
     let is_staff: bool = row.try_get("is_staff")?;
     let is_superuser: bool = row.try_get("is_superuser")?;
     Ok(AuthUser {
@@ -525,6 +621,7 @@ fn user_from_pg_row(row: PgRow) -> Result<AuthUser, sqlx::Error> {
         username,
         email: row.try_get("email")?,
         roles: roles_from_codes(&role, &role_codes, is_superuser),
+        permissions: permission_codes_from_csv(&permission_codes),
         role,
         job_title: row.try_get("job_title")?,
         is_staff,
@@ -538,6 +635,7 @@ fn user_from_sqlite_row(row: SqliteRow) -> Result<AuthUser, sqlx::Error> {
     let username: String = row.try_get("username")?;
     let role: String = row.try_get("role")?;
     let role_codes: String = row.try_get("role_codes")?;
+    let permission_codes: String = row.try_get("permission_codes")?;
     let is_staff: bool = row.try_get("is_staff")?;
     let is_superuser: bool = row.try_get("is_superuser")?;
     Ok(AuthUser {
@@ -547,6 +645,7 @@ fn user_from_sqlite_row(row: SqliteRow) -> Result<AuthUser, sqlx::Error> {
         username,
         email: row.try_get("email")?,
         roles: roles_from_codes(&role, &role_codes, is_superuser),
+        permissions: permission_codes_from_csv(&permission_codes),
         role,
         job_title: row.try_get("job_title")?,
         is_staff,
@@ -577,6 +676,7 @@ fn session_from_pg_row(row: PgRow) -> Result<AuthSession, sqlx::Error> {
     let username: String = row.try_get("username")?;
     let role: String = row.try_get("role")?;
     let role_codes: String = row.try_get("role_codes")?;
+    let permission_codes: String = row.try_get("permission_codes")?;
     let is_staff: bool = row.try_get("is_staff")?;
     let is_superuser: bool = row.try_get("is_superuser")?;
     let user = AuthUser {
@@ -586,6 +686,7 @@ fn session_from_pg_row(row: PgRow) -> Result<AuthSession, sqlx::Error> {
         username,
         email: row.try_get("email")?,
         roles: roles_from_codes(&role, &role_codes, is_superuser),
+        permissions: permission_codes_from_csv(&permission_codes),
         role,
         job_title: row.try_get("job_title")?,
         is_staff,
@@ -608,6 +709,7 @@ fn session_from_sqlite_row(row: SqliteRow) -> Result<AuthSession, sqlx::Error> {
     let username: String = row.try_get("username")?;
     let role: String = row.try_get("role")?;
     let role_codes: String = row.try_get("role_codes")?;
+    let permission_codes: String = row.try_get("permission_codes")?;
     let is_staff: bool = row.try_get("is_staff")?;
     let is_superuser: bool = row.try_get("is_superuser")?;
     let user = AuthUser {
@@ -617,6 +719,7 @@ fn session_from_sqlite_row(row: SqliteRow) -> Result<AuthSession, sqlx::Error> {
         username,
         email: row.try_get("email")?,
         roles: roles_from_codes(&role, &role_codes, is_superuser),
+        permissions: permission_codes_from_csv(&permission_codes),
         role,
         job_title: row.try_get("job_title")?,
         is_staff,
@@ -773,6 +876,20 @@ fn push_role(roles: &mut Vec<String>, role: &str) {
     if !roles.iter().any(|existing| existing == &role) {
         roles.push(role);
     }
+}
+
+fn permission_codes_from_csv(permission_codes: &str) -> Vec<String> {
+    permission_codes
+        .split(',')
+        .map(str::trim)
+        .filter(|permission| !permission.is_empty())
+        .map(|permission| permission.to_ascii_lowercase())
+        .fold(Vec::new(), |mut permissions, permission| {
+            if !permissions.iter().any(|existing| existing == &permission) {
+                permissions.push(permission);
+            }
+            permissions
+        })
 }
 
 fn non_empty(value: String) -> Option<String> {

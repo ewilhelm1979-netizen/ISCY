@@ -106,6 +106,7 @@ Die wichtigsten Bereiche sind:
 - Organizations unter `/organizations/`
 - Product Security unter `/product-security/`
 - Vulnerability Intelligence unter `/cves/`
+- Threat Intelligence und Security Observations unter `/security-observations/`
 
 ## 5. Fachliche Erklaerung aller Hauptfunktionen
 
@@ -813,6 +814,46 @@ Fachlicher Nutzen:
 
 Fuer Nicht-Sicherheitsleute:
 Hier wird aus einer technischen Schwachstellenmeldung eine geschaeftlich nutzbare Bewertung.
+
+### 5.19 Native Threat Intelligence und Security Observations
+
+Zweck:
+Begrenzte Threat Indicators und bereits vorhandene technische Findings in
+einer tenantgebundenen Analystenansicht gemeinsam triagieren.
+
+Phase 1 unterstuetzt lokal validierte IPv4-, IPv6-, Domain-, HTTP(S)-URL- und
+SHA-256-Indicators. Jeder Indicator besitzt Source-/Provenance-Angaben,
+Confidence, Gueltigkeit, Lifecycle und Klassifizierung. Die Validierung erfolgt
+ohne DNS-, HTTP-, Reputation- oder Feed-Aufruf.
+
+Security Observations koennen manuell erfasst werden oder auf ein bestehendes
+Agent Finding beziehungsweise Product-Security-Vulnerability-Finding zeigen.
+Diese vorhandenen Datensaetze bleiben die kanonische Quelle. Die Observation
+ist nur eine begrenzte Triage-Projektion mit stabiler Source-Referenz,
+Kategorie, Severity, Owner und Status.
+
+Indicators werden in Phase 1 ausschliesslich manuell mit Observations
+verknuepft. Match-Typ, Begruendung, Evaluator und Triage werden auditierbar
+festgehalten. Daraus entsteht weder automatisch ein Incident noch ein
+Evidence-Datensatz, Risiko, Roadmap-Task oder eine technische Reaktion.
+
+Die Rollen sind bewusst getrennt:
+
+- `SOC_ANALYST` liest Indicators und Observations und darf Observations sowie
+  manuelle Links triagieren.
+- `SECURITY_ADMIN` darf zusaetzlich Indicators verwalten und Observations
+  erfassen.
+- bestehende Rollen erhalten keine automatische neue Permission-Zuweisung.
+
+Die API liegt unter `/api/v1/threat-intelligence/` und
+`/api/v1/security-observations/`; die Webarbeitsansicht liegt unter
+`/security-observations/`. Weitere Betriebs- und Sicherheitsgrenzen stehen in
+`docs/THREAT_INTELLIGENCE_OBSERVATIONS.md` und der zugehoerigen ADR.
+
+Fuer Nicht-Sicherheitsleute:
+Der Bereich hilft, einen Hinweis nachvollziehbar zu bewerten, ohne ihn
+automatisch zu einem meldepflichtigen Vorfall oder zu einer technischen
+Gegenmassnahme zu machen.
 
 ## 6. Typische Arbeitsablaeufe
 
@@ -1786,8 +1827,8 @@ unterschiedliche Instanzen geschrieben, gelesen und verifiziert. Danach wird
 Failover in beide Richtungen sowie ein paralleler Migrationsstart geprueft.
 Lokaler Dateispeicher und SQLite werden nicht als HA-faehig dargestellt.
 
-`make visual-regression` vergleicht 36 bewusst versionierte Playwright-
-Baselines fuer 18 zentrale Seiten bei Desktop- und kleinem Laptop-Viewport.
+`make visual-regression` vergleicht 38 bewusst versionierte Playwright-
+Baselines fuer 19 zentrale Seiten bei Desktop- und kleinem Laptop-Viewport.
 Neben Pixelabweichungen prueft die Suite leere Hauptbereiche, 500-Seiten,
 horizontalen Ueberlauf, abgeschnittene Tabellenueberschriften und sichtbare
 Secrets. CI aktualisiert Baselines nie automatisch.
@@ -1800,10 +1841,11 @@ Skalierbarkeit, SLA-Erfuellung, Zertifizierung oder Rechtskonformitaet.
 
 ### 6.18 Finales Hardening und Release-Vorbereitung
 
-`V23.7.29` bleibt der unveraenderte veroeffentlichte Vorgaenger. `V23.7.30`
-ist als `prepared_not_published` vorbereitet, ohne einen neuen Tag, ein GitHub
-Release oder eine oeffentliche Veroeffentlichung zu erzeugen. Die vorhandenen
-Pflichtpruefungen laufen in `make release-candidate-check` zusammen. GitHub-CI
+`V23.7.30` bleibt der unveraenderte veroeffentlichte Stable-/Latest-Stand.
+`V23.7.31` ist als `development_unreleased` geoeffnet, ohne Tag, GitHub
+Release oder Upload. Eine spaetere Release-Vorbereitung und Freigabe bleiben
+getrennte menschliche Entscheidungen. Die vorhandenen Pflichtpruefungen laufen
+in `make release-candidate-check` zusammen. GitHub-CI
 behaelt die getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und
 Docker-Jobs und aggregiert deren Ergebnis erst am Ende. Lokal erzeugte
 Candidate-Artefakte bleiben unter `artifacts/release-candidate/`, sind
@@ -1813,7 +1855,7 @@ Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
 Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
 und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust
 1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem
-Bootstrap, 41 Migrationen, Restart, Migrationsrennen und einem logischen
+Bootstrap, 42 Migrationen, Restart, Migrationsrennen und einem logischen
 Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der
 PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder
 ein In-place-Upgrade noch ein automatisiertes `pg_upgrade` oder einen
@@ -1827,7 +1869,7 @@ Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-
 Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder
 internen Store-Details.
 
-Die RC-Metadatenpruefung bestaetigt 41 fortlaufende Migrationen, 36 visuelle
+Die RC-Metadatenpruefung bestaetigt 42 fortlaufende Migrationen, 38 visuelle
 Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen
 wertredigierten Sensitive-Data-Scan. `release/release-manifest.json` nutzt
 `git:HEAD` als reproduzierbaren Quellmarker; die lokale Artefakterzeugung loest
@@ -1908,15 +1950,22 @@ Deployment-Handoffs und begrenzte transaktionale Result-Importe. ISCY bleibt
 dabei Governance- und Evidence-Control-Plane ohne externe Credentials,
 Remote-Ausfuehrung oder automatische Verteilung.
 
+Migration `0042_rust_native_threat_intelligence_observations` ergaenzt lokal
+validierte Indicators, normalisierte Referenzen auf vorhandene Agent- und
+Vulnerability-Findings, manuelle Indicator-Links, Triage und Audit. Der
+Entwicklungsstand fuehrt weder Raw-Log-Ingestion, externe Feeds, automatische
+Korrelation noch Incident-/Evidence-Erzeugung oder aktive Reaktion ein.
+
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
 1. Supplier/Product-Security-Workflow fachlich weiter polishen, z. B. feinere Import-Vorbereitung fuer Hersteller-Advisorys, Contract-/Exit-Reifegrade und Review-Pack-Gliederung
 2. Den S3-kompatiblen Evidence-Storage nach menschlicher Security-Review in einer isolierten Betreiberumgebung mit produktiven Endpoint-, Secret-Root- und Restore-Vorgaben pilotieren
 3. Produktive Agent-Paketsignierung und eine spaetere produktive CA-/PKI-Stufe auf Basis des vorbereiteten Artefakt-/Provenance- und PKI-/CSR-Governance-Modells
-4. Den vorbereiteten Candidate `V23.7.30` vollstaendig pruefen und erst in einem
-   getrennten Auftrag ueber Merge, Tag und Veroeffentlichung entscheiden
+4. Native Threat Intelligence nach menschlicher Review erst in getrennten
+   Meilensteinen um kontrollierte Connectoren oder automatische Vorschlaege
+   erweitern; die Phase-1-Grenzen bleiben bis dahin verbindlich
 
-Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
+Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Threat Intelligence, Security Observations, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 
 ## 11. Git-Bezug dieses Handbuchs
 

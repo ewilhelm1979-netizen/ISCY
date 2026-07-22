@@ -19,9 +19,9 @@ Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
 - Nix: `nixos-26.05`, Nix-Rust `1.95.0`
 - Datenbank: PostgreSQL 16 bleibt Standard; PostgreSQL 18.4 ist
   kompatibilitaetsgeprueft
-- Migrationen: 41, fortlaufend `0001` bis `0041`
-- Visual Regression: 36 Baselines
-- Rust-Vollsuite auf dem fachlichen Ausgangsstand: 334 Tests bestanden; der
+- Migrationen: 42, fortlaufend `0001` bis `0042`
+- Visual Regression: 38 Baselines
+- Rust-Vollsuite auf dem aktuellen Entwicklungsstand: 340 Tests bestanden; der
   bestehende isolierte MinIO-Test bleibt im normalen Cargo-Lauf bewusst
   ignoriert und wird im separaten Object-Storage-Integrationsjob ausgefuehrt
 - Lizenz: `AGPL-3.0-only`
@@ -72,10 +72,10 @@ lueckenlos, eindeutig und aufsteigend sein.
 
 | Bereich | Status | Nachweis oder Einschränkung |
 | --- | --- | --- |
-| Rust/Axum Backend und Weboberfläche | implementiert und geprüft | Locked Build, Clippy und 334 Rust-/HTTP-Tests waren auf dem fachlichen Ausgangsstand gruen. |
+| Rust/Axum Backend und Weboberfläche | implementiert und geprüft | Locked Build, Clippy und 340 Rust-/HTTP-Tests sind auf dem aktuellen Entwicklungsstand gruen. |
 | SQLite | geprüft mit dokumentierter Einschränkung | Bootstrap, Restart und Restore; kein Mehrinstanz-/HA-Pfad. |
 | PostgreSQL 16 | Candidate-Prüfung erforderlich | Standardpfad; Leerdatenbank, Bestand, Dump/Restore und Migrations-Race muessen im Candidate-Gate gruen sein. |
-| PostgreSQL 18.4 | Candidate-Prüfung erforderlich | Zusatzgate fuer frischen Bootstrap, Restart, 41 Migrationen und logischen 16-nach-18-Forward-Restore; kein Produktionsstandard. |
+| PostgreSQL 18.4 | Candidate-Prüfung erforderlich | Zusatzgate fuer frischen Bootstrap, Restart, 42 Migrationen und logischen 16-nach-18-Forward-Restore; kein Produktionsstandard. |
 | Lokale Evidence-Speicherung | geprüft mit dokumentierter Einschränkung | Authentifiziert und canonical-path-geprueft; nicht HA-faehig. |
 | S3-kompatibler Evidence Storage | Candidate-Prüfung erforderlich | MinIO-Lifecycle und HA-Cross-Instance-Pfad muessen gruen sein; keine produktiven Cloud-Credentials. |
 | Evidence Worker und Disposition | Candidate-Prüfung erforderlich | Atomare Claims, Legal Hold, Approval, Tombstone und Wiederanlauf werden im Gate geprueft. |
@@ -93,7 +93,7 @@ lueckenlos, eindeutig und aufsteigend sein.
 | Liveness, Readiness und Shutdown | Candidate-Prüfung erforderlich | Graceful-Shutdown-Smoke und sichere Fehlerklassen muessen gruen sein. |
 | Performance-Smoke | Candidate-Prüfung erforderlich | CI-Budget, keine Produktions-SLO. |
 | Zwei-Instanzen-/Failover-Test | Candidate-Prüfung erforderlich | Zwei App-Instanzen; PostgreSQL, MinIO und nginx bleiben im Test Einzelinstanzen. |
-| Visual Regression | Candidate-Prüfung erforderlich | 36/36 Baselines, keine automatische Baseline-Aktualisierung. |
+| Visual Regression | Candidate-Prüfung erforderlich | 38/38 Baselines, keine automatische Baseline-Aktualisierung. |
 | Docker/Compose und hardened Build | Candidate-Prüfung erforderlich | Non-root, Cap-Drop/no-new-privileges und alle Compose-Varianten. |
 | Dependency-/Supply-Chain-Prüfung | Candidate-Prüfung erforderlich | cargo audit, cargo deny, SBOM und CI muessen gruen sein. |
 
@@ -236,7 +236,7 @@ freigegebene Vulnerability-Assertion vorliegt.
 - [ ] Alle lokalen, in der Umgebung ausführbaren Pflichtprüfungen sind grün.
 - [ ] SQLite leer/restartbar und PostgreSQL leer/Bestand/Restore/Race sind grün.
 - [ ] PostgreSQL 18.4 und der logische Forward-Restore 16 nach 18 sind gruen.
-- [ ] MinIO-Lifecycle, Performance, HA und Visual Regression 36/36 sind grün.
+- [ ] MinIO-Lifecycle, Performance, HA und Visual Regression 38/38 sind grün.
 - [ ] Binary-Hygiene, sauberer Runtime-Container und zwei byteidentische
   portable Builds sind gruen.
 - [ ] Manifest, Checksums, Handbuch und Release Notes sind konsistent.

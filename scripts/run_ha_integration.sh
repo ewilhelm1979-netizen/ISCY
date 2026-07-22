@@ -98,7 +98,7 @@ fi
 migration_count="$("$STACK" compose exec --no-TTY postgres psql --tuples-only --no-align \
   --username iscy_test --dbname iscy_race \
   --command 'SELECT COUNT(*) FROM iscy_schema_migrations')"
-[[ "$migration_count" == "41" ]]
+[[ "$migration_count" == "42" ]]
 
 app_a_container="$("$STACK" compose ps --quiet app-a)"
 "$STACK" compose stop --timeout 25 app-a >/dev/null

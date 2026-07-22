@@ -195,6 +195,28 @@ Backup files contain production database and evidence data. File permissions, in
 
 **Residual risk:** A compromised endpoint can submit plausible false local state. Agent findings are security signals, not proof of host integrity.
 
+### Threat-indicator poisoning and observation overcollection
+
+**Threat:** Untrusted indicators or observations inject malformed values,
+cross tenant references, secrets, raw telemetry, misleading provenance or
+unbounded data. Automated correlation could turn an uncertain signal into an
+Incident or active response without review.
+
+**Controls:**
+
+- local allowlisted validation for IPv4, IPv6, domains, HTTP(S) URLs and SHA-256
+- no DNS, HTTP, reputation-feed, scanning or other network lookup
+- composite tenant foreign keys for source findings, assets and links
+- bounded JSON attributes, text lengths, confidence, lifecycle and status enums
+- tenant-local uniqueness and transactional audit for idempotent writes
+- manual-only Indicator/Observation matching with explicit evaluator and triage
+- hashed references in audit details; no indicator values or raw payload logs
+- no automatic Incident, Evidence, Risk, Roadmap or endpoint-action side effect
+
+**Residual risk:** Manually entered intelligence can be inaccurate or stale.
+Confidence and provenance support review but do not establish truth. External
+feeds and automatic matching require a separately reviewed trust boundary.
+
 ### Secret disclosure through logs, Git, or backups
 
 **Threat:** Database credentials or tokens appear in console logs, committed files, CI artifacts, or backup environment snapshots.
@@ -282,6 +304,7 @@ A release must not knowingly violate these rules:
 | Backup integrity | generated `SHA256SUMS` and restore preflight |
 | Webhook replay | HMAC nonce/timestamp tests |
 | Agent secret binding | enrollment, heartbeat, findings, and rotation tests |
+| Threat indicators and observations | local normalization, bounded-input, permission, foreign-tenant, deduplication, concurrency and no-side-effect tests |
 
 ## Known limitations and next steps
 

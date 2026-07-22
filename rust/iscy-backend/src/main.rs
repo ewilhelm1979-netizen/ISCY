@@ -38,6 +38,7 @@ use iscy_backend::{
     supplier_product_security_store::SupplierProductSecurityStore,
     supplier_store::SupplierStore,
     tenant_store::TenantStore,
+    threat_intelligence_store::ThreatIntelligenceStore,
     wizard_store::WizardStore,
     AppState,
 };
@@ -186,6 +187,10 @@ async fn main() -> anyhow::Result<()> {
         ),
     };
     let notification_worker_store = agent_governance_store.clone();
+    let threat_intelligence_store = match database_url.as_deref() {
+        Some(database_url) => Some(ThreatIntelligenceStore::connect(database_url).await?),
+        None => None,
+    };
     let state = AppState::with_stores(cve_store, tenant_store)
         .with_account_store(account_store)
         .with_agent_governance_store(agent_governance_store)
@@ -215,6 +220,7 @@ async fn main() -> anyhow::Result<()> {
         .with_wizard_store(wizard_store)
         .with_product_security_store(product_security_store)
         .with_ai_governance_store(ai_governance_store)
+        .with_threat_intelligence_store(threat_intelligence_store)
         .with_database_url(database_url)
         .with_security_config(security_config.clone());
 

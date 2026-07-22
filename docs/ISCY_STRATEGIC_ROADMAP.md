@@ -290,7 +290,7 @@ Umgesetzt:
 - Zwei-Instanzen-Topologie mit PostgreSQL 16, S3-kompatiblem MinIO und nginx 1.31
 - Cross-Instance-Schreiben/Lesen, Evidence-Upload/Verify und Failover in beide Richtungen
 - isolierter PostgreSQL-18-Kompatibilitaets- und PG16-zu-PG18-Forward-Restore-Test mit getrennten Volumes, dynamischem Datenintegritaetsvergleich, Anwendungssmoke und Migrationsrennen; PostgreSQL 16 bleibt Standard
-- Nix-/Playwright-basierte visuelle Regression fuer 18 Bereiche und zwei Viewports mit 36 bewusst versionierten Baselines
+- Nix-/Playwright-basierte visuelle Regression fuer 19 Bereiche und zwei Viewports mit 38 bewusst versionierten Baselines
 - getrennte CI-Artefakte fuer Performance-Bericht und visuelle Abweichungen
 
 Bewusste Grenze:
@@ -300,6 +300,41 @@ Bewusste Grenze:
 Erfolgskriterium:
 
 - Grobe Laufzeit-, Failover-, Side-Effect- und UI-Regressionen werden reproduzierbar vor einem Release Candidate sichtbar.
+
+## Prioritaet 9: Native Threat Intelligence und Security Observations
+
+Status: Phase 1 im Entwicklungsstand `V23.7.31` implementiert.
+
+Umgesetzt:
+
+- tenantgebundene Indicators fuer IPv4, IPv6, Domains, HTTP(S)-URLs und
+  SHA-256 mit lokaler Validierung und Normalisierung
+- Provenance, Confidence, Gueltigkeit, Lifecycle, Klassifizierung,
+  Deduplizierung und Auditspur
+- normalisierte, begrenzte Security Observations aus manueller Erfassung,
+  vorhandenen Agent Findings oder vorhandenen Product-Security-
+  Vulnerability-Findings
+- tenantgebundene Composite Foreign Keys auf vorhandene Sources und Assets;
+  die vorhandenen Findings bleiben kanonisch
+- manuelle Indicator-/Observation-Links mit Match-Typ, Begruendung, Evaluator
+  und Triage
+- Rollen `SOC_ANALYST` und `SECURITY_ADMIN` sowie granulare direkte und
+  gruppenbasierte Permissions ohne automatische Zuweisung an Bestandsrollen
+- Rust-API, Webarbeitsbereich `/security-observations/`, negative Tenant-/RBAC-
+  Tests und SQLite-/PostgreSQL-Migrationspfad `0042`
+
+Bewusste Grenze:
+
+- keine Raw-Log-Speicherung, kein SIEM/EDR/XDR, kein Wazuh, kein STIX/TAXII,
+  MISP oder OpenCTI, keine externen Feeds oder Netzwerk-Lookups
+- keine automatische Korrelation, Incident-/Evidence-Erzeugung, aktive
+  Reaktion, Remote-Ausfuehrung oder Hackback
+
+Erfolgskriterium:
+
+- Analysten koennen tenantgebundene Intelligence und vorhandene technische
+  Findings gemeinsam triagieren, ohne ein zweites Finding-System oder
+  unbeabsichtigte operative Nebenwirkungen einzufuehren.
 
 ## Empfohlene Umsetzungsreihenfolge
 
@@ -332,7 +367,8 @@ Erfolgskriterium:
 | Implementiert / Veroeffentlichung ausstehend | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |
 | Implementiert / Veroeffentlichung ausstehend | Evidence-Worker, kontrollierte physische Disposition und Object-Storage-Vorbereitung | Begrenzte Integritaets-Worker-Laeufe, Approval-gebundene physische Disposition, Tombstone-Metadaten und vorbereitete Object-Storage-Konfiguration sind tenantgebunden auditierbar. |
 | Implementiert / Veroeffentlichung ausstehend | S3-kompatibler Evidence-Storage-Runtime-Client | Explizite Secret-Referenzen, SigV4, DNS-/SSRF-Revalidierung, kanonische Object-IDs, begrenzte PUT-/HEAD-/GET-Operationen und kontrolliertes Remote-DELETE sind mit MinIO-Integrationstest umgesetzt. |
-| Implementiert / Veroeffentlichung ausstehend | Performance, HA und visuelle Regression | Grosszuegige CI-Budgets, gepruefter PostgreSQL-/S3-Zwei-Instanzen-Betrieb und 36 UI-Baselines machen grobe Regressionen sichtbar, ohne allgemeine HA oder SLA zu behaupten. |
+| Implementiert / Veroeffentlichung ausstehend | Performance, HA und visuelle Regression | Grosszuegige CI-Budgets, gepruefter PostgreSQL-/S3-Zwei-Instanzen-Betrieb und 38 UI-Baselines machen grobe Regressionen sichtbar, ohne allgemeine HA oder SLA zu behaupten. |
+| Implementiert / Veroeffentlichung ausstehend | Native Threat Intelligence und Security Observations - Phase 1 | Lokal validierte Indicators, normalisierte Referenzen auf vorhandene Findings, manuelle Matches, Triage und Audit sind tenantgebunden verfuegbar, ohne Feed-, SIEM- oder Active-Response-Funktion. |
 | Release Candidate vorbereitet | Finales Hardening und Release Readiness | Zentrale RC-Pruefung, Readiness-Matrix, Release Notes, Manifest, Checksums, Sensitive-Data-Scan und CI-Aggregation sind vorbereitet; Tag und Veroeffentlichung bleiben ausstehend. |
 
 ## Abgrenzung

@@ -25,10 +25,26 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
 - In diesem Stand wird kein Release-Bundle vorbereitet oder erzeugt.
 - `V23.7.31` besitzt noch keinen Release Candidate und keine Stable-/Latest-
   Freigabe.
-- Neue Produktfunktionen werden erst nach ihrer Implementierung und Pruefung
-  unter `Unreleased` dokumentiert.
-- Native Threat Intelligence und Security Observations werden durch diese
-  Lifecycle-Umstellung noch nicht als implementiert ausgewiesen.
+- Neue Produktfunktionen werden nach ihrer Implementierung und Pruefung unter
+  `Unreleased` dokumentiert.
+- Native Threat Intelligence und Security Observations - Phase 1 sind in
+  diesem Entwicklungsstand implementiert, aber noch nicht veroeffentlicht.
+
+## Native Threat Intelligence und Security Observations - Phase 1
+
+- tenantgebundene, lokal validierte Indicators fuer IPv4, IPv6, Domains, URLs
+  und SHA-256 mit Provenance, Confidence, Gueltigkeit, Lifecycle und
+  Klassifizierung
+- normalisierte, begrenzte Security Observations aus manueller Erfassung oder
+  vorhandenen Agent-/Vulnerability-Findings; die vorhandenen Findings bleiben
+  kanonisch
+- manuelle, triagierbare Indicator-Links mit transaktionaler Auditspur und
+  tenantlokaler Deduplizierung
+- Rollen `SOC_ANALYST` und `SECURITY_ADMIN` sowie granulare direkte und
+  gruppenbasierte Permissions ohne automatische Zuweisung an Bestandsrollen
+- Rust-API und Webarbeitsbereich `/security-observations/`
+- keine externen Feeds oder Netzwerk-Lookups, keine Raw-Logs, keine
+  automatische Incident-/Evidence-Erzeugung und keine aktive Reaktion
 
 ## Technische Basis
 
@@ -37,7 +53,7 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
 - MSRV und portabler Release-Builder: Rust `1.88.0`
 - PostgreSQL 16 bleibt der Standard.
 - PostgreSQL 18.4 bleibt ein zusaetzlicher Kompatibilitaetspfad.
-- Aktuell 41 fortlaufende Migrationen, `0001` bis `0041`
-- 36 Visual-Baselines
+- Aktuell 42 fortlaufende Migrationen, `0001` bis `0042`
+- 38 Visual-Baselines
 - Signaturstatus: `unsigned`
 - Provenance-Status: `prepared_unsigned`

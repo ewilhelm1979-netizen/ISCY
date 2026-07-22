@@ -14,6 +14,7 @@ const pages = [
   ["product-security-psirt", "/product-security/", true],
   ["ai-governance", "/ai-governance/", true],
   ["zero-trust-agent-fleet", "/zero-trust/", true],
+  ["threat-intelligence-observations", "/security-observations/", true],
   ["agent-rollout-rings", "/zero-trust/rollouts/", true],
   ["agent-artefakte-provenance", "/zero-trust/", true],
   ["agent-pki-csr-mtls", "/zero-trust/", true],

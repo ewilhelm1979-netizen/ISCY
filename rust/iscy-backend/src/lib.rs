@@ -70,6 +70,7 @@ pub mod security_store;
 pub mod supplier_product_security_store;
 pub mod supplier_store;
 pub mod tenant_store;
+pub mod threat_intelligence_store;
 pub mod wizard_store;
 
 use account_store::AccountStore;
@@ -125,6 +126,12 @@ use supplier_product_security_store::{
 };
 use supplier_store::{SupplierStore, SupplierStoreErrorKind};
 use tenant_store::TenantStore;
+use threat_intelligence_store::{
+    ObservationIndicatorLinkTriageRequest, ObservationIndicatorLinkWriteRequest,
+    SecurityObservationTriageRequest, SecurityObservationWriteRequest,
+    ThreatIndicatorUpdateRequest, ThreatIndicatorWriteRequest, ThreatIntelligenceError,
+    ThreatIntelligenceErrorKind, ThreatIntelligenceStore,
+};
 use wizard_store::WizardStore;
 
 #[derive(Clone, Default)]
@@ -157,6 +164,7 @@ pub struct AppState {
     pub supplier_product_security_store: Option<SupplierProductSecurityStore>,
     pub supplier_store: Option<SupplierStore>,
     pub tenant_store: Option<TenantStore>,
+    pub threat_intelligence_store: Option<ThreatIntelligenceStore>,
     pub wizard_store: Option<WizardStore>,
     pub evidence_media_root: Option<PathBuf>,
     pub nvd_api_base_url: Option<String>,
@@ -227,6 +235,7 @@ impl AppState {
             supplier_product_security_store: None,
             supplier_store: None,
             tenant_store: None,
+            threat_intelligence_store: None,
             wizard_store: None,
             evidence_media_root: None,
             nvd_api_base_url: None,
@@ -267,6 +276,7 @@ impl AppState {
             supplier_product_security_store: None,
             supplier_store: None,
             tenant_store,
+            threat_intelligence_store: None,
             wizard_store: None,
             evidence_media_root: None,
             nvd_api_base_url: None,
@@ -455,6 +465,14 @@ impl AppState {
         self.wizard_store = wizard_store;
         self
     }
+
+    pub fn with_threat_intelligence_store(
+        mut self,
+        threat_intelligence_store: Option<ThreatIntelligenceStore>,
+    ) -> Self {
+        self.threat_intelligence_store = threat_intelligence_store;
+        self
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -495,6 +513,18 @@ pub struct ApiErrorResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct ThreatIntelligenceApiResponse<T> {
+    accepted: bool,
+    api_version: &'static str,
+    data: T,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ThreatIntelligenceListQuery {
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
 struct AgentRolloutApiResponse<T> {
     accepted: bool,
     api_version: &'static str,
@@ -509,6 +539,7 @@ pub struct ContextWhoamiResponse {
     pub user_id: Option<i64>,
     pub user_email: Option<String>,
     pub roles: Vec<String>,
+    pub permissions: Vec<String>,
     pub is_staff: bool,
     pub is_superuser: bool,
 }
@@ -2256,6 +2287,69 @@ pub struct WebContextQuery {
     pub has_open_gaps: Option<String>,
     pub has_critical_gaps: Option<String>,
     pub limit: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebThreatIndicatorCreateForm {
+    indicator_type: String,
+    value: String,
+    source_type: String,
+    source_name: String,
+    provenance_reference: String,
+    confidence: i64,
+    #[serde(default)]
+    valid_from: String,
+    #[serde(default)]
+    valid_until: String,
+    classification: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebThreatIndicatorUpdateForm {
+    confidence: i64,
+    #[serde(default)]
+    valid_until: String,
+    lifecycle_status: String,
+    classification: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSecurityObservationCreateForm {
+    source_reference: String,
+    deduplication_key: String,
+    #[serde(default)]
+    observed_at: String,
+    category: String,
+    severity: String,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    attributes_json: String,
+    provenance_type: String,
+    provenance_reference: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSecurityObservationTriageForm {
+    triage_status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebObservationIndicatorLinkForm {
+    observation_id: i64,
+    indicator_id: i64,
+    match_type: String,
+    #[serde(default)]
+    rationale: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebObservationIndicatorLinkTriageForm {
+    observation_id: i64,
+    triage_status: String,
+    #[serde(default)]
+    rationale: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4175,6 +4269,464 @@ fn admin_permission_error(context: &AuthenticatedTenantContext) -> Option<Respon
     )
 }
 
+const PERMISSION_VIEW_THREAT_INDICATOR: &str = "view_threat_indicator";
+const PERMISSION_ADD_THREAT_INDICATOR: &str = "add_threat_indicator";
+const PERMISSION_CHANGE_THREAT_INDICATOR: &str = "change_threat_indicator";
+const PERMISSION_ARCHIVE_THREAT_INDICATOR: &str = "archive_threat_indicator";
+const PERMISSION_VIEW_SECURITY_OBSERVATION: &str = "view_security_observation";
+const PERMISSION_ADD_SECURITY_OBSERVATION: &str = "add_security_observation";
+const PERMISSION_TRIAGE_SECURITY_OBSERVATION: &str = "triage_security_observation";
+const PERMISSION_LINK_SECURITY_OBSERVATION: &str = "link_security_observation";
+
+fn has_threat_intelligence_permission(
+    context: &AuthenticatedTenantContext,
+    permission: &str,
+) -> bool {
+    if context.is_superuser || context.is_staff || context.has_role("ADMIN") {
+        return true;
+    }
+    if context.has_permission(permission) {
+        return true;
+    }
+    if context.has_role("SECURITY_ADMIN") {
+        return matches!(
+            permission,
+            PERMISSION_VIEW_THREAT_INDICATOR
+                | PERMISSION_ADD_THREAT_INDICATOR
+                | PERMISSION_CHANGE_THREAT_INDICATOR
+                | PERMISSION_ARCHIVE_THREAT_INDICATOR
+                | PERMISSION_VIEW_SECURITY_OBSERVATION
+                | PERMISSION_ADD_SECURITY_OBSERVATION
+                | PERMISSION_TRIAGE_SECURITY_OBSERVATION
+                | PERMISSION_LINK_SECURITY_OBSERVATION
+        );
+    }
+    context.has_role("SOC_ANALYST")
+        && matches!(
+            permission,
+            PERMISSION_VIEW_THREAT_INDICATOR
+                | PERMISSION_VIEW_SECURITY_OBSERVATION
+                | PERMISSION_TRIAGE_SECURITY_OBSERVATION
+                | PERMISSION_LINK_SECURITY_OBSERVATION
+        )
+}
+
+fn threat_intelligence_permission_error(
+    context: &AuthenticatedTenantContext,
+    permission: &str,
+) -> Option<Response> {
+    if has_threat_intelligence_permission(context, permission) {
+        return None;
+    }
+    Some(
+        (
+            StatusCode::FORBIDDEN,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "insufficient_security_observation_permission",
+                message: "Fuer diese Security-Observation-Operation fehlt die Berechtigung."
+                    .to_string(),
+            }),
+        )
+            .into_response(),
+    )
+}
+
+fn threat_intelligence_error_response(error: ThreatIntelligenceError) -> Response {
+    let (status, error_code) = match error.kind() {
+        ThreatIntelligenceErrorKind::InvalidInput => (
+            StatusCode::BAD_REQUEST,
+            "invalid_security_observation_payload",
+        ),
+        ThreatIntelligenceErrorKind::NotFound => (StatusCode::NOT_FOUND, "object_not_found"),
+        ThreatIntelligenceErrorKind::Conflict => {
+            (StatusCode::CONFLICT, "security_observation_conflict")
+        }
+        ThreatIntelligenceErrorKind::Database => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "database_error")
+        }
+    };
+    (
+        status,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code,
+            message: error.message().to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn threat_intelligence_store_unavailable() -> Response {
+    api_database_not_configured("Rust-Threat-Intelligence-Store ist nicht konfiguriert.")
+}
+
+async fn threat_indicators_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ThreatIntelligenceListQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) =
+        threat_intelligence_permission_error(&context, PERMISSION_VIEW_THREAT_INDICATOR)
+    {
+        return response;
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return threat_intelligence_store_unavailable();
+    };
+    match store
+        .list_indicators(context.tenant_id, query.limit.unwrap_or(100))
+        .await
+    {
+        Ok(indicators) => Json(ThreatIntelligenceApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: indicators,
+        })
+        .into_response(),
+        Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
+async fn threat_indicator_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ThreatIndicatorWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) =
+        threat_intelligence_permission_error(&context, PERMISSION_ADD_THREAT_INDICATOR)
+    {
+        return response;
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return threat_intelligence_store_unavailable();
+    };
+    match store
+        .create_indicator(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(result) => (
+            if result.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(ThreatIntelligenceApiResponse {
+                accepted: true,
+                api_version: "v1",
+                data: result,
+            }),
+        )
+            .into_response(),
+        Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
+async fn threat_indicator_update(
+    Path(indicator_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ThreatIndicatorUpdateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    let archive_requested = payload
+        .lifecycle_status
+        .as_deref()
+        .is_some_and(|status| status.trim().eq_ignore_ascii_case("ARCHIVED"));
+    let changes_other_fields = payload.confidence.is_some()
+        || payload.valid_from.is_some()
+        || payload.valid_until.is_some()
+        || payload.classification.is_some()
+        || !archive_requested;
+    if changes_other_fields {
+        if let Some(response) =
+            threat_intelligence_permission_error(&context, PERMISSION_CHANGE_THREAT_INDICATOR)
+        {
+            return response;
+        }
+    }
+    if archive_requested {
+        if let Some(response) =
+            threat_intelligence_permission_error(&context, PERMISSION_ARCHIVE_THREAT_INDICATOR)
+        {
+            return response;
+        }
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return threat_intelligence_store_unavailable();
+    };
+    match store
+        .update_indicator(context.tenant_id, context.user_id, indicator_id, payload)
+        .await
+    {
+        Ok(indicator) => Json(ThreatIntelligenceApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: indicator,
+        })
+        .into_response(),
+        Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
+async fn security_observations_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ThreatIntelligenceListQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) =
+        threat_intelligence_permission_error(&context, PERMISSION_VIEW_SECURITY_OBSERVATION)
+    {
+        return response;
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return threat_intelligence_store_unavailable();
+    };
+    match store
+        .list_observations(context.tenant_id, query.limit.unwrap_or(100))
+        .await
+    {
+        Ok(observations) => Json(ThreatIntelligenceApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: observations,
+        })
+        .into_response(),
+        Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
+async fn security_observation_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SecurityObservationWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) =
+        threat_intelligence_permission_error(&context, PERMISSION_ADD_SECURITY_OBSERVATION)
+    {
+        return response;
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return threat_intelligence_store_unavailable();
+    };
+    match store
+        .create_observation(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(result) => (
+            if result.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(ThreatIntelligenceApiResponse {
+                accepted: true,
+                api_version: "v1",
+                data: result,
+            }),
+        )
+            .into_response(),
+        Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
+async fn security_observation_triage(
+    Path(observation_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SecurityObservationTriageRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) =
+        threat_intelligence_permission_error(&context, PERMISSION_TRIAGE_SECURITY_OBSERVATION)
+    {
+        return response;
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return threat_intelligence_store_unavailable();
+    };
+    match store
+        .triage_observation(context.tenant_id, context.user_id, observation_id, payload)
+        .await
+    {
+        Ok(observation) => Json(ThreatIntelligenceApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: observation,
+        })
+        .into_response(),
+        Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
+async fn security_observation_links_list(
+    Path(observation_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ThreatIntelligenceListQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) =
+        threat_intelligence_permission_error(&context, PERMISSION_VIEW_SECURITY_OBSERVATION)
+    {
+        return response;
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return threat_intelligence_store_unavailable();
+    };
+    match store
+        .list_links_for_observation(
+            context.tenant_id,
+            observation_id,
+            query.limit.unwrap_or(100),
+        )
+        .await
+    {
+        Ok(links) => Json(ThreatIntelligenceApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: links,
+        })
+        .into_response(),
+        Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
+async fn security_observation_link_create(
+    Path(observation_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ObservationIndicatorLinkWriteRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) =
+        threat_intelligence_permission_error(&context, PERMISSION_LINK_SECURITY_OBSERVATION)
+    {
+        return response;
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return threat_intelligence_store_unavailable();
+    };
+    match store
+        .create_link(context.tenant_id, context.user_id, observation_id, payload)
+        .await
+    {
+        Ok(result) => (
+            if result.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(ThreatIntelligenceApiResponse {
+                accepted: true,
+                api_version: "v1",
+                data: result,
+            }),
+        )
+            .into_response(),
+        Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
+async fn security_observation_link_triage(
+    Path((observation_id, link_id)): Path<(i64, i64)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ObservationIndicatorLinkTriageRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) =
+        threat_intelligence_permission_error(&context, PERMISSION_LINK_SECURITY_OBSERVATION)
+    {
+        return response;
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return threat_intelligence_store_unavailable();
+    };
+    match store
+        .triage_link(
+            context.tenant_id,
+            context.user_id,
+            observation_id,
+            link_id,
+            payload,
+        )
+        .await
+    {
+        Ok(link) => Json(ThreatIntelligenceApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: link,
+        })
+        .into_response(),
+        Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
+async fn security_observation_audit_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ThreatIntelligenceListQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(err) => return api_context_error(err),
+    };
+    if let Some(response) =
+        threat_intelligence_permission_error(&context, PERMISSION_VIEW_SECURITY_OBSERVATION)
+    {
+        return response;
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return threat_intelligence_store_unavailable();
+    };
+    match store
+        .list_audit_events(context.tenant_id, query.limit.unwrap_or(100))
+        .await
+    {
+        Ok(events) => Json(ThreatIntelligenceApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: events,
+        })
+        .into_response(),
+        Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
 fn account_payload_error(err: &anyhow::Error) -> bool {
     err.chain()
         .any(|cause| cause.to_string().contains("Account-Feld"))
@@ -5428,6 +5980,7 @@ async fn context_whoami(State(state): State<AppState>, headers: HeaderMap) -> Re
                             user_id: Some(session.user_id),
                             user_email: session.user_email,
                             roles: session.user.roles,
+                            permissions: session.user.permissions,
                             is_staff: session.user.is_staff,
                             is_superuser: session.user.is_superuser,
                         }),
@@ -5473,6 +6026,7 @@ async fn context_whoami(State(state): State<AppState>, headers: HeaderMap) -> Re
                 user_id: context.user_id,
                 user_email: context.user_email,
                 roles: context.roles,
+                permissions: context.permissions,
                 is_staff: context.is_staff,
                 is_superuser: context.is_superuser,
             }),
@@ -21602,6 +22156,695 @@ fn web_context_from_auth(context: &AuthenticatedTenantContext) -> WebContext {
         tenant_id: context.tenant_id,
         user_id: context.user_id,
         user_email: context.user_email.clone(),
+    }
+}
+
+fn web_threat_permission_denied(context: &WebContext) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        web_error_page(
+            "Threat Intelligence",
+            "/security-observations/",
+            context,
+            "Fuer diese Security-Observation-Operation fehlt die Berechtigung.",
+        ),
+    )
+        .into_response()
+}
+
+fn web_threat_error(context: &WebContext, error: ThreatIntelligenceError) -> Response {
+    let status = match error.kind() {
+        ThreatIntelligenceErrorKind::InvalidInput => StatusCode::BAD_REQUEST,
+        ThreatIntelligenceErrorKind::NotFound => StatusCode::NOT_FOUND,
+        ThreatIntelligenceErrorKind::Conflict => StatusCode::CONFLICT,
+        ThreatIntelligenceErrorKind::Database => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    let message = if error.kind() == ThreatIntelligenceErrorKind::Database {
+        "Security-Observation-Daten konnten intern nicht verarbeitet werden."
+    } else {
+        error.message()
+    };
+    (
+        status,
+        web_error_page(
+            "Threat Intelligence",
+            "/security-observations/",
+            context,
+            message,
+        ),
+    )
+        .into_response()
+}
+
+fn threat_status_badge(status: &str) -> String {
+    let class_name = match status {
+        "ACTIVE" | "CONFIRMED" | "RELEVANT" => "ok",
+        "ARCHIVED" | "DISMISSED" | "NOT_RELEVANT" => "muted-badge",
+        "INACTIVE" | "NEEDS_REVIEW" | "IN_REVIEW" => "warn",
+        _ => "info",
+    };
+    web_badge(status, class_name)
+}
+
+async fn web_security_observations(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Threat Intelligence", "/security-observations/")
+                .into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_threat_intelligence_permission(&auth_context, PERMISSION_VIEW_THREAT_INDICATOR)
+        || !has_threat_intelligence_permission(&auth_context, PERMISSION_VIEW_SECURITY_OBSERVATION)
+    {
+        return web_threat_permission_denied(&context);
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return web_store_missing(
+            "Threat Intelligence",
+            "/security-observations/",
+            &context,
+            "Threat Intelligence",
+        )
+        .into_response();
+    };
+    let overview = match store.overview(auth_context.tenant_id, 100).await {
+        Ok(overview) => overview,
+        Err(error) => return web_threat_error(&context, error),
+    };
+    let can_manage_indicators =
+        has_threat_intelligence_permission(&auth_context, PERMISSION_CHANGE_THREAT_INDICATOR);
+    let can_archive_indicators =
+        has_threat_intelligence_permission(&auth_context, PERMISSION_ARCHIVE_THREAT_INDICATOR);
+    let can_add_indicator =
+        has_threat_intelligence_permission(&auth_context, PERMISSION_ADD_THREAT_INDICATOR);
+    let can_add_observation =
+        has_threat_intelligence_permission(&auth_context, PERMISSION_ADD_SECURITY_OBSERVATION);
+    let can_triage =
+        has_threat_intelligence_permission(&auth_context, PERMISSION_TRIAGE_SECURITY_OBSERVATION);
+    let can_link =
+        has_threat_intelligence_permission(&auth_context, PERMISSION_LINK_SECURITY_OBSERVATION);
+
+    let indicator_rows = overview
+        .indicators
+        .iter()
+        .map(|indicator| {
+            let action = if can_manage_indicators {
+                format!(
+                    r#"<form class="inline-form" method="post" action="{}">
+                    <input name="confidence" type="number" min="0" max="100" value="{}" aria-label="Confidence">
+                    <input name="valid_until" value="{}" placeholder="RFC 3339 oder leer" aria-label="Gueltig bis">
+                    <select name="lifecycle_status" aria-label="Lifecycle">{}</select>
+                    <select name="classification" aria-label="Klassifizierung">{}</select>
+                    <button type="submit">Speichern</button></form>"#,
+                    web_path_with_context(
+                        &format!("/security-observations/indicators/{}/update", indicator.id),
+                        Some(&context),
+                    ),
+                    indicator.confidence,
+                    html_escape(indicator.valid_until.as_deref().unwrap_or("")),
+                    ["ACTIVE", "INACTIVE", "ARCHIVED"]
+                        .iter()
+                        .filter(|value| **value != "ARCHIVED" || can_archive_indicators)
+                        .map(|value| option_tag(value, value, &indicator.lifecycle_status))
+                        .collect::<Vec<_>>()
+                        .join(""),
+                    [
+                        "PUBLIC",
+                        "INTERNAL",
+                        "RESTRICTED",
+                        "TLP_CLEAR",
+                        "TLP_GREEN",
+                        "TLP_AMBER",
+                        "TLP_RED",
+                    ]
+                    .iter()
+                    .map(|value| option_tag(value, value, &indicator.classification))
+                    .collect::<Vec<_>>()
+                    .join(""),
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                r#"<tr><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&indicator.indicator_type),
+                html_escape(&indicator.normalized_value),
+                threat_status_badge(&indicator.lifecycle_status),
+                indicator.confidence,
+                html_escape(&indicator.classification),
+                html_escape(&format!(
+                    "{} / {} / {}",
+                    indicator.source_type,
+                    indicator.source_name,
+                    indicator.provenance_reference
+                )),
+                action,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    let observation_rows = overview
+        .observations
+        .iter()
+        .map(|observation| {
+            let action = if can_triage {
+                format!(
+                    r#"<form class="inline-form" method="post" action="{}"><select name="triage_status" aria-label="Triage-Status">{}</select><button type="submit">Triagieren</button></form>"#,
+                    web_path_with_context(
+                        &format!(
+                            "/security-observations/observations/{}/triage",
+                            observation.id
+                        ),
+                        Some(&context),
+                    ),
+                    ["NEW", "IN_REVIEW", "CONFIRMED", "DISMISSED", "ARCHIVED"]
+                        .iter()
+                        .map(|value| option_tag(value, value, &observation.triage_status))
+                        .collect::<Vec<_>>()
+                        .join(""),
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}<br><small>{}</small></td><td>{}</td><td>{}</td><td>{}</td><td>{}<br><small>{}</small></td><td>{}</td></tr>"#,
+                html_escape(&observation.observed_at),
+                html_escape(&observation.title),
+                html_escape(&observation.description),
+                html_escape(&observation.severity),
+                threat_status_badge(&observation.triage_status),
+                html_escape(observation.asset_name.as_deref().unwrap_or("-")),
+                html_escape(&format!(
+                    "{} / {}",
+                    observation.source_type, observation.source_reference
+                )),
+                html_escape(&format!(
+                    "{} / {}",
+                    observation.provenance_type, observation.provenance_reference
+                )),
+                action,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    let link_rows = overview
+        .links
+        .iter()
+        .map(|link| {
+            let action = if can_link {
+                format!(
+                    r#"<form class="inline-form" method="post" action="{}"><input type="hidden" name="observation_id" value="{}"><select name="triage_status" aria-label="Match-Triage">{}</select><input name="rationale" value="{}" maxlength="1000" aria-label="Begruendung"><button type="submit">Bewerten</button></form>"#,
+                    web_path_with_context(
+                        &format!("/security-observations/links/{}/triage", link.id),
+                        Some(&context),
+                    ),
+                    link.observation_id,
+                    ["PENDING", "RELEVANT", "NOT_RELEVANT", "NEEDS_REVIEW"]
+                        .iter()
+                        .map(|value| option_tag(value, value, &link.triage_status))
+                        .collect::<Vec<_>>()
+                        .join(""),
+                    html_escape(&link.rationale),
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                r#"<tr><td>{}</td><td>{}: <code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&link.observation_title),
+                html_escape(&link.indicator_type),
+                html_escape(&link.indicator_value),
+                html_escape(&link.match_type),
+                threat_status_badge(&link.triage_status),
+                html_escape(&link.rationale),
+                action,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    let audit_rows = overview
+        .audit_events
+        .iter()
+        .map(|event| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&event.created_at),
+                html_escape(&event.object_type),
+                html_escape(&event.event_type),
+                html_escape(&event.summary),
+                event.actor_id,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    let indicator_form = if can_add_indicator {
+        format!(
+            r#"<section class="panel wide"><h2>Indicator erfassen</h2><form method="post" action="{}">
+            <div class="form-grid">
+              <label>Typ<select name="indicator_type"><option>IPV4</option><option>IPV6</option><option>DOMAIN</option><option>URL</option><option>SHA256</option></select></label>
+              <label>Wert<input name="value" maxlength="2048" required></label>
+              <label>Quellentyp<input name="source_type" value="MANUAL" maxlength="32" required></label>
+              <label>Quelle<input name="source_name" maxlength="128" required></label>
+              <label>Provenance-Referenz<input name="provenance_reference" maxlength="255" required></label>
+              <label>Confidence<input name="confidence" type="number" min="0" max="100" value="50" required></label>
+              <label>Gueltig ab<input name="valid_from" placeholder="RFC 3339"></label>
+              <label>Gueltig bis<input name="valid_until" placeholder="RFC 3339"></label>
+              <label>Klassifizierung<select name="classification"><option>INTERNAL</option><option>PUBLIC</option><option>RESTRICTED</option><option>TLP_CLEAR</option><option>TLP_GREEN</option><option>TLP_AMBER</option><option>TLP_RED</option></select></label>
+            </div><button type="submit">Indicator speichern</button></form></section>"#,
+            web_path_with_context("/security-observations/indicators/", Some(&context)),
+        )
+    } else {
+        String::new()
+    };
+
+    let observation_form = if can_add_observation {
+        format!(
+            r#"<section class="panel wide"><h2>Manuelle Observation erfassen</h2><form method="post" action="{}">
+            <div class="form-grid threat-observation-form-grid">
+              <label>Herkunftsreferenz<input name="source_reference" maxlength="255" required></label>
+              <label>Deduplizierungsschluessel<input name="deduplication_key" maxlength="128" required></label>
+              <label>Beobachtet<input name="observed_at" placeholder="RFC 3339"></label>
+              <label>Kategorie<select name="category"><option>THREAT_ACTIVITY</option><option>POSTURE</option><option>VULNERABILITY</option><option>POLICY</option><option>OTHER</option></select></label>
+              <label>Severity<select name="severity"><option>MEDIUM</option><option>INFO</option><option>LOW</option><option>HIGH</option><option>CRITICAL</option></select></label>
+              <label>Provenance-Typ<input name="provenance_type" value="MANUAL" maxlength="32" required></label>
+              <label>Provenance-Referenz<input name="provenance_reference" maxlength="255" required></label>
+            </div>
+            <label>Titel<input name="title" maxlength="255" required></label>
+            <label>Beschreibung<textarea class="rollout-description" name="description" maxlength="4000"></textarea></label>
+            <label>Strukturierte Attribute (JSON-Objekt)<textarea class="rollout-description" name="attributes_json">{}</textarea></label>
+            <button type="submit">Observation speichern</button></form></section>"#,
+            web_path_with_context("/security-observations/observations/", Some(&context)),
+            "{}",
+        )
+    } else {
+        String::new()
+    };
+
+    let link_form = if can_link
+        && !overview.observations.is_empty()
+        && !overview.indicators.is_empty()
+    {
+        let observation_options = overview
+            .observations
+            .iter()
+            .map(|item| {
+                format!(
+                    r#"<option value="{}">{}</option>"#,
+                    item.id,
+                    html_escape(&item.title)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        let indicator_options = overview
+            .indicators
+            .iter()
+            .map(|item| {
+                format!(
+                    r#"<option value="{}">{}: {}</option>"#,
+                    item.id,
+                    html_escape(&item.indicator_type),
+                    html_escape(&item.normalized_value),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        format!(
+            r#"<section class="panel wide"><h2>Manuell verknuepfen</h2><form method="post" action="{}"><div class="form-grid"><label>Observation<select name="observation_id">{}</select></label><label>Indicator<select name="indicator_id">{}</select></label><label>Match-Typ<select name="match_type"><option>CONTEXTUAL</option><option>EXACT</option><option>SOURCE_ASSERTED</option></select></label><label>Begruendung<input name="rationale" maxlength="1000"></label></div><button type="submit">Verknuepfen</button></form></section>"#,
+            web_path_with_context("/security-observations/links/", Some(&context)),
+            observation_options,
+            indicator_options,
+        )
+    } else {
+        String::new()
+    };
+
+    let body = format!(
+        r#"<section class="hero compact"><h1>Threat Intelligence &amp; Security Observations</h1></section>
+        <section class="metrics">{}{}{}{}</section>
+        <section class="grid">
+          <section class="panel wide"><h2>Indicators</h2><table class="wide-table"><thead><tr><th>Typ</th><th>Wert</th><th>Status</th><th>Confidence</th><th>Klassifizierung</th><th>Provenance</th><th>Aktion</th></tr></thead><tbody>{}</tbody></table></section>
+          <section class="panel wide"><h2>Observations</h2><table class="wide-table"><thead><tr><th>Beobachtet</th><th>Observation</th><th>Severity</th><th>Triage</th><th>Asset</th><th>Herkunft / Provenance</th><th>Aktion</th></tr></thead><tbody>{}</tbody></table></section>
+          <section class="panel wide"><h2>Manuelle Matches</h2><table><thead><tr><th>Observation</th><th>Indicator</th><th>Match</th><th>Triage</th><th>Begruendung</th><th>Aktion</th></tr></thead><tbody>{}</tbody></table></section>
+          {}
+          {}
+          {}
+          <section class="panel wide"><h2>Audit</h2><table><thead><tr><th>Zeit</th><th>Objekt</th><th>Ereignis</th><th>Zusammenfassung</th><th>Akteur</th></tr></thead><tbody>{}</tbody></table></section>
+        </section>"#,
+        metric_card("Indicators", overview.indicators.len() as i64),
+        metric_card("Observations", overview.observations.len() as i64),
+        metric_card(
+            "Offene Triage",
+            overview
+                .observations
+                .iter()
+                .filter(|item| matches!(item.triage_status.as_str(), "NEW" | "IN_REVIEW"))
+                .count() as i64
+        ),
+        metric_card(
+            "Offene Matches",
+            overview
+                .links
+                .iter()
+                .filter(|item| matches!(item.triage_status.as_str(), "PENDING" | "NEEDS_REVIEW"))
+                .count() as i64
+        ),
+        if indicator_rows.is_empty() {
+            web_empty_row(7, "Keine Indicators vorhanden.")
+        } else {
+            indicator_rows
+        },
+        if observation_rows.is_empty() {
+            web_empty_row(7, "Keine Security Observations vorhanden.")
+        } else {
+            observation_rows
+        },
+        if link_rows.is_empty() {
+            web_empty_row(6, "Keine manuellen Matches vorhanden.")
+        } else {
+            link_rows
+        },
+        indicator_form,
+        observation_form,
+        link_form,
+        if audit_rows.is_empty() {
+            web_empty_row(5, "Noch keine Audit-Ereignisse vorhanden.")
+        } else {
+            audit_rows
+        },
+    );
+    web_page(
+        "Threat Intelligence",
+        "/security-observations/",
+        Some(&context),
+        &body,
+    )
+    .into_response()
+}
+
+async fn web_threat_indicator_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebThreatIndicatorCreateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Threat Intelligence", "/security-observations/")
+                .into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_threat_intelligence_permission(&auth_context, PERMISSION_ADD_THREAT_INDICATOR) {
+        return web_threat_permission_denied(&context);
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return web_store_missing(
+            "Threat Intelligence",
+            "/security-observations/",
+            &context,
+            "Threat Intelligence",
+        )
+        .into_response();
+    };
+    let payload = ThreatIndicatorWriteRequest {
+        indicator_type: form.indicator_type,
+        value: form.value,
+        source_type: form.source_type,
+        source_name: form.source_name,
+        provenance_reference: form.provenance_reference,
+        confidence: form.confidence,
+        valid_from: (!form.valid_from.trim().is_empty()).then_some(form.valid_from),
+        valid_until: (!form.valid_until.trim().is_empty()).then_some(form.valid_until),
+        classification: form.classification,
+    };
+    match store
+        .create_indicator(auth_context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(_) => Redirect::to("/security-observations/").into_response(),
+        Err(error) => web_threat_error(&context, error),
+    }
+}
+
+async fn web_threat_indicator_update(
+    Path(indicator_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebThreatIndicatorUpdateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Threat Intelligence", "/security-observations/")
+                .into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_threat_intelligence_permission(&auth_context, PERMISSION_CHANGE_THREAT_INDICATOR) {
+        return web_threat_permission_denied(&context);
+    }
+    if form
+        .lifecycle_status
+        .trim()
+        .eq_ignore_ascii_case("ARCHIVED")
+        && !has_threat_intelligence_permission(&auth_context, PERMISSION_ARCHIVE_THREAT_INDICATOR)
+    {
+        return web_threat_permission_denied(&context);
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return web_store_missing(
+            "Threat Intelligence",
+            "/security-observations/",
+            &context,
+            "Threat Intelligence",
+        )
+        .into_response();
+    };
+    let payload = ThreatIndicatorUpdateRequest {
+        confidence: Some(form.confidence),
+        valid_from: None,
+        valid_until: Some(form.valid_until),
+        lifecycle_status: Some(form.lifecycle_status),
+        classification: Some(form.classification),
+    };
+    match store
+        .update_indicator(
+            auth_context.tenant_id,
+            auth_context.user_id,
+            indicator_id,
+            payload,
+        )
+        .await
+    {
+        Ok(_) => Redirect::to("/security-observations/").into_response(),
+        Err(error) => web_threat_error(&context, error),
+    }
+}
+
+async fn web_security_observation_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSecurityObservationCreateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Threat Intelligence", "/security-observations/")
+                .into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_threat_intelligence_permission(&auth_context, PERMISSION_ADD_SECURITY_OBSERVATION) {
+        return web_threat_permission_denied(&context);
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return web_store_missing(
+            "Threat Intelligence",
+            "/security-observations/",
+            &context,
+            "Threat Intelligence",
+        )
+        .into_response();
+    };
+    let attributes = if form.attributes_json.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        match serde_json::from_str(&form.attributes_json) {
+            Ok(value) => value,
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    web_error_page(
+                        "Threat Intelligence",
+                        "/security-observations/",
+                        &context,
+                        "Strukturierte Attribute muessen gueltiges JSON sein.",
+                    ),
+                )
+                    .into_response()
+            }
+        }
+    };
+    let payload = SecurityObservationWriteRequest {
+        source_type: "MANUAL".to_string(),
+        source_reference: form.source_reference,
+        asset_id: None,
+        deduplication_key: form.deduplication_key,
+        observed_at: (!form.observed_at.trim().is_empty()).then_some(form.observed_at),
+        category: Some(form.category),
+        severity: Some(form.severity),
+        title: Some(form.title),
+        description: Some(form.description),
+        attributes: Some(attributes),
+        provenance_type: Some(form.provenance_type),
+        provenance_reference: Some(form.provenance_reference),
+        owner_id: None,
+    };
+    match store
+        .create_observation(auth_context.tenant_id, auth_context.user_id, payload)
+        .await
+    {
+        Ok(_) => Redirect::to("/security-observations/").into_response(),
+        Err(error) => web_threat_error(&context, error),
+    }
+}
+
+async fn web_security_observation_triage(
+    Path(observation_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSecurityObservationTriageForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Threat Intelligence", "/security-observations/")
+                .into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_threat_intelligence_permission(&auth_context, PERMISSION_TRIAGE_SECURITY_OBSERVATION) {
+        return web_threat_permission_denied(&context);
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return web_store_missing(
+            "Threat Intelligence",
+            "/security-observations/",
+            &context,
+            "Threat Intelligence",
+        )
+        .into_response();
+    };
+    match store
+        .triage_observation(
+            auth_context.tenant_id,
+            auth_context.user_id,
+            observation_id,
+            SecurityObservationTriageRequest {
+                triage_status: form.triage_status,
+                owner_id: None,
+            },
+        )
+        .await
+    {
+        Ok(_) => Redirect::to("/security-observations/").into_response(),
+        Err(error) => web_threat_error(&context, error),
+    }
+}
+
+async fn web_observation_indicator_link_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebObservationIndicatorLinkForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Threat Intelligence", "/security-observations/")
+                .into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_threat_intelligence_permission(&auth_context, PERMISSION_LINK_SECURITY_OBSERVATION) {
+        return web_threat_permission_denied(&context);
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return web_store_missing(
+            "Threat Intelligence",
+            "/security-observations/",
+            &context,
+            "Threat Intelligence",
+        )
+        .into_response();
+    };
+    let observation_id = form.observation_id;
+    let payload = ObservationIndicatorLinkWriteRequest {
+        indicator_id: form.indicator_id,
+        match_type: form.match_type,
+        rationale: Some(form.rationale),
+    };
+    match store
+        .create_link(
+            auth_context.tenant_id,
+            auth_context.user_id,
+            observation_id,
+            payload,
+        )
+        .await
+    {
+        Ok(_) => Redirect::to("/security-observations/").into_response(),
+        Err(error) => web_threat_error(&context, error),
+    }
+}
+
+async fn web_observation_indicator_link_triage(
+    Path(link_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebObservationIndicatorLinkTriageForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Threat Intelligence", "/security-observations/")
+                .into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_threat_intelligence_permission(&auth_context, PERMISSION_LINK_SECURITY_OBSERVATION) {
+        return web_threat_permission_denied(&context);
+    }
+    let Some(store) = state.threat_intelligence_store else {
+        return web_store_missing(
+            "Threat Intelligence",
+            "/security-observations/",
+            &context,
+            "Threat Intelligence",
+        )
+        .into_response();
+    };
+    match store
+        .triage_link(
+            auth_context.tenant_id,
+            auth_context.user_id,
+            form.observation_id,
+            link_id,
+            ObservationIndicatorLinkTriageRequest {
+                triage_status: form.triage_status,
+                rationale: Some(form.rationale),
+            },
+        )
+        .await
+    {
+        Ok(_) => Redirect::to("/security-observations/").into_response(),
+        Err(error) => web_threat_error(&context, error),
     }
 }
 
@@ -38733,6 +39976,7 @@ fn web_page(
         ("/navigator/", "Navigator"),
         ("/controls/", "ISCY-27"),
         ("/zero-trust/", "Zero Trust"),
+        ("/security-observations/", "Threat Intel"),
         ("/incidents/", "Incidents"),
         ("/cves/", "CVEs"),
         ("/risks/", "Risks"),
@@ -38865,6 +40109,7 @@ fn web_page(
     input[type="checkbox"] {{ width:auto; }}
     .checkbox-row {{ display:flex; align-items:center; gap:8px; }}
     .form-grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px; }}
+    .threat-observation-form-grid {{ grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); }}
     .rollout-form-grid {{ align-items:start; }}
     .rollout-description {{ min-height:96px; font-family:inherit; }}
     .rollout-plan {{ min-height:140px; font-family:inherit; }}
@@ -43520,6 +44765,34 @@ pub fn app_router_with_state(state: AppState) -> Router {
             "/api/v1/agents/devices/{device_id}/findings",
             get(agent_device_findings).post(agent_findings),
         )
+        .route(
+            "/api/v1/threat-intelligence/indicators",
+            get(threat_indicators_list).post(threat_indicator_create),
+        )
+        .route(
+            "/api/v1/threat-intelligence/indicators/{indicator_id}",
+            patch(threat_indicator_update),
+        )
+        .route(
+            "/api/v1/security-observations",
+            get(security_observations_list).post(security_observation_create),
+        )
+        .route(
+            "/api/v1/security-observations/audit",
+            get(security_observation_audit_list),
+        )
+        .route(
+            "/api/v1/security-observations/{observation_id}/triage",
+            patch(security_observation_triage),
+        )
+        .route(
+            "/api/v1/security-observations/{observation_id}/indicator-links",
+            get(security_observation_links_list).post(security_observation_link_create),
+        )
+        .route(
+            "/api/v1/security-observations/{observation_id}/indicator-links/{link_id}/triage",
+            patch(security_observation_link_triage),
+        )
         .route("/api/v1/assets/information-assets", get(asset_inventory))
         .route(
             "/api/v1/suppliers/product-security",
@@ -44022,6 +45295,31 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/operations/incidents/", get(web_operations_incidents))
         .route("/zero-trust/", get(web_zero_trust))
+        .route("/security-observations/", get(web_security_observations))
+        .route(
+            "/security-observations/indicators/",
+            post(web_threat_indicator_create),
+        )
+        .route(
+            "/security-observations/indicators/{indicator_id}/update",
+            post(web_threat_indicator_update),
+        )
+        .route(
+            "/security-observations/observations/",
+            post(web_security_observation_create),
+        )
+        .route(
+            "/security-observations/observations/{observation_id}/triage",
+            post(web_security_observation_triage),
+        )
+        .route(
+            "/security-observations/links/",
+            post(web_observation_indicator_link_create),
+        )
+        .route(
+            "/security-observations/links/{link_id}/triage",
+            post(web_observation_indicator_link_triage),
+        )
         .route(
             "/zero-trust/rollouts/",
             get(web_agent_rollouts).post(web_agent_rollout_create),
