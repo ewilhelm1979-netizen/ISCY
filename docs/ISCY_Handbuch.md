@@ -671,7 +671,11 @@ Aktueller Rust-Funktionsumfang:
 - Betriebsstatus fuer Paket-Backlog und offene Blocker
 - Supplier/Product-Security-Register unter `/suppliers/product-security/` fuer lokale Advisory-/PSIRT-/CVE-Metadaten, Lieferantenprodukt, betroffene und behobene Versionen, SBOM-/VEX-Bezug, Review-Status, Owner, Faelligkeit und Evidence
 - API-Pfade unter `/api/v1/suppliers/product-security` fuer Liste, Anlage, Detail, Aenderung, Statuswechsel, Evidence-Verknuepfung und Ereignishistorie
-- Keine externen Live-Abfragen gegen NVD, Herstellerportale, GitHub Advisories oder andere Feeds; Referenzen werden nur sicher gespeichert und ausgegeben
+- Das Supplier/Product-Security-Register selbst fuehrt keine freien Live-Abfragen
+  gegen Herstellerportale oder beliebige Advisory-URLs aus. Die zentrale,
+  fest erlaubte Vulnerability-Intelligence-Synchronisation wird getrennt unter
+  5.18 betrieben; Supplier-Referenzen werden lokal sicher gespeichert und
+  ausgegeben.
 
 ### 5.16 AI Governance
 
@@ -783,7 +787,10 @@ Bewusst nicht Teil dieses Moduls:
 - keine neue Evidence-Engine
 - keine neue Risiko-Engine
 - keine neue Control-Bibliothek
-- keine externe NVD-, Hersteller-, GitHub-Advisory- oder sonstige Live-Feed-Integration
+- keine eigene freie NVD-, Hersteller-, GitHub-Advisory- oder sonstige
+  Live-Feed-Integration innerhalb des Supplier-Moduls; offizielle NVD-, CISA-
+  KEV- und FIRST-EPSS-Daten werden ausschliesslich ueber den zentralen,
+  fest erlaubten Dienst aus 5.18 synchronisiert
 - keine eigenen Supplier-spezifischen Legal-Hold-, Disposition-, Loesch-, Re-Hash- oder Objektspeicher-Engines
 
 Fuer Nicht-Sicherheitsleute:
@@ -796,15 +803,39 @@ Bekannte Schwachstellen fachlich und technisch bewerten.
 
 Was der Bereich jetzt leisten soll:
 
-- CVE aus NVD laden
-- lokale Risikoanalyse durchfuehren
-- optionales lokales LLM-Enrichment
-- EPSS- und KEV-Kontext beruecksichtigen
-- NIS2-Relevanz und kritische Services einbeziehen
-- Git-/Repository- und Paketkontext speichern
-- Risiko- und Vulnerability-Objekte automatisch verknuepfen
+- einzelne CVEs und begrenzte UTC-Deltas aus der offiziellen NVD API 2.0 laden
+- CVE-Referenzdaten global, idempotent und mit Checkpoint/Laufstatus pflegen
+- den offiziellen CISA-KEV-Katalog atomar an vorhandene CVEs anbinden
+- FIRST-EPSS-Score, Percentile und Modelldatum in begrenzten Batches pflegen
+- vorhandene tenantgebundene Assets, Softwarekomponenten und SBOMs ueber
+  nachvollziehbare CPE-/Versionsregeln korrelieren
+- unsichere Matches als Pruefkandidaten statt als bestaetigte Betroffenheit
+  behandeln
+- vorhandene Product-Security-Vulnerability-Findings idempotent aktualisieren
+- CVSS, KEV, EPSS, Assetkritikalitaet, Datenalter, VEX und dokumentierte
+  Compensating Controls transparent priorisieren
+- ausschliesslich passive Pruef-, Patch- und Mitigationsempfehlungen ausgeben
 
-Fuer lokale Tests und air-gapped Prueflaeufe kann der NVD-Import statt eines HTTP-Endpunkts auch eine lokale NVD-JSON-Datei lesen, wenn `NVD_API_BASE_URL` als `file:///pfad/zur/nvd-response.json` gesetzt wird.
+NVD, CISA KEV und FIRST EPSS sind feste offizielle HTTPS-Quellen. Freie URLs,
+Redirects, lokale Dateien sowie private oder Link-Local-Ziele werden nicht
+akzeptiert. ISCY bleibt ohne Feed-Verbindung startfaehig; vorhandene Daten und
+Findings bleiben bei einem Ausfall erhalten. Ein optionaler NVD-Key wird ueber
+die vorhandene `NVD_API_KEY_FILE`-Secret-Abstraktion gelesen und weder
+protokolliert noch gespeichert.
+
+Ein KEV-Treffer bedeutet bekannte Ausnutzung der Schwachstelle, aber keine
+Kompromittierung des eigenen Assets. EPSS ist eine
+Wahrscheinlichkeitsschaetzung und kein Angriffsnachweis. Ein CVE- oder
+Softwarematch bleibt Vulnerability Finding beziehungsweise Review-Kandidat,
+nicht Incident. Sync, Korrelation und Triage erzeugen weder Evidence noch
+Agentenbefehle oder aktive Reaktionen. Ohne belastbare Quelle bleibt EOL/EOS
+`UNKNOWN`.
+
+Ein vorhandenes Product-Security-Vulnerability-Finding wird nur mit bereits
+vorhandenem tenantgebundenem Produktbezug erzeugt oder aktualisiert. Reine
+Asset-Matches bleiben als erklaerbare Korrelationen im bestehenden Review;
+ISCY erzeugt dafuer kein kuenstliches Produkt und kein paralleles
+Finding-Modell.
 
 Fachlicher Nutzen:
 
@@ -814,6 +845,11 @@ Fachlicher Nutzen:
 
 Fuer Nicht-Sicherheitsleute:
 Hier wird aus einer technischen Schwachstellenmeldung eine geschaeftlich nutzbare Bewertung.
+
+Technische Details, Rollen und Betriebsgrenzen stehen in
+`docs/VULNERABILITY_INTELLIGENCE_SOFTWARE_HYGIENE.md`; die verbindliche
+Architekturentscheidung steht in
+`docs/ADR_CONTINUOUS_VULNERABILITY_INTELLIGENCE_SOFTWARE_HYGIENE.md`.
 
 ### 5.19 Native Threat Intelligence und Security Observations
 
@@ -1827,7 +1863,7 @@ unterschiedliche Instanzen geschrieben, gelesen und verifiziert. Danach wird
 Failover in beide Richtungen sowie ein paralleler Migrationsstart geprueft.
 Lokaler Dateispeicher und SQLite werden nicht als HA-faehig dargestellt.
 
-`make visual-regression` vergleicht 38 bewusst versionierte Playwright-
+`make visual-regression` vergleicht 40 bewusst versionierte Playwright-
 Baselines fuer 19 zentrale Seiten bei Desktop- und kleinem Laptop-Viewport.
 Neben Pixelabweichungen prueft die Suite leere Hauptbereiche, 500-Seiten,
 horizontalen Ueberlauf, abgeschnittene Tabellenueberschriften und sichtbare
@@ -1855,7 +1891,7 @@ Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
 Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
 und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust
 1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem
-Bootstrap, 42 Migrationen, Restart, Migrationsrennen und einem logischen
+Bootstrap, 43 Migrationen, Restart, Migrationsrennen und einem logischen
 Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der
 PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder
 ein In-place-Upgrade noch ein automatisiertes `pg_upgrade` oder einen
@@ -1869,7 +1905,7 @@ Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-
 Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder
 internen Store-Details.
 
-Die RC-Metadatenpruefung bestaetigt 42 fortlaufende Migrationen, 38 visuelle
+Die RC-Metadatenpruefung bestaetigt 43 fortlaufende Migrationen, 40 visuelle
 Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen
 wertredigierten Sensitive-Data-Scan. `release/release-manifest.json` nutzt
 `git:HEAD` als reproduzierbaren Quellmarker; die lokale Artefakterzeugung loest
@@ -1955,6 +1991,15 @@ validierte Indicators, normalisierte Referenzen auf vorhandene Agent- und
 Vulnerability-Findings, manuelle Indicator-Links, Triage und Audit. Der
 Entwicklungsstand fuehrt weder Raw-Log-Ingestion, externe Feeds, automatische
 Korrelation noch Incident-/Evidence-Erzeugung oder aktive Reaktion ein.
+
+Migration `0043_rust_continuous_vulnerability_intelligence` erweitert die
+vorhandenen globalen CVE-Referenzdaten um NVD-, CISA-KEV- und FIRST-EPSS-
+Provenance, persistente Feed-Laeufe und Checkpoints. Tenantgebundene
+Korrelationen und vorhandene Product-Security-Vulnerability-Findings erhalten
+erklaerbare Match-, Datenalter-, Hygiene- und Prioritaetsfelder. Neue
+Permissions werden keiner Bestandsrolle automatisch zugewiesen. Der Pfad
+erzeugt keine Security Observation, keinen Incident, keine Evidence und keine
+aktive Reaktion.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 

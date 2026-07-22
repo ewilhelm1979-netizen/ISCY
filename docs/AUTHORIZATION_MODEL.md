@@ -46,6 +46,27 @@ Admin-, Staff- und Superuser-Kontexte behalten die bestehende administrative
 Semantik. Jede Source-, Asset-, Indicator-, Observation- und Link-Abfrage ist
 zusaetzlich im SQL tenantgebunden.
 
+### Vulnerability Intelligence und Software Hygiene
+
+Migration `0043_rust_continuous_vulnerability_intelligence` ergaenzt drei
+granulare Permissions ohne automatische Zuweisung an Bestandsgruppen:
+
+- `view_vulnerability_intelligence`: globale CVE-/Feed-Provenance und
+  tenantgebundene Findings lesen; implizit fuer `SOC_ANALYST` und
+  `SECURITY_ADMIN`.
+- `review_software_hygiene`: tenantlokale Korrelation und passive
+  Finding-Aktualisierung ausloesen; implizit fuer `SECURITY_ADMIN`, nicht fuer
+  `SOC_ANALYST`.
+- `sync_vulnerability_intelligence`: globale NVD-/KEV-/EPSS-Synchronisation;
+  ausschliesslich direkte Permission oder Superuser. Weder `SECURITY_ADMIN`
+  noch Staff oder normale Adminrollen erhalten dieses globale Recht implizit.
+
+Der Tenant fuer Hygiene-Findings und Bewertungen stammt ausschliesslich aus
+dem authentifizierten serverseitigen Kontext. Query- oder Payload-Felder
+koennen ihn nicht ueberschreiben. Feed-Checkpoints und globale CVE-
+Referenzdaten uebertragen keine Leserechte auf tenantgebundene Assets,
+Korrelationen oder Findings.
+
 ## Negativtests
 
 Vor jedem Production-Cutover muessen mindestens diese Szenarien abgedeckt sein:
@@ -65,5 +86,11 @@ Fuer Threat Intelligence und Security Observations prueft die Suite fehlende
 Berechtigungen, manipulierte Tenant-Felder, fremde Source Findings, Assets und
 Indicators, idempotente Wiederholungs-/Parallelaufrufe sowie ausbleibende
 Incident- und Evidence-Nebenwirkungen.
+
+Fuer Vulnerability Intelligence und Software Hygiene prueft die Suite
+unauthentifizierte und tenantlokale Sync-Versuche, fehlende globale Rechte,
+die getrennten `SOC_ANALYST`-/`SECURITY_ADMIN`-Grenzen, tenantfremde Assets,
+Komponenten und Findings, idempotente Korrelationen sowie ausbleibende
+Incident-, Evidence- und Active-Response-Nebenwirkungen.
 
 Evidence-Uploads validieren tenantgebundene Session-, Massnahmen-, Incident- und Versionsvorgaenger-Referenzen vor dem Insert. Bei einer ungueltigen oder fremden Referenz antwortet die API mit `400 invalid_evidence_upload`, gibt keine Fremdmandantendaten preis und entfernt eine bereits temporaer geschriebene Upload-Datei. Die Negativtest-Matrix bleibt ein fortlaufendes Release-Gate: neue objektbezogene Read-, Write- oder Export-Routen muessen einen Fremdmandantenfall erhalten.

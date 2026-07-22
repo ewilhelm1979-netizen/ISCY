@@ -106,7 +106,7 @@ logischen PostgreSQL-16-zu-18-Forward-Restore.
 
 Die Testtopologie liegt unter `tests/postgresql/` und verwendet fuer PG16 und
 PG18 unterschiedliche Wegwerfvolumes sowie die versionsrichtigen Mountziele.
-Sie prueft Fresh Bootstrap, Restart, alle 42 Migrationen, den Advisory Lock,
+Sie prueft Fresh Bootstrap, Restart, alle 43 Migrationen, den Advisory Lock,
 Health/Auth/Fachsmokes, Custom- und Betreiberbackup-Restore, dynamische
 Tabellen-/Inhalts-/Sequenz-/Constraint-Vergleiche und Media-Integritaet.
 Details und die Rollback-Grenze stehen in
@@ -129,7 +129,7 @@ Erfasst werden Login, Dashboard/Betriebsuebersicht, Organisation, Management-
 und Regulatory Reviews, Evidence Quality und Integrity, Object-Storage-Status,
 Supplier Review, Supplier/Product Security, Product Security/PSIRT, AI
 Governance, Zero Trust/Fleet, Agent-Provenance, PKI/CSR/mTLS, Cross-Domain
-Notifications und Roadmap.
+Notifications, Continuous Vulnerability Intelligence und Roadmap.
 
 Die Pixel-Toleranz ist auf `threshold = 0.15` und maximal 0,3 Prozent
 abweichende Pixel begrenzt. Zusaetzlich schlagen 500-Seiten, leere
@@ -156,7 +156,7 @@ und Testdaten.
 Der Job `release-candidate-check` aggregiert die bestehenden Pflichtjobs. Er
 fuehrt die teuren Topologien nicht erneut aus, sondern scheitert, sobald ein
 benoetigter Job fehlschlaegt, abgebrochen oder uebersprungen wurde. Danach
-validiert er nur die deterministischen RC-Metadaten, 42 Migrationen, 38
+validiert er nur die deterministischen RC-Metadaten, 43 Migrationen, 40
 Baselines, Screenshot-Referenzen, Checksums und den Sensitive-Data-Scan.
 
 Bekannte Grenzen:

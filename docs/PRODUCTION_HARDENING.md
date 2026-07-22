@@ -233,7 +233,7 @@ veroeffentlicht keine Artefakte. Der Aufruf bricht bei fehlenden Werkzeugen,
 fehlenden Wegwerf-PostgreSQL-URLs oder einem Testfehler ab. Die GitHub-CI nutzt
 weiterhin getrennte zeitbegrenzte Jobs fuer Rust, Nix, MinIO, Performance, HA,
 Visual Regression, Docker und das portable Linux-Binary. Der abschliessende Aggregationsjob prueft deren
-Erfolg sowie Manifest, Checksums, 42 Migrationen, 38 Baselines,
+Erfolg sowie Manifest, Checksums, 43 Migrationen, 40 Baselines,
 Dokumentationsreferenzen und den wertredigierten Sensitive-Data-Scan.
 
 `make release-binary-gate` erzeugt das Release-Binary zweimal cachefrei in

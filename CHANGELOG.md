@@ -6,6 +6,15 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Continuous Vulnerability Intelligence and Software Hygiene - Phase 1
+
+- hardens the existing NVD import boundary and disables caller-controlled CVE payload upserts while preserving a validated, authorized single-CVE import
+- adds bounded NVD 2.0 delta synchronization, persistent checkpoints and leases, CISA KEV enrichment with removal history, and batched FIRST EPSS enrichment with provenance
+- correlates existing tenant-scoped assets, software components and SBOM imports conservatively through explainable CPE/version evidence and reuses existing Product Security Vulnerability Findings where a canonical product binding exists
+- adds deterministic passive hygiene priority from CVSS, KEV, EPSS, asset criticality, freshness, VEX and documented controls without creating Security Observations, Incidents, Evidence or active actions
+- adds migration `0043_rust_continuous_vulnerability_intelligence`, granular view/review/global-sync permissions, minimal status/sync/hygiene APIs and the `/cves/` workflow
+- restricts feed access to fixed official HTTPS sources with DNS/SSRF, redirect, timeout, compression, payload, parser, retry and secret-handling controls; no SIEM/EDR/XDR, Wazuh, scanning, Agent command, remote execution or Hackback capability is introduced
+
 ### Native Threat Intelligence and Security Observations - Phase 1
 
 - adds tenant-scoped, locally validated IPv4, IPv6, domain, URL and SHA-256 indicators with provenance, confidence, validity, lifecycle, classification and audit history
