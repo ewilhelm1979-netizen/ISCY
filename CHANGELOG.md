@@ -17,6 +17,7 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 - beginnt den Entwicklungszyklus fuer `V23.7.30` auf Basis des unveraenderten, veroeffentlichten Stands `V23.7.29`
 - trennt den nicht veroeffentlichten Development-Modus fail-closed von einer spaeteren, separaten Release-Candidate-Vorbereitung
+- bereitet `V23.7.30` als `prepared_not_published` mit Candidate Notes, 41 Migrationen, 36 Visual-Baselines, reproduzierbarer CycloneDX-SBOM sowie lokalem unsigniertem Artefaktvertrag vor, ohne Tag, GitHub Release, Upload oder Veroeffentlichung
 - dokumentiert den bereits auf `main` gemergten Pin des Produkt-Builders auf das offizielle Rust-1.97.0-Bookworm-Multiarch-Image per Digest; Toolchain und Produktfunktion bleiben unveraendert
 - enthaelt in diesem PR keine Produkt-, Migrations- oder Dependency-Aenderung
 

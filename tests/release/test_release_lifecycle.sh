@@ -13,9 +13,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+development_manifest="$tmp_dir/development-manifest.json"
+jq '
+    .release_status = "development_unreleased"
+    | .test_suite_summary.status = "development_validation_required"
+    | .release_artifact.reproducibility_status = "not_prepared"
+    | .release_artifact.binary_sha256 = null
+' "$source_manifest" >"$development_manifest"
+
 set +e
 development_output="$(
-    ISCY_RC_ARTIFACT_DIR="$output_dir" \
+    ISCY_RELEASE_MANIFEST_PATH="$development_manifest" \
+        ISCY_RC_ARTIFACT_DIR="$output_dir" \
         make release-candidate-artifacts 2>&1
 )"
 development_status=$?

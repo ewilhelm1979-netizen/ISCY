@@ -13,6 +13,27 @@ cleanup() {
 }
 trap cleanup EXIT
 
+development_manifest="$tmp_dir/development-manifest.json"
+jq '
+    .release_status = "development_unreleased"
+    | .test_suite_summary.status = "development_validation_required"
+    | .release_artifact.reproducibility_status = "not_prepared"
+    | .release_artifact.binary_sha256 = null
+' "$source_manifest" >"$development_manifest"
+
+development_notes="$tmp_dir/development-notes.md"
+cat >"$development_notes" <<'EOF'
+# ISCY V23.7.30 - Development Notes
+
+Status: Development / Unreleased.
+
+Basis: `V23.7.29`.
+
+Dieser Entwicklungsstand wurde noch nicht veroeffentlicht. Es gibt noch keinen
+Tag und noch kein GitHub Release fuer V23.7.30. Aenderungen werden bis zur
+Release-Vorbereitung unter Unreleased dokumentiert.
+EOF
+
 candidate_manifest="$tmp_dir/candidate-manifest.json"
 jq '
     .release_status = "prepared_not_published"
@@ -56,16 +77,17 @@ expect_rejected() {
     }
 }
 
+ISCY_RELEASE_MANIFEST_PATH="$development_manifest" "$guard" "$development_notes" >/dev/null
 ISCY_RELEASE_MANIFEST_PATH="$source_manifest" "$guard" "$source_notes" >/dev/null
 
 wrong_development_version="$tmp_dir/wrong-development-version.md"
-sed 's/ISCY V23\.7\.30/ISCY V23.7.31/' "$source_notes" >"$wrong_development_version"
-expect_rejected wrong_development_version "$source_manifest" "$wrong_development_version" target_version
+sed 's/ISCY V23\.7\.30/ISCY V23.7.31/' "$development_notes" >"$wrong_development_version"
+expect_rejected wrong_development_version "$development_manifest" "$wrong_development_version" target_version
 
 development_published="$tmp_dir/development-published.md"
-cp "$source_notes" "$development_published"
+cp "$development_notes" "$development_published"
 printf '\nStable Release veroeffentlicht.\n' >>"$development_published"
-expect_rejected development_published "$source_manifest" "$development_published" stable_published
+expect_rejected development_published "$development_manifest" "$development_published" stable_published
 
 ISCY_RELEASE_MANIFEST_PATH="$candidate_manifest" "$guard" "$candidate_notes" >/dev/null
 

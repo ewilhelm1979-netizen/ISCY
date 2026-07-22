@@ -12,7 +12,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
 endobj
 5 0 obj
-<< /Length 3419 >>
+<< /Length 3437 >>
 stream
 BT
 /F1 9 Tf
@@ -22,7 +22,7 @@ BT
 T*
 () Tj
 T*
-(Version: Arbeitsstand Juli 2026 \(ISCY V23.7.29 vorbereitet / Rust 0.3.22\)) Tj
+(Version: Arbeitsstand Juli 2026 \(ISCY V23.7.30 Release Candidate vorbereitet / Rust 0.3.22\)) Tj
 T*
 () Tj
 T*
@@ -4565,7 +4565,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 63 0 R >>
 endobj
 63 0 obj
-<< /Length 4489 >>
+<< /Length 4909 >>
 stream
 BT
 /F1 9 Tf
@@ -4575,19 +4575,21 @@ BT
 T*
 () Tj
 T*
-(Der stabile Folgerelease V23.7.29 fuehrt die vorhandenen Pflichtpruefungen) Tj
+(V23.7.29 bleibt der unveraenderte veroeffentlichte Vorgaenger. V23.7.30) Tj
 T*
-(in make release-candidate-check zusammen, ohne einen Tag, ein GitHub Release) Tj
+(ist als preparednotpublished vorbereitet, ohne einen neuen Tag, ein GitHub) Tj
 T*
-(oder eine oeffentliche Veroeffentlichung zu erzeugen. GitHub-CI behaelt die) Tj
+(Release oder eine oeffentliche Veroeffentlichung zu erzeugen. Die vorhandenen) Tj
 T*
-(getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und Docker-Jobs und) Tj
+(Pflichtpruefungen laufen in make release-candidate-check zusammen. GitHub-CI) Tj
 T*
-(aggregiert deren Ergebnis erst am Ende. Lokal erzeugte RC-Artefakte bleiben) Tj
+(behaelt die getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und) Tj
 T*
-(unter artifacts/release-candidate/, sind unsigniert und werden nicht) Tj
+(Docker-Jobs und aggregiert deren Ergebnis erst am Ende. Lokal erzeugte) Tj
 T*
-(hochgeladen.) Tj
+(Candidate-Artefakte bleiben unter artifacts/release-candidate/, sind) Tj
+T*
+(unsigniert und werden weder committed noch hochgeladen.) Tj
 T*
 () Tj
 T*
@@ -4599,7 +4601,7 @@ T*
 T*
 (1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem) Tj
 T*
-(Bootstrap, 40 Migrationen, Restart, Migrationsrennen und einem logischen) Tj
+(Bootstrap, 41 Migrationen, Restart, Migrationsrennen und einem logischen) Tj
 T*
 (Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der) Tj
 T*
@@ -4627,7 +4629,7 @@ T*
 T*
 () Tj
 T*
-(Die RC-Metadatenpruefung bestaetigt 40 fortlaufende Migrationen, 36 visuelle) Tj
+(Die RC-Metadatenpruefung bestaetigt 41 fortlaufende Migrationen, 36 visuelle) Tj
 T*
 (Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen) Tj
 T*
@@ -4663,6 +4665,26 @@ T*
 T*
 () Tj
 T*
+(Der owner-kontrollierte ISCY Codex PR-Orchestrator bietet fuer autorisierte) Tj
+T*
+(Same-Repository-Draft-PRs gegen main die Routen /iscy status,) Tj
+T*
+(/iscy review, /iscy fix-ci und /iscy verify. Read-only Review/Verify,) Tj
+T*
+(Workspace-begrenzte Korrekturen, Head-/Diff-Pruefungen und hoechstens zwei) Tj
+T*
+(CI-Fix-Versuche folgen Least-Privilege- und fail-closed Grenzen. Codex erhaelt) Tj
+T*
+(keine Merge-, Tag- oder Release-Berechtigung; die Merge-Grenze bleibt) Tj
+T*
+(menschlich. Modellaufrufe setzen separat finanzierte OpenAI-API-Credits voraus.) Tj
+T*
+(Da diese fuer die Candidate-Vorbereitung nicht vorhanden sind, wird kein) Tj
+T*
+(erfolgreicher produktiver Auto-Fix-End-to-End-Lauf behauptet.) Tj
+T*
+() Tj
+T*
 (7. Was die wichtigsten Begriffe bedeuten:) Tj
 T*
 () Tj
@@ -4693,6 +4715,19 @@ T*
 T*
 (- TARA: Threat Analysis and Risk Assessment) Tj
 T*
+ET
+endstream
+endobj
+64 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 65 0 R >>
+endobj
+65 0 obj
+<< /Length 5256 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- PSIRT: Product Security Incident Response Team) Tj
 T*
 () Tj
@@ -4715,19 +4750,6 @@ T*
 T*
 (- ein vollwertiges Projektmanagement-Werkzeug fuer alle Unternehmensbereiche) Tj
 T*
-ET
-endstream
-endobj
-64 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 65 0 R >>
-endobj
-65 0 obj
-<< /Length 5529 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muessen trotzdem) Tj
@@ -4850,6 +4872,19 @@ T*
 T*
 (Migration 0040rustagentrolloutgovernance ergaenzt darauf kontrollierte) Tj
 T*
+ET
+endstream
+endobj
+66 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 67 0 R >>
+endobj
+67 0 obj
+<< /Length 2206 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Rollout-Ringe, Preflight-/Postflight-Gates, menschliche Promotion und) Tj
 T*
 (operatorgefuehrten Rollback fuer bestehende Agenten, ohne Remote-Ausfuehrung) Tj
@@ -4872,19 +4907,6 @@ T*
 T*
 (Die priorisierte Roadmap liegt in docs/ISCYSTRATEGICROADMAP.md und umfasst:) Tj
 T*
-ET
-endstream
-endobj
-66 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 67 0 R >>
-endobj
-67 0 obj
-<< /Length 1509 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (1. Supplier/Product-Security-Workflow fachlich weiter polishen, z. B. feinere) Tj
@@ -4901,9 +4923,9 @@ T*
 T*
 (vorbereiteten Artefakt-/Provenance- und PKI-/CSR-Governance-Modells) Tj
 T*
-(4. Den vorbereiteten stabilen Release V23.7.29 vollstaendig pruefen und erst) Tj
+(4. Den vorbereiteten Candidate V23.7.30 vollstaendig pruefen und erst in einem) Tj
 T*
-(in einem getrennten Auftrag ueber Tag und Veroeffentlichung entscheiden) Tj
+(getrennten Auftrag ueber Merge, Tag und Veroeffentlichung entscheiden) Tj
 T*
 () Tj
 T*
@@ -4950,70 +4972,70 @@ xref
 0000000331 00000 n
 0000000401 00000 n
 0000000527 00000 n
-0000003997 00000 n
-0000004123 00000 n
-0000006940 00000 n
-0000007066 00000 n
-0000009753 00000 n
-0000009881 00000 n
-0000011769 00000 n
-0000011897 00000 n
-0000015009 00000 n
-0000015137 00000 n
-0000019363 00000 n
-0000019491 00000 n
-0000022726 00000 n
-0000022854 00000 n
-0000027067 00000 n
-0000027195 00000 n
-0000031302 00000 n
-0000031430 00000 n
-0000033477 00000 n
-0000033605 00000 n
-0000038057 00000 n
-0000038185 00000 n
-0000042276 00000 n
-0000042404 00000 n
-0000047646 00000 n
-0000047774 00000 n
-0000050735 00000 n
-0000050863 00000 n
-0000055724 00000 n
-0000055852 00000 n
-0000060048 00000 n
-0000060176 00000 n
-0000065090 00000 n
-0000065218 00000 n
-0000069292 00000 n
-0000069420 00000 n
-0000072721 00000 n
-0000072849 00000 n
-0000077026 00000 n
-0000077154 00000 n
-0000081960 00000 n
-0000082088 00000 n
-0000086892 00000 n
-0000087020 00000 n
-0000091750 00000 n
-0000091878 00000 n
-0000096099 00000 n
-0000096227 00000 n
-0000100523 00000 n
-0000100651 00000 n
-0000105007 00000 n
-0000105135 00000 n
-0000109760 00000 n
-0000109888 00000 n
-0000114610 00000 n
-0000114738 00000 n
-0000119503 00000 n
-0000119631 00000 n
-0000124172 00000 n
-0000124300 00000 n
-0000129881 00000 n
-0000130009 00000 n
+0000004015 00000 n
+0000004141 00000 n
+0000006958 00000 n
+0000007084 00000 n
+0000009771 00000 n
+0000009899 00000 n
+0000011787 00000 n
+0000011915 00000 n
+0000015027 00000 n
+0000015155 00000 n
+0000019381 00000 n
+0000019509 00000 n
+0000022744 00000 n
+0000022872 00000 n
+0000027085 00000 n
+0000027213 00000 n
+0000031320 00000 n
+0000031448 00000 n
+0000033495 00000 n
+0000033623 00000 n
+0000038075 00000 n
+0000038203 00000 n
+0000042294 00000 n
+0000042422 00000 n
+0000047664 00000 n
+0000047792 00000 n
+0000050753 00000 n
+0000050881 00000 n
+0000055742 00000 n
+0000055870 00000 n
+0000060066 00000 n
+0000060194 00000 n
+0000065108 00000 n
+0000065236 00000 n
+0000069310 00000 n
+0000069438 00000 n
+0000072739 00000 n
+0000072867 00000 n
+0000077044 00000 n
+0000077172 00000 n
+0000081978 00000 n
+0000082106 00000 n
+0000086910 00000 n
+0000087038 00000 n
+0000091768 00000 n
+0000091896 00000 n
+0000096117 00000 n
+0000096245 00000 n
+0000100541 00000 n
+0000100669 00000 n
+0000105025 00000 n
+0000105153 00000 n
+0000109778 00000 n
+0000109906 00000 n
+0000114628 00000 n
+0000114756 00000 n
+0000119521 00000 n
+0000119649 00000 n
+0000124610 00000 n
+0000124738 00000 n
+0000130046 00000 n
+0000130174 00000 n
 trailer
 << /Size 68 /Root 1 0 R >>
 startxref
-131570
+132432
 %%EOF
