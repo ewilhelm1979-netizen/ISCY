@@ -16,8 +16,8 @@
   "cargo_package_version": "0.3.22",
   "cargo_lock_sha256": "f5bb49559a438e3cd388141fee38734cb4ced0a3c25882b49b169c8b209e711f",
   "flake_lock_sha256": "9f9358302aa0ef8400983fe1bd54786ff94fc9560f36f37708aba1713ec6d680",
-  "handbook_sha256": "e6c84bdf9788f816dab31f179580d8c8f19ace8edd46314f70d36b2c2429571d",
-  "migration_count": 41,
+  "handbook_sha256": "350775f113ef32f58cf8cab70bc2a63a09b3adbfdd3a3899cee4678523fe2b51",
+  "migration_count": 42,
   "platform_versions": {
     "nginx": "1.31-alpine",
     "nixpkgs": "nixos-26.05"
@@ -56,7 +56,7 @@
       "javascript-typescript",
       "rust"
     ],
-    "visual_baselines": 36,
+    "visual_baselines": 38,
     "status": "development_validation_required"
   },
   "release_artifact": {

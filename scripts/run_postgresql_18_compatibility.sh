@@ -230,10 +230,10 @@ assert_migrations() {
   local database="$2"
   local count
   count="$(db_scalar "$service" "$database" 'SELECT COUNT(*) FROM iscy_schema_migrations;')"
-  [[ "$count" == "41" ]] || fail migrations "Erwartet 41 Migrationen, gefunden $count."
+  [[ "$count" == "42" ]] || fail migrations "Erwartet 42 Migrationen, gefunden $count."
   local latest
   latest="$(db_scalar "$service" "$database" 'SELECT MAX(version) FROM iscy_schema_migrations;')"
-  [[ "$latest" == 0041_* ]] || fail migrations "Die erwartete Migration 0041 fehlt."
+  [[ "$latest" == 0042_* ]] || fail migrations "Die erwartete Migration 0042 fehlt."
 }
 
 snapshot_database() {
@@ -469,18 +469,37 @@ application_smoke() {
   for path in \
     /dashboard/ /risks/ /controls/ /incidents/ /evidence/ \
     /suppliers/product-security/ /product-security/ /regulatory-review-packs/ \
-    /zero-trust/ /status/ /status/operations.json; do
+    /zero-trust/ /security-observations/ /status/ /status/operations.json; do
     expect_status 200 --cookie "$cookie_file" "$base_url$path"
   done
   for path in \
     /api/v1/risks /api/v1/controls /api/v1/incidents /api/v1/evidence \
     /api/v1/suppliers/product-security /api/v1/product-security/overview \
+    /api/v1/threat-intelligence/indicators /api/v1/security-observations \
     /api/v1/status/operations; do
     expect_status 200 --cookie "$cookie_file" "$base_url$path"
   done
   curl --fail --silent --show-error --cookie "$cookie_file" \
     --header 'content-type: application/json' --data '{}' \
     "$base_url/api/v1/regulatory/review-packs/nis2/preview" >/dev/null
+
+  local indicator_response indicator_id observation_response observation_id
+  indicator_response="$(curl --fail --silent --show-error --cookie "$cookie_file" \
+    --header 'content-type: application/json' \
+    --data "{\"indicator_type\":\"DOMAIN\",\"value\":\"$label.invalid\",\"source_type\":\"MANUAL\",\"source_name\":\"PostgreSQL compatibility\",\"provenance_reference\":\"pg:$label\",\"confidence\":70,\"valid_from\":\"2026-07-22T00:00:00Z\",\"valid_until\":null,\"classification\":\"INTERNAL\"}" \
+    "$base_url/api/v1/threat-intelligence/indicators")"
+  indicator_id="$(printf '%s' "$indicator_response" | jq --exit-status --raw-output '.data.indicator.id')"
+  [[ "$indicator_id" =~ ^[0-9]+$ ]] || fail application_write "Indicator-ID ist ungueltig."
+  observation_response="$(curl --fail --silent --show-error --cookie "$cookie_file" \
+    --header 'content-type: application/json' \
+    --data "{\"source_type\":\"MANUAL\",\"source_reference\":\"pg:$label:observation\",\"asset_id\":null,\"deduplication_key\":\"pg:$label:observation\",\"observed_at\":\"2026-07-22T00:01:00Z\",\"category\":\"THREAT_ACTIVITY\",\"severity\":\"MEDIUM\",\"title\":\"PostgreSQL compatibility observation\",\"description\":\"Synthetic bounded test record\",\"attributes\":{\"test_scope\":\"postgresql_compatibility\"},\"provenance_type\":\"MANUAL\",\"provenance_reference\":\"pg:$label\",\"owner_id\":null}" \
+    "$base_url/api/v1/security-observations")"
+  observation_id="$(printf '%s' "$observation_response" | jq --exit-status --raw-output '.data.observation.id')"
+  [[ "$observation_id" =~ ^[0-9]+$ ]] || fail application_write "Observation-ID ist ungueltig."
+  curl --fail --silent --show-error --cookie "$cookie_file" \
+    --header 'content-type: application/json' \
+    --data "{\"indicator_id\":$indicator_id,\"match_type\":\"CONTEXTUAL\",\"rationale\":\"PostgreSQL compatibility test\"}" \
+    "$base_url/api/v1/security-observations/$observation_id/indicator-links" >/dev/null
 
   local risk_payload="$TMP_DIR/${label}-risk.json"
   jq --null-input --arg title "PostgreSQL 18 $label Risk" '{
@@ -781,7 +800,7 @@ main() {
   printf 'source_server_version=%s\n' "$source_version"
   printf 'target_server_version=%s\n' "$target_version"
   printf 'target_data_directory=%s\n' "$target_data_dir"
-  printf 'migration_count=41\n'
+  printf 'migration_count=42\n'
   printf 'application_table_count=%s\n' "$table_count"
   printf 'application_row_count=%s\n' "$row_count"
   printf 'integrity=rows,content_hashes,sequences,constraints,indexes,foreign_keys,media\n'

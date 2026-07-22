@@ -270,7 +270,362 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_AGENT_ROLLOUT_MANIFEST_HANDOFF_SCHEMA,
         postgres_sql: POSTGRES_AGENT_ROLLOUT_MANIFEST_HANDOFF_SCHEMA,
     },
+    Migration {
+        version: "0042_rust_native_threat_intelligence_observations",
+        sqlite_sql: SQLITE_NATIVE_THREAT_INTELLIGENCE_OBSERVATION_SCHEMA,
+        postgres_sql: POSTGRES_NATIVE_THREAT_INTELLIGENCE_OBSERVATION_SCHEMA,
+    },
 ];
+
+const SQLITE_NATIVE_THREAT_INTELLIGENCE_OBSERVATION_SCHEMA: &str = r#"
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_tenant_object_unique
+    ON assets_app_informationasset(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_finding_tenant_object_unique
+    ON zero_trust_agent_finding(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vulnerability_tenant_object_unique
+    ON product_security_vulnerability(tenant_id, id);
+
+CREATE TABLE IF NOT EXISTS threat_intelligence_indicator (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    indicator_type varchar(16) NOT NULL,
+    normalized_value TEXT NOT NULL,
+    original_value TEXT NOT NULL DEFAULT '',
+    source_type varchar(32) NOT NULL DEFAULT 'MANUAL',
+    source_name varchar(128) NOT NULL,
+    provenance_reference varchar(255) NOT NULL,
+    confidence INTEGER NOT NULL DEFAULT 50,
+    valid_from TEXT NOT NULL,
+    valid_until TEXT NULL,
+    lifecycle_status varchar(16) NOT NULL DEFAULT 'ACTIVE',
+    classification varchar(24) NOT NULL DEFAULT 'INTERNAL',
+    created_by_id INTEGER NOT NULL,
+    updated_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, indicator_type, normalized_value),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    CHECK(indicator_type IN ('IPV4','IPV6','DOMAIN','URL','SHA256')),
+    CHECK(length(normalized_value) BETWEEN 1 AND 2048),
+    CHECK(length(original_value) <= 2048),
+    CHECK(length(source_name) BETWEEN 1 AND 128),
+    CHECK(length(provenance_reference) BETWEEN 1 AND 255),
+    CHECK(confidence BETWEEN 0 AND 100),
+    CHECK(lifecycle_status IN ('ACTIVE','INACTIVE','ARCHIVED')),
+    CHECK(classification IN ('PUBLIC','INTERNAL','RESTRICTED','TLP_CLEAR','TLP_GREEN','TLP_AMBER','TLP_RED'))
+);
+CREATE INDEX IF NOT EXISTS idx_threat_indicator_tenant_status
+    ON threat_intelligence_indicator(tenant_id, lifecycle_status, indicator_type, updated_at);
+CREATE INDEX IF NOT EXISTS idx_threat_indicator_tenant_provenance
+    ON threat_intelligence_indicator(tenant_id, source_type, source_name);
+
+CREATE TABLE IF NOT EXISTS security_observation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    source_type varchar(32) NOT NULL,
+    source_reference varchar(255) NOT NULL,
+    agent_finding_id INTEGER NULL,
+    vulnerability_finding_id INTEGER NULL,
+    asset_id INTEGER NULL,
+    deduplication_key varchar(128) NOT NULL,
+    observed_at TEXT NOT NULL,
+    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    category varchar(32) NOT NULL,
+    severity varchar(16) NOT NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    attributes_json TEXT NOT NULL DEFAULT '{}',
+    provenance_type varchar(32) NOT NULL,
+    provenance_reference varchar(255) NOT NULL,
+    triage_status varchar(24) NOT NULL DEFAULT 'NEW',
+    owner_id INTEGER NULL,
+    created_by_id INTEGER NOT NULL,
+    updated_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, source_type, source_reference),
+    UNIQUE(tenant_id, deduplication_key),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, agent_finding_id)
+        REFERENCES zero_trust_agent_finding(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, vulnerability_finding_id)
+        REFERENCES product_security_vulnerability(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, asset_id)
+        REFERENCES assets_app_informationasset(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(source_type IN ('MANUAL','AGENT_FINDING','VULNERABILITY_FINDING')),
+    CHECK(length(source_reference) BETWEEN 1 AND 255),
+    CHECK(length(deduplication_key) BETWEEN 1 AND 128),
+    CHECK(category IN ('POSTURE','VULNERABILITY','THREAT_ACTIVITY','POLICY','OTHER')),
+    CHECK(severity IN ('INFO','LOW','MEDIUM','HIGH','CRITICAL')),
+    CHECK(length(title) BETWEEN 1 AND 255),
+    CHECK(length(description) <= 4000),
+    CHECK(length(attributes_json) <= 16384),
+    CHECK(length(provenance_reference) BETWEEN 1 AND 255),
+    CHECK(triage_status IN ('NEW','IN_REVIEW','CONFIRMED','DISMISSED','ARCHIVED')),
+    CHECK(
+        (source_type = 'MANUAL' AND agent_finding_id IS NULL AND vulnerability_finding_id IS NULL)
+        OR (source_type = 'AGENT_FINDING' AND agent_finding_id IS NOT NULL AND vulnerability_finding_id IS NULL)
+        OR (source_type = 'VULNERABILITY_FINDING' AND agent_finding_id IS NULL AND vulnerability_finding_id IS NOT NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_security_observation_tenant_status
+    ON security_observation(tenant_id, triage_status, severity, observed_at);
+CREATE INDEX IF NOT EXISTS idx_security_observation_tenant_source
+    ON security_observation(tenant_id, source_type, source_reference);
+CREATE INDEX IF NOT EXISTS idx_security_observation_tenant_asset
+    ON security_observation(tenant_id, asset_id, triage_status);
+
+CREATE TABLE IF NOT EXISTS security_observation_indicator_link (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    observation_id INTEGER NOT NULL,
+    indicator_id INTEGER NOT NULL,
+    match_origin varchar(16) NOT NULL DEFAULT 'MANUAL',
+    match_type varchar(24) NOT NULL,
+    matched_at TEXT NOT NULL,
+    evaluator_id INTEGER NOT NULL,
+    triage_status varchar(24) NOT NULL DEFAULT 'PENDING',
+    rationale TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, observation_id, indicator_id),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, observation_id)
+        REFERENCES security_observation(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, indicator_id)
+        REFERENCES threat_intelligence_indicator(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(match_origin = 'MANUAL'),
+    CHECK(match_type IN ('EXACT','CONTEXTUAL','SOURCE_ASSERTED')),
+    CHECK(triage_status IN ('PENDING','RELEVANT','NOT_RELEVANT','NEEDS_REVIEW')),
+    CHECK(length(rationale) <= 1000)
+);
+CREATE INDEX IF NOT EXISTS idx_security_observation_link_tenant_status
+    ON security_observation_indicator_link(tenant_id, triage_status, matched_at);
+
+CREATE TABLE IF NOT EXISTS security_observation_audit_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    object_type varchar(24) NOT NULL,
+    object_id INTEGER NOT NULL,
+    event_type varchar(48) NOT NULL,
+    actor_id INTEGER NOT NULL,
+    summary varchar(255) NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    CHECK(object_type IN ('INDICATOR','OBSERVATION','LINK')),
+    CHECK(length(summary) BETWEEN 1 AND 255),
+    CHECK(length(detail_json) <= 2048)
+);
+CREATE INDEX IF NOT EXISTS idx_security_observation_audit_object
+    ON security_observation_audit_event(tenant_id, object_type, object_id, created_at);
+
+INSERT OR IGNORE INTO accounts_role (code, label, description) VALUES
+    ('SOC_ANALYST', 'SOC Analyst', 'Tenant-scoped threat-intelligence review and observation triage'),
+    ('SECURITY_ADMIN', 'Security Administrator', 'Tenant-scoped threat-intelligence and security-observation administration');
+INSERT OR IGNORE INTO django_content_type (app_label, model) VALUES
+    ('security_observations', 'threatindicator'),
+    ('security_observations', 'securityobservation');
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view threat indicator', id, 'view_threat_indicator' FROM django_content_type WHERE app_label='security_observations' AND model='threatindicator';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can add threat indicator', id, 'add_threat_indicator' FROM django_content_type WHERE app_label='security_observations' AND model='threatindicator';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can change threat indicator', id, 'change_threat_indicator' FROM django_content_type WHERE app_label='security_observations' AND model='threatindicator';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can archive threat indicator', id, 'archive_threat_indicator' FROM django_content_type WHERE app_label='security_observations' AND model='threatindicator';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view security observation', id, 'view_security_observation' FROM django_content_type WHERE app_label='security_observations' AND model='securityobservation';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can add security observation', id, 'add_security_observation' FROM django_content_type WHERE app_label='security_observations' AND model='securityobservation';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can triage security observation', id, 'triage_security_observation' FROM django_content_type WHERE app_label='security_observations' AND model='securityobservation';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can link security observation', id, 'link_security_observation' FROM django_content_type WHERE app_label='security_observations' AND model='securityobservation';
+"#;
+
+const POSTGRES_NATIVE_THREAT_INTELLIGENCE_OBSERVATION_SCHEMA: &str = r#"
+CREATE UNIQUE INDEX IF NOT EXISTS idx_assets_tenant_object_unique
+    ON assets_app_informationasset(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_finding_tenant_object_unique
+    ON zero_trust_agent_finding(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vulnerability_tenant_object_unique
+    ON product_security_vulnerability(tenant_id, id);
+
+CREATE TABLE IF NOT EXISTS threat_intelligence_indicator (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    indicator_type varchar(16) NOT NULL,
+    normalized_value TEXT NOT NULL,
+    original_value TEXT NOT NULL DEFAULT '',
+    source_type varchar(32) NOT NULL DEFAULT 'MANUAL',
+    source_name varchar(128) NOT NULL,
+    provenance_reference varchar(255) NOT NULL,
+    confidence INTEGER NOT NULL DEFAULT 50,
+    valid_from TEXT NOT NULL,
+    valid_until TEXT NULL,
+    lifecycle_status varchar(16) NOT NULL DEFAULT 'ACTIVE',
+    classification varchar(24) NOT NULL DEFAULT 'INTERNAL',
+    created_by_id BIGINT NOT NULL,
+    updated_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, indicator_type, normalized_value),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    CHECK(indicator_type IN ('IPV4','IPV6','DOMAIN','URL','SHA256')),
+    CHECK(length(normalized_value) BETWEEN 1 AND 2048),
+    CHECK(length(original_value) <= 2048),
+    CHECK(length(source_name) BETWEEN 1 AND 128),
+    CHECK(length(provenance_reference) BETWEEN 1 AND 255),
+    CHECK(confidence BETWEEN 0 AND 100),
+    CHECK(lifecycle_status IN ('ACTIVE','INACTIVE','ARCHIVED')),
+    CHECK(classification IN ('PUBLIC','INTERNAL','RESTRICTED','TLP_CLEAR','TLP_GREEN','TLP_AMBER','TLP_RED'))
+);
+CREATE INDEX IF NOT EXISTS idx_threat_indicator_tenant_status
+    ON threat_intelligence_indicator(tenant_id, lifecycle_status, indicator_type, updated_at);
+CREATE INDEX IF NOT EXISTS idx_threat_indicator_tenant_provenance
+    ON threat_intelligence_indicator(tenant_id, source_type, source_name);
+
+CREATE TABLE IF NOT EXISTS security_observation (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    source_type varchar(32) NOT NULL,
+    source_reference varchar(255) NOT NULL,
+    agent_finding_id BIGINT NULL,
+    vulnerability_finding_id BIGINT NULL,
+    asset_id BIGINT NULL,
+    deduplication_key varchar(128) NOT NULL,
+    observed_at TEXT NOT NULL,
+    recorded_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    category varchar(32) NOT NULL,
+    severity varchar(16) NOT NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    attributes_json TEXT NOT NULL DEFAULT '{}',
+    provenance_type varchar(32) NOT NULL,
+    provenance_reference varchar(255) NOT NULL,
+    triage_status varchar(24) NOT NULL DEFAULT 'NEW',
+    owner_id BIGINT NULL,
+    created_by_id BIGINT NOT NULL,
+    updated_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, source_type, source_reference),
+    UNIQUE(tenant_id, deduplication_key),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, agent_finding_id)
+        REFERENCES zero_trust_agent_finding(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, vulnerability_finding_id)
+        REFERENCES product_security_vulnerability(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, asset_id)
+        REFERENCES assets_app_informationasset(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(source_type IN ('MANUAL','AGENT_FINDING','VULNERABILITY_FINDING')),
+    CHECK(length(source_reference) BETWEEN 1 AND 255),
+    CHECK(length(deduplication_key) BETWEEN 1 AND 128),
+    CHECK(category IN ('POSTURE','VULNERABILITY','THREAT_ACTIVITY','POLICY','OTHER')),
+    CHECK(severity IN ('INFO','LOW','MEDIUM','HIGH','CRITICAL')),
+    CHECK(length(title) BETWEEN 1 AND 255),
+    CHECK(length(description) <= 4000),
+    CHECK(length(attributes_json) <= 16384),
+    CHECK(length(provenance_reference) BETWEEN 1 AND 255),
+    CHECK(triage_status IN ('NEW','IN_REVIEW','CONFIRMED','DISMISSED','ARCHIVED')),
+    CHECK(
+        (source_type = 'MANUAL' AND agent_finding_id IS NULL AND vulnerability_finding_id IS NULL)
+        OR (source_type = 'AGENT_FINDING' AND agent_finding_id IS NOT NULL AND vulnerability_finding_id IS NULL)
+        OR (source_type = 'VULNERABILITY_FINDING' AND agent_finding_id IS NULL AND vulnerability_finding_id IS NOT NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_security_observation_tenant_status
+    ON security_observation(tenant_id, triage_status, severity, observed_at);
+CREATE INDEX IF NOT EXISTS idx_security_observation_tenant_source
+    ON security_observation(tenant_id, source_type, source_reference);
+CREATE INDEX IF NOT EXISTS idx_security_observation_tenant_asset
+    ON security_observation(tenant_id, asset_id, triage_status);
+
+CREATE TABLE IF NOT EXISTS security_observation_indicator_link (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    observation_id BIGINT NOT NULL,
+    indicator_id BIGINT NOT NULL,
+    match_origin varchar(16) NOT NULL DEFAULT 'MANUAL',
+    match_type varchar(24) NOT NULL,
+    matched_at TEXT NOT NULL,
+    evaluator_id BIGINT NOT NULL,
+    triage_status varchar(24) NOT NULL DEFAULT 'PENDING',
+    rationale TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, observation_id, indicator_id),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, observation_id)
+        REFERENCES security_observation(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, indicator_id)
+        REFERENCES threat_intelligence_indicator(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(match_origin = 'MANUAL'),
+    CHECK(match_type IN ('EXACT','CONTEXTUAL','SOURCE_ASSERTED')),
+    CHECK(triage_status IN ('PENDING','RELEVANT','NOT_RELEVANT','NEEDS_REVIEW')),
+    CHECK(length(rationale) <= 1000)
+);
+CREATE INDEX IF NOT EXISTS idx_security_observation_link_tenant_status
+    ON security_observation_indicator_link(tenant_id, triage_status, matched_at);
+
+CREATE TABLE IF NOT EXISTS security_observation_audit_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    object_type varchar(24) NOT NULL,
+    object_id BIGINT NOT NULL,
+    event_type varchar(48) NOT NULL,
+    actor_id BIGINT NOT NULL,
+    summary varchar(255) NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    CHECK(object_type IN ('INDICATOR','OBSERVATION','LINK')),
+    CHECK(length(summary) BETWEEN 1 AND 255),
+    CHECK(length(detail_json) <= 2048)
+);
+CREATE INDEX IF NOT EXISTS idx_security_observation_audit_object
+    ON security_observation_audit_event(tenant_id, object_type, object_id, created_at);
+
+INSERT INTO accounts_role (code, label, description) VALUES
+    ('SOC_ANALYST', 'SOC Analyst', 'Tenant-scoped threat-intelligence review and observation triage'),
+    ('SECURITY_ADMIN', 'Security Administrator', 'Tenant-scoped threat-intelligence and security-observation administration')
+ON CONFLICT(code) DO NOTHING;
+INSERT INTO django_content_type (app_label, model) VALUES
+    ('security_observations', 'threatindicator'),
+    ('security_observations', 'securityobservation')
+ON CONFLICT(app_label, model) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view threat indicator', id, 'view_threat_indicator' FROM django_content_type WHERE app_label='security_observations' AND model='threatindicator'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can add threat indicator', id, 'add_threat_indicator' FROM django_content_type WHERE app_label='security_observations' AND model='threatindicator'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can change threat indicator', id, 'change_threat_indicator' FROM django_content_type WHERE app_label='security_observations' AND model='threatindicator'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can archive threat indicator', id, 'archive_threat_indicator' FROM django_content_type WHERE app_label='security_observations' AND model='threatindicator'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view security observation', id, 'view_security_observation' FROM django_content_type WHERE app_label='security_observations' AND model='securityobservation'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can add security observation', id, 'add_security_observation' FROM django_content_type WHERE app_label='security_observations' AND model='securityobservation'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can triage security observation', id, 'triage_security_observation' FROM django_content_type WHERE app_label='security_observations' AND model='securityobservation'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can link security observation', id, 'link_security_observation' FROM django_content_type WHERE app_label='security_observations' AND model='securityobservation'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+"#;
 
 const SQLITE_CATALOG_REQUIREMENTS_SEED: &str =
     include_str!("../seeds/catalog_requirements_seed_sqlite.sql");
@@ -9173,5 +9528,101 @@ mod tests {
         let foreign_manifest = sqlx::query("INSERT INTO zero_trust_agent_rollout_manifest (manifest_id,tenant_id,rollout_id,ring_id,manifest_version,manifest_sha256,canonical_json,target_count,created_by_id,frozen_at) VALUES ('33333333-3333-4333-8333-333333333333',999,14101,14101,2,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','{}',1,1,'2026-07-21T10:00:00Z')")
             .execute(&pool).await;
         assert!(foreign_manifest.is_err());
+    }
+
+    #[tokio::test]
+    async fn sqlite_0042_is_restartable_tenant_safe_and_preserves_source_data() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        sqlx::query("PRAGMA foreign_keys=ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO organizations_tenant (id,name,slug) VALUES (142,'Threat Fixture','threat-fixture'),(143,'Foreign Threat Fixture','foreign-threat-fixture')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO accounts_user (id,username,tenant_id,role) VALUES (14201,'threat-admin',142,'SECURITY_ADMIN')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO assets_app_informationasset (id,tenant_id,name) VALUES (14201,142,'Existing asset')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zero_trust_agent_device (id,tenant_id,asset_id,stable_device_id,hostname,os_family) VALUES (14201,142,14201,'threat-device','threat-device','LINUX')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO zero_trust_agent_finding (id,tenant_id,device_id,check_id,severity,status,title) VALUES (14201,142,14201,'posture.fixture','HIGH','OPEN','Existing posture finding')")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO product_security_vulnerability (id,tenant_id,product_id,title,cve,severity,status) VALUES (14201,142,1,'Existing vulnerability','CVE-2026-0001','HIGH','OPEN')")
+            .execute(&pool).await.unwrap();
+
+        for table in [
+            "security_observation_audit_event",
+            "security_observation_indicator_link",
+            "security_observation",
+            "threat_intelligence_indicator",
+        ] {
+            sqlx::query(&format!("DROP TABLE {table}"))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        sqlx::query("DELETE FROM iscy_schema_migrations WHERE version='0042_rust_native_threat_intelligence_observations'")
+            .execute(&pool).await.unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(
+            applied,
+            vec!["0042_rust_native_threat_intelligence_observations"]
+        );
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+
+        let source_counts: (i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM assets_app_informationasset WHERE tenant_id=142 AND id=14201),(SELECT COUNT(*) FROM zero_trust_agent_finding WHERE tenant_id=142 AND id=14201),(SELECT COUNT(*) FROM product_security_vulnerability WHERE tenant_id=142 AND id=14201)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(source_counts, (1, 1, 1));
+
+        let role_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM accounts_role WHERE code IN ('SOC_ANALYST','SECURITY_ADMIN')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let permission_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM auth_permission WHERE codename IN ('view_threat_indicator','add_threat_indicator','change_threat_indicator','archive_threat_indicator','view_security_observation','add_security_observation','triage_security_observation','link_security_observation')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let assigned_permission_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM auth_group_permissions gp JOIN auth_permission p ON p.id=gp.permission_id WHERE p.codename IN ('view_threat_indicator','add_threat_indicator','change_threat_indicator','archive_threat_indicator','view_security_observation','add_security_observation','triage_security_observation','link_security_observation')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (role_count, permission_count, assigned_permission_count),
+            (2, 8, 0)
+        );
+
+        sqlx::query("INSERT INTO threat_intelligence_indicator (id,tenant_id,indicator_type,normalized_value,source_name,provenance_reference,valid_from,created_by_id,updated_by_id) VALUES (14201,142,'DOMAIN','example.test','fixture','fixture:indicator','2026-07-22T10:00:00Z',14201,14201)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO security_observation (id,tenant_id,source_type,source_reference,agent_finding_id,asset_id,deduplication_key,observed_at,category,severity,title,provenance_type,provenance_reference,created_by_id,updated_by_id) VALUES (14201,142,'AGENT_FINDING','14201',14201,14201,'agent_finding:14201','2026-07-22T10:00:00Z','POSTURE','HIGH','Existing posture finding','ISCY_AGENT','agent-finding:14201',14201,14201)")
+            .execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO security_observation_indicator_link (tenant_id,observation_id,indicator_id,match_type,matched_at,evaluator_id) VALUES (142,14201,14201,'CONTEXTUAL','2026-07-22T10:05:00Z',14201)")
+            .execute(&pool).await.unwrap();
+
+        let duplicate_indicator = sqlx::query("INSERT INTO threat_intelligence_indicator (tenant_id,indicator_type,normalized_value,source_name,provenance_reference,valid_from,created_by_id,updated_by_id) VALUES (142,'DOMAIN','example.test','fixture','fixture:duplicate','2026-07-22T10:00:00Z',14201,14201)")
+            .execute(&pool).await;
+        assert!(duplicate_indicator.is_err());
+        let foreign_link = sqlx::query("INSERT INTO security_observation_indicator_link (tenant_id,observation_id,indicator_id,match_type,matched_at,evaluator_id) VALUES (143,14201,14201,'CONTEXTUAL','2026-07-22T10:05:00Z',14201)")
+            .execute(&pool).await;
+        assert!(foreign_link.is_err());
     }
 }

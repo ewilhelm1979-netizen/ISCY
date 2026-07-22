@@ -6,12 +6,21 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Native Threat Intelligence and Security Observations - Phase 1
+
+- adds tenant-scoped, locally validated IPv4, IPv6, domain, URL and SHA-256 indicators with provenance, confidence, validity, lifecycle, classification and audit history
+- adds bounded Security Observations sourced manually or from existing tenant-local Agent Findings and Product Security Vulnerability Findings without creating a competing finding model
+- adds manual, triageable Indicator/Observation links with transactional audit, tenant-local deduplication and explicit `SOC_ANALYST`/`SECURITY_ADMIN` permissions
+- adds the `/security-observations/` workspace and `/api/v1/threat-intelligence/*` and `/api/v1/security-observations/*` endpoints with negative tenant, role, payload and side-effect tests
+- adds migration `0042_rust_native_threat_intelligence_observations` for SQLite and PostgreSQL; no raw-log ingestion, external feed, network lookup, automatic matching, Incident/Evidence creation or active response is introduced
+
 ### Release lifecycle
 
 - beginnt den Entwicklungszyklus fuer `V23.7.31` auf Basis des unveraenderten, veroeffentlichten Stable Release `V23.7.30`
 - dokumentiert Tag, Release-ID, Zielcommit und die sechs geprueften Assets von `V23.7.30` in einem unveraenderlichen Published-Snapshot
 - setzt den Root-Lifecycle fail-closed auf `development_unreleased`; Release-Bundle, Tag, GitHub Release und Upload bleiben einer separaten Release-Vorbereitung vorbehalten
-- enthaelt keine Produkt-, Migrations-, Dependency- oder Plattformaenderung
+- oeffnet die Produktentwicklung fuer `V23.7.31`; die darunter dokumentierten
+  Unreleased-Aenderungen sind weiterhin weder getaggt noch veroeffentlicht
 
 ## V23.7.30 - 2026-07-22
 

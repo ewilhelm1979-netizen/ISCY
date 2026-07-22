@@ -60,6 +60,15 @@ A change that appears local can affect tenant isolation, evidence confidentialit
 2. Enforce size, structure, type, and tenant-reference validation before persistence.
 3. Generated regulatory text is assistance, not certification, legal advice, or an automatic compliance decision.
 
+### Threat intelligence and security observations
+
+1. Threat-indicator validation and normalization must remain local unless a separately reviewed connector explicitly defines its outbound trust boundary.
+2. Security Observations must remain tenant-scoped, bounded triage records. Do not use them as an unbounded raw-log or telemetry store.
+3. Referenced Agent Findings, Vulnerability Findings, and Assets remain canonical and must be resolved through tenant-bound database queries and foreign keys.
+4. Indicator matches are human-created in Phase 1 and must not automatically create or modify Incidents, Evidence, Risks, Roadmap tasks, or endpoint actions.
+5. Never log indicator values, observation payloads, credentials, local paths, or unbounded source data in audit or application logs.
+6. Active response, scanning, remote execution, hackback, SIEM/EDR/XDR behavior, and vendor-specific collection are outside this module's security boundary.
+
 ## Required validation
 
 Run the relevant subset and explain any skipped command:

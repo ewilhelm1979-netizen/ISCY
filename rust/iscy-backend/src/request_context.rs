@@ -8,6 +8,7 @@ pub struct RequestContext {
     pub user_id: Option<i64>,
     pub user_email: Option<String>,
     pub roles: Vec<String>,
+    pub permissions: Vec<String>,
     pub is_staff: bool,
     pub is_superuser: bool,
 }
@@ -18,6 +19,7 @@ pub struct AuthenticatedTenantContext {
     pub user_id: i64,
     pub user_email: Option<String>,
     pub roles: Vec<String>,
+    pub permissions: Vec<String>,
     pub is_staff: bool,
     pub is_superuser: bool,
 }
@@ -56,6 +58,7 @@ impl RequestContext {
             user_id,
             user_email,
             roles,
+            permissions: Vec::new(),
             is_staff,
             is_superuser,
         })
@@ -83,6 +86,7 @@ impl RequestContext {
             user_id,
             user_email: self.user_email,
             roles: self.roles,
+            permissions: self.permissions,
             is_staff: self.is_staff,
             is_superuser: self.is_superuser,
         })
@@ -95,6 +99,13 @@ impl AuthenticatedTenantContext {
         self.roles
             .iter()
             .any(|candidate| candidate.eq_ignore_ascii_case(&role))
+    }
+
+    pub fn has_permission(&self, permission: &str) -> bool {
+        let permission = permission.trim().to_ascii_lowercase();
+        self.permissions
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&permission))
     }
 
     pub fn can_write(&self) -> bool {
@@ -225,6 +236,7 @@ mod tests {
         assert_eq!(context.tenant_id, None);
         assert_eq!(context.user_id, None);
         assert!(context.roles.is_empty());
+        assert!(context.permissions.is_empty());
     }
 
     #[test]
@@ -245,6 +257,7 @@ mod tests {
         assert_eq!(context.user_id, Some(7));
         assert_eq!(context.user_email.as_deref(), Some("security@example.test"));
         assert_eq!(context.roles, vec!["AUDITOR", "CISO"]);
+        assert!(context.permissions.is_empty());
     }
 
     #[test]
@@ -291,6 +304,7 @@ mod tests {
         assert_eq!(context.tenant_id, 42);
         assert_eq!(context.user_id, 7);
         assert_eq!(context.roles, vec!["CONTRIBUTOR"]);
+        assert!(context.permissions.is_empty());
         assert!(context.can_write());
     }
 
@@ -304,6 +318,7 @@ mod tests {
         let context = RequestContext::authenticated_tenant_from_headers(&headers).unwrap();
 
         assert!(context.has_role("AUDITOR"));
+        assert!(!context.has_permission("view_threat_indicator"));
         assert!(!context.can_write());
     }
 }

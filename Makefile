@@ -85,6 +85,9 @@ rust-smoke:
 	curl -fsS -c "$$cookie_file" -H "content-type: application/json" -d '{"tenant_id":1,"username":"admin","password":"Admin123!"}' "$$url/api/v1/auth/sessions" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/api/v1/auth/session" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/dashboard/" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/security-observations/" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/api/v1/threat-intelligence/indicators" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/api/v1/security-observations" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/admin/users/" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/imports/" >/dev/null; \
 	curl -fsS -b "$$cookie_file" "$$url/incidents/" >/dev/null; \

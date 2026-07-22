@@ -37,6 +37,10 @@ use iscy_backend::{
     supplier_product_security_store::SupplierProductSecurityStore,
     supplier_store::SupplierStore,
     tenant_store::TenantStore,
+    threat_intelligence_store::{
+        ObservationIndicatorLinkWriteRequest, SecurityObservationWriteRequest,
+        ThreatIndicatorWriteRequest, ThreatIntelligenceStore,
+    },
     wizard_store::WizardStore,
     AppState,
 };
@@ -849,8 +853,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0041_rust_agent_rollout_manifest_handoff"));
-    assert!(html.contains("41/41 angewendet"));
+    assert!(html.contains("0042_rust_native_threat_intelligence_observations"));
+    assert!(html.contains("42/42 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -16895,7 +16899,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0038_rust_evidence_object_storage_client",
             "0039_rust_evidence_s3_runtime_client",
             "0040_rust_agent_rollout_governance",
-            "0041_rust_agent_rollout_manifest_handoff"
+            "0041_rust_agent_rollout_manifest_handoff",
+            "0042_rust_native_threat_intelligence_observations"
         ]
     );
     assert!(
@@ -25236,4 +25241,774 @@ async fn insert_tenant(pool: &SqlitePool) {
     .execute(pool)
     .await
     .unwrap();
+}
+
+async fn threat_api_request(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    tenant_id: i64,
+    user_id: i64,
+    roles: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", tenant_id.to_string())
+                .header("x-iscy-user-id", user_id.to_string())
+                .header("x-iscy-roles", roles)
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload = serde_json::from_slice(&bytes).unwrap_or_else(
+        |_| serde_json::json!({"unparsed": String::from_utf8_lossy(&bytes).to_string()}),
+    );
+    (status, payload)
+}
+
+#[tokio::test]
+async fn threat_intelligence_api_is_tenant_scoped_role_bound_and_side_effect_free() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query("PRAGMA foreign_keys=ON")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO organizations_tenant (id,name,slug) VALUES (501,'Threat A','threat-a'),(502,'Threat B','threat-b')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO accounts_user (id,username,tenant_id,role) VALUES (50101,'security-a',501,'SECURITY_ADMIN'),(50102,'analyst-a',501,'SOC_ANALYST'),(50103,'reader-a',501,'AUDITOR'),(50201,'security-b',502,'SECURITY_ADMIN')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO assets_app_informationasset (id,tenant_id,name) VALUES (50101,501,'Workstation A'),(50201,502,'Workstation B')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO zero_trust_agent_device (id,tenant_id,asset_id,stable_device_id,hostname,os_family) VALUES (50101,501,50101,'device-a','device-a','LINUX'),(50201,502,50201,'device-b','device-b','LINUX')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO zero_trust_agent_finding (id,tenant_id,device_id,check_id,severity,status,title,description,observed_at) VALUES (50101,501,50101,'posture-a','HIGH','OPEN','Posture A','Tenant A posture','2026-07-22T10:00:00Z'),(50201,502,50201,'posture-b','HIGH','OPEN','Posture B','Tenant B posture','2026-07-22T10:00:00Z')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO product_security_vulnerability (id,tenant_id,product_id,title,cve,severity,status) VALUES (50101,501,1,'Vulnerability A','CVE-2026-0501','CRITICAL','OPEN'),(50201,502,2,'Vulnerability B','CVE-2026-0502','HIGH','OPEN')")
+        .execute(&pool).await.unwrap();
+    let app = app_router_with_state(AppState::default().with_threat_intelligence_store(Some(
+        ThreatIntelligenceStore::from_sqlite_pool(pool.clone()),
+    )));
+
+    let missing_auth = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/threat-intelligence/indicators")
+                .header("x-iscy-tenant-id", "501")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_auth.status(), StatusCode::UNAUTHORIZED);
+
+    let analyst_admin_attempt = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/accounts/users")
+                .header("x-iscy-tenant-id", "501")
+                .header("x-iscy-user-id", "50102")
+                .header("x-iscy-roles", "SOC_ANALYST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(analyst_admin_attempt.status(), StatusCode::FORBIDDEN);
+
+    let indicator = serde_json::json!({
+        "indicator_type": "DOMAIN",
+        "value": "Example.Invalid.",
+        "source_type": "MANUAL",
+        "source_name": "Tenant analyst",
+        "provenance_reference": "case:501",
+        "confidence": 75,
+        "valid_from": "2026-07-22T10:00:00Z",
+        "valid_until": "2026-08-22T10:00:00Z",
+        "classification": "INTERNAL"
+    });
+    let (status, _) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/threat-intelligence/indicators",
+        501,
+        50103,
+        "AUDITOR",
+        indicator.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let indicator_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM threat_intelligence_indicator")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(indicator_count, 0);
+
+    let (status, created) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/threat-intelligence/indicators?tenant_id=502",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        indicator.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["data"]["indicator"]["tenant_id"], 501);
+    assert_eq!(
+        created["data"]["indicator"]["normalized_value"],
+        "example.invalid"
+    );
+    let indicator_id = created["data"]["indicator"]["id"].as_i64().unwrap();
+
+    let (status, duplicate) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/threat-intelligence/indicators",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        indicator.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(duplicate["data"]["created"], false);
+
+    let mut manipulated = indicator.clone();
+    manipulated["tenant_id"] = serde_json::json!(502);
+    let (status, _) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/threat-intelligence/indicators",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        manipulated,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let mut invalid_indicator = indicator.clone();
+    invalid_indicator["value"] = serde_json::json!("not a domain");
+    let (status, _) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/threat-intelligence/indicators",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        invalid_indicator,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let mut invalid_type = indicator.clone();
+    invalid_type["indicator_type"] = serde_json::json!("CVE");
+    let (status, _) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/threat-intelligence/indicators",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        invalid_type,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let mut oversized_indicator = indicator.clone();
+    oversized_indicator["value"] = serde_json::json!("x".repeat(2049));
+    let (status, _) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/threat-intelligence/indicators",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        oversized_indicator,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, local_url) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/threat-intelligence/indicators",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        serde_json::json!({
+            "indicator_type":"URL","value":"https://offline.invalid/path#fragment",
+            "source_type":"MANUAL","source_name":"Offline validation",
+            "provenance_reference":"case:501:url","confidence":40,
+            "valid_from":"2026-07-22T10:00:00Z","valid_until":null,
+            "classification":"RESTRICTED"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        local_url["data"]["indicator"]["normalized_value"],
+        "https://offline.invalid/path"
+    );
+
+    let manual_observation = serde_json::json!({
+        "source_type": "MANUAL",
+        "source_reference": "case:501:observation:1",
+        "asset_id": 50101,
+        "deduplication_key": "manual:501:1",
+        "observed_at": "2026-07-22T10:05:00Z",
+        "category": "THREAT_ACTIVITY",
+        "severity": "HIGH",
+        "title": "Suspicious domain reference",
+        "description": "Bounded analyst observation",
+        "attributes": {"sensor_class":"manual-review","count":1},
+        "provenance_type": "MANUAL",
+        "provenance_reference": "case:501",
+        "owner_id": 50102
+    });
+    let (status, denied) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/security-observations",
+        501,
+        50102,
+        "SOC_ANALYST",
+        manual_observation.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        denied["error_code"],
+        "insufficient_security_observation_permission"
+    );
+
+    let (status, created_observation) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/security-observations",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        manual_observation.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let observation_id = created_observation["data"]["observation"]["id"]
+        .as_i64()
+        .unwrap();
+    let (status, duplicate_observation) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/security-observations",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        manual_observation.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(duplicate_observation["data"]["created"], false);
+
+    let mut oversized = manual_observation.clone();
+    oversized["attributes"] = serde_json::json!({"message":"x".repeat(17_000)});
+    oversized["source_reference"] = serde_json::json!("case:501:oversized");
+    oversized["deduplication_key"] = serde_json::json!("manual:501:oversized");
+    let (status, _) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/security-observations",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        oversized,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let mut sensitive_attributes = manual_observation.clone();
+    sensitive_attributes["attributes"] = serde_json::json!({"private_key":"redacted test fixture"});
+    sensitive_attributes["source_reference"] = serde_json::json!("case:501:sensitive");
+    sensitive_attributes["deduplication_key"] = serde_json::json!("manual:501:sensitive");
+    let (status, _) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/security-observations",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        sensitive_attributes,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let mut foreign_owner = manual_observation.clone();
+    foreign_owner["owner_id"] = serde_json::json!(50201);
+    foreign_owner["source_reference"] = serde_json::json!("case:501:foreign-owner");
+    foreign_owner["deduplication_key"] = serde_json::json!("manual:501:foreign-owner");
+    let (status, _) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/security-observations",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        foreign_owner,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let agent_observation = serde_json::json!({
+        "source_type":"AGENT_FINDING","source_reference":"50101","asset_id":50101,
+        "deduplication_key":"ignored-for-source","observed_at":null,"category":null,
+        "severity":null,"title":null,"description":null,"attributes":null,
+        "provenance_type":null,"provenance_reference":null,"owner_id":50102
+    });
+    let (status, agent_created) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/security-observations",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        agent_observation,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        agent_created["data"]["observation"]["agent_finding_id"],
+        50101
+    );
+    assert_eq!(agent_created["data"]["observation"]["asset_id"], 50101);
+
+    let vulnerability_observation = serde_json::json!({
+        "source_type":"VULNERABILITY_FINDING","source_reference":"50101","asset_id":null,
+        "deduplication_key":"ignored-for-source","observed_at":null,"category":null,
+        "severity":null,"title":null,"description":null,"attributes":null,
+        "provenance_type":null,"provenance_reference":null,"owner_id":50102
+    });
+    let (status, vulnerability_created) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/security-observations",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        vulnerability_observation,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        vulnerability_created["data"]["observation"]["vulnerability_finding_id"],
+        50101
+    );
+
+    let foreign_source = serde_json::json!({
+        "source_type":"AGENT_FINDING","source_reference":"50201","asset_id":null,
+        "deduplication_key":"ignored","observed_at":null,"category":null,
+        "severity":null,"title":null,"description":null,"attributes":null,
+        "provenance_type":null,"provenance_reference":null,"owner_id":null
+    });
+    let (status, _) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/security-observations",
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        foreign_source,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, foreign_indicator) = threat_api_request(
+        &app,
+        "POST",
+        "/api/v1/threat-intelligence/indicators",
+        502,
+        50201,
+        "SECURITY_ADMIN",
+        serde_json::json!({
+            "indicator_type":"IPV4","value":"192.0.2.44","source_type":"MANUAL",
+            "source_name":"Tenant B","provenance_reference":"case:502","confidence":80,
+            "valid_from":"2026-07-22T10:00:00Z","valid_until":null,"classification":"INTERNAL"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let foreign_indicator_id = foreign_indicator["data"]["indicator"]["id"]
+        .as_i64()
+        .unwrap();
+    let (status, _) = threat_api_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/threat-intelligence/indicators/{foreign_indicator_id}"),
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        serde_json::json!({"confidence":10}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = threat_api_request(
+        &app,
+        "POST",
+        &format!("/api/v1/security-observations/{observation_id}/indicator-links"),
+        501,
+        50102,
+        "SOC_ANALYST",
+        serde_json::json!({"indicator_id":foreign_indicator_id,"match_type":"CONTEXTUAL","rationale":"tenant boundary test"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let incidents_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM incidents_incident")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let evidence_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evidence_evidenceitem")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (status, created_link) = threat_api_request(
+        &app,
+        "POST",
+        &format!("/api/v1/security-observations/{observation_id}/indicator-links"),
+        501,
+        50102,
+        "SOC_ANALYST",
+        serde_json::json!({"indicator_id":indicator_id,"match_type":"CONTEXTUAL","rationale":"manual analyst match"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let link_id = created_link["data"]["link"]["id"].as_i64().unwrap();
+    let (status, _) = threat_api_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/security-observations/{observation_id}/triage"),
+        501,
+        50102,
+        "SOC_ANALYST",
+        serde_json::json!({"triage_status":"CONFIRMED","owner_id":50102}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = threat_api_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/security-observations/{observation_id}/indicator-links/{link_id}/triage"),
+        501,
+        50102,
+        "SOC_ANALYST",
+        serde_json::json!({"triage_status":"RELEVANT","rationale":"reviewed manually"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let incidents_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM incidents_incident")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let evidence_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evidence_evidenceitem")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        (incidents_before, evidence_before),
+        (incidents_after, evidence_after)
+    );
+
+    let (status, tenant_b_list) = threat_api_request(
+        &app,
+        "GET",
+        "/api/v1/security-observations",
+        502,
+        50201,
+        "SECURITY_ADMIN",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(tenant_b_list["data"].as_array().unwrap().len(), 0);
+
+    let (status, tenant_b_indicators) = threat_api_request(
+        &app,
+        "GET",
+        "/api/v1/threat-intelligence/indicators",
+        502,
+        50201,
+        "SECURITY_ADMIN",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let tenant_b_indicators = tenant_b_indicators["data"].as_array().unwrap();
+    assert_eq!(tenant_b_indicators.len(), 1);
+    assert!(tenant_b_indicators
+        .iter()
+        .all(|item| item["tenant_id"] == 502));
+
+    let (status, tenant_b_links) = threat_api_request(
+        &app,
+        "GET",
+        &format!("/api/v1/security-observations/{observation_id}/indicator-links"),
+        502,
+        50201,
+        "SECURITY_ADMIN",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(tenant_b_links["data"].as_array().unwrap().is_empty());
+
+    let (status, tenant_b_audit) = threat_api_request(
+        &app,
+        "GET",
+        "/api/v1/security-observations/audit",
+        502,
+        50201,
+        "SECURITY_ADMIN",
+        serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(tenant_b_audit["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| item["tenant_id"] == 502));
+
+    let (status, _) = threat_api_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/security-observations/{observation_id}/triage"),
+        502,
+        50201,
+        "SECURITY_ADMIN",
+        serde_json::json!({"triage_status":"DISMISSED","owner_id":null}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = threat_api_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/security-observations/{observation_id}/indicator-links/{link_id}/triage"),
+        502,
+        50201,
+        "SECURITY_ADMIN",
+        serde_json::json!({"triage_status":"NOT_RELEVANT","rationale":"foreign"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = threat_api_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/threat-intelligence/indicators/{indicator_id}"),
+        501,
+        50103,
+        "AUDITOR",
+        serde_json::json!({"confidence":10}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, _) = threat_api_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/threat-intelligence/indicators/{indicator_id}"),
+        501,
+        50102,
+        "SOC_ANALYST",
+        serde_json::json!({"lifecycle_status":"ARCHIVED"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, archived) = threat_api_request(
+        &app,
+        "PATCH",
+        &format!("/api/v1/threat-intelligence/indicators/{indicator_id}"),
+        501,
+        50101,
+        "SECURITY_ADMIN",
+        serde_json::json!({"lifecycle_status":"ARCHIVED"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(archived["data"]["lifecycle_status"], "ARCHIVED");
+
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM security_observation_audit_event WHERE tenant_id=501",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(audit_count, 9);
+    let leaked_indicator: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM security_observation_audit_event WHERE detail_json LIKE '%example.invalid%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(leaked_indicator, 0);
+}
+
+#[tokio::test]
+async fn auth_session_resolves_direct_and_group_threat_permissions() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query("INSERT INTO organizations_tenant (id,name,slug) VALUES (504,'Permission Threat','permission-threat')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO accounts_user (id,username,tenant_id,role) VALUES (50401,'permission-user',504,'AUDITOR')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO auth_group (id,name) VALUES (50401,'Threat readers')")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO accounts_user_groups (user_id,group_id) VALUES (50401,50401)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO accounts_user_user_permissions (user_id,permission_id) SELECT 50401,id FROM auth_permission WHERE codename='add_threat_indicator'")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO auth_group_permissions (group_id,permission_id) SELECT 50401,id FROM auth_permission WHERE codename='view_security_observation'")
+        .execute(&pool).await.unwrap();
+
+    let store = AuthStore::from_sqlite_pool(pool);
+    let session = store.create_session(504, 50401).await.unwrap().unwrap();
+    assert_eq!(session.user.roles, vec!["AUDITOR"]);
+    assert_eq!(
+        session.user.permissions,
+        vec![
+            "add_threat_indicator".to_string(),
+            "view_security_observation".to_string()
+        ]
+    );
+    let context = session.tenant_context();
+    assert!(context.has_permission("add_threat_indicator"));
+    assert!(context.has_permission("VIEW_SECURITY_OBSERVATION"));
+    assert!(!context.has_permission("change_threat_indicator"));
+}
+
+#[tokio::test]
+async fn threat_intelligence_store_parallel_retries_are_idempotent() {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("iscy-threat-parallel-{nonce}.sqlite3"));
+    let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
+        .unwrap()
+        .create_if_missing(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .busy_timeout(Duration::from_secs(10));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(4)
+        .connect_with(options)
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query("PRAGMA foreign_keys=ON")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO organizations_tenant (id,name,slug) VALUES (503,'Parallel Threat','parallel-threat')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO accounts_user (id,username,tenant_id,role) VALUES (50301,'parallel-admin',503,'SECURITY_ADMIN')")
+        .execute(&pool).await.unwrap();
+    let store = ThreatIntelligenceStore::from_sqlite_pool(pool.clone());
+    let request = ThreatIndicatorWriteRequest {
+        indicator_type: "SHA256".to_string(),
+        value: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        source_type: "MANUAL".to_string(),
+        source_name: "parallel-fixture".to_string(),
+        provenance_reference: "parallel:indicator".to_string(),
+        confidence: 60,
+        valid_from: Some("2026-07-22T10:00:00Z".to_string()),
+        valid_until: None,
+        classification: "INTERNAL".to_string(),
+    };
+    let (a, b, c) = tokio::join!(
+        store.create_indicator(503, 50301, request.clone()),
+        store.create_indicator(503, 50301, request.clone()),
+        store.create_indicator(503, 50301, request),
+    );
+    let results = [a.unwrap(), b.unwrap(), c.unwrap()];
+    assert_eq!(results.iter().filter(|result| result.created).count(), 1);
+    assert!(results
+        .iter()
+        .all(|result| result.indicator.id == results[0].indicator.id));
+
+    let observation_request = SecurityObservationWriteRequest {
+        source_type: "MANUAL".to_string(),
+        source_reference: "parallel:observation".to_string(),
+        asset_id: None,
+        deduplication_key: "parallel-observation".to_string(),
+        observed_at: Some("2026-07-22T10:10:00Z".to_string()),
+        category: Some("THREAT_ACTIVITY".to_string()),
+        severity: Some("MEDIUM".to_string()),
+        title: Some("Parallel observation".to_string()),
+        description: Some("Idempotency fixture".to_string()),
+        attributes: Some(serde_json::json!({"fixture":true})),
+        provenance_type: Some("MANUAL".to_string()),
+        provenance_reference: Some("parallel:source".to_string()),
+        owner_id: None,
+    };
+    let (a, b, c) = tokio::join!(
+        store.create_observation(503, 50301, observation_request.clone()),
+        store.create_observation(503, 50301, observation_request.clone()),
+        store.create_observation(503, 50301, observation_request),
+    );
+    let observations = [a.unwrap(), b.unwrap(), c.unwrap()];
+    assert_eq!(
+        observations.iter().filter(|result| result.created).count(),
+        1
+    );
+    let observation_id = observations[0].observation.id;
+    let link_request = ObservationIndicatorLinkWriteRequest {
+        indicator_id: results[0].indicator.id,
+        match_type: "CONTEXTUAL".to_string(),
+        rationale: Some("parallel fixture".to_string()),
+    };
+    let (a, b, c) = tokio::join!(
+        store.create_link(503, 50301, observation_id, link_request.clone()),
+        store.create_link(503, 50301, observation_id, link_request.clone()),
+        store.create_link(503, 50301, observation_id, link_request),
+    );
+    let links = [a.unwrap(), b.unwrap(), c.unwrap()];
+    assert_eq!(links.iter().filter(|result| result.created).count(), 1);
+
+    let counts: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM threat_intelligence_indicator),(SELECT COUNT(*) FROM security_observation),(SELECT COUNT(*) FROM security_observation_indicator_link),(SELECT COUNT(*) FROM security_observation_audit_event)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(counts, (1, 1, 1, 3));
+    pool.close().await;
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(path.with_extension("sqlite3-shm"));
+    let _ = fs::remove_file(path.with_extension("sqlite3-wal"));
 }
