@@ -65,7 +65,10 @@ Der Tenant fuer Hygiene-Findings und Bewertungen stammt ausschliesslich aus
 dem authentifizierten serverseitigen Kontext. Query- oder Payload-Felder
 koennen ihn nicht ueberschreiben. Feed-Checkpoints und globale CVE-
 Referenzdaten uebertragen keine Leserechte auf tenantgebundene Assets,
-Korrelationen oder Findings.
+Korrelationen oder Findings. Tenantrollen sehen den fachlichen Feedstatus,
+aber weder globale Checkpoint-/Fenster-Zeitpunkte noch die Kennung des
+anfordernden Plattform-Actors; diese Administrationsdaten bleiben der
+expliziten globalen Sync-Permission beziehungsweise Superusern vorbehalten.
 
 ## Negativtests
 
@@ -90,7 +93,8 @@ Incident- und Evidence-Nebenwirkungen.
 Fuer Vulnerability Intelligence und Software Hygiene prueft die Suite
 unauthentifizierte und tenantlokale Sync-Versuche, fehlende globale Rechte,
 die getrennten `SOC_ANALYST`-/`SECURITY_ADMIN`-Grenzen, tenantfremde Assets,
-Komponenten und Findings, idempotente Korrelationen sowie ausbleibende
-Incident-, Evidence- und Active-Response-Nebenwirkungen.
+Komponenten und Findings, die Redaktion globaler Checkpoint-/Fenster-/Actor-Daten,
+idempotente Korrelationen sowie ausbleibende Incident-, Evidence- und
+Active-Response-Nebenwirkungen.
 
 Evidence-Uploads validieren tenantgebundene Session-, Massnahmen-, Incident- und Versionsvorgaenger-Referenzen vor dem Insert. Bei einer ungueltigen oder fremden Referenz antwortet die API mit `400 invalid_evidence_upload`, gibt keine Fremdmandantendaten preis und entfernt eine bereits temporaer geschriebene Upload-Datei. Die Negativtest-Matrix bleibt ein fortlaufendes Release-Gate: neue objektbezogene Read-, Write- oder Export-Routen muessen einen Fremdmandantenfall erhalten.

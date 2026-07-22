@@ -46,6 +46,10 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
   Datenalter, VEX und dokumentierten Compensating Controls
 - feste offizielle HTTPS-Quellen und DNS-/SSRF-, Redirect-, Timeout-,
   Kompressions-, Payload-, Parser- und Secret-Grenzen
+- transaktionales Lease-Fencing, KEV-Count-/Rollback-Pruefung, faire
+  EPSS-Batchrotation und pruefpflichtige komplexe NVD-CPE-Kontexte
+- globale Checkpoint-/Fenster-Zeitpunkte und anfordernde Plattform-Actor-IDs bleiben fuer
+  Tenantrollen redigiert
 - keine automatische Security Observation, kein Incident, keine Evidence,
   kein Agentenbefehl und keine aktive Reaktion; EOL/EOS und weitergehende
   Software-Policy bleiben ohne belastbare Quelle Phase 2

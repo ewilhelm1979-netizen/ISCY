@@ -231,10 +231,15 @@ tenant findings, premature checkpoints or disclosure of an NVD API key.
 - connection/total timeout, uncompressed-response policy and byte/record limits
 - strict JSON, identifier, date, score, pagination and version-range parsing
 - bounded retries with backoff/jitter and source-specific rate delay
-- persistent per-source lease and checkpoint only after complete success
-- atomic CISA-KEV catalog processing and monotonic EPSS model dates
+- persistent per-source fenced lease, transaction-time lease revalidation and
+  checkpoint only after complete success
+- atomic CISA-KEV catalog processing with count/rollback validation, fair EPSS
+  selection and monotonic EPSS model dates
 - API key only through the secret abstraction and never in status, audit or logs
+- global checkpoint and requesting-actor details visible only to explicit
+  platform sync authorization, not tenant view roles
 - no tenant finding from feed data alone; a tenant-scoped conservative match is required
+- complex NVD CPE `AND` or non-vulnerable platform contexts remain review-only
 - no automatic Incident, Evidence, Agent command or active response
 
 **Residual risk:** The official feeds are transported over HTTPS but are not

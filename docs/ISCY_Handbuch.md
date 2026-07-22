@@ -804,9 +804,11 @@ Bekannte Schwachstellen fachlich und technisch bewerten.
 Was der Bereich jetzt leisten soll:
 
 - einzelne CVEs und begrenzte UTC-Deltas aus der offiziellen NVD API 2.0 laden
-- CVE-Referenzdaten global, idempotent und mit Checkpoint/Laufstatus pflegen
+- CVE-Referenzdaten global, idempotent und mit Checkpoint, gezaeuntem Lease
+  und Laufstatus pflegen
 - den offiziellen CISA-KEV-Katalog atomar an vorhandene CVEs anbinden
-- FIRST-EPSS-Score, Percentile und Modelldatum in begrenzten Batches pflegen
+- FIRST-EPSS-Score, Percentile und Modelldatum in begrenzten, auch bei
+  fehlenden Scores fair fortschreitenden Batches pflegen
 - vorhandene tenantgebundene Assets, Softwarekomponenten und SBOMs ueber
   nachvollziehbare CPE-/Versionsregeln korrelieren
 - unsichere Matches als Pruefkandidaten statt als bestaetigte Betroffenheit
@@ -835,7 +837,15 @@ Ein vorhandenes Product-Security-Vulnerability-Finding wird nur mit bereits
 vorhandenem tenantgebundenem Produktbezug erzeugt oder aktualisiert. Reine
 Asset-Matches bleiben als erklaerbare Korrelationen im bestehenden Review;
 ISCY erzeugt dafuer kein kuenstliches Produkt und kein paralleles
-Finding-Modell.
+Finding-Modell. Komplexe NVD-CPE-Kontexte mit logischem `AND` oder
+nicht-vulnerablen Plattformbedingungen werden nicht zu einem bestaetigten
+Match vereinfacht, sondern bleiben pruefpflichtig. Ein aelterer oder in der
+Datensatzanzahl inkonsistenter KEV-Katalog wird fail-closed abgewiesen.
+
+Tenantrollen sehen den fachlichen Feedstatus, aber keine globalen
+Checkpoint-/Fenster-Zeitpunkte oder anfordernden Plattform-Actor-IDs. Diese
+Betriebsdaten sind auf die explizite globale Sync-Permission und Superuser
+begrenzt.
 
 Fachlicher Nutzen:
 

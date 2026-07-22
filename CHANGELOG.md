@@ -14,6 +14,7 @@ The project uses release tags for immutable release points. Changes under **Unre
 - adds deterministic passive hygiene priority from CVSS, KEV, EPSS, asset criticality, freshness, VEX and documented controls without creating Security Observations, Incidents, Evidence or active actions
 - adds migration `0043_rust_continuous_vulnerability_intelligence`, granular view/review/global-sync permissions, minimal status/sync/hygiene APIs and the `/cves/` workflow
 - restricts feed access to fixed official HTTPS sources with DNS/SSRF, redirect, timeout, compression, payload, parser, retry and secret-handling controls; no SIEM/EDR/XDR, Wazuh, scanning, Agent command, remote execution or Hackback capability is introduced
+- hardens the Phase-1 review findings with transaction-time lease fencing, current NVD single-CVE parameters, KEV count/rollback validation, fair EPSS coverage, conservative handling of complex CPE contexts, scoped compensating controls, requester audit attribution and redacted global operational metadata for tenant roles
 
 ### Native Threat Intelligence and Security Observations - Phase 1
 
