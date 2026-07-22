@@ -17,11 +17,11 @@ notes_path="${ISCY_RELEASE_NOTES_PATH:-docs/RELEASE_NOTES_DRAFT.md}"
 manifest_path="${ISCY_RELEASE_MANIFEST_PATH:-release/release-manifest.json}"
 sbom_path="${ISCY_RELEASE_SBOM_PATH:-release/iscy-backend.cdx.json}"
 checksums_path="${ISCY_RELEASE_CHECKSUMS_PATH:-release/SHA256SUMS}"
-snapshot_path="${ISCY_PUBLISHED_SNAPSHOT_PATH:-release/published/V23.7.29.json}"
+snapshot_path="${ISCY_PUBLISHED_SNAPSHOT_PATH:-release/published/V23.7.30.json}"
 db_admin_path="${ISCY_DB_ADMIN_PATH:-rust/iscy-backend/src/db_admin.rs}"
-published_version='V23.7.29'
-published_commit='ba47201885435d57efc5042acde665f42dc000df'
-development_version='V23.7.30'
+published_version='V23.7.30'
+published_commit='1c07af4e7cd196076220479d394242a3df589714'
+development_version='V23.7.31'
 
 [[ -f "$notes_path" ]] || fail documentation 'Release Notes fehlen.'
 [[ -f docs/RELEASE_CANDIDATE_CHECKLIST.md ]] || fail documentation 'Release-Checkliste fehlt.'
@@ -29,7 +29,7 @@ development_version='V23.7.30'
 [[ -f "$manifest_path" ]] || fail manifest 'Release-Manifest fehlt.'
 [[ -f "$checksums_path" ]] || fail checksum 'Release-Checksummen fehlen.'
 [[ -f "$sbom_path" ]] || fail sbom 'CycloneDX-SBOM fehlt.'
-[[ -f "$snapshot_path" ]] || fail published_snapshot 'V23.7.29-Published-Snapshot fehlt.'
+[[ -f "$snapshot_path" ]] || fail published_snapshot 'V23.7.30-Published-Snapshot fehlt.'
 [[ -f "$db_admin_path" ]] || fail migration 'Migrationsquelle fehlt.'
 
 release_status="$(jq -er '.release_status | select(type == "string")' "$manifest_path")" \
@@ -143,8 +143,8 @@ jq -e \
     --arg commit "$published_commit" \
     '.schema_version == 1 and
     .tag_name == $version and
-    .release_name == "ISCY V23.7.29" and
-    .release_id == 353634425 and
+    .release_name == "ISCY V23.7.30" and
+    .release_id == 358056010 and
     .target_commit == $commit and
     (.published_at | type) == "string" and
     (.published_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
@@ -165,10 +165,10 @@ jq -e \
         (.sha256 | type) == "string" and (.sha256 | test("^[0-9a-f]{64}$")) and
         (.content_type | type) == "string" and (.content_type | length) > 0 and
         (.download_url | type) == "string" and
-        (.download_url | startswith("https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.29/")) and
+        (.download_url | startswith("https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.30/")) and
         (.download_url | contains("?")) == false and
         (.download_url | contains("@")) == false)' "$snapshot_path" >/dev/null \
-    || fail published_snapshot 'V23.7.29-Published-Snapshot ist ungueltig.'
+    || fail published_snapshot 'V23.7.30-Published-Snapshot ist ungueltig.'
 if grep -aEq '/home/|/nix/store/|/github/workspace/|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----' "$snapshot_path"; then
     fail published_snapshot 'Published-Snapshot enthaelt lokale Pfade oder sensitive Marker.'
 fi

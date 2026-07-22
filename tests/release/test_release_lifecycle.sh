@@ -5,8 +5,8 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 source_manifest='release/release-manifest.json'
-published_snapshot='release/published/V23.7.29.json'
-published_snapshot_sha256='2e6a09027fce6d0acac8d6d706deb45984adc470b61608f9834c7d4394668e4e'
+published_snapshot='release/published/V23.7.30.json'
+published_snapshot_sha256='eec9e24ecdd6ea9cae4c0095a1ed367fa8d83de5b49e1f0f263338071033a517'
 artifact_guard='./scripts/prepare_release_candidate_artifacts.sh'
 tmp_dir="$(mktemp -d)"
 output_dir="artifacts/release-lifecycle-test-$$"
@@ -15,12 +15,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[[ "$(jq -r '.release_status' "$source_manifest")" == 'prepared_not_published' ]] || {
-    echo 'RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest ist nicht prepared_not_published.' >&2
+[[ "$(jq -r '.release_status' "$source_manifest")" == 'development_unreleased' ]] || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest ist nicht development_unreleased.' >&2
     exit 1
 }
 [[ "$(sha256sum "$published_snapshot" | cut -d ' ' -f 1)" == "$published_snapshot_sha256" ]] || {
-    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_snapshot]: V23.7.29-Snapshot wurde veraendert.' >&2
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_snapshot]: V23.7.30-Snapshot wurde veraendert.' >&2
     exit 1
 }
 grep -Fq '.release_status = "stable_release_prepared"' "$artifact_guard" || {
