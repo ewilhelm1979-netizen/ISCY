@@ -5,6 +5,8 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 source_manifest='release/release-manifest.json'
+published_snapshot='release/published/V23.7.29.json'
+published_snapshot_sha256='2e6a09027fce6d0acac8d6d706deb45984adc470b61608f9834c7d4394668e4e'
 artifact_guard='./scripts/prepare_release_candidate_artifacts.sh'
 tmp_dir="$(mktemp -d)"
 output_dir="artifacts/release-lifecycle-test-$$"
@@ -12,6 +14,23 @@ cleanup() {
     rm -rf "$tmp_dir" "$output_dir"
 }
 trap cleanup EXIT
+
+[[ "$(jq -r '.release_status' "$source_manifest")" == 'prepared_not_published' ]] || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest ist nicht prepared_not_published.' >&2
+    exit 1
+}
+[[ "$(sha256sum "$published_snapshot" | cut -d ' ' -f 1)" == "$published_snapshot_sha256" ]] || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_snapshot]: V23.7.29-Snapshot wurde veraendert.' >&2
+    exit 1
+}
+grep -Fq '.release_status = "stable_release_prepared"' "$artifact_guard" || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[bundle_status]: Bundle-Manifest-Status ist nicht stabil abgesichert.' >&2
+    exit 1
+}
+grep -Fq "cp docs/RELEASE_NOTES_DRAFT.md \"\$output_dir/RELEASE_NOTES.md\"" "$artifact_guard" || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[notes_asset]: Publiziertes Notes-Asset ist nicht RELEASE_NOTES.md.' >&2
+    exit 1
+}
 
 development_manifest="$tmp_dir/development-manifest.json"
 jq '

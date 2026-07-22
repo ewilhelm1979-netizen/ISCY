@@ -45,7 +45,7 @@ candidate_notes="$tmp_dir/candidate-notes.md"
 cat >"$candidate_notes" <<'EOF'
 # ISCY V23.7.30 - Release Notes
 
-Status: Stabiler Release vorbereitet; Tag und GitHub Release noch nicht erstellt.
+Status: Stabiler Release.
 
 Vorgänger: `V23.7.29`.
 
@@ -77,6 +77,17 @@ expect_rejected() {
     }
 }
 
+expect_candidate_phrase_rejected() {
+    local label="$1"
+    local phrase="$2"
+    local expected_category="$3"
+    local notes="$tmp_dir/$label.md"
+
+    cp "$candidate_notes" "$notes"
+    printf '\n%s\n' "$phrase" >>"$notes"
+    expect_rejected "$label" "$candidate_manifest" "$notes" "$expected_category"
+}
+
 ISCY_RELEASE_MANIFEST_PATH="$development_manifest" "$guard" "$development_notes" >/dev/null
 ISCY_RELEASE_MANIFEST_PATH="$source_manifest" "$guard" "$source_notes" >/dev/null
 
@@ -100,5 +111,28 @@ cp "$candidate_notes" "$candidate_with_development_placeholder"
 printf '\nStatus: Development / Unreleased. Aenderungen werden unter Unreleased dokumentiert.\n' \
     >>"$candidate_with_development_placeholder"
 expect_rejected candidate_development_placeholder "$candidate_manifest" "$candidate_with_development_placeholder" development_status
+
+expect_candidate_phrase_rejected candidate_creation_pending \
+    'Tag und GitHub Release noch nicht erstellt.' creation_pending
+expect_candidate_phrase_rejected candidate_tag_pending \
+    'Tag noch nicht erstellt.' tag_pending
+expect_candidate_phrase_rejected candidate_release_pending \
+    'GitHub Release noch nicht erstellt.' github_release_pending
+expect_candidate_phrase_rejected candidate_unpublished \
+    'Dieser Stand ist noch nicht veroeffentlicht.' unpublished
+expect_candidate_phrase_rejected candidate_publication_pending \
+    'Veroeffentlichung steht aus.' publication_pending
+expect_candidate_phrase_rejected candidate_draft_release \
+    'Draft Release.' draft_release
+expect_candidate_phrase_rejected candidate_prerelease \
+    'Prerelease.' prerelease
+expect_candidate_phrase_rejected candidate_already_published \
+    'Dieser Stand ist bereits veroeffentlicht.' already_published
+expect_candidate_phrase_rejected candidate_publication_success \
+    'GitHub Release erfolgreich veroeffentlicht.' publication_success
+expect_candidate_phrase_rejected candidate_latest_release \
+    'Latest Release veroeffentlicht.' latest_release
+expect_candidate_phrase_rejected candidate_asset_upload_success \
+    'Asset-Upload erfolgreich.' asset_upload_success
 
 echo 'Release-Notes-Modustests OK'

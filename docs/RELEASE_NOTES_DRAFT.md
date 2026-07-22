@@ -1,14 +1,13 @@
 # ISCY V23.7.30 - Release Notes
 
-Status: Stabiler Release vorbereitet; Tag und GitHub Release noch nicht erstellt.
+Status: Stabiler Release.
 
 Vorgänger: `V23.7.29` (`ba47201885435d57efc5042acde665f42dc000df`).
 
-`V23.7.30` ist als `prepared_not_published` vorbereitet. Dieser Stand ist
-weder getaggt noch veroeffentlicht und wurde nicht als Latest Release gesetzt.
-Die Candidate-Artefakte bleiben lokale, unsignierte Build-Ausgaben. Der
-veroeffentlichte Stand `V23.7.29`, seine Release-ID `353634425` und seine sechs
-Assets bleiben unveraendert.
+`V23.7.30` buendelt die nachfolgend beschriebenen Funktionen und Nachweise. Die
+Release-Artefakte sind unsigniert; der Provenance-Status ist
+`prepared_unsigned`. Der Vorgaenger `V23.7.29`, seine Release-ID `353634425`
+und seine sechs Assets bleiben unveraendert.
 
 ## Agent Rollout 2.0 - Phase 1
 
@@ -53,10 +52,11 @@ CI-Fix-Versuche folgen einem Least-Privilege- und fail-closed Design. Codex
 erhaelt keine Merge-Berechtigung und kann einen PR weder freigeben noch mergen,
 taggen oder veroeffentlichen; die Merge-Grenze bleibt menschlich.
 
-Modellaufrufe benoetigen einen separat finanzierten OpenAI-API-Zugang. Da fuer
-diese Release-Vorbereitung keine API-Credits vorhanden sind, wird kein
-erfolgreich abgeschlossener produktiver Auto-Fix-End-to-End-Test behauptet.
-Die normalen GitHub-CI- und CodeQL-Pruefungen verwenden keine OpenAI-Aufrufe.
+Modellaufrufe benoetigen einen separat finanzierten OpenAI-API-Zugang. Fuer
+diesen Release-Nachweis standen keine API-Credits zur Verfuegung; daher wird
+kein erfolgreich abgeschlossener produktiver Auto-Fix-End-to-End-Test
+behauptet. Die normalen GitHub-CI- und CodeQL-Pruefungen verwenden keine
+OpenAI-Aufrufe.
 
 ## Migrationen und Datenbanken
 
@@ -118,9 +118,9 @@ CA-Ausstellung, keine privaten Signaturschluessel und keine automatische
 Agent-Paketsignierung. Ebenso enthalten sind keine Wazuh-, IOC-, Behavioral-
 Detection-, MDM-, RMM-, EDR- oder Command-and-Control-Funktionen.
 
-## Noch nicht veroeffentlicht
+## Release-Grenzen
 
-Die Vorbereitung erzeugt weder Tag noch GitHub Release, Asset-Upload,
-Container-Publishing oder Signatur. Eine menschliche Security-, Betriebs- und
-Release-Review bleibt erforderlich, bevor in einem getrennten Auftrag ueber
-Merge, Tag und Veroeffentlichung entschieden werden darf.
+Tag-Erstellung, GitHub-Release-Status, Asset-Upload, Container-Publishing und
+Signatur werden nicht durch diese Notes belegt. Diese Zustaende werden getrennt
+ueber den GitHub-Release-Zustand und den Published-Snapshot nachgewiesen. Eine
+menschliche Security-, Betriebs- und Release-Review bleibt erforderlich.
