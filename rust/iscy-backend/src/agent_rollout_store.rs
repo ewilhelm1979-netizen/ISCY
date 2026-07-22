@@ -3,6 +3,7 @@ use std::{error::Error, fmt, str::FromStr};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow},
@@ -55,6 +56,31 @@ const TARGET_STATUSES: &[&str] = &[
 const SIGNATURE_REQUIREMENTS: &[&str] = &["not_required", "metadata_only", "verified_required"];
 const CERTIFICATE_REQUIREMENTS: &[&str] =
     &["not_required", "active_required", "mtls_bound_required"];
+const MANIFEST_SCHEMA_VERSION: &str = "iscy.agent-rollout-manifest.v1";
+const HANDOFF_SCHEMA_VERSION: &str = "iscy.agent-rollout-handoff.v1";
+const RESULT_SCHEMA_VERSION: &str = "iscy.agent-rollout-results.v1";
+const HANDOFF_STATUSES: &[&str] = &[
+    "prepared",
+    "exported",
+    "awaiting_results",
+    "partially_reported",
+    "completed",
+    "failed",
+    "expired",
+    "invalidated",
+];
+const RESULT_OUTCOMES: &[&str] = &["succeeded", "failed", "skipped", "timed_out", "unknown"];
+const RESULT_REASON_CODES: &[&str] = &[
+    "",
+    "network",
+    "package",
+    "verification",
+    "policy",
+    "timeout",
+    "unsupported",
+    "operator_skipped",
+    "unknown",
+];
 
 #[derive(Clone)]
 pub enum AgentRolloutStore {
@@ -93,6 +119,17 @@ impl AgentRolloutError {
             AgentRolloutErrorKind::Database,
             "Die Rollout-Daten konnten nicht verarbeitet werden.",
         )
+    }
+}
+
+fn database_or_concurrent(context: &'static str, error: sqlx::Error) -> AgentRolloutError {
+    if error
+        .as_database_error()
+        .is_some_and(|database_error| database_error.is_unique_violation())
+    {
+        concurrent_change()
+    } else {
+        AgentRolloutError::database(context, error)
     }
 }
 
@@ -267,6 +304,224 @@ pub struct AgentRolloutRollbackTargetResult {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentRolloutManifestFreezeRequest {
+    pub confirmed: bool,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRolloutHandoffCreateRequest {
+    pub confirmed: bool,
+    pub manifest_id: String,
+    pub source_system: String,
+    #[serde(default)]
+    pub external_batch_id: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRolloutHandoffActionRequest {
+    pub confirmed: bool,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRolloutResultImportPacket {
+    pub schema_version: String,
+    pub manifest_id: String,
+    pub manifest_sha256: String,
+    pub handoff_id: String,
+    pub source_system: String,
+    pub external_batch_id: String,
+    pub generated_at: String,
+    pub results: Vec<AgentRolloutImportedResult>,
+    #[serde(default)]
+    pub confirmed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRolloutImportedResult {
+    pub target_id: i64,
+    pub stable_device_id: String,
+    pub outcome: String,
+    #[serde(default)]
+    pub deployed_version: String,
+    #[serde(default)]
+    pub reason_code: String,
+    #[serde(default)]
+    pub operator_note: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentRolloutCanonicalManifest {
+    pub schema_version: String,
+    pub manifest_id: String,
+    pub manifest_version: i64,
+    pub rollout_id: i64,
+    pub ring_name: String,
+    pub ring_position: i64,
+    pub target_agent_version: String,
+    pub deployment_channel: String,
+    pub artifact: AgentRolloutManifestArtifact,
+    pub policy: AgentRolloutManifestPolicy,
+    pub preflight: AgentRolloutManifestPreflight,
+    pub targets: Vec<AgentRolloutManifestTargetSnapshot>,
+    pub created_by_id: i64,
+    pub frozen_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentRolloutManifestArtifact {
+    pub artifact_id: String,
+    pub sha256: String,
+    pub signature_status: String,
+    pub verification_status: String,
+    pub provenance_status: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentRolloutManifestPolicy {
+    pub policy_profile_id: Option<i64>,
+    pub name: String,
+    pub revision: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentRolloutManifestPreflight {
+    pub target_count: i64,
+    pub passed_count: i64,
+    pub warning_count: i64,
+    pub failed_count: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentRolloutManifestTargetSnapshot {
+    pub target_id: i64,
+    pub stable_device_id: String,
+    pub expected_agent_version: String,
+    pub current_agent_version: String,
+    pub os_family: String,
+    pub architecture: String,
+    pub certificate_status: String,
+    pub mtls_binding_status: String,
+    pub preflight_status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentRolloutManifestPreview {
+    pub manifest: AgentRolloutCanonicalManifest,
+    pub manifest_sha256: String,
+    pub persisted: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentRolloutManifest {
+    pub id: i64,
+    pub manifest_id: String,
+    pub rollout_id: i64,
+    pub ring_id: i64,
+    pub ring_name: String,
+    pub manifest_version: i64,
+    pub schema_version: String,
+    pub status: String,
+    pub manifest_sha256: String,
+    #[serde(skip_serializing)]
+    pub canonical_json: String,
+    pub artifact_id: Option<String>,
+    pub artifact_sha256: String,
+    pub artifact_signature_status: String,
+    pub artifact_verification_status: String,
+    pub artifact_provenance_status: String,
+    pub policy_profile_id: Option<i64>,
+    pub policy_revision: String,
+    pub target_count: i64,
+    pub preflight_passed_count: i64,
+    pub preflight_warning_count: i64,
+    pub preflight_failed_count: i64,
+    pub created_by_id: i64,
+    pub frozen_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentRolloutHandoff {
+    pub id: i64,
+    pub handoff_id: String,
+    pub rollout_id: i64,
+    pub ring_id: i64,
+    pub ring_name: String,
+    pub manifest_id: String,
+    pub manifest_sha256: String,
+    pub status: String,
+    pub source_system: String,
+    pub external_batch_id: String,
+    pub description: String,
+    pub expected_result_count: i64,
+    pub reported_result_count: i64,
+    pub succeeded_count: i64,
+    pub failed_count: i64,
+    pub skipped_count: i64,
+    pub timed_out_count: i64,
+    pub unknown_count: i64,
+    pub version_mismatch_count: i64,
+    pub expires_at: Option<String>,
+    pub exported_at: Option<String>,
+    pub acknowledged_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub invalidated_at: Option<String>,
+    pub created_by_id: i64,
+    pub updated_by_id: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentRolloutHandoffExport {
+    pub schema_version: String,
+    pub handoff_id: String,
+    pub source_system: String,
+    pub external_batch_id: String,
+    pub manifest_id: String,
+    pub manifest_sha256: String,
+    pub rollout_id: i64,
+    pub ring_name: String,
+    pub expected_result_count: i64,
+    pub created_at: String,
+    pub expires_at: Option<String>,
+    pub manifest: AgentRolloutCanonicalManifest,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentRolloutResultImport {
+    pub import_id: String,
+    pub handoff_id: String,
+    pub source_system: String,
+    pub external_batch_id: String,
+    pub generated_at: String,
+    pub payload_sha256: String,
+    pub status: String,
+    pub item_count: i64,
+    pub succeeded_count: i64,
+    pub failed_count: i64,
+    pub skipped_count: i64,
+    pub timed_out_count: i64,
+    pub unknown_count: i64,
+    pub version_mismatch_count: i64,
+    pub replay_count: i64,
+    pub imported_by_id: i64,
+    pub imported_at: String,
+    pub last_replayed_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentRollout {
     pub id: i64,
@@ -394,6 +649,9 @@ pub struct AgentRolloutDetail {
     pub targets: Vec<AgentRolloutTarget>,
     pub checks: Vec<AgentRolloutCheck>,
     pub events: Vec<AgentRolloutEvent>,
+    pub manifests: Vec<AgentRolloutManifest>,
+    pub handoffs: Vec<AgentRolloutHandoff>,
+    pub result_imports: Vec<AgentRolloutResultImport>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -423,13 +681,20 @@ pub struct AgentRolloutOperationsSummary {
     pub rollback_required_rollouts: i64,
     pub blocked_rings: i64,
     pub failed_targets: i64,
+    pub rings_without_manifest: i64,
+    pub active_handoffs: i64,
+    pub handoffs_awaiting_results: i64,
+    pub missing_handoff_results: i64,
+    pub failed_import_results: i64,
 }
 
 #[derive(Debug, Clone)]
 struct DeviceFacts {
     id: i64,
+    stable_device_id: String,
     hostname: String,
     os_family: String,
+    architecture: String,
     deployment_channel: String,
     agent_version: String,
     enrollment_status: String,
@@ -444,6 +709,89 @@ struct DeviceFacts {
 }
 
 #[derive(Debug, Clone)]
+struct ArtifactSnapshot {
+    artifact_id: String,
+    sha256: String,
+    signature_status: String,
+    verification_status: String,
+    provenance_status: String,
+}
+
+#[derive(Debug, Clone)]
+struct PolicySnapshot {
+    policy_profile_id: Option<i64>,
+    name: String,
+    revision: String,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedManifest {
+    ring_id: i64,
+    canonical: AgentRolloutCanonicalManifest,
+    canonical_json: String,
+    manifest_sha256: String,
+}
+
+#[derive(Debug, Clone)]
+struct ManifestBuildIdentity {
+    manifest_id: String,
+    manifest_version: i64,
+    actor_id: i64,
+    frozen_at: String,
+}
+
+struct HandoffTransition<'a> {
+    tenant_id: i64,
+    rollout_id: i64,
+    actor_id: i64,
+    handoff: &'a AgentRolloutHandoff,
+    from: &'a str,
+    to: &'a str,
+    event_type: &'a str,
+    reason: &'a str,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ImportCounts {
+    succeeded: i64,
+    failed: i64,
+    skipped: i64,
+    timed_out: i64,
+    unknown: i64,
+    version_mismatch: i64,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedImportItem {
+    target: AgentRolloutTarget,
+    request: AgentRolloutDeploymentResultRequest,
+}
+
+struct ResultImportTransaction<'a> {
+    tenant_id: i64,
+    rollout_id: i64,
+    actor_id: i64,
+    import_id: &'a str,
+    payload_sha256: &'a str,
+    packet: &'a AgentRolloutResultImportPacket,
+    manifest: &'a AgentRolloutManifest,
+    handoff: &'a AgentRolloutHandoff,
+    prepared: &'a [PreparedImportItem],
+    counts: &'a ImportCounts,
+}
+
+struct RecordResultContext<'a> {
+    tenant_id: i64,
+    rollout_id: i64,
+    target: &'a AgentRolloutTarget,
+    actor_id: i64,
+    request: &'a AgentRolloutDeploymentResultRequest,
+    new_status: &'a str,
+    source: &'a str,
+    deployment_reference: &'a str,
+}
+
+#[derive(Debug, Clone)]
 struct EvaluatedCheck {
     key: &'static str,
     status: &'static str,
@@ -453,6 +801,49 @@ struct EvaluatedCheck {
 
 fn default_minimum_score() -> i64 {
     80
+}
+
+fn new_stable_uuid() -> AgentRolloutResult<String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| {
+        AgentRolloutError::new(
+            AgentRolloutErrorKind::Database,
+            "Eine stabile Rollout-Referenz konnte nicht erzeugt werden.",
+        )
+    })?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Ok(format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+    ))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn sort_manifest_targets(targets: &mut [AgentRolloutManifestTargetSnapshot]) {
+    targets.sort_by(|left, right| {
+        left.stable_device_id
+            .cmp(&right.stable_device_id)
+            .then(left.target_id.cmp(&right.target_id))
+    });
+}
+
+fn validate_safe_reference(label: &str, value: &str, maximum: usize) -> AgentRolloutResult<()> {
+    if value.is_empty()
+        || value.len() > maximum
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(invalid_input(format!(
+            "{label} ist leer oder enthaelt nicht erlaubte Zeichen."
+        )));
+    }
+    Ok(())
 }
 
 fn default_heartbeat_freshness_minutes() -> i64 {
@@ -804,18 +1195,24 @@ impl AgentRolloutStore {
         rollout_id: i64,
     ) -> AgentRolloutResult<AgentRolloutDetail> {
         let rollout = self.rollout(tenant_id, rollout_id).await?;
-        let (rings, targets, checks, events) = match self {
+        let (rings, targets, checks, events, manifests, handoffs, result_imports) = match self {
             Self::Sqlite(pool) => (
                 list_rings_sqlite(pool, tenant_id, rollout_id).await?,
                 list_targets_sqlite(pool, tenant_id, rollout_id).await?,
                 list_checks_sqlite(pool, tenant_id, rollout_id).await?,
                 list_events_sqlite(pool, tenant_id, rollout_id).await?,
+                list_manifests_sqlite(pool, tenant_id, rollout_id).await?,
+                list_handoffs_sqlite(pool, tenant_id, rollout_id).await?,
+                list_result_imports_sqlite(pool, tenant_id, rollout_id).await?,
             ),
             Self::Postgres(pool) => (
                 list_rings_postgres(pool, tenant_id, rollout_id).await?,
                 list_targets_postgres(pool, tenant_id, rollout_id).await?,
                 list_checks_postgres(pool, tenant_id, rollout_id).await?,
                 list_events_postgres(pool, tenant_id, rollout_id).await?,
+                list_manifests_postgres(pool, tenant_id, rollout_id).await?,
+                list_handoffs_postgres(pool, tenant_id, rollout_id).await?,
+                list_result_imports_postgres(pool, tenant_id, rollout_id).await?,
             ),
         };
         Ok(AgentRolloutDetail {
@@ -824,6 +1221,999 @@ impl AgentRolloutStore {
             targets,
             checks,
             events,
+            manifests,
+            handoffs,
+            result_imports,
+        })
+    }
+
+    pub async fn manifest_preview(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        ring_name: &str,
+    ) -> AgentRolloutResult<AgentRolloutManifestPreview> {
+        validate_ring_name(ring_name)?;
+        let detail = self.detail(tenant_id, rollout_id).await?;
+        let next_version = detail
+            .manifests
+            .iter()
+            .filter(|manifest| manifest.ring_name == ring_name)
+            .map(|manifest| manifest.manifest_version)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let prepared = self
+            .prepare_manifest(
+                tenant_id,
+                &detail,
+                ring_name,
+                ManifestBuildIdentity {
+                    manifest_id: "preview".to_string(),
+                    manifest_version: next_version,
+                    actor_id: 0,
+                    frozen_at: String::new(),
+                },
+            )
+            .await?;
+        Ok(AgentRolloutManifestPreview {
+            manifest: prepared.canonical,
+            manifest_sha256: prepared.manifest_sha256,
+            persisted: false,
+        })
+    }
+
+    pub async fn freeze_manifest(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        ring_name: &str,
+        actor_id: i64,
+        request: AgentRolloutManifestFreezeRequest,
+    ) -> AgentRolloutResult<AgentRolloutManifest> {
+        require_confirmation(
+            &AgentRolloutConfirmationRequest {
+                confirmed: request.confirmed,
+                reason: request.reason,
+            },
+            "Das Manifest muss mit einer Begruendung eingefroren werden.",
+        )?;
+        validate_ring_name(ring_name)?;
+        let detail = self.detail(tenant_id, rollout_id).await?;
+        if detail.handoffs.iter().any(|handoff| {
+            handoff.ring_name == ring_name
+                && !matches!(
+                    handoff.status.as_str(),
+                    "completed" | "failed" | "expired" | "invalidated"
+                )
+        }) {
+            return Err(gate_blocked(
+                "Ein aktiver externer Handoff muss vor einer neuen Manifestversion invalidiert werden.",
+            ));
+        }
+        let next_version = detail
+            .manifests
+            .iter()
+            .filter(|manifest| manifest.ring_name == ring_name)
+            .map(|manifest| manifest.manifest_version)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let prepared = self
+            .prepare_manifest(
+                tenant_id,
+                &detail,
+                ring_name,
+                ManifestBuildIdentity {
+                    manifest_id: new_stable_uuid()?,
+                    manifest_version: next_version,
+                    actor_id,
+                    frozen_at: Utc::now().to_rfc3339(),
+                },
+            )
+            .await?;
+        match self {
+            Self::Sqlite(pool) => {
+                freeze_manifest_sqlite(pool, tenant_id, rollout_id, actor_id, &prepared).await?
+            }
+            Self::Postgres(pool) => {
+                freeze_manifest_postgres(pool, tenant_id, rollout_id, actor_id, &prepared).await?
+            }
+        }
+        self.manifest(tenant_id, rollout_id, &prepared.canonical.manifest_id)
+            .await
+    }
+
+    pub async fn manifest(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        manifest_id: &str,
+    ) -> AgentRolloutResult<AgentRolloutManifest> {
+        validate_safe_reference("Die Manifest-ID", manifest_id.trim(), 36)?;
+        let row = match self {
+            Self::Sqlite(pool) => sqlx::query("SELECT m.*,r.ring_name FROM zero_trust_agent_rollout_manifest m JOIN zero_trust_agent_rollout_ring r ON r.tenant_id=m.tenant_id AND r.rollout_id=m.rollout_id AND r.id=m.ring_id WHERE m.tenant_id=?1 AND m.rollout_id=?2 AND m.manifest_id=?3")
+                .bind(tenant_id).bind(rollout_id).bind(manifest_id.trim()).fetch_optional(pool).await
+                .map_err(|error| AgentRolloutError::database("SQLite-Rollout-Manifest konnte nicht gelesen werden", error))?
+                .map(manifest_from_sqlite_row).transpose()?,
+            Self::Postgres(pool) => sqlx::query("SELECT m.*,r.ring_name FROM zero_trust_agent_rollout_manifest m JOIN zero_trust_agent_rollout_ring r ON r.tenant_id=m.tenant_id AND r.rollout_id=m.rollout_id AND r.id=m.ring_id WHERE m.tenant_id=$1 AND m.rollout_id=$2 AND m.manifest_id=$3")
+                .bind(tenant_id).bind(rollout_id).bind(manifest_id.trim()).fetch_optional(pool).await
+                .map_err(|error| AgentRolloutError::database("PostgreSQL-Rollout-Manifest konnte nicht gelesen werden", error))?
+                .map(manifest_from_postgres_row).transpose()?,
+        };
+        row.ok_or_else(|| foreign_reference("Das Rollout-Manifest wurde nicht gefunden."))
+    }
+
+    pub async fn create_handoff(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        actor_id: i64,
+        mut request: AgentRolloutHandoffCreateRequest,
+    ) -> AgentRolloutResult<AgentRolloutHandoff> {
+        if !request.confirmed {
+            return Err(invalid_input(
+                "Der externe Handoff muss ausdruecklich bestaetigt werden.",
+            ));
+        }
+        request.manifest_id = request.manifest_id.trim().to_string();
+        request.source_system = request.source_system.trim().to_string();
+        request.external_batch_id = request.external_batch_id.trim().to_string();
+        request.description = request.description.trim().to_string();
+        validate_safe_reference("Die Manifest-ID", &request.manifest_id, 36)?;
+        validate_safe_reference("Das Quellsystem", &request.source_system, 96)?;
+        if !request.external_batch_id.is_empty() {
+            validate_safe_reference("Die externe Batch-ID", &request.external_batch_id, 128)?;
+        }
+        if request.description.len() > 1_000 || !safe_operator_text(&request.description) {
+            return Err(invalid_input(
+                "Die Handoff-Beschreibung ist zu lang oder enthaelt nicht erlaubte Inhalte.",
+            ));
+        }
+        request.expires_at = request
+            .expires_at
+            .as_deref()
+            .map(|value| {
+                DateTime::parse_from_rfc3339(value.trim())
+                    .map(|value| value.with_timezone(&Utc).to_rfc3339())
+                    .map_err(|_| invalid_input("expires_at muss ein RFC-3339-Zeitpunkt sein."))
+            })
+            .transpose()?;
+        if request
+            .expires_at
+            .as_deref()
+            .and_then(parse_timestamp)
+            .is_some_and(|expires| expires <= Utc::now())
+        {
+            return Err(invalid_input(
+                "Der Handoff-Ablaufzeitpunkt liegt in der Vergangenheit.",
+            ));
+        }
+        let manifest = self
+            .manifest(tenant_id, rollout_id, &request.manifest_id)
+            .await?;
+        if manifest.status != "active" {
+            return Err(gate_blocked(
+                "Ein Handoff kann nur fuer das aktive Manifest erstellt werden.",
+            ));
+        }
+        let detail = self.detail(tenant_id, rollout_id).await?;
+        let ring = detail
+            .rings
+            .iter()
+            .find(|ring| ring.id == manifest.ring_id)
+            .ok_or_else(|| foreign_reference("Der Manifest-Ring wurde nicht gefunden."))?;
+        if !matches!(ring.status.as_str(), "ready" | "active" | "observing") {
+            return Err(invalid_transition(
+                "Der Ring ist nicht fuer einen externen Handoff bereit.",
+            ));
+        }
+        if detail.handoffs.iter().any(|handoff| {
+            handoff.manifest_id == manifest.manifest_id
+                && !matches!(
+                    handoff.status.as_str(),
+                    "completed" | "failed" | "expired" | "invalidated"
+                )
+        }) {
+            return Err(gate_blocked(
+                "Fuer dieses Manifest besteht bereits ein aktiver Handoff.",
+            ));
+        }
+        let handoff_id = new_stable_uuid()?;
+        match self {
+            Self::Sqlite(pool) => {
+                create_handoff_sqlite(
+                    pool,
+                    tenant_id,
+                    rollout_id,
+                    actor_id,
+                    &handoff_id,
+                    &manifest,
+                    &request,
+                )
+                .await?
+            }
+            Self::Postgres(pool) => {
+                create_handoff_postgres(
+                    pool,
+                    tenant_id,
+                    rollout_id,
+                    actor_id,
+                    &handoff_id,
+                    &manifest,
+                    &request,
+                )
+                .await?
+            }
+        }
+        self.handoff(tenant_id, rollout_id, &handoff_id).await
+    }
+
+    pub async fn handoff(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        handoff_id: &str,
+    ) -> AgentRolloutResult<AgentRolloutHandoff> {
+        validate_safe_reference("Die Handoff-ID", handoff_id.trim(), 36)?;
+        let row = match self {
+            Self::Sqlite(pool) => sqlx::query("SELECT h.*,r.ring_name,m.manifest_id,m.manifest_sha256 FROM zero_trust_agent_rollout_handoff h JOIN zero_trust_agent_rollout_ring r ON r.tenant_id=h.tenant_id AND r.rollout_id=h.rollout_id AND r.id=h.ring_id JOIN zero_trust_agent_rollout_manifest m ON m.tenant_id=h.tenant_id AND m.rollout_id=h.rollout_id AND m.ring_id=h.ring_id AND m.id=h.manifest_db_id WHERE h.tenant_id=?1 AND h.rollout_id=?2 AND h.handoff_id=?3")
+                .bind(tenant_id).bind(rollout_id).bind(handoff_id.trim()).fetch_optional(pool).await
+                .map_err(|error| AgentRolloutError::database("SQLite-Rollout-Handoff konnte nicht gelesen werden", error))?
+                .map(handoff_from_sqlite_row).transpose()?,
+            Self::Postgres(pool) => sqlx::query("SELECT h.*,r.ring_name,m.manifest_id,m.manifest_sha256 FROM zero_trust_agent_rollout_handoff h JOIN zero_trust_agent_rollout_ring r ON r.tenant_id=h.tenant_id AND r.rollout_id=h.rollout_id AND r.id=h.ring_id JOIN zero_trust_agent_rollout_manifest m ON m.tenant_id=h.tenant_id AND m.rollout_id=h.rollout_id AND m.ring_id=h.ring_id AND m.id=h.manifest_db_id WHERE h.tenant_id=$1 AND h.rollout_id=$2 AND h.handoff_id=$3")
+                .bind(tenant_id).bind(rollout_id).bind(handoff_id.trim()).fetch_optional(pool).await
+                .map_err(|error| AgentRolloutError::database("PostgreSQL-Rollout-Handoff konnte nicht gelesen werden", error))?
+                .map(handoff_from_postgres_row).transpose()?,
+        };
+        row.ok_or_else(|| foreign_reference("Der externe Rollout-Handoff wurde nicht gefunden."))
+    }
+
+    pub async fn export_handoff(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        handoff_id: &str,
+        actor_id: i64,
+    ) -> AgentRolloutResult<(AgentRolloutHandoff, String)> {
+        let handoff = self.handoff(tenant_id, rollout_id, handoff_id).await?;
+        if matches!(handoff.status.as_str(), "expired" | "invalidated") {
+            return Err(invalid_transition(
+                "Dieser Handoff darf nicht mehr exportiert werden.",
+            ));
+        }
+        let manifest = self
+            .manifest(tenant_id, rollout_id, &handoff.manifest_id)
+            .await?;
+        if sha256_hex(manifest.canonical_json.as_bytes()) != manifest.manifest_sha256 {
+            return Err(gate_blocked(
+                "Der Handoff-Export wurde wegen einer Manifest-Integritaetsabweichung blockiert.",
+            ));
+        }
+        let canonical_manifest: AgentRolloutCanonicalManifest =
+            serde_json::from_str(&manifest.canonical_json).map_err(|_| {
+                gate_blocked(
+                    "Der Handoff-Export wurde wegen eines ungueltigen Manifests blockiert.",
+                )
+            })?;
+        if handoff.status == "prepared" {
+            match self {
+                Self::Sqlite(pool) => {
+                    mark_handoff_exported_sqlite(
+                        pool,
+                        tenant_id,
+                        rollout_id,
+                        actor_id,
+                        handoff.id,
+                        handoff.ring_id,
+                    )
+                    .await?
+                }
+                Self::Postgres(pool) => {
+                    mark_handoff_exported_postgres(
+                        pool,
+                        tenant_id,
+                        rollout_id,
+                        actor_id,
+                        handoff.id,
+                        handoff.ring_id,
+                    )
+                    .await?
+                }
+            }
+        }
+        let current = self.handoff(tenant_id, rollout_id, handoff_id).await?;
+        let export = AgentRolloutHandoffExport {
+            schema_version: HANDOFF_SCHEMA_VERSION.to_string(),
+            handoff_id: current.handoff_id.clone(),
+            source_system: current.source_system.clone(),
+            external_batch_id: current.external_batch_id.clone(),
+            manifest_id: current.manifest_id.clone(),
+            manifest_sha256: current.manifest_sha256.clone(),
+            rollout_id: current.rollout_id,
+            ring_name: current.ring_name.clone(),
+            expected_result_count: current.expected_result_count,
+            created_at: current.created_at.clone(),
+            expires_at: current.expires_at.clone(),
+            manifest: canonical_manifest,
+        };
+        let body = serde_json::to_string(&export).map_err(|_| {
+            AgentRolloutError::new(
+                AgentRolloutErrorKind::Database,
+                "Der externe Handoff konnte nicht exportiert werden.",
+            )
+        })?;
+        Ok((current, body))
+    }
+
+    pub async fn change_handoff_status(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        handoff_id: &str,
+        actor_id: i64,
+        action: &str,
+        request: AgentRolloutHandoffActionRequest,
+    ) -> AgentRolloutResult<AgentRolloutHandoff> {
+        if !request.confirmed || request.reason.trim().is_empty() {
+            return Err(invalid_input(
+                "Die Handoff-Aktion muss mit einer Begruendung bestaetigt werden.",
+            ));
+        }
+        if request.reason.len() > 1_000 || !safe_operator_text(request.reason.trim()) {
+            return Err(invalid_input(
+                "Die Handoff-Begruendung ist nicht zulaessig.",
+            ));
+        }
+        let handoff = self.handoff(tenant_id, rollout_id, handoff_id).await?;
+        let (from, to, event_type) = match action {
+            "acknowledge" if handoff.status == "exported" => {
+                ("exported", "awaiting_results", "handoff_acknowledged")
+            }
+            "invalidate"
+                if !matches!(
+                    handoff.status.as_str(),
+                    "completed" | "failed" | "expired" | "invalidated"
+                ) =>
+            {
+                (
+                    handoff.status.as_str(),
+                    "invalidated",
+                    "handoff_invalidated",
+                )
+            }
+            "complete"
+                if matches!(
+                    handoff.status.as_str(),
+                    "partially_reported" | "awaiting_results"
+                ) && handoff.reported_result_count == handoff.expected_result_count =>
+            {
+                (handoff.status.as_str(), "completed", "handoff_completed")
+            }
+            _ => {
+                return Err(invalid_transition(
+                    "Die Handoff-Aktion ist im aktuellen Status nicht zulaessig.",
+                ))
+            }
+        };
+        validate_member("Handoff-Status", to, HANDOFF_STATUSES)?;
+        let transition = HandoffTransition {
+            tenant_id,
+            rollout_id,
+            actor_id,
+            handoff: &handoff,
+            from,
+            to,
+            event_type,
+            reason: request.reason.trim(),
+        };
+        match self {
+            Self::Sqlite(pool) => change_handoff_status_sqlite(pool, &transition).await?,
+            Self::Postgres(pool) => change_handoff_status_postgres(pool, &transition).await?,
+        }
+        self.handoff(tenant_id, rollout_id, handoff_id).await
+    }
+
+    pub async fn import_handoff_results(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        actor_id: i64,
+        payload_sha256: &str,
+        mut packet: AgentRolloutResultImportPacket,
+    ) -> AgentRolloutResult<AgentRolloutResultImport> {
+        if !packet.confirmed {
+            return Err(invalid_input(
+                "Der Ergebnisimport muss ausdruecklich bestaetigt werden.",
+            ));
+        }
+        if packet.schema_version != RESULT_SCHEMA_VERSION {
+            return Err(invalid_input(
+                "Die Schema-Version des Ergebnisimports wird nicht unterstuetzt.",
+            ));
+        }
+        if payload_sha256.len() != 64
+            || !payload_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(invalid_input("Der Payload-Hash ist ungueltig."));
+        }
+        packet.manifest_id = packet.manifest_id.trim().to_string();
+        packet.manifest_sha256 = packet.manifest_sha256.trim().to_ascii_lowercase();
+        packet.handoff_id = packet.handoff_id.trim().to_string();
+        packet.source_system = packet.source_system.trim().to_string();
+        packet.external_batch_id = packet.external_batch_id.trim().to_string();
+        validate_safe_reference("Die Manifest-ID", &packet.manifest_id, 36)?;
+        validate_safe_reference("Die Handoff-ID", &packet.handoff_id, 36)?;
+        validate_safe_reference("Das Quellsystem", &packet.source_system, 96)?;
+        validate_safe_reference("Die externe Batch-ID", &packet.external_batch_id, 128)?;
+        if packet.results.is_empty() || packet.results.len() > 500 {
+            return Err(invalid_input(
+                "Ein Ergebnisimport muss 1 bis 500 Eintraege enthalten.",
+            ));
+        }
+        let generated_at = DateTime::parse_from_rfc3339(packet.generated_at.trim())
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|_| invalid_input("generated_at muss ein RFC-3339-Zeitpunkt sein."))?;
+        if generated_at > Utc::now() + Duration::minutes(5) {
+            return Err(invalid_input(
+                "generated_at liegt unzulaessig weit in der Zukunft.",
+            ));
+        }
+        packet.generated_at = generated_at.to_rfc3339();
+        let handoff = self
+            .handoff(tenant_id, rollout_id, &packet.handoff_id)
+            .await?;
+        if !matches!(
+            handoff.status.as_str(),
+            "exported" | "awaiting_results" | "partially_reported"
+        ) {
+            return Err(invalid_transition(
+                "Der Handoff nimmt in seinem aktuellen Status keine Ergebnisse an.",
+            ));
+        }
+        if handoff
+            .expires_at
+            .as_deref()
+            .and_then(parse_timestamp)
+            .is_some_and(|expires| expires <= Utc::now())
+        {
+            self.audit_result_import_rejected(
+                tenant_id,
+                rollout_id,
+                handoff.ring_id,
+                actor_id,
+                "result_import_rejected",
+                "late_result",
+            )
+            .await?;
+            return Err(gate_blocked("Der externe Handoff ist abgelaufen."));
+        }
+        if handoff.manifest_id != packet.manifest_id
+            || handoff.manifest_sha256 != packet.manifest_sha256
+            || handoff.source_system != packet.source_system
+            || (!handoff.external_batch_id.is_empty()
+                && handoff.external_batch_id != packet.external_batch_id)
+        {
+            let event_type = if handoff.manifest_id != packet.manifest_id
+                || handoff.manifest_sha256 != packet.manifest_sha256
+            {
+                "manifest_hash_conflict"
+            } else {
+                "result_import_rejected"
+            };
+            self.audit_result_import_rejected(
+                tenant_id,
+                rollout_id,
+                handoff.ring_id,
+                actor_id,
+                event_type,
+                "handoff_reference_mismatch",
+            )
+            .await?;
+            return Err(gate_blocked(
+                "Ergebnisimport und Handoff-Referenzen stimmen nicht ueberein.",
+            ));
+        }
+        let manifest = self
+            .manifest(tenant_id, rollout_id, &packet.manifest_id)
+            .await?;
+        if manifest.status != "active"
+            || manifest.manifest_sha256 != packet.manifest_sha256
+            || sha256_hex(manifest.canonical_json.as_bytes()) != manifest.manifest_sha256
+        {
+            self.audit_result_import_rejected(
+                tenant_id,
+                rollout_id,
+                handoff.ring_id,
+                actor_id,
+                "manifest_hash_conflict",
+                "manifest_integrity_mismatch",
+            )
+            .await?;
+            return Err(gate_blocked(
+                "Das referenzierte Manifest ist nicht aktiv oder nicht integer.",
+            ));
+        }
+        let frozen_at = parse_timestamp(&manifest.frozen_at)
+            .ok_or_else(|| gate_blocked("Der Manifest-Zeitpunkt ist nicht verifizierbar."))?;
+        if generated_at < frozen_at {
+            return Err(invalid_input(
+                "Der Ergebniszeitpunkt liegt vor dem eingefrorenen Manifest.",
+            ));
+        }
+        let canonical: AgentRolloutCanonicalManifest =
+            serde_json::from_str(&manifest.canonical_json).map_err(|_| {
+                gate_blocked("Das referenzierte Manifest ist strukturell nicht verifizierbar.")
+            })?;
+        if self
+            .result_import_batch_exists(
+                tenant_id,
+                handoff.id,
+                &packet.source_system,
+                &packet.external_batch_id,
+            )
+            .await?
+        {
+            let replay_id = new_stable_uuid()?;
+            let empty_counts = ImportCounts::default();
+            let transaction = ResultImportTransaction {
+                tenant_id,
+                rollout_id,
+                actor_id,
+                import_id: &replay_id,
+                payload_sha256,
+                packet: &packet,
+                manifest: &manifest,
+                handoff: &handoff,
+                prepared: &[],
+                counts: &empty_counts,
+            };
+            match self {
+                Self::Sqlite(pool) => import_results_sqlite(pool, &transaction).await?,
+                Self::Postgres(pool) => import_results_postgres(pool, &transaction).await?,
+            }
+            return self
+                .result_import_for_batch(
+                    tenant_id,
+                    rollout_id,
+                    &packet.handoff_id,
+                    &packet.source_system,
+                    &packet.external_batch_id,
+                )
+                .await;
+        }
+        let detail = self.detail(tenant_id, rollout_id).await?;
+        let ring = detail
+            .rings
+            .iter()
+            .find(|ring| ring.id == handoff.ring_id)
+            .ok_or_else(|| foreign_reference("Der Handoff-Ring wurde nicht gefunden."))?;
+        if detail.rollout.status != "active"
+            || !matches!(ring.status.as_str(), "active" | "observing")
+        {
+            return Err(invalid_transition(
+                "Ergebnisse koennen nur fuer einen aktiven Rollout-Ring importiert werden.",
+            ));
+        }
+        let mut seen_target_ids = Vec::with_capacity(packet.results.len());
+        let mut seen_devices = Vec::with_capacity(packet.results.len());
+        let mut prepared = Vec::with_capacity(packet.results.len());
+        let mut counts = ImportCounts::default();
+        for item in &mut packet.results {
+            item.stable_device_id = item.stable_device_id.trim().to_string();
+            item.outcome = item.outcome.trim().to_ascii_lowercase();
+            item.deployed_version = item.deployed_version.trim().to_string();
+            item.reason_code = item.reason_code.trim().to_ascii_lowercase();
+            item.operator_note = item.operator_note.trim().to_string();
+            validate_safe_reference("Die stabile Device-ID", &item.stable_device_id, 128)?;
+            validate_member("Das Deployment-Ergebnis", &item.outcome, RESULT_OUTCOMES)?;
+            validate_member(
+                "Der Ergebnis-Reason-Code",
+                &item.reason_code,
+                RESULT_REASON_CODES,
+            )?;
+            if item.deployed_version.len() > 64
+                || item.operator_note.len() > 1_000
+                || !safe_operator_text(&item.operator_note)
+            {
+                return Err(invalid_input(
+                    "Ein Ergebniswert ueberschreitet die erlaubte Laenge.",
+                ));
+            }
+            if item.outcome == "succeeded" && item.deployed_version.is_empty() {
+                return Err(invalid_input(
+                    "Ein erfolgreiches Ergebnis benoetigt die beobachtete Agent-Version.",
+                ));
+            }
+            if seen_target_ids.contains(&item.target_id)
+                || seen_devices.contains(&item.stable_device_id)
+            {
+                return Err(invalid_input(
+                    "Ein Rollout-Ziel ist im Ergebnisimport mehrfach enthalten.",
+                ));
+            }
+            seen_target_ids.push(item.target_id);
+            seen_devices.push(item.stable_device_id.clone());
+            let Some(snapshot) = canonical
+                .targets
+                .iter()
+                .find(|target| target.target_id == item.target_id)
+            else {
+                self.audit_result_import_rejected(
+                    tenant_id,
+                    rollout_id,
+                    ring.id,
+                    actor_id,
+                    "result_import_rejected",
+                    "unknown_target",
+                )
+                .await?;
+                return Err(foreign_reference(
+                    "Ein Import-Ziel ist nicht im Manifest enthalten.",
+                ));
+            };
+            if snapshot.stable_device_id != item.stable_device_id {
+                self.audit_result_import_rejected(
+                    tenant_id,
+                    rollout_id,
+                    ring.id,
+                    actor_id,
+                    "result_import_rejected",
+                    "device_reference_mismatch",
+                )
+                .await?;
+                return Err(foreign_reference(
+                    "Device- und Zielreferenz stimmen nicht tenant-sicher ueberein.",
+                ));
+            }
+            let target = detail
+                .targets
+                .iter()
+                .find(|target| target.id == item.target_id && target.ring_id == ring.id)
+                .cloned()
+                .ok_or_else(|| foreign_reference("Das Rollout-Ziel wurde nicht gefunden."))?;
+            let mapped_status = if item.outcome == "succeeded" {
+                "succeeded"
+            } else {
+                "failed"
+            };
+            let mapped_error = match item.reason_code.as_str() {
+                "network" | "package" | "verification" | "policy" | "timeout" | "unknown" => {
+                    item.reason_code.clone()
+                }
+                _ if item.outcome == "timed_out" => "timeout".to_string(),
+                _ if item.outcome == "succeeded" => String::new(),
+                _ => "unknown".to_string(),
+            };
+            if matches!(target.deployment_status.as_str(), "succeeded" | "failed") {
+                if target.deployment_reference.starts_with("handoff:") {
+                    self.audit_result_import_rejected(
+                        tenant_id,
+                        rollout_id,
+                        ring.id,
+                        actor_id,
+                        "target_result_conflict",
+                        "target_conflict",
+                    )
+                    .await?;
+                    return Err(AgentRolloutError::new(
+                        AgentRolloutErrorKind::ConcurrentChange,
+                        "Ein Rollout-Ziel wurde bereits durch einen anderen Import gemeldet.",
+                    ));
+                }
+                let same = target.deployment_status == mapped_status
+                    && target.observed_agent_version == item.deployed_version
+                    && target.error_class == mapped_error
+                    && target.operator_note == item.operator_note;
+                if !same {
+                    self.audit_result_import_rejected(
+                        tenant_id,
+                        rollout_id,
+                        ring.id,
+                        actor_id,
+                        "target_result_conflict",
+                        "direct_result_conflict",
+                    )
+                    .await?;
+                    return Err(AgentRolloutError::new(
+                        AgentRolloutErrorKind::ConcurrentChange,
+                        "Der Import widerspricht einem bereits dokumentierten Zielergebnis.",
+                    ));
+                }
+            } else if !matches!(target.status.as_str(), "scheduled" | "in_progress") {
+                return Err(invalid_transition(
+                    "Ein Import-Ziel nimmt kein Deployment-Ergebnis mehr an.",
+                ));
+            }
+            match item.outcome.as_str() {
+                "succeeded" => counts.succeeded += 1,
+                "failed" => counts.failed += 1,
+                "skipped" => counts.skipped += 1,
+                "timed_out" => counts.timed_out += 1,
+                "unknown" => counts.unknown += 1,
+                _ => unreachable!(),
+            }
+            if !item.deployed_version.is_empty()
+                && item.deployed_version != snapshot.expected_agent_version
+            {
+                counts.version_mismatch += 1;
+            }
+            prepared.push(PreparedImportItem {
+                target,
+                request: AgentRolloutDeploymentResultRequest {
+                    status: mapped_status.to_string(),
+                    observed_version: item.deployed_version.clone(),
+                    error_class: mapped_error,
+                    operator_note: item.operator_note.clone(),
+                    observed_at: Some(packet.generated_at.clone()),
+                },
+            });
+        }
+        let import_id = new_stable_uuid()?;
+        let transaction = ResultImportTransaction {
+            tenant_id,
+            rollout_id,
+            actor_id,
+            import_id: &import_id,
+            payload_sha256,
+            packet: &packet,
+            manifest: &manifest,
+            handoff: &handoff,
+            prepared: &prepared,
+            counts: &counts,
+        };
+        match self {
+            Self::Sqlite(pool) => import_results_sqlite(pool, &transaction).await?,
+            Self::Postgres(pool) => import_results_postgres(pool, &transaction).await?,
+        }
+        self.result_import_for_batch(
+            tenant_id,
+            rollout_id,
+            &packet.handoff_id,
+            &packet.source_system,
+            &packet.external_batch_id,
+        )
+        .await
+    }
+
+    async fn result_import_batch_exists(
+        &self,
+        tenant_id: i64,
+        handoff_db_id: i64,
+        source_system: &str,
+        external_batch_id: &str,
+    ) -> AgentRolloutResult<bool> {
+        match self {
+            Self::Sqlite(pool) => sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zero_trust_agent_rollout_result_import WHERE tenant_id=?1 AND handoff_db_id=?2 AND source_system=?3 AND external_batch_id=?4)")
+                .bind(tenant_id).bind(handoff_db_id).bind(source_system).bind(external_batch_id).fetch_one(pool).await,
+            Self::Postgres(pool) => sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM zero_trust_agent_rollout_result_import WHERE tenant_id=$1 AND handoff_db_id=$2 AND source_system=$3 AND external_batch_id=$4)")
+                .bind(tenant_id).bind(handoff_db_id).bind(source_system).bind(external_batch_id).fetch_one(pool).await,
+        }.map_err(|error| AgentRolloutError::database("Ergebnisimport-Replay konnte nicht gelesen werden", error))
+    }
+
+    async fn result_import_for_batch(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        handoff_id: &str,
+        source_system: &str,
+        external_batch_id: &str,
+    ) -> AgentRolloutResult<AgentRolloutResultImport> {
+        let imports = match self {
+            Self::Sqlite(pool) => list_result_imports_sqlite(pool, tenant_id, rollout_id).await?,
+            Self::Postgres(pool) => {
+                list_result_imports_postgres(pool, tenant_id, rollout_id).await?
+            }
+        };
+        imports
+            .into_iter()
+            .find(|import| {
+                import.handoff_id == handoff_id
+                    && import.source_system == source_system
+                    && import.external_batch_id == external_batch_id
+            })
+            .ok_or_else(|| {
+                AgentRolloutError::new(
+                    AgentRolloutErrorKind::Database,
+                    "Der Ergebnisimport konnte nicht erneut gelesen werden.",
+                )
+            })
+    }
+
+    async fn audit_result_import_rejected(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        ring_id: i64,
+        actor_id: i64,
+        event_type: &str,
+        reason_code: &str,
+    ) -> AgentRolloutResult<()> {
+        match self {
+            Self::Sqlite(pool) => {
+                let mut tx = pool.begin().await.map_err(|error| {
+                    AgentRolloutError::database(
+                        "SQLite-Import-Ablehnungs-Audit konnte nicht gestartet werden",
+                        error,
+                    )
+                })?;
+                insert_event_sqlite(
+                    &mut tx,
+                    RolloutEventInput {
+                        tenant_id,
+                        rollout_id,
+                        ring_id: Some(ring_id),
+                        target_id: None,
+                        event_type,
+                        from_status: "pending",
+                        to_status: "rejected",
+                        actor_id,
+                        summary: "Externer Ergebnisimport sicher abgelehnt",
+                        detail: json!({"reason_code":reason_code}),
+                    },
+                )
+                .await?;
+                tx.commit().await.map_err(|error| {
+                    AgentRolloutError::database(
+                        "SQLite-Import-Ablehnungs-Audit konnte nicht bestaetigt werden",
+                        error,
+                    )
+                })?;
+            }
+            Self::Postgres(pool) => {
+                let mut tx = pool.begin().await.map_err(|error| {
+                    AgentRolloutError::database(
+                        "PostgreSQL-Import-Ablehnungs-Audit konnte nicht gestartet werden",
+                        error,
+                    )
+                })?;
+                insert_event_postgres(
+                    &mut tx,
+                    RolloutEventInput {
+                        tenant_id,
+                        rollout_id,
+                        ring_id: Some(ring_id),
+                        target_id: None,
+                        event_type,
+                        from_status: "pending",
+                        to_status: "rejected",
+                        actor_id,
+                        summary: "Externer Ergebnisimport sicher abgelehnt",
+                        detail: json!({"reason_code":reason_code}),
+                    },
+                )
+                .await?;
+                tx.commit().await.map_err(|error| {
+                    AgentRolloutError::database(
+                        "PostgreSQL-Import-Ablehnungs-Audit konnte nicht bestaetigt werden",
+                        error,
+                    )
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn prepare_manifest(
+        &self,
+        tenant_id: i64,
+        detail: &AgentRolloutDetail,
+        ring_name: &str,
+        identity: ManifestBuildIdentity,
+    ) -> AgentRolloutResult<PreparedManifest> {
+        if !matches!(detail.rollout.status.as_str(), "draft" | "ready" | "active") {
+            return Err(invalid_transition(
+                "Manifeste koennen nur vor oder waehrend eines kontrollierten Rollouts erzeugt werden.",
+            ));
+        }
+        let ring = detail
+            .rings
+            .iter()
+            .find(|ring| ring.ring_name == ring_name)
+            .ok_or_else(|| foreign_reference("Der Rollout-Ring wurde nicht gefunden."))?;
+        if ring.status != "ready" || ring.started_at.is_some() {
+            return Err(gate_blocked(
+                "Das Manifest erfordert einen ungestarteten Ring mit bestandenem Preflight.",
+            ));
+        }
+        let ring_targets: Vec<_> = detail
+            .targets
+            .iter()
+            .filter(|target| target.ring_id == ring.id)
+            .collect();
+        if ring_targets.is_empty()
+            || ring_targets
+                .iter()
+                .any(|target| target.status != "eligible" || target.preflight_status != "passed")
+        {
+            return Err(gate_blocked(
+                "Alle Manifest-Ziele muessen den aktuellen Preflight bestanden haben.",
+            ));
+        }
+        let mut targets = Vec::with_capacity(ring_targets.len());
+        for target in ring_targets {
+            let facts = self
+                .device_facts_by_id(tenant_id, detail.rollout.id, target.device_id)
+                .await?;
+            let warning = detail.checks.iter().any(|check| {
+                check.ring_id == Some(ring.id)
+                    && check.target_id == Some(target.id)
+                    && check.phase == "preflight"
+                    && check.status == "warning"
+            });
+            targets.push(AgentRolloutManifestTargetSnapshot {
+                target_id: target.id,
+                stable_device_id: facts.stable_device_id,
+                expected_agent_version: target.expected_agent_version.clone(),
+                current_agent_version: facts.agent_version,
+                os_family: facts.os_family,
+                architecture: facts.architecture,
+                certificate_status: facts.certificate_status,
+                mtls_binding_status: facts.mtls_binding_status,
+                preflight_status: if warning { "warning" } else { "passed" }.to_string(),
+            });
+        }
+        sort_manifest_targets(&mut targets);
+        let warning_count = targets
+            .iter()
+            .filter(|target| target.preflight_status == "warning")
+            .count() as i64;
+        let artifact = self
+            .artifact_snapshot(tenant_id, detail.rollout.artifact_id.as_deref())
+            .await?
+            .unwrap_or_else(|| ArtifactSnapshot {
+                artifact_id: String::new(),
+                sha256: String::new(),
+                signature_status: "not_required".to_string(),
+                verification_status: "not_required".to_string(),
+                provenance_status: "not_available".to_string(),
+            });
+        let policy = self
+            .policy_snapshot(tenant_id, detail.rollout.policy_profile_id)
+            .await?;
+        let canonical = AgentRolloutCanonicalManifest {
+            schema_version: MANIFEST_SCHEMA_VERSION.to_string(),
+            manifest_id: identity.manifest_id,
+            manifest_version: identity.manifest_version,
+            rollout_id: detail.rollout.id,
+            ring_name: ring.ring_name.clone(),
+            ring_position: ring.sequence_number,
+            target_agent_version: detail.rollout.target_agent_version.clone(),
+            deployment_channel: detail.rollout.deployment_channel_filter.clone(),
+            artifact: AgentRolloutManifestArtifact {
+                artifact_id: artifact.artifact_id,
+                sha256: artifact.sha256,
+                signature_status: artifact.signature_status,
+                verification_status: artifact.verification_status,
+                provenance_status: artifact.provenance_status,
+            },
+            policy: AgentRolloutManifestPolicy {
+                policy_profile_id: policy.policy_profile_id,
+                name: policy.name,
+                revision: policy.revision,
+            },
+            preflight: AgentRolloutManifestPreflight {
+                target_count: targets.len() as i64,
+                passed_count: targets.len() as i64 - warning_count,
+                warning_count,
+                failed_count: 0,
+            },
+            targets,
+            created_by_id: identity.actor_id,
+            frozen_at: identity.frozen_at,
+        };
+        let canonical_json = serde_json::to_string(&canonical).map_err(|_| {
+            AgentRolloutError::new(
+                AgentRolloutErrorKind::Database,
+                "Das kanonische Rollout-Manifest konnte nicht erzeugt werden.",
+            )
+        })?;
+        let manifest_sha256 = sha256_hex(canonical_json.as_bytes());
+        Ok(PreparedManifest {
+            ring_id: ring.id,
+            canonical,
+            canonical_json,
+            manifest_sha256,
         })
     }
 
@@ -1067,6 +2457,389 @@ impl AgentRolloutStore {
                 .map_err(|error: sqlx::Error| AgentRolloutError::database("PostgreSQL-Artefaktstatus ist unlesbar", error)),
         }
     }
+
+    async fn artifact_snapshot(
+        &self,
+        tenant_id: i64,
+        artifact_id: Option<&str>,
+    ) -> AgentRolloutResult<Option<ArtifactSnapshot>> {
+        let Some(artifact_id) = artifact_id else {
+            return Ok(None);
+        };
+        let row = match self {
+            Self::Sqlite(pool) => sqlx::query("SELECT artifact_id,sha256,signature_status,verification_status,provenance_status FROM agent_release_artifact WHERE tenant_id=?1 AND artifact_id=?2")
+                .bind(tenant_id).bind(artifact_id).fetch_optional(pool).await
+                .map_err(|error| AgentRolloutError::database("SQLite-Artefakt-Snapshot konnte nicht gelesen werden", error))?
+                .map(|row| ArtifactSnapshot { artifact_id: row.get("artifact_id"), sha256: row.get("sha256"), signature_status: row.get("signature_status"), verification_status: row.get("verification_status"), provenance_status: row.get("provenance_status") }),
+            Self::Postgres(pool) => sqlx::query("SELECT artifact_id,sha256,signature_status,verification_status,provenance_status FROM agent_release_artifact WHERE tenant_id=$1 AND artifact_id=$2")
+                .bind(tenant_id).bind(artifact_id).fetch_optional(pool).await
+                .map_err(|error| AgentRolloutError::database("PostgreSQL-Artefakt-Snapshot konnte nicht gelesen werden", error))?
+                .map(|row| ArtifactSnapshot { artifact_id: row.get("artifact_id"), sha256: row.get("sha256"), signature_status: row.get("signature_status"), verification_status: row.get("verification_status"), provenance_status: row.get("provenance_status") }),
+        };
+        row.ok_or_else(|| foreign_reference("Das Release-Artefakt wurde nicht gefunden."))
+            .map(Some)
+    }
+
+    async fn policy_snapshot(
+        &self,
+        tenant_id: i64,
+        policy_profile_id: Option<i64>,
+    ) -> AgentRolloutResult<PolicySnapshot> {
+        let Some(policy_profile_id) = policy_profile_id else {
+            return Ok(PolicySnapshot {
+                policy_profile_id: None,
+                name: "not_assigned".to_string(),
+                revision: "not_assigned".to_string(),
+            });
+        };
+        let row = match self {
+            Self::Sqlite(pool) => sqlx::query("SELECT name,updated_at FROM zero_trust_agent_policy_profile WHERE tenant_id=?1 AND id=?2")
+                .bind(tenant_id).bind(policy_profile_id).fetch_optional(pool).await
+                .map_err(|error| AgentRolloutError::database("SQLite-Policy-Snapshot konnte nicht gelesen werden", error))?
+                .map(|row| PolicySnapshot { policy_profile_id: Some(policy_profile_id), name: row.get("name"), revision: row.get("updated_at") }),
+            Self::Postgres(pool) => sqlx::query("SELECT name,updated_at FROM zero_trust_agent_policy_profile WHERE tenant_id=$1 AND id=$2")
+                .bind(tenant_id).bind(policy_profile_id).fetch_optional(pool).await
+                .map_err(|error| AgentRolloutError::database("PostgreSQL-Policy-Snapshot konnte nicht gelesen werden", error))?
+                .map(|row| PolicySnapshot { policy_profile_id: Some(policy_profile_id), name: row.get("name"), revision: row.get("updated_at") }),
+        };
+        row.ok_or_else(|| foreign_reference("Das Policy-Profil wurde nicht gefunden."))
+    }
+}
+
+async fn create_handoff_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    rollout_id: i64,
+    actor_id: i64,
+    handoff_id: &str,
+    manifest: &AgentRolloutManifest,
+    request: &AgentRolloutHandoffCreateRequest,
+) -> AgentRolloutResult<()> {
+    let mut tx = pool.begin().await.map_err(|error| {
+        AgentRolloutError::database("SQLite-Handoff konnte nicht gestartet werden", error)
+    })?;
+    let result = sqlx::query("INSERT INTO zero_trust_agent_rollout_handoff (handoff_id,tenant_id,rollout_id,ring_id,manifest_db_id,status,source_system,external_batch_id,description,expected_result_count,expires_at,created_by_id,updated_by_id) SELECT ?1,?2,?3,m.ring_id,m.id,'prepared',?4,?5,?6,m.target_count,?7,?8,?8 FROM zero_trust_agent_rollout_manifest m WHERE m.tenant_id=?2 AND m.rollout_id=?3 AND m.id=?9 AND m.status='active' AND NOT EXISTS (SELECT 1 FROM zero_trust_agent_rollout_handoff h WHERE h.tenant_id=m.tenant_id AND h.manifest_db_id=m.id AND h.status NOT IN ('completed','failed','expired','invalidated'))")
+        .bind(handoff_id).bind(tenant_id).bind(rollout_id).bind(&request.source_system).bind(&request.external_batch_id).bind(&request.description).bind(request.expires_at.as_deref()).bind(actor_id).bind(manifest.id)
+        .execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("SQLite-Handoff konnte nicht gespeichert werden", error))?;
+    if result.rows_affected() != 1 {
+        return Err(concurrent_change());
+    }
+    insert_event_sqlite(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(manifest.ring_id), target_id: None, event_type: "handoff_created", from_status: "", to_status: "prepared", actor_id, summary: "Externer Deployment-Handoff vorbereitet", detail: json!({"handoff_id":handoff_id,"manifest_id":manifest.manifest_id,"source_system":request.source_system}) }).await?;
+    tx.commit().await.map_err(|error| {
+        AgentRolloutError::database("SQLite-Handoff konnte nicht bestaetigt werden", error)
+    })?;
+    Ok(())
+}
+
+async fn create_handoff_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    rollout_id: i64,
+    actor_id: i64,
+    handoff_id: &str,
+    manifest: &AgentRolloutManifest,
+    request: &AgentRolloutHandoffCreateRequest,
+) -> AgentRolloutResult<()> {
+    let mut tx = pool.begin().await.map_err(|error| {
+        AgentRolloutError::database("PostgreSQL-Handoff konnte nicht gestartet werden", error)
+    })?;
+    let locked: Option<i64> = sqlx::query_scalar("SELECT id FROM zero_trust_agent_rollout_manifest WHERE tenant_id=$1 AND rollout_id=$2 AND id=$3 AND status='active' FOR UPDATE")
+        .bind(tenant_id).bind(rollout_id).bind(manifest.id).fetch_optional(&mut *tx).await.map_err(|error| AgentRolloutError::database("PostgreSQL-Manifest konnte fuer Handoff nicht gesperrt werden", error))?;
+    if locked.is_none() {
+        return Err(concurrent_change());
+    }
+    let result = sqlx::query("INSERT INTO zero_trust_agent_rollout_handoff (handoff_id,tenant_id,rollout_id,ring_id,manifest_db_id,status,source_system,external_batch_id,description,expected_result_count,expires_at,created_by_id,updated_by_id) SELECT $1,$2,$3,m.ring_id,m.id,'prepared',$4,$5,$6,m.target_count,$7,$8,$8 FROM zero_trust_agent_rollout_manifest m WHERE m.tenant_id=$2 AND m.rollout_id=$3 AND m.id=$9 AND m.status='active' AND NOT EXISTS (SELECT 1 FROM zero_trust_agent_rollout_handoff h WHERE h.tenant_id=m.tenant_id AND h.manifest_db_id=m.id AND h.status NOT IN ('completed','failed','expired','invalidated'))")
+        .bind(handoff_id).bind(tenant_id).bind(rollout_id).bind(&request.source_system).bind(&request.external_batch_id).bind(&request.description).bind(request.expires_at.as_deref()).bind(actor_id).bind(manifest.id)
+        .execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("PostgreSQL-Handoff konnte nicht gespeichert werden", error))?;
+    if result.rows_affected() != 1 {
+        return Err(concurrent_change());
+    }
+    insert_event_postgres(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(manifest.ring_id), target_id: None, event_type: "handoff_created", from_status: "", to_status: "prepared", actor_id, summary: "Externer Deployment-Handoff vorbereitet", detail: json!({"handoff_id":handoff_id,"manifest_id":manifest.manifest_id,"source_system":request.source_system}) }).await?;
+    tx.commit().await.map_err(|error| {
+        AgentRolloutError::database("PostgreSQL-Handoff konnte nicht bestaetigt werden", error)
+    })?;
+    Ok(())
+}
+
+async fn mark_handoff_exported_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    rollout_id: i64,
+    actor_id: i64,
+    handoff_db_id: i64,
+    ring_id: i64,
+) -> AgentRolloutResult<()> {
+    let mut tx = pool.begin().await.map_err(|error| {
+        AgentRolloutError::database("SQLite-Handoff-Export konnte nicht gestartet werden", error)
+    })?;
+    let result = sqlx::query("UPDATE zero_trust_agent_rollout_handoff SET status='exported',exported_at=CURRENT_TIMESTAMP,updated_by_id=?1,updated_at=CURRENT_TIMESTAMP WHERE tenant_id=?2 AND rollout_id=?3 AND id=?4 AND status='prepared'").bind(actor_id).bind(tenant_id).bind(rollout_id).bind(handoff_db_id).execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("SQLite-Handoff-Export konnte nicht gespeichert werden", error))?;
+    if result.rows_affected() != 1 {
+        return Err(concurrent_change());
+    }
+    insert_event_sqlite(
+        &mut tx,
+        RolloutEventInput {
+            tenant_id,
+            rollout_id,
+            ring_id: Some(ring_id),
+            target_id: None,
+            event_type: "handoff_exported",
+            from_status: "prepared",
+            to_status: "exported",
+            actor_id,
+            summary: "Kanonisches Manifest fuer externen Handoff exportiert",
+            detail: json!({"remote_execution":false}),
+        },
+    )
+    .await?;
+    tx.commit().await.map_err(|error| {
+        AgentRolloutError::database(
+            "SQLite-Handoff-Export konnte nicht bestaetigt werden",
+            error,
+        )
+    })?;
+    Ok(())
+}
+
+async fn mark_handoff_exported_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    rollout_id: i64,
+    actor_id: i64,
+    handoff_db_id: i64,
+    ring_id: i64,
+) -> AgentRolloutResult<()> {
+    let mut tx = pool.begin().await.map_err(|error| {
+        AgentRolloutError::database(
+            "PostgreSQL-Handoff-Export konnte nicht gestartet werden",
+            error,
+        )
+    })?;
+    let result = sqlx::query("UPDATE zero_trust_agent_rollout_handoff SET status='exported',exported_at=(CURRENT_TIMESTAMP)::text,updated_by_id=$1,updated_at=(CURRENT_TIMESTAMP)::text WHERE tenant_id=$2 AND rollout_id=$3 AND id=$4 AND status='prepared'").bind(actor_id).bind(tenant_id).bind(rollout_id).bind(handoff_db_id).execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("PostgreSQL-Handoff-Export konnte nicht gespeichert werden", error))?;
+    if result.rows_affected() != 1 {
+        return Err(concurrent_change());
+    }
+    insert_event_postgres(
+        &mut tx,
+        RolloutEventInput {
+            tenant_id,
+            rollout_id,
+            ring_id: Some(ring_id),
+            target_id: None,
+            event_type: "handoff_exported",
+            from_status: "prepared",
+            to_status: "exported",
+            actor_id,
+            summary: "Kanonisches Manifest fuer externen Handoff exportiert",
+            detail: json!({"remote_execution":false}),
+        },
+    )
+    .await?;
+    tx.commit().await.map_err(|error| {
+        AgentRolloutError::database(
+            "PostgreSQL-Handoff-Export konnte nicht bestaetigt werden",
+            error,
+        )
+    })?;
+    Ok(())
+}
+
+async fn change_handoff_status_sqlite(
+    pool: &SqlitePool,
+    transition: &HandoffTransition<'_>,
+) -> AgentRolloutResult<()> {
+    let mut tx = pool.begin().await.map_err(|error| {
+        AgentRolloutError::database(
+            "SQLite-Handoff-Statuswechsel konnte nicht gestartet werden",
+            error,
+        )
+    })?;
+    let result = sqlx::query("UPDATE zero_trust_agent_rollout_handoff SET status=?1,acknowledged_at=CASE WHEN ?1='awaiting_results' THEN CURRENT_TIMESTAMP ELSE acknowledged_at END,completed_at=CASE WHEN ?1='completed' THEN CURRENT_TIMESTAMP ELSE completed_at END,invalidated_at=CASE WHEN ?1='invalidated' THEN CURRENT_TIMESTAMP ELSE invalidated_at END,updated_by_id=?2,updated_at=CURRENT_TIMESTAMP WHERE tenant_id=?3 AND rollout_id=?4 AND id=?5 AND status=?6").bind(transition.to).bind(transition.actor_id).bind(transition.tenant_id).bind(transition.rollout_id).bind(transition.handoff.id).bind(transition.from).execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("SQLite-Handoff-Status konnte nicht gespeichert werden", error))?;
+    if result.rows_affected() != 1 {
+        return Err(concurrent_change());
+    }
+    insert_event_sqlite(
+        &mut tx,
+        RolloutEventInput {
+            tenant_id: transition.tenant_id,
+            rollout_id: transition.rollout_id,
+            ring_id: Some(transition.handoff.ring_id),
+            target_id: None,
+            event_type: transition.event_type,
+            from_status: transition.from,
+            to_status: transition.to,
+            actor_id: transition.actor_id,
+            summary: "Externer Handoff-Status kontrolliert aktualisiert",
+            detail: json!({"handoff_id":transition.handoff.handoff_id,"reason":transition.reason}),
+        },
+    )
+    .await?;
+    tx.commit().await.map_err(|error| {
+        AgentRolloutError::database(
+            "SQLite-Handoff-Status konnte nicht bestaetigt werden",
+            error,
+        )
+    })?;
+    Ok(())
+}
+
+async fn change_handoff_status_postgres(
+    pool: &PgPool,
+    transition: &HandoffTransition<'_>,
+) -> AgentRolloutResult<()> {
+    let mut tx = pool.begin().await.map_err(|error| {
+        AgentRolloutError::database(
+            "PostgreSQL-Handoff-Statuswechsel konnte nicht gestartet werden",
+            error,
+        )
+    })?;
+    let result = sqlx::query("UPDATE zero_trust_agent_rollout_handoff SET status=$1,acknowledged_at=CASE WHEN $1='awaiting_results' THEN (CURRENT_TIMESTAMP)::text ELSE acknowledged_at END,completed_at=CASE WHEN $1='completed' THEN (CURRENT_TIMESTAMP)::text ELSE completed_at END,invalidated_at=CASE WHEN $1='invalidated' THEN (CURRENT_TIMESTAMP)::text ELSE invalidated_at END,updated_by_id=$2,updated_at=(CURRENT_TIMESTAMP)::text WHERE tenant_id=$3 AND rollout_id=$4 AND id=$5 AND status=$6").bind(transition.to).bind(transition.actor_id).bind(transition.tenant_id).bind(transition.rollout_id).bind(transition.handoff.id).bind(transition.from).execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("PostgreSQL-Handoff-Status konnte nicht gespeichert werden", error))?;
+    if result.rows_affected() != 1 {
+        return Err(concurrent_change());
+    }
+    insert_event_postgres(
+        &mut tx,
+        RolloutEventInput {
+            tenant_id: transition.tenant_id,
+            rollout_id: transition.rollout_id,
+            ring_id: Some(transition.handoff.ring_id),
+            target_id: None,
+            event_type: transition.event_type,
+            from_status: transition.from,
+            to_status: transition.to,
+            actor_id: transition.actor_id,
+            summary: "Externer Handoff-Status kontrolliert aktualisiert",
+            detail: json!({"handoff_id":transition.handoff.handoff_id,"reason":transition.reason}),
+        },
+    )
+    .await?;
+    tx.commit().await.map_err(|error| {
+        AgentRolloutError::database(
+            "PostgreSQL-Handoff-Status konnte nicht bestaetigt werden",
+            error,
+        )
+    })?;
+    Ok(())
+}
+
+async fn freeze_manifest_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    rollout_id: i64,
+    actor_id: i64,
+    prepared: &PreparedManifest,
+) -> AgentRolloutResult<()> {
+    let mut tx = pool.begin().await.map_err(|error| {
+        AgentRolloutError::database(
+            "SQLite-Manifest-Freeze konnte nicht gestartet werden",
+            error,
+        )
+    })?;
+    let superseded = sqlx::query("UPDATE zero_trust_agent_rollout_manifest SET status='superseded' WHERE tenant_id=?1 AND rollout_id=?2 AND ring_id=?3 AND status='active' AND EXISTS (SELECT 1 FROM zero_trust_agent_rollout_ring r WHERE r.tenant_id=?1 AND r.rollout_id=?2 AND r.id=?3 AND r.status='ready' AND r.started_at IS NULL)")
+        .bind(tenant_id).bind(rollout_id).bind(prepared.ring_id).execute(&mut *tx).await
+        .map_err(|error| AgentRolloutError::database("SQLite-vorheriges Manifest konnte nicht abgeloest werden", error))?;
+    let canonical = &prepared.canonical;
+    let manifest_db_id: i64 = sqlx::query_scalar("INSERT INTO zero_trust_agent_rollout_manifest (manifest_id,tenant_id,rollout_id,ring_id,manifest_version,schema_version,status,manifest_sha256,canonical_json,artifact_id,artifact_sha256,artifact_signature_status,artifact_verification_status,artifact_provenance_status,policy_profile_id,policy_revision,target_count,preflight_passed_count,preflight_warning_count,preflight_failed_count,created_by_id,frozen_at) SELECT ?1,?2,?3,?4,?5,?6,'active',?7,?8,NULLIF(?9,''),?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21 WHERE EXISTS (SELECT 1 FROM zero_trust_agent_rollout ro JOIN zero_trust_agent_rollout_ring r ON r.tenant_id=ro.tenant_id AND r.rollout_id=ro.id WHERE ro.tenant_id=?2 AND ro.id=?3 AND ro.status IN ('draft','ready','active') AND r.id=?4 AND r.status='ready' AND r.started_at IS NULL) RETURNING id")
+        .bind(&canonical.manifest_id).bind(tenant_id).bind(rollout_id).bind(prepared.ring_id).bind(canonical.manifest_version).bind(&canonical.schema_version).bind(&prepared.manifest_sha256).bind(&prepared.canonical_json).bind(&canonical.artifact.artifact_id).bind(&canonical.artifact.sha256).bind(&canonical.artifact.signature_status).bind(&canonical.artifact.verification_status).bind(&canonical.artifact.provenance_status).bind(canonical.policy.policy_profile_id).bind(&canonical.policy.revision).bind(canonical.preflight.target_count).bind(canonical.preflight.passed_count).bind(canonical.preflight.warning_count).bind(canonical.preflight.failed_count).bind(actor_id).bind(&canonical.frozen_at)
+        .fetch_optional(&mut *tx).await.map_err(|error| database_or_concurrent("SQLite-Manifest konnte nicht eingefroren werden", error))?
+        .ok_or_else(concurrent_change)?;
+    for (position, target) in canonical.targets.iter().enumerate() {
+        let result = sqlx::query("INSERT INTO zero_trust_agent_rollout_manifest_target (tenant_id,rollout_id,ring_id,manifest_db_id,target_id,device_id,target_position,stable_device_id,expected_agent_version,current_agent_version,os_family,architecture,certificate_status,mtls_binding_status,preflight_status) SELECT ?1,?2,?3,?4,t.id,t.device_id,?5,?6,?7,?8,?9,?10,?11,?12,?13 FROM zero_trust_agent_rollout_target t JOIN zero_trust_agent_device d ON d.tenant_id=t.tenant_id AND d.id=t.device_id WHERE t.tenant_id=?1 AND t.rollout_id=?2 AND t.ring_id=?3 AND t.id=?14 AND d.stable_device_id=?6 AND t.status='eligible' AND t.preflight_status='passed'")
+            .bind(tenant_id).bind(rollout_id).bind(prepared.ring_id).bind(manifest_db_id).bind(position as i64 + 1).bind(&target.stable_device_id).bind(&target.expected_agent_version).bind(&target.current_agent_version).bind(&target.os_family).bind(&target.architecture).bind(&target.certificate_status).bind(&target.mtls_binding_status).bind(&target.preflight_status).bind(target.target_id)
+            .execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("SQLite-Manifest-Ziel konnte nicht eingefroren werden", error))?;
+        if result.rows_affected() != 1 {
+            return Err(concurrent_change());
+        }
+    }
+    if superseded.rows_affected() > 0 {
+        insert_event_sqlite(
+            &mut tx,
+            RolloutEventInput {
+                tenant_id,
+                rollout_id,
+                ring_id: Some(prepared.ring_id),
+                target_id: None,
+                event_type: "manifest_superseded",
+                from_status: "active",
+                to_status: "superseded",
+                actor_id,
+                summary: "Vorherige Manifestversion vor Ring-Start abgeloest",
+                detail: json!({"new_manifest_id": canonical.manifest_id}),
+            },
+        )
+        .await?;
+    }
+    insert_event_sqlite(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(prepared.ring_id), target_id: None, event_type: "manifest_frozen", from_status: "preview", to_status: "active", actor_id, summary: "Unveraenderliches Rollout-Manifest eingefroren", detail: json!({"manifest_id":canonical.manifest_id,"manifest_sha256":prepared.manifest_sha256,"manifest_version":canonical.manifest_version,"target_count":canonical.targets.len()}) }).await?;
+    tx.commit().await.map_err(|error| {
+        AgentRolloutError::database(
+            "SQLite-Manifest-Freeze konnte nicht bestaetigt werden",
+            error,
+        )
+    })?;
+    Ok(())
+}
+
+async fn freeze_manifest_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    rollout_id: i64,
+    actor_id: i64,
+    prepared: &PreparedManifest,
+) -> AgentRolloutResult<()> {
+    let mut tx = pool.begin().await.map_err(|error| {
+        AgentRolloutError::database(
+            "PostgreSQL-Manifest-Freeze konnte nicht gestartet werden",
+            error,
+        )
+    })?;
+    let locked: Option<i64> = sqlx::query_scalar("SELECT id FROM zero_trust_agent_rollout_ring WHERE tenant_id=$1 AND rollout_id=$2 AND id=$3 AND status='ready' AND started_at IS NULL FOR UPDATE")
+        .bind(tenant_id).bind(rollout_id).bind(prepared.ring_id).fetch_optional(&mut *tx).await
+        .map_err(|error| AgentRolloutError::database("PostgreSQL-Rollout-Ring konnte nicht gesperrt werden", error))?;
+    if locked.is_none() {
+        return Err(concurrent_change());
+    }
+    let superseded = sqlx::query("UPDATE zero_trust_agent_rollout_manifest SET status='superseded' WHERE tenant_id=$1 AND rollout_id=$2 AND ring_id=$3 AND status='active'")
+        .bind(tenant_id).bind(rollout_id).bind(prepared.ring_id).execute(&mut *tx).await
+        .map_err(|error| AgentRolloutError::database("PostgreSQL-vorheriges Manifest konnte nicht abgeloest werden", error))?;
+    let canonical = &prepared.canonical;
+    let manifest_db_id: i64 = sqlx::query_scalar("INSERT INTO zero_trust_agent_rollout_manifest (manifest_id,tenant_id,rollout_id,ring_id,manifest_version,schema_version,status,manifest_sha256,canonical_json,artifact_id,artifact_sha256,artifact_signature_status,artifact_verification_status,artifact_provenance_status,policy_profile_id,policy_revision,target_count,preflight_passed_count,preflight_warning_count,preflight_failed_count,created_by_id,frozen_at) SELECT $1,$2,$3,$4,$5,$6,'active',$7,$8,NULLIF($9,''),$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21 WHERE EXISTS (SELECT 1 FROM zero_trust_agent_rollout WHERE tenant_id=$2 AND id=$3 AND status IN ('draft','ready','active')) RETURNING id")
+        .bind(&canonical.manifest_id).bind(tenant_id).bind(rollout_id).bind(prepared.ring_id).bind(canonical.manifest_version as i32).bind(&canonical.schema_version).bind(&prepared.manifest_sha256).bind(&prepared.canonical_json).bind(&canonical.artifact.artifact_id).bind(&canonical.artifact.sha256).bind(&canonical.artifact.signature_status).bind(&canonical.artifact.verification_status).bind(&canonical.artifact.provenance_status).bind(canonical.policy.policy_profile_id).bind(&canonical.policy.revision).bind(canonical.preflight.target_count as i32).bind(canonical.preflight.passed_count as i32).bind(canonical.preflight.warning_count as i32).bind(canonical.preflight.failed_count as i32).bind(actor_id).bind(&canonical.frozen_at)
+        .fetch_optional(&mut *tx).await.map_err(|error| database_or_concurrent("PostgreSQL-Manifest konnte nicht eingefroren werden", error))?
+        .ok_or_else(concurrent_change)?;
+    for (position, target) in canonical.targets.iter().enumerate() {
+        let result = sqlx::query("INSERT INTO zero_trust_agent_rollout_manifest_target (tenant_id,rollout_id,ring_id,manifest_db_id,target_id,device_id,target_position,stable_device_id,expected_agent_version,current_agent_version,os_family,architecture,certificate_status,mtls_binding_status,preflight_status) SELECT $1,$2,$3,$4,t.id,t.device_id,$5,$6,$7,$8,$9,$10,$11,$12,$13 FROM zero_trust_agent_rollout_target t JOIN zero_trust_agent_device d ON d.tenant_id=t.tenant_id AND d.id=t.device_id WHERE t.tenant_id=$1 AND t.rollout_id=$2 AND t.ring_id=$3 AND t.id=$14 AND d.stable_device_id=$6 AND t.status='eligible' AND t.preflight_status='passed'")
+            .bind(tenant_id).bind(rollout_id).bind(prepared.ring_id).bind(manifest_db_id).bind(position as i32 + 1).bind(&target.stable_device_id).bind(&target.expected_agent_version).bind(&target.current_agent_version).bind(&target.os_family).bind(&target.architecture).bind(&target.certificate_status).bind(&target.mtls_binding_status).bind(&target.preflight_status).bind(target.target_id)
+            .execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("PostgreSQL-Manifest-Ziel konnte nicht eingefroren werden", error))?;
+        if result.rows_affected() != 1 {
+            return Err(concurrent_change());
+        }
+    }
+    if superseded.rows_affected() > 0 {
+        insert_event_postgres(
+            &mut tx,
+            RolloutEventInput {
+                tenant_id,
+                rollout_id,
+                ring_id: Some(prepared.ring_id),
+                target_id: None,
+                event_type: "manifest_superseded",
+                from_status: "active",
+                to_status: "superseded",
+                actor_id,
+                summary: "Vorherige Manifestversion vor Ring-Start abgeloest",
+                detail: json!({"new_manifest_id": canonical.manifest_id}),
+            },
+        )
+        .await?;
+    }
+    insert_event_postgres(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(prepared.ring_id), target_id: None, event_type: "manifest_frozen", from_status: "preview", to_status: "active", actor_id, summary: "Unveraenderliches Rollout-Manifest eingefroren", detail: json!({"manifest_id":canonical.manifest_id,"manifest_sha256":prepared.manifest_sha256,"manifest_version":canonical.manifest_version,"target_count":canonical.targets.len()}) }).await?;
+    tx.commit().await.map_err(|error| {
+        AgentRolloutError::database(
+            "PostgreSQL-Manifest-Freeze konnte nicht bestaetigt werden",
+            error,
+        )
+    })?;
+    Ok(())
 }
 
 async fn abort_sqlite(
@@ -2751,6 +4524,244 @@ async fn list_events_postgres(
     rows.into_iter().map(event_from_postgres_row).collect()
 }
 
+async fn list_manifests_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    rollout_id: i64,
+) -> AgentRolloutResult<Vec<AgentRolloutManifest>> {
+    let rows = sqlx::query("SELECT m.*,r.ring_name FROM zero_trust_agent_rollout_manifest m JOIN zero_trust_agent_rollout_ring r ON r.tenant_id=m.tenant_id AND r.rollout_id=m.rollout_id AND r.id=m.ring_id WHERE m.tenant_id=?1 AND m.rollout_id=?2 ORDER BY r.sequence_number,m.manifest_version DESC")
+        .bind(tenant_id).bind(rollout_id).fetch_all(pool).await
+        .map_err(|error| AgentRolloutError::database("SQLite-Rollout-Manifeste konnten nicht gelesen werden", error))?;
+    rows.into_iter().map(manifest_from_sqlite_row).collect()
+}
+
+async fn list_manifests_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    rollout_id: i64,
+) -> AgentRolloutResult<Vec<AgentRolloutManifest>> {
+    let rows = sqlx::query("SELECT m.*,r.ring_name FROM zero_trust_agent_rollout_manifest m JOIN zero_trust_agent_rollout_ring r ON r.tenant_id=m.tenant_id AND r.rollout_id=m.rollout_id AND r.id=m.ring_id WHERE m.tenant_id=$1 AND m.rollout_id=$2 ORDER BY r.sequence_number,m.manifest_version DESC")
+        .bind(tenant_id).bind(rollout_id).fetch_all(pool).await
+        .map_err(|error| AgentRolloutError::database("PostgreSQL-Rollout-Manifeste konnten nicht gelesen werden", error))?;
+    rows.into_iter().map(manifest_from_postgres_row).collect()
+}
+
+async fn list_handoffs_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    rollout_id: i64,
+) -> AgentRolloutResult<Vec<AgentRolloutHandoff>> {
+    let rows = sqlx::query("SELECT h.*,r.ring_name,m.manifest_id,m.manifest_sha256 FROM zero_trust_agent_rollout_handoff h JOIN zero_trust_agent_rollout_ring r ON r.tenant_id=h.tenant_id AND r.rollout_id=h.rollout_id AND r.id=h.ring_id JOIN zero_trust_agent_rollout_manifest m ON m.tenant_id=h.tenant_id AND m.rollout_id=h.rollout_id AND m.ring_id=h.ring_id AND m.id=h.manifest_db_id WHERE h.tenant_id=?1 AND h.rollout_id=?2 ORDER BY h.created_at DESC,h.id DESC")
+        .bind(tenant_id).bind(rollout_id).fetch_all(pool).await
+        .map_err(|error| AgentRolloutError::database("SQLite-Rollout-Handoffs konnten nicht gelesen werden", error))?;
+    rows.into_iter().map(handoff_from_sqlite_row).collect()
+}
+
+async fn list_handoffs_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    rollout_id: i64,
+) -> AgentRolloutResult<Vec<AgentRolloutHandoff>> {
+    let rows = sqlx::query("SELECT h.*,r.ring_name,m.manifest_id,m.manifest_sha256 FROM zero_trust_agent_rollout_handoff h JOIN zero_trust_agent_rollout_ring r ON r.tenant_id=h.tenant_id AND r.rollout_id=h.rollout_id AND r.id=h.ring_id JOIN zero_trust_agent_rollout_manifest m ON m.tenant_id=h.tenant_id AND m.rollout_id=h.rollout_id AND m.ring_id=h.ring_id AND m.id=h.manifest_db_id WHERE h.tenant_id=$1 AND h.rollout_id=$2 ORDER BY h.created_at DESC,h.id DESC")
+        .bind(tenant_id).bind(rollout_id).fetch_all(pool).await
+        .map_err(|error| AgentRolloutError::database("PostgreSQL-Rollout-Handoffs konnten nicht gelesen werden", error))?;
+    rows.into_iter().map(handoff_from_postgres_row).collect()
+}
+
+async fn list_result_imports_sqlite(
+    pool: &SqlitePool,
+    tenant_id: i64,
+    rollout_id: i64,
+) -> AgentRolloutResult<Vec<AgentRolloutResultImport>> {
+    let rows = sqlx::query("SELECT i.*,h.handoff_id FROM zero_trust_agent_rollout_result_import i JOIN zero_trust_agent_rollout_handoff h ON h.tenant_id=i.tenant_id AND h.rollout_id=i.rollout_id AND h.ring_id=i.ring_id AND h.id=i.handoff_db_id WHERE i.tenant_id=?1 AND i.rollout_id=?2 ORDER BY i.imported_at DESC,i.id DESC")
+        .bind(tenant_id).bind(rollout_id).fetch_all(pool).await
+        .map_err(|error| AgentRolloutError::database("SQLite-Rollout-Importe konnten nicht gelesen werden", error))?;
+    rows.into_iter()
+        .map(result_import_from_sqlite_row)
+        .collect()
+}
+
+async fn list_result_imports_postgres(
+    pool: &PgPool,
+    tenant_id: i64,
+    rollout_id: i64,
+) -> AgentRolloutResult<Vec<AgentRolloutResultImport>> {
+    let rows = sqlx::query("SELECT i.*,h.handoff_id FROM zero_trust_agent_rollout_result_import i JOIN zero_trust_agent_rollout_handoff h ON h.tenant_id=i.tenant_id AND h.rollout_id=i.rollout_id AND h.ring_id=i.ring_id AND h.id=i.handoff_db_id WHERE i.tenant_id=$1 AND i.rollout_id=$2 ORDER BY i.imported_at DESC,i.id DESC")
+        .bind(tenant_id).bind(rollout_id).fetch_all(pool).await
+        .map_err(|error| AgentRolloutError::database("PostgreSQL-Rollout-Importe konnten nicht gelesen werden", error))?;
+    rows.into_iter()
+        .map(result_import_from_postgres_row)
+        .collect()
+}
+
+fn manifest_from_sqlite_row(row: SqliteRow) -> AgentRolloutResult<AgentRolloutManifest> {
+    Ok(AgentRolloutManifest {
+        id: get_sqlite(&row, "id")?,
+        manifest_id: get_sqlite(&row, "manifest_id")?,
+        rollout_id: get_sqlite(&row, "rollout_id")?,
+        ring_id: get_sqlite(&row, "ring_id")?,
+        ring_name: get_sqlite(&row, "ring_name")?,
+        manifest_version: get_sqlite(&row, "manifest_version")?,
+        schema_version: get_sqlite(&row, "schema_version")?,
+        status: get_sqlite(&row, "status")?,
+        manifest_sha256: get_sqlite(&row, "manifest_sha256")?,
+        canonical_json: get_sqlite(&row, "canonical_json")?,
+        artifact_id: get_sqlite(&row, "artifact_id")?,
+        artifact_sha256: get_sqlite(&row, "artifact_sha256")?,
+        artifact_signature_status: get_sqlite(&row, "artifact_signature_status")?,
+        artifact_verification_status: get_sqlite(&row, "artifact_verification_status")?,
+        artifact_provenance_status: get_sqlite(&row, "artifact_provenance_status")?,
+        policy_profile_id: get_sqlite(&row, "policy_profile_id")?,
+        policy_revision: get_sqlite(&row, "policy_revision")?,
+        target_count: get_sqlite(&row, "target_count")?,
+        preflight_passed_count: get_sqlite(&row, "preflight_passed_count")?,
+        preflight_warning_count: get_sqlite(&row, "preflight_warning_count")?,
+        preflight_failed_count: get_sqlite(&row, "preflight_failed_count")?,
+        created_by_id: get_sqlite(&row, "created_by_id")?,
+        frozen_at: get_sqlite(&row, "frozen_at")?,
+    })
+}
+
+fn manifest_from_postgres_row(row: PgRow) -> AgentRolloutResult<AgentRolloutManifest> {
+    Ok(AgentRolloutManifest {
+        id: get_postgres(&row, "id")?,
+        manifest_id: get_postgres(&row, "manifest_id")?,
+        rollout_id: get_postgres(&row, "rollout_id")?,
+        ring_id: get_postgres(&row, "ring_id")?,
+        ring_name: get_postgres(&row, "ring_name")?,
+        manifest_version: get_postgres_integer(&row, "manifest_version")?,
+        schema_version: get_postgres(&row, "schema_version")?,
+        status: get_postgres(&row, "status")?,
+        manifest_sha256: get_postgres(&row, "manifest_sha256")?,
+        canonical_json: get_postgres(&row, "canonical_json")?,
+        artifact_id: get_postgres(&row, "artifact_id")?,
+        artifact_sha256: get_postgres(&row, "artifact_sha256")?,
+        artifact_signature_status: get_postgres(&row, "artifact_signature_status")?,
+        artifact_verification_status: get_postgres(&row, "artifact_verification_status")?,
+        artifact_provenance_status: get_postgres(&row, "artifact_provenance_status")?,
+        policy_profile_id: get_postgres(&row, "policy_profile_id")?,
+        policy_revision: get_postgres(&row, "policy_revision")?,
+        target_count: get_postgres_integer(&row, "target_count")?,
+        preflight_passed_count: get_postgres_integer(&row, "preflight_passed_count")?,
+        preflight_warning_count: get_postgres_integer(&row, "preflight_warning_count")?,
+        preflight_failed_count: get_postgres_integer(&row, "preflight_failed_count")?,
+        created_by_id: get_postgres(&row, "created_by_id")?,
+        frozen_at: get_postgres(&row, "frozen_at")?,
+    })
+}
+
+fn handoff_from_sqlite_row(row: SqliteRow) -> AgentRolloutResult<AgentRolloutHandoff> {
+    Ok(AgentRolloutHandoff {
+        id: get_sqlite(&row, "id")?,
+        handoff_id: get_sqlite(&row, "handoff_id")?,
+        rollout_id: get_sqlite(&row, "rollout_id")?,
+        ring_id: get_sqlite(&row, "ring_id")?,
+        ring_name: get_sqlite(&row, "ring_name")?,
+        manifest_id: get_sqlite(&row, "manifest_id")?,
+        manifest_sha256: get_sqlite(&row, "manifest_sha256")?,
+        status: get_sqlite(&row, "status")?,
+        source_system: get_sqlite(&row, "source_system")?,
+        external_batch_id: get_sqlite(&row, "external_batch_id")?,
+        description: get_sqlite(&row, "description")?,
+        expected_result_count: get_sqlite(&row, "expected_result_count")?,
+        reported_result_count: get_sqlite(&row, "reported_result_count")?,
+        succeeded_count: get_sqlite(&row, "succeeded_count")?,
+        failed_count: get_sqlite(&row, "failed_count")?,
+        skipped_count: get_sqlite(&row, "skipped_count")?,
+        timed_out_count: get_sqlite(&row, "timed_out_count")?,
+        unknown_count: get_sqlite(&row, "unknown_count")?,
+        version_mismatch_count: get_sqlite(&row, "version_mismatch_count")?,
+        expires_at: get_sqlite(&row, "expires_at")?,
+        exported_at: get_sqlite(&row, "exported_at")?,
+        acknowledged_at: get_sqlite(&row, "acknowledged_at")?,
+        completed_at: get_sqlite(&row, "completed_at")?,
+        invalidated_at: get_sqlite(&row, "invalidated_at")?,
+        created_by_id: get_sqlite(&row, "created_by_id")?,
+        updated_by_id: get_sqlite(&row, "updated_by_id")?,
+        created_at: get_sqlite(&row, "created_at")?,
+        updated_at: get_sqlite(&row, "updated_at")?,
+    })
+}
+
+fn handoff_from_postgres_row(row: PgRow) -> AgentRolloutResult<AgentRolloutHandoff> {
+    Ok(AgentRolloutHandoff {
+        id: get_postgres(&row, "id")?,
+        handoff_id: get_postgres(&row, "handoff_id")?,
+        rollout_id: get_postgres(&row, "rollout_id")?,
+        ring_id: get_postgres(&row, "ring_id")?,
+        ring_name: get_postgres(&row, "ring_name")?,
+        manifest_id: get_postgres(&row, "manifest_id")?,
+        manifest_sha256: get_postgres(&row, "manifest_sha256")?,
+        status: get_postgres(&row, "status")?,
+        source_system: get_postgres(&row, "source_system")?,
+        external_batch_id: get_postgres(&row, "external_batch_id")?,
+        description: get_postgres(&row, "description")?,
+        expected_result_count: get_postgres_integer(&row, "expected_result_count")?,
+        reported_result_count: get_postgres_integer(&row, "reported_result_count")?,
+        succeeded_count: get_postgres_integer(&row, "succeeded_count")?,
+        failed_count: get_postgres_integer(&row, "failed_count")?,
+        skipped_count: get_postgres_integer(&row, "skipped_count")?,
+        timed_out_count: get_postgres_integer(&row, "timed_out_count")?,
+        unknown_count: get_postgres_integer(&row, "unknown_count")?,
+        version_mismatch_count: get_postgres_integer(&row, "version_mismatch_count")?,
+        expires_at: get_postgres(&row, "expires_at")?,
+        exported_at: get_postgres(&row, "exported_at")?,
+        acknowledged_at: get_postgres(&row, "acknowledged_at")?,
+        completed_at: get_postgres(&row, "completed_at")?,
+        invalidated_at: get_postgres(&row, "invalidated_at")?,
+        created_by_id: get_postgres(&row, "created_by_id")?,
+        updated_by_id: get_postgres(&row, "updated_by_id")?,
+        created_at: get_postgres(&row, "created_at")?,
+        updated_at: get_postgres(&row, "updated_at")?,
+    })
+}
+
+fn result_import_from_sqlite_row(row: SqliteRow) -> AgentRolloutResult<AgentRolloutResultImport> {
+    Ok(AgentRolloutResultImport {
+        import_id: get_sqlite(&row, "import_id")?,
+        handoff_id: get_sqlite(&row, "handoff_id")?,
+        source_system: get_sqlite(&row, "source_system")?,
+        external_batch_id: get_sqlite(&row, "external_batch_id")?,
+        generated_at: get_sqlite(&row, "generated_at")?,
+        payload_sha256: get_sqlite(&row, "payload_sha256")?,
+        status: get_sqlite(&row, "status")?,
+        item_count: get_sqlite(&row, "item_count")?,
+        succeeded_count: get_sqlite(&row, "succeeded_count")?,
+        failed_count: get_sqlite(&row, "failed_count")?,
+        skipped_count: get_sqlite(&row, "skipped_count")?,
+        timed_out_count: get_sqlite(&row, "timed_out_count")?,
+        unknown_count: get_sqlite(&row, "unknown_count")?,
+        version_mismatch_count: get_sqlite(&row, "version_mismatch_count")?,
+        replay_count: get_sqlite(&row, "replay_count")?,
+        imported_by_id: get_sqlite(&row, "imported_by_id")?,
+        imported_at: get_sqlite(&row, "imported_at")?,
+        last_replayed_at: get_sqlite(&row, "last_replayed_at")?,
+    })
+}
+
+fn result_import_from_postgres_row(row: PgRow) -> AgentRolloutResult<AgentRolloutResultImport> {
+    Ok(AgentRolloutResultImport {
+        import_id: get_postgres(&row, "import_id")?,
+        handoff_id: get_postgres(&row, "handoff_id")?,
+        source_system: get_postgres(&row, "source_system")?,
+        external_batch_id: get_postgres(&row, "external_batch_id")?,
+        generated_at: get_postgres(&row, "generated_at")?,
+        payload_sha256: get_postgres(&row, "payload_sha256")?,
+        status: get_postgres(&row, "status")?,
+        item_count: get_postgres_integer(&row, "item_count")?,
+        succeeded_count: get_postgres_integer(&row, "succeeded_count")?,
+        failed_count: get_postgres_integer(&row, "failed_count")?,
+        skipped_count: get_postgres_integer(&row, "skipped_count")?,
+        timed_out_count: get_postgres_integer(&row, "timed_out_count")?,
+        unknown_count: get_postgres_integer(&row, "unknown_count")?,
+        version_mismatch_count: get_postgres_integer(&row, "version_mismatch_count")?,
+        replay_count: get_postgres_integer(&row, "replay_count")?,
+        imported_by_id: get_postgres(&row, "imported_by_id")?,
+        imported_at: get_postgres(&row, "imported_at")?,
+        last_replayed_at: get_postgres(&row, "last_replayed_at")?,
+    })
+}
+
 fn event_from_sqlite_row(row: SqliteRow) -> AgentRolloutResult<AgentRolloutEvent> {
     let raw: String = get_sqlite(&row, "safe_detail_json")?;
     Ok(AgentRolloutEvent {
@@ -3273,6 +5284,23 @@ impl AgentRolloutStore {
                 "Alle Ziele dieses Rings muessen den Preflight bestanden haben.",
             ));
         }
+        let manifest = match self
+            .verify_start_manifest(tenant_id, &detail, ring, &targets)
+            .await
+        {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                self.audit_manifest_start_blocker(
+                    tenant_id,
+                    rollout_id,
+                    ring.id,
+                    actor_id,
+                    &error.safe_message,
+                )
+                .await?;
+                return Err(error);
+            }
+        };
         let artifact = self
             .artifact_status(tenant_id, detail.rollout.artifact_id.as_deref())
             .await?;
@@ -3307,12 +5335,178 @@ impl AgentRolloutStore {
             actor_id,
             reason: &confirmation.reason,
             rollout_status: &detail.rollout.status,
+            manifest: &manifest,
         };
         match self {
             Self::Sqlite(pool) => start_ring_sqlite(pool, &start).await?,
             Self::Postgres(pool) => start_ring_postgres(pool, &start).await?,
         }
         self.detail(tenant_id, rollout_id).await
+    }
+
+    async fn verify_start_manifest(
+        &self,
+        tenant_id: i64,
+        detail: &AgentRolloutDetail,
+        ring: &AgentRolloutRing,
+        targets: &[&AgentRolloutTarget],
+    ) -> AgentRolloutResult<AgentRolloutManifest> {
+        let manifest = detail
+            .manifests
+            .iter()
+            .find(|manifest| manifest.ring_id == ring.id && manifest.status == "active")
+            .cloned()
+            .ok_or_else(|| gate_blocked("Der Ring besitzt kein aktives eingefrorenes Manifest."))?;
+        if sha256_hex(manifest.canonical_json.as_bytes()) != manifest.manifest_sha256 {
+            return Err(gate_blocked(
+                "Die Integritaet des eingefrorenen Manifests ist nicht verifizierbar.",
+            ));
+        }
+        let canonical: AgentRolloutCanonicalManifest =
+            serde_json::from_str(&manifest.canonical_json).map_err(|_| {
+                gate_blocked("Das eingefrorene Manifest ist strukturell nicht verifizierbar.")
+            })?;
+        if canonical.schema_version != MANIFEST_SCHEMA_VERSION
+            || canonical.manifest_id != manifest.manifest_id
+            || canonical.manifest_version != manifest.manifest_version
+            || canonical.rollout_id != detail.rollout.id
+            || canonical.ring_name != ring.ring_name
+            || canonical.ring_position != ring.sequence_number
+            || canonical.target_agent_version != detail.rollout.target_agent_version
+            || canonical.deployment_channel != detail.rollout.deployment_channel_filter
+            || canonical.targets.len() != targets.len()
+            || canonical.preflight.target_count != targets.len() as i64
+            || canonical.preflight.failed_count != 0
+        {
+            return Err(gate_blocked(
+                "Manifest und aktueller Rollout-Scope stimmen nicht ueberein.",
+            ));
+        }
+        let artifact = self
+            .artifact_snapshot(tenant_id, detail.rollout.artifact_id.as_deref())
+            .await?;
+        let artifact_matches = match artifact {
+            Some(value) => {
+                canonical.artifact.artifact_id == value.artifact_id
+                    && canonical.artifact.sha256 == value.sha256
+                    && canonical.artifact.signature_status == value.signature_status
+                    && canonical.artifact.verification_status == value.verification_status
+                    && canonical.artifact.provenance_status == value.provenance_status
+            }
+            None => canonical.artifact.artifact_id.is_empty(),
+        };
+        let policy = self
+            .policy_snapshot(tenant_id, detail.rollout.policy_profile_id)
+            .await?;
+        if !artifact_matches
+            || canonical.policy.policy_profile_id != policy.policy_profile_id
+            || canonical.policy.name != policy.name
+            || canonical.policy.revision != policy.revision
+        {
+            return Err(gate_blocked(
+                "Artefakt oder Policy-Revision weichen vom Manifest ab.",
+            ));
+        }
+        for target in targets {
+            let facts = self
+                .device_facts_by_id(tenant_id, detail.rollout.id, target.device_id)
+                .await?;
+            let Some(snapshot) = canonical
+                .targets
+                .iter()
+                .find(|snapshot| snapshot.target_id == target.id)
+            else {
+                return Err(gate_blocked(
+                    "Die aktuelle Zielmenge weicht vom Manifest ab.",
+                ));
+            };
+            if snapshot.stable_device_id != facts.stable_device_id
+                || snapshot.expected_agent_version != target.expected_agent_version
+                || snapshot.current_agent_version != facts.agent_version
+                || snapshot.os_family != facts.os_family
+                || snapshot.architecture != facts.architecture
+                || snapshot.certificate_status != facts.certificate_status
+                || snapshot.mtls_binding_status != facts.mtls_binding_status
+            {
+                return Err(gate_blocked(
+                    "Mindestens ein Ziel weicht vom eingefrorenen Manifest ab.",
+                ));
+            }
+        }
+        Ok(manifest)
+    }
+
+    async fn audit_manifest_start_blocker(
+        &self,
+        tenant_id: i64,
+        rollout_id: i64,
+        ring_id: i64,
+        actor_id: i64,
+        reason: &str,
+    ) -> AgentRolloutResult<()> {
+        match self {
+            Self::Sqlite(pool) => {
+                let mut tx = pool.begin().await.map_err(|error| {
+                    AgentRolloutError::database(
+                        "SQLite-Manifest-Blocker-Audit konnte nicht gestartet werden",
+                        error,
+                    )
+                })?;
+                insert_event_sqlite(
+                    &mut tx,
+                    RolloutEventInput {
+                        tenant_id,
+                        rollout_id,
+                        ring_id: Some(ring_id),
+                        target_id: None,
+                        event_type: "manifest_start_blocked",
+                        from_status: "ready",
+                        to_status: "ready",
+                        actor_id,
+                        summary: "Ring-Start durch Manifest-Gate blockiert",
+                        detail: json!({"reason":reason}),
+                    },
+                )
+                .await?;
+                tx.commit().await.map_err(|error| {
+                    AgentRolloutError::database(
+                        "SQLite-Manifest-Blocker-Audit konnte nicht bestaetigt werden",
+                        error,
+                    )
+                })?;
+            }
+            Self::Postgres(pool) => {
+                let mut tx = pool.begin().await.map_err(|error| {
+                    AgentRolloutError::database(
+                        "PostgreSQL-Manifest-Blocker-Audit konnte nicht gestartet werden",
+                        error,
+                    )
+                })?;
+                insert_event_postgres(
+                    &mut tx,
+                    RolloutEventInput {
+                        tenant_id,
+                        rollout_id,
+                        ring_id: Some(ring_id),
+                        target_id: None,
+                        event_type: "manifest_start_blocked",
+                        from_status: "ready",
+                        to_status: "ready",
+                        actor_id,
+                        summary: "Ring-Start durch Manifest-Gate blockiert",
+                        detail: json!({"reason":reason}),
+                    },
+                )
+                .await?;
+                tx.commit().await.map_err(|error| {
+                    AgentRolloutError::database(
+                        "PostgreSQL-Manifest-Blocker-Audit konnte nicht bestaetigt werden",
+                        error,
+                    )
+                })?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn record_deployment_result(
@@ -3456,6 +5650,21 @@ impl AgentRolloutStore {
             return Err(invalid_transition(
                 "Der Ring ist nicht fuer Postflight-Pruefungen bereit.",
             ));
+        }
+        if let Some(handoff) = detail.handoffs.iter().find(|handoff| {
+            handoff.ring_id == ring.id
+                && !matches!(
+                    handoff.status.as_str(),
+                    "failed" | "expired" | "invalidated"
+                )
+        }) {
+            if handoff.status != "completed"
+                || handoff.reported_result_count != handoff.expected_result_count
+            {
+                return Err(gate_blocked(
+                    "Der externe Handoff muss vollstaendig berichtet und manuell abgeschlossen sein.",
+                ));
+            }
         }
         let targets: Vec<_> = detail
             .targets
@@ -3694,6 +5903,7 @@ struct RingStart<'a> {
     actor_id: i64,
     reason: &'a str,
     rollout_status: &'a str,
+    manifest: &'a AgentRolloutManifest,
 }
 
 async fn start_ring_sqlite(pool: &SqlitePool, start: &RingStart<'_>) -> AgentRolloutResult<()> {
@@ -3752,7 +5962,7 @@ async fn start_ring_sqlite(pool: &SqlitePool, start: &RingStart<'_>) -> AgentRol
             to_status: "active",
             actor_id,
             summary: "Rollout-Ring nach manueller Freigabe gestartet",
-            detail: json!({"reason":reason.trim(),"remote_execution":false}),
+            detail: json!({"reason":reason.trim(),"remote_execution":false,"manifest_id":start.manifest.manifest_id,"manifest_sha256":start.manifest.manifest_sha256}),
         },
     )
     .await?;
@@ -3818,13 +6028,247 @@ async fn start_ring_postgres(pool: &PgPool, start: &RingStart<'_>) -> AgentRollo
             to_status: "active",
             actor_id,
             summary: "Rollout-Ring nach manueller Freigabe gestartet",
-            detail: json!({"reason":reason.trim(),"remote_execution":false}),
+            detail: json!({"reason":reason.trim(),"remote_execution":false,"manifest_id":start.manifest.manifest_id,"manifest_sha256":start.manifest.manifest_sha256}),
         },
     )
     .await?;
     tx.commit().await.map_err(|error| {
         AgentRolloutError::database(
             "PostgreSQL-Ring-Start konnte nicht bestaetigt werden",
+            error,
+        )
+    })?;
+    Ok(())
+}
+
+async fn import_results_sqlite(
+    pool: &SqlitePool,
+    operation: &ResultImportTransaction<'_>,
+) -> AgentRolloutResult<()> {
+    let tenant_id = operation.tenant_id;
+    let rollout_id = operation.rollout_id;
+    let actor_id = operation.actor_id;
+    let import_id = operation.import_id;
+    let payload_sha256 = operation.payload_sha256;
+    let packet = operation.packet;
+    let manifest = operation.manifest;
+    let handoff = operation.handoff;
+    let prepared = operation.prepared;
+    let counts = operation.counts;
+    let mut tx = pool.begin().await.map_err(|error| {
+        AgentRolloutError::database("SQLite-Ergebnisimport konnte nicht gestartet werden", error)
+    })?;
+    let existing = sqlx::query("SELECT id,payload_sha256 FROM zero_trust_agent_rollout_result_import WHERE tenant_id=?1 AND handoff_db_id=?2 AND source_system=?3 AND external_batch_id=?4")
+        .bind(tenant_id).bind(handoff.id).bind(&packet.source_system).bind(&packet.external_batch_id).fetch_optional(&mut *tx).await
+        .map_err(|error| AgentRolloutError::database("SQLite-Import-Replay konnte nicht geprueft werden", error))?;
+    if let Some(existing) = existing {
+        let existing_id: i64 = existing.get("id");
+        let existing_hash: String = existing.get("payload_sha256");
+        if existing_hash == payload_sha256 {
+            sqlx::query("UPDATE zero_trust_agent_rollout_result_import SET status='replayed',replay_count=replay_count+1,last_replayed_at=CURRENT_TIMESTAMP WHERE tenant_id=?1 AND id=?2")
+                .bind(tenant_id).bind(existing_id).execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("SQLite-Import-Replay konnte nicht gespeichert werden", error))?;
+            insert_event_sqlite(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(handoff.ring_id), target_id: None, event_type: "result_import_replayed", from_status: "accepted", to_status: "replayed", actor_id, summary: "Identischer Ergebnisimport idempotent wiedererkannt", detail: json!({"handoff_id":handoff.handoff_id,"external_batch_id":packet.external_batch_id,"payload_sha256":payload_sha256}) }).await?;
+            tx.commit().await.map_err(|error| {
+                AgentRolloutError::database(
+                    "SQLite-Import-Replay konnte nicht bestaetigt werden",
+                    error,
+                )
+            })?;
+            return Ok(());
+        }
+        insert_event_sqlite(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(handoff.ring_id), target_id: None, event_type: "result_import_hash_conflict", from_status: "accepted", to_status: "rejected", actor_id, summary: "Externe Batch-ID mit abweichendem Payload-Hash abgelehnt", detail: json!({"handoff_id":handoff.handoff_id,"external_batch_id":packet.external_batch_id}) }).await?;
+        tx.commit().await.map_err(|error| {
+            AgentRolloutError::database(
+                "SQLite-Import-Konflikt-Audit konnte nicht bestaetigt werden",
+                error,
+            )
+        })?;
+        return Err(AgentRolloutError::new(
+            AgentRolloutErrorKind::ConcurrentChange,
+            "Die externe Batch-ID wurde bereits mit einem anderen Payload verwendet.",
+        ));
+    }
+    let reference = format!(
+        "handoff:{}:{}",
+        handoff.handoff_id, packet.external_batch_id
+    );
+    for item in prepared {
+        if matches!(
+            item.target.deployment_status.as_str(),
+            "succeeded" | "failed"
+        ) {
+            let result = sqlx::query("UPDATE zero_trust_agent_rollout_target SET deployment_reference=?1,updated_at=CURRENT_TIMESTAMP WHERE tenant_id=?2 AND rollout_id=?3 AND id=?4 AND deployment_reference='' AND deployment_status=?5")
+                .bind(&reference).bind(tenant_id).bind(rollout_id).bind(item.target.id).bind(&item.request.status).execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("SQLite-Import-Provenienz konnte nicht gespeichert werden", error))?;
+            if result.rows_affected() != 1 {
+                return Err(concurrent_change());
+            }
+        } else {
+            let new_status = if item.request.status == "failed" {
+                "failed"
+            } else {
+                "in_progress"
+            };
+            record_result_in_sqlite_tx(
+                &mut tx,
+                &RecordResultContext {
+                    tenant_id,
+                    rollout_id,
+                    target: &item.target,
+                    actor_id,
+                    request: &item.request,
+                    new_status,
+                    source: "handoff_import",
+                    deployment_reference: &reference,
+                },
+            )
+            .await?;
+        }
+    }
+    sqlx::query("INSERT INTO zero_trust_agent_rollout_result_import (import_id,tenant_id,rollout_id,ring_id,manifest_db_id,handoff_db_id,source_system,external_batch_id,generated_at,payload_sha256,status,item_count,succeeded_count,failed_count,skipped_count,timed_out_count,unknown_count,version_mismatch_count,imported_by_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'accepted',?11,?12,?13,?14,?15,?16,?17,?18)")
+        .bind(import_id).bind(tenant_id).bind(rollout_id).bind(handoff.ring_id).bind(manifest.id).bind(handoff.id).bind(&packet.source_system).bind(&packet.external_batch_id).bind(&packet.generated_at).bind(payload_sha256).bind(prepared.len() as i64).bind(counts.succeeded).bind(counts.failed).bind(counts.skipped).bind(counts.timed_out).bind(counts.unknown).bind(counts.version_mismatch).bind(actor_id)
+        .execute(&mut *tx).await.map_err(|error| database_or_concurrent("SQLite-Import-Provenienz konnte nicht angelegt werden", error))?;
+    let handoff_update = sqlx::query("UPDATE zero_trust_agent_rollout_handoff SET status='partially_reported',reported_result_count=reported_result_count+?1,succeeded_count=succeeded_count+?2,failed_count=failed_count+?3,skipped_count=skipped_count+?4,timed_out_count=timed_out_count+?5,unknown_count=unknown_count+?6,version_mismatch_count=version_mismatch_count+?7,updated_by_id=?8,updated_at=CURRENT_TIMESTAMP WHERE tenant_id=?9 AND rollout_id=?10 AND id=?11 AND status IN ('exported','awaiting_results','partially_reported') AND reported_result_count+?1<=expected_result_count")
+        .bind(prepared.len() as i64).bind(counts.succeeded).bind(counts.failed).bind(counts.skipped).bind(counts.timed_out).bind(counts.unknown).bind(counts.version_mismatch).bind(actor_id).bind(tenant_id).bind(rollout_id).bind(handoff.id)
+        .execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("SQLite-Handoff-Aggregate konnten nicht aktualisiert werden", error))?;
+    if handoff_update.rows_affected() != 1 {
+        return Err(concurrent_change());
+    }
+    let check_status = if counts.failed + counts.timed_out + counts.unknown > 0 {
+        "failed"
+    } else if counts.skipped + counts.version_mismatch > 0 {
+        "warning"
+    } else {
+        "passed"
+    };
+    sqlx::query("INSERT INTO zero_trust_agent_rollout_check (tenant_id,rollout_id,ring_id,target_id,phase,check_type,status,source,summary,safe_detail_json,observed_at,actor_id) VALUES (?1,?2,?3,NULL,'postflight','external_handoff.result_import',?4,'operator','Externe Deployment-Ergebnisse kontrolliert importiert',?5,?6,?7)")
+        .bind(tenant_id).bind(rollout_id).bind(handoff.ring_id).bind(check_status).bind(json!({"item_count":prepared.len(),"succeeded":counts.succeeded,"failed":counts.failed,"skipped":counts.skipped,"timed_out":counts.timed_out,"unknown":counts.unknown,"version_mismatch":counts.version_mismatch}).to_string()).bind(&packet.generated_at).bind(actor_id)
+        .execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("SQLite-Import-Gate-Signal konnte nicht gespeichert werden", error))?;
+    insert_event_sqlite(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(handoff.ring_id), target_id: None, event_type: "result_import_accepted", from_status: &handoff.status, to_status: "partially_reported", actor_id, summary: "Externer Ergebnisimport atomar angenommen", detail: json!({"handoff_id":handoff.handoff_id,"import_id":import_id,"external_batch_id":packet.external_batch_id,"payload_sha256":payload_sha256,"item_count":prepared.len()}) }).await?;
+    insert_event_sqlite(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(handoff.ring_id), target_id: None, event_type: "handoff_partially_reported", from_status: &handoff.status, to_status: "partially_reported", actor_id, summary: "Externer Handoff mit kontrollierten Rueckmeldungen aktualisiert", detail: json!({"handoff_id":handoff.handoff_id,"reported_items":prepared.len(),"expected_results":handoff.expected_result_count}) }).await?;
+    tx.commit().await.map_err(|error| {
+        AgentRolloutError::database(
+            "SQLite-Ergebnisimport konnte nicht bestaetigt werden",
+            error,
+        )
+    })?;
+    Ok(())
+}
+
+async fn import_results_postgres(
+    pool: &PgPool,
+    operation: &ResultImportTransaction<'_>,
+) -> AgentRolloutResult<()> {
+    let tenant_id = operation.tenant_id;
+    let rollout_id = operation.rollout_id;
+    let actor_id = operation.actor_id;
+    let import_id = operation.import_id;
+    let payload_sha256 = operation.payload_sha256;
+    let packet = operation.packet;
+    let manifest = operation.manifest;
+    let handoff = operation.handoff;
+    let prepared = operation.prepared;
+    let counts = operation.counts;
+    let mut tx = pool.begin().await.map_err(|error| {
+        AgentRolloutError::database(
+            "PostgreSQL-Ergebnisimport konnte nicht gestartet werden",
+            error,
+        )
+    })?;
+    let locked: Option<i64> = sqlx::query_scalar("SELECT id FROM zero_trust_agent_rollout_handoff WHERE tenant_id=$1 AND rollout_id=$2 AND id=$3 FOR UPDATE")
+        .bind(tenant_id).bind(rollout_id).bind(handoff.id).fetch_optional(&mut *tx).await.map_err(|error| AgentRolloutError::database("PostgreSQL-Handoff konnte nicht gesperrt werden", error))?;
+    if locked.is_none() {
+        return Err(concurrent_change());
+    }
+    let existing = sqlx::query("SELECT id,payload_sha256 FROM zero_trust_agent_rollout_result_import WHERE tenant_id=$1 AND handoff_db_id=$2 AND source_system=$3 AND external_batch_id=$4 FOR UPDATE")
+        .bind(tenant_id).bind(handoff.id).bind(&packet.source_system).bind(&packet.external_batch_id).fetch_optional(&mut *tx).await
+        .map_err(|error| AgentRolloutError::database("PostgreSQL-Import-Replay konnte nicht geprueft werden", error))?;
+    if let Some(existing) = existing {
+        let existing_id: i64 = existing.get("id");
+        let existing_hash: String = existing.get("payload_sha256");
+        if existing_hash == payload_sha256 {
+            sqlx::query("UPDATE zero_trust_agent_rollout_result_import SET status='replayed',replay_count=replay_count+1,last_replayed_at=(CURRENT_TIMESTAMP)::text WHERE tenant_id=$1 AND id=$2")
+                .bind(tenant_id).bind(existing_id).execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("PostgreSQL-Import-Replay konnte nicht gespeichert werden", error))?;
+            insert_event_postgres(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(handoff.ring_id), target_id: None, event_type: "result_import_replayed", from_status: "accepted", to_status: "replayed", actor_id, summary: "Identischer Ergebnisimport idempotent wiedererkannt", detail: json!({"handoff_id":handoff.handoff_id,"external_batch_id":packet.external_batch_id,"payload_sha256":payload_sha256}) }).await?;
+            tx.commit().await.map_err(|error| {
+                AgentRolloutError::database(
+                    "PostgreSQL-Import-Replay konnte nicht bestaetigt werden",
+                    error,
+                )
+            })?;
+            return Ok(());
+        }
+        insert_event_postgres(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(handoff.ring_id), target_id: None, event_type: "result_import_hash_conflict", from_status: "accepted", to_status: "rejected", actor_id, summary: "Externe Batch-ID mit abweichendem Payload-Hash abgelehnt", detail: json!({"handoff_id":handoff.handoff_id,"external_batch_id":packet.external_batch_id}) }).await?;
+        tx.commit().await.map_err(|error| {
+            AgentRolloutError::database(
+                "PostgreSQL-Import-Konflikt-Audit konnte nicht bestaetigt werden",
+                error,
+            )
+        })?;
+        return Err(AgentRolloutError::new(
+            AgentRolloutErrorKind::ConcurrentChange,
+            "Die externe Batch-ID wurde bereits mit einem anderen Payload verwendet.",
+        ));
+    }
+    let reference = format!(
+        "handoff:{}:{}",
+        handoff.handoff_id, packet.external_batch_id
+    );
+    for item in prepared {
+        if matches!(
+            item.target.deployment_status.as_str(),
+            "succeeded" | "failed"
+        ) {
+            let result = sqlx::query("UPDATE zero_trust_agent_rollout_target SET deployment_reference=$1,updated_at=(CURRENT_TIMESTAMP)::text WHERE tenant_id=$2 AND rollout_id=$3 AND id=$4 AND deployment_reference='' AND deployment_status=$5")
+                .bind(&reference).bind(tenant_id).bind(rollout_id).bind(item.target.id).bind(&item.request.status).execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("PostgreSQL-Import-Provenienz konnte nicht gespeichert werden", error))?;
+            if result.rows_affected() != 1 {
+                return Err(concurrent_change());
+            }
+        } else {
+            let new_status = if item.request.status == "failed" {
+                "failed"
+            } else {
+                "in_progress"
+            };
+            record_result_in_postgres_tx(
+                &mut tx,
+                &RecordResultContext {
+                    tenant_id,
+                    rollout_id,
+                    target: &item.target,
+                    actor_id,
+                    request: &item.request,
+                    new_status,
+                    source: "handoff_import",
+                    deployment_reference: &reference,
+                },
+            )
+            .await?;
+        }
+    }
+    sqlx::query("INSERT INTO zero_trust_agent_rollout_result_import (import_id,tenant_id,rollout_id,ring_id,manifest_db_id,handoff_db_id,source_system,external_batch_id,generated_at,payload_sha256,status,item_count,succeeded_count,failed_count,skipped_count,timed_out_count,unknown_count,version_mismatch_count,imported_by_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'accepted',$11,$12,$13,$14,$15,$16,$17,$18)")
+        .bind(import_id).bind(tenant_id).bind(rollout_id).bind(handoff.ring_id).bind(manifest.id).bind(handoff.id).bind(&packet.source_system).bind(&packet.external_batch_id).bind(&packet.generated_at).bind(payload_sha256).bind(prepared.len() as i32).bind(counts.succeeded as i32).bind(counts.failed as i32).bind(counts.skipped as i32).bind(counts.timed_out as i32).bind(counts.unknown as i32).bind(counts.version_mismatch as i32).bind(actor_id)
+        .execute(&mut *tx).await.map_err(|error| database_or_concurrent("PostgreSQL-Import-Provenienz konnte nicht angelegt werden", error))?;
+    let handoff_update = sqlx::query("UPDATE zero_trust_agent_rollout_handoff SET status='partially_reported',reported_result_count=reported_result_count+$1,succeeded_count=succeeded_count+$2,failed_count=failed_count+$3,skipped_count=skipped_count+$4,timed_out_count=timed_out_count+$5,unknown_count=unknown_count+$6,version_mismatch_count=version_mismatch_count+$7,updated_by_id=$8,updated_at=(CURRENT_TIMESTAMP)::text WHERE tenant_id=$9 AND rollout_id=$10 AND id=$11 AND status IN ('exported','awaiting_results','partially_reported') AND reported_result_count+$1<=expected_result_count")
+        .bind(prepared.len() as i32).bind(counts.succeeded as i32).bind(counts.failed as i32).bind(counts.skipped as i32).bind(counts.timed_out as i32).bind(counts.unknown as i32).bind(counts.version_mismatch as i32).bind(actor_id).bind(tenant_id).bind(rollout_id).bind(handoff.id)
+        .execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("PostgreSQL-Handoff-Aggregate konnten nicht aktualisiert werden", error))?;
+    if handoff_update.rows_affected() != 1 {
+        return Err(concurrent_change());
+    }
+    let check_status = if counts.failed + counts.timed_out + counts.unknown > 0 {
+        "failed"
+    } else if counts.skipped + counts.version_mismatch > 0 {
+        "warning"
+    } else {
+        "passed"
+    };
+    sqlx::query("INSERT INTO zero_trust_agent_rollout_check (tenant_id,rollout_id,ring_id,target_id,phase,check_type,status,source,summary,safe_detail_json,observed_at,actor_id) VALUES ($1,$2,$3,NULL,'postflight','external_handoff.result_import',$4,'operator','Externe Deployment-Ergebnisse kontrolliert importiert',$5::jsonb,$6,$7)")
+        .bind(tenant_id).bind(rollout_id).bind(handoff.ring_id).bind(check_status).bind(json!({"item_count":prepared.len(),"succeeded":counts.succeeded,"failed":counts.failed,"skipped":counts.skipped,"timed_out":counts.timed_out,"unknown":counts.unknown,"version_mismatch":counts.version_mismatch}).to_string()).bind(&packet.generated_at).bind(actor_id)
+        .execute(&mut *tx).await.map_err(|error| AgentRolloutError::database("PostgreSQL-Import-Gate-Signal konnte nicht gespeichert werden", error))?;
+    insert_event_postgres(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(handoff.ring_id), target_id: None, event_type: "result_import_accepted", from_status: &handoff.status, to_status: "partially_reported", actor_id, summary: "Externer Ergebnisimport atomar angenommen", detail: json!({"handoff_id":handoff.handoff_id,"import_id":import_id,"external_batch_id":packet.external_batch_id,"payload_sha256":payload_sha256,"item_count":prepared.len()}) }).await?;
+    insert_event_postgres(&mut tx, RolloutEventInput { tenant_id, rollout_id, ring_id: Some(handoff.ring_id), target_id: None, event_type: "handoff_partially_reported", from_status: &handoff.status, to_status: "partially_reported", actor_id, summary: "Externer Handoff mit kontrollierten Rueckmeldungen aktualisiert", detail: json!({"handoff_id":handoff.handoff_id,"reported_items":prepared.len(),"expected_results":handoff.expected_result_count}) }).await?;
+    tx.commit().await.map_err(|error| {
+        AgentRolloutError::database(
+            "PostgreSQL-Ergebnisimport konnte nicht bestaetigt werden",
             error,
         )
     })?;
@@ -3846,13 +6290,20 @@ async fn record_result_sqlite(
             error,
         )
     })?;
-    let result=sqlx::query("UPDATE zero_trust_agent_rollout_target SET status=?1,deployment_status=?2,observed_agent_version=?3,error_class=?4,operator_note=?5,result_summary='Externes Deployment-Ergebnis dokumentiert',deployment_started_at=CASE WHEN deployment_started_at IS NULL THEN COALESCE(?6,CURRENT_TIMESTAMP) ELSE deployment_started_at END,deployment_recorded_at=COALESCE(?6,CURRENT_TIMESTAMP),completed_at=CASE WHEN ?2='failed' THEN COALESCE(?6,CURRENT_TIMESTAMP) ELSE completed_at END,updated_at=CURRENT_TIMESTAMP WHERE tenant_id=?7 AND rollout_id=?8 AND id=?9 AND status=?10")
-        .bind(new_status).bind(&request.status).bind(&request.observed_version).bind(&request.error_class).bind(&request.operator_note).bind(request.observed_at.as_deref()).bind(tenant_id).bind(rollout_id).bind(target.id).bind(&target.status)
-        .execute(&mut *tx).await.map_err(|error|AgentRolloutError::database("SQLite-Deployment-Rueckmeldung konnte nicht gespeichert werden",error))?;
-    if result.rows_affected() != 1 {
-        return Err(concurrent_change());
-    }
-    insert_event_sqlite(&mut tx,RolloutEventInput{tenant_id,rollout_id,ring_id:Some(target.ring_id),target_id:Some(target.id),event_type:"deployment_result_recorded",from_status:&target.status,to_status:new_status,actor_id,summary:"Externes Deployment-Ergebnis dokumentiert",detail:json!({"deployment_status":request.status,"observed_version":request.observed_version})}).await?;
+    record_result_in_sqlite_tx(
+        &mut tx,
+        &RecordResultContext {
+            tenant_id,
+            rollout_id,
+            target,
+            actor_id,
+            request,
+            new_status,
+            source: "direct",
+            deployment_reference: "",
+        },
+    )
+    .await?;
     tx.commit().await.map_err(|error| {
         AgentRolloutError::database(
             "SQLite-Deployment-Rueckmeldung konnte nicht bestaetigt werden",
@@ -3877,13 +6328,20 @@ async fn record_result_postgres(
             error,
         )
     })?;
-    let result=sqlx::query("UPDATE zero_trust_agent_rollout_target SET status=$1,deployment_status=$2,observed_agent_version=$3,error_class=$4,operator_note=$5,result_summary='Externes Deployment-Ergebnis dokumentiert',deployment_started_at=CASE WHEN deployment_started_at IS NULL THEN COALESCE($6::text,(CURRENT_TIMESTAMP)::text) ELSE deployment_started_at END,deployment_recorded_at=COALESCE($6::text,(CURRENT_TIMESTAMP)::text),completed_at=CASE WHEN $2='failed' THEN COALESCE($6::text,(CURRENT_TIMESTAMP)::text) ELSE completed_at END,updated_at=(CURRENT_TIMESTAMP)::text WHERE tenant_id=$7 AND rollout_id=$8 AND id=$9 AND status=$10")
-        .bind(new_status).bind(&request.status).bind(&request.observed_version).bind(&request.error_class).bind(&request.operator_note).bind(request.observed_at.as_deref()).bind(tenant_id).bind(rollout_id).bind(target.id).bind(&target.status)
-        .execute(&mut *tx).await.map_err(|error|AgentRolloutError::database("PostgreSQL-Deployment-Rueckmeldung konnte nicht gespeichert werden",error))?;
-    if result.rows_affected() != 1 {
-        return Err(concurrent_change());
-    }
-    insert_event_postgres(&mut tx,RolloutEventInput{tenant_id,rollout_id,ring_id:Some(target.ring_id),target_id:Some(target.id),event_type:"deployment_result_recorded",from_status:&target.status,to_status:new_status,actor_id,summary:"Externes Deployment-Ergebnis dokumentiert",detail:json!({"deployment_status":request.status,"observed_version":request.observed_version})}).await?;
+    record_result_in_postgres_tx(
+        &mut tx,
+        &RecordResultContext {
+            tenant_id,
+            rollout_id,
+            target,
+            actor_id,
+            request,
+            new_status,
+            source: "direct",
+            deployment_reference: "",
+        },
+    )
+    .await?;
     tx.commit().await.map_err(|error| {
         AgentRolloutError::database(
             "PostgreSQL-Deployment-Rueckmeldung konnte nicht bestaetigt werden",
@@ -3891,6 +6349,48 @@ async fn record_result_postgres(
         )
     })?;
     Ok(())
+}
+
+async fn record_result_in_sqlite_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    context: &RecordResultContext<'_>,
+) -> AgentRolloutResult<()> {
+    let tenant_id = context.tenant_id;
+    let rollout_id = context.rollout_id;
+    let target = context.target;
+    let actor_id = context.actor_id;
+    let request = context.request;
+    let new_status = context.new_status;
+    let source = context.source;
+    let deployment_reference = context.deployment_reference;
+    let result=sqlx::query("UPDATE zero_trust_agent_rollout_target SET status=?1,deployment_status=?2,observed_agent_version=?3,error_class=?4,operator_note=?5,deployment_reference=CASE WHEN ?6='' THEN deployment_reference ELSE ?6 END,result_summary='Externes Deployment-Ergebnis dokumentiert',deployment_started_at=CASE WHEN deployment_started_at IS NULL THEN COALESCE(?7,CURRENT_TIMESTAMP) ELSE deployment_started_at END,deployment_recorded_at=COALESCE(?7,CURRENT_TIMESTAMP),completed_at=CASE WHEN ?2='failed' THEN COALESCE(?7,CURRENT_TIMESTAMP) ELSE completed_at END,updated_at=CURRENT_TIMESTAMP WHERE tenant_id=?8 AND rollout_id=?9 AND id=?10 AND status=?11")
+        .bind(new_status).bind(&request.status).bind(&request.observed_version).bind(&request.error_class).bind(&request.operator_note).bind(deployment_reference).bind(request.observed_at.as_deref()).bind(tenant_id).bind(rollout_id).bind(target.id).bind(&target.status)
+        .execute(&mut **tx).await.map_err(|error|AgentRolloutError::database("SQLite-Deployment-Rueckmeldung konnte nicht gespeichert werden",error))?;
+    if result.rows_affected() != 1 {
+        return Err(concurrent_change());
+    }
+    insert_event_sqlite(tx,RolloutEventInput{tenant_id,rollout_id,ring_id:Some(target.ring_id),target_id:Some(target.id),event_type:"deployment_result_recorded",from_status:&target.status,to_status:new_status,actor_id,summary:"Externes Deployment-Ergebnis dokumentiert",detail:json!({"deployment_status":request.status,"observed_version":request.observed_version,"source":source})}).await
+}
+
+async fn record_result_in_postgres_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context: &RecordResultContext<'_>,
+) -> AgentRolloutResult<()> {
+    let tenant_id = context.tenant_id;
+    let rollout_id = context.rollout_id;
+    let target = context.target;
+    let actor_id = context.actor_id;
+    let request = context.request;
+    let new_status = context.new_status;
+    let source = context.source;
+    let deployment_reference = context.deployment_reference;
+    let result=sqlx::query("UPDATE zero_trust_agent_rollout_target SET status=$1,deployment_status=$2,observed_agent_version=$3,error_class=$4,operator_note=$5,deployment_reference=CASE WHEN $6='' THEN deployment_reference ELSE $6 END,result_summary='Externes Deployment-Ergebnis dokumentiert',deployment_started_at=CASE WHEN deployment_started_at IS NULL THEN COALESCE($7::text,(CURRENT_TIMESTAMP)::text) ELSE deployment_started_at END,deployment_recorded_at=COALESCE($7::text,(CURRENT_TIMESTAMP)::text),completed_at=CASE WHEN $2='failed' THEN COALESCE($7::text,(CURRENT_TIMESTAMP)::text) ELSE completed_at END,updated_at=(CURRENT_TIMESTAMP)::text WHERE tenant_id=$8 AND rollout_id=$9 AND id=$10 AND status=$11")
+        .bind(new_status).bind(&request.status).bind(&request.observed_version).bind(&request.error_class).bind(&request.operator_note).bind(deployment_reference).bind(request.observed_at.as_deref()).bind(tenant_id).bind(rollout_id).bind(target.id).bind(&target.status)
+        .execute(&mut **tx).await.map_err(|error|AgentRolloutError::database("PostgreSQL-Deployment-Rueckmeldung konnte nicht gespeichert werden",error))?;
+    if result.rows_affected() != 1 {
+        return Err(concurrent_change());
+    }
+    insert_event_postgres(tx,RolloutEventInput{tenant_id,rollout_id,ring_id:Some(target.ring_id),target_id:Some(target.id),event_type:"deployment_result_recorded",from_status:&target.status,to_status:new_status,actor_id,summary:"Externes Deployment-Ergebnis dokumentiert",detail:json!({"deployment_status":request.status,"observed_version":request.observed_version,"source":source})}).await
 }
 
 fn evaluate_postflight(
@@ -4641,13 +7141,23 @@ impl AgentRolloutStore {
                     (SELECT COUNT(*) FROM zero_trust_agent_rollout WHERE tenant_id=?1 AND status='paused') paused_rollouts,
                     (SELECT COUNT(*) FROM zero_trust_agent_rollout WHERE tenant_id=?1 AND status='rollback_required') rollback_required_rollouts,
                     (SELECT COUNT(*) FROM zero_trust_agent_rollout_ring WHERE tenant_id=?1 AND status IN ('failed','rollback_required')) blocked_rings,
-                    (SELECT COUNT(*) FROM zero_trust_agent_rollout_target WHERE tenant_id=?1 AND status='failed') failed_targets"#).bind(tenant_id).fetch_one(pool).await.map_err(|error|AgentRolloutError::database("SQLite-Rollout-Betriebsstatus konnte nicht gelesen werden",error))?;
+                    (SELECT COUNT(*) FROM zero_trust_agent_rollout_target WHERE tenant_id=?1 AND status='failed') failed_targets,
+                    (SELECT COUNT(*) FROM zero_trust_agent_rollout_ring r WHERE r.tenant_id=?1 AND r.status='ready' AND NOT EXISTS (SELECT 1 FROM zero_trust_agent_rollout_manifest m WHERE m.tenant_id=r.tenant_id AND m.rollout_id=r.rollout_id AND m.ring_id=r.id AND m.status='active')) rings_without_manifest,
+                    (SELECT COUNT(*) FROM zero_trust_agent_rollout_handoff WHERE tenant_id=?1 AND status NOT IN ('completed','failed','expired','invalidated')) active_handoffs,
+                    (SELECT COUNT(*) FROM zero_trust_agent_rollout_handoff WHERE tenant_id=?1 AND status IN ('exported','awaiting_results','partially_reported')) handoffs_awaiting_results,
+                    (SELECT COALESCE(SUM(expected_result_count-reported_result_count),0) FROM zero_trust_agent_rollout_handoff WHERE tenant_id=?1 AND status IN ('exported','awaiting_results','partially_reported')) missing_handoff_results,
+                    (SELECT COALESCE(SUM(failed_count+timed_out_count+unknown_count),0) FROM zero_trust_agent_rollout_handoff WHERE tenant_id=?1) failed_import_results"#).bind(tenant_id).fetch_one(pool).await.map_err(|error|AgentRolloutError::database("SQLite-Rollout-Betriebsstatus konnte nicht gelesen werden",error))?;
                 Ok(AgentRolloutOperationsSummary {
                     active_rollouts: get_sqlite(&row, "active_rollouts")?,
                     paused_rollouts: get_sqlite(&row, "paused_rollouts")?,
                     rollback_required_rollouts: get_sqlite(&row, "rollback_required_rollouts")?,
                     blocked_rings: get_sqlite(&row, "blocked_rings")?,
                     failed_targets: get_sqlite(&row, "failed_targets")?,
+                    rings_without_manifest: get_sqlite(&row, "rings_without_manifest")?,
+                    active_handoffs: get_sqlite(&row, "active_handoffs")?,
+                    handoffs_awaiting_results: get_sqlite(&row, "handoffs_awaiting_results")?,
+                    missing_handoff_results: get_sqlite(&row, "missing_handoff_results")?,
+                    failed_import_results: get_sqlite(&row, "failed_import_results")?,
                 })
             }
             Self::Postgres(pool) => {
@@ -4656,13 +7166,23 @@ impl AgentRolloutStore {
                     (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout WHERE tenant_id=$1 AND status='paused') paused_rollouts,
                     (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout WHERE tenant_id=$1 AND status='rollback_required') rollback_required_rollouts,
                     (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_ring WHERE tenant_id=$1 AND status IN ('failed','rollback_required')) blocked_rings,
-                    (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_target WHERE tenant_id=$1 AND status='failed') failed_targets"#).bind(tenant_id).fetch_one(pool).await.map_err(|error|AgentRolloutError::database("PostgreSQL-Rollout-Betriebsstatus konnte nicht gelesen werden",error))?;
+                    (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_target WHERE tenant_id=$1 AND status='failed') failed_targets,
+                    (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_ring r WHERE r.tenant_id=$1 AND r.status='ready' AND NOT EXISTS (SELECT 1 FROM zero_trust_agent_rollout_manifest m WHERE m.tenant_id=r.tenant_id AND m.rollout_id=r.rollout_id AND m.ring_id=r.id AND m.status='active')) rings_without_manifest,
+                    (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_handoff WHERE tenant_id=$1 AND status NOT IN ('completed','failed','expired','invalidated')) active_handoffs,
+                    (SELECT COUNT(*)::bigint FROM zero_trust_agent_rollout_handoff WHERE tenant_id=$1 AND status IN ('exported','awaiting_results','partially_reported')) handoffs_awaiting_results,
+                    (SELECT COALESCE(SUM(expected_result_count-reported_result_count),0)::bigint FROM zero_trust_agent_rollout_handoff WHERE tenant_id=$1 AND status IN ('exported','awaiting_results','partially_reported')) missing_handoff_results,
+                    (SELECT COALESCE(SUM(failed_count+timed_out_count+unknown_count),0)::bigint FROM zero_trust_agent_rollout_handoff WHERE tenant_id=$1) failed_import_results"#).bind(tenant_id).fetch_one(pool).await.map_err(|error|AgentRolloutError::database("PostgreSQL-Rollout-Betriebsstatus konnte nicht gelesen werden",error))?;
                 Ok(AgentRolloutOperationsSummary {
                     active_rollouts: get_postgres(&row, "active_rollouts")?,
                     paused_rollouts: get_postgres(&row, "paused_rollouts")?,
                     rollback_required_rollouts: get_postgres(&row, "rollback_required_rollouts")?,
                     blocked_rings: get_postgres(&row, "blocked_rings")?,
                     failed_targets: get_postgres(&row, "failed_targets")?,
+                    rings_without_manifest: get_postgres(&row, "rings_without_manifest")?,
+                    active_handoffs: get_postgres(&row, "active_handoffs")?,
+                    handoffs_awaiting_results: get_postgres(&row, "handoffs_awaiting_results")?,
+                    missing_handoff_results: get_postgres(&row, "missing_handoff_results")?,
+                    failed_import_results: get_postgres(&row, "failed_import_results")?,
                 })
             }
         }
@@ -4672,8 +7192,10 @@ impl AgentRolloutStore {
 fn device_facts_from_sqlite_row(row: SqliteRow) -> AgentRolloutResult<DeviceFacts> {
     Ok(DeviceFacts {
         id: get_sqlite(&row, "id")?,
+        stable_device_id: get_sqlite(&row, "stable_device_id")?,
         hostname: get_sqlite(&row, "hostname")?,
         os_family: get_sqlite(&row, "os_family")?,
+        architecture: get_sqlite(&row, "architecture")?,
         deployment_channel: get_sqlite(&row, "deployment_channel")?,
         agent_version: get_sqlite(&row, "agent_version")?,
         enrollment_status: get_sqlite(&row, "enrollment_status")?,
@@ -4691,8 +7213,10 @@ fn device_facts_from_sqlite_row(row: SqliteRow) -> AgentRolloutResult<DeviceFact
 fn device_facts_from_postgres_row(row: PgRow) -> AgentRolloutResult<DeviceFacts> {
     Ok(DeviceFacts {
         id: get_postgres(&row, "id")?,
+        stable_device_id: get_postgres(&row, "stable_device_id")?,
         hostname: get_postgres(&row, "hostname")?,
         os_family: get_postgres(&row, "os_family")?,
+        architecture: get_postgres(&row, "architecture")?,
         deployment_channel: get_postgres(&row, "deployment_channel")?,
         agent_version: get_postgres(&row, "agent_version")?,
         enrollment_status: get_postgres(&row, "enrollment_status")?,
@@ -4977,8 +7501,10 @@ mod tests {
     fn device_fixture() -> DeviceFacts {
         DeviceFacts {
             id: 1,
+            stable_device_id: "rollout-fixture-stable".to_string(),
             hostname: "rollout-fixture".to_string(),
             os_family: "LINUX".to_string(),
+            architecture: "x86_64".to_string(),
             deployment_channel: "systemd".to_string(),
             agent_version: "1.3.0".to_string(),
             enrollment_status: "ACTIVE".to_string(),
@@ -5065,6 +7591,73 @@ mod tests {
             .expect("PostgreSQL timestamp text must be readable");
         assert_eq!(timestamp.to_rfc3339(), "2026-07-17T22:08:49.829836+00:00");
         assert!(parse_timestamp("2026-07-17 22:08:49.829836").is_some());
+    }
+
+    #[test]
+    fn canonical_manifest_sorting_and_sha256_are_deterministic() {
+        let target = |target_id, stable_device_id: &str| AgentRolloutManifestTargetSnapshot {
+            target_id,
+            stable_device_id: stable_device_id.to_string(),
+            expected_agent_version: "1.4.0".to_string(),
+            current_agent_version: "1.3.0".to_string(),
+            os_family: "LINUX".to_string(),
+            architecture: "x86_64".to_string(),
+            certificate_status: "active".to_string(),
+            mtls_binding_status: "bound".to_string(),
+            preflight_status: "passed".to_string(),
+        };
+        let mut targets = vec![
+            target(2, "device-z"),
+            target(3, "device-a"),
+            target(1, "device-a"),
+        ];
+        sort_manifest_targets(&mut targets);
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| (target.stable_device_id.as_str(), target.target_id))
+                .collect::<Vec<_>>(),
+            vec![("device-a", 1), ("device-a", 3), ("device-z", 2)]
+        );
+
+        let manifest = AgentRolloutCanonicalManifest {
+            schema_version: MANIFEST_SCHEMA_VERSION.to_string(),
+            manifest_id: "11111111-1111-4111-8111-111111111111".to_string(),
+            manifest_version: 1,
+            rollout_id: 17,
+            ring_name: "lab".to_string(),
+            ring_position: 10,
+            target_agent_version: "1.4.0".to_string(),
+            deployment_channel: "systemd".to_string(),
+            artifact: AgentRolloutManifestArtifact {
+                artifact_id: "artifact-17".to_string(),
+                sha256: "a".repeat(64),
+                signature_status: "verified".to_string(),
+                verification_status: "verified".to_string(),
+                provenance_status: "verified".to_string(),
+            },
+            policy: AgentRolloutManifestPolicy {
+                policy_profile_id: Some(19),
+                name: "Linux baseline".to_string(),
+                revision: "2026-07-21T10:00:00Z".to_string(),
+            },
+            preflight: AgentRolloutManifestPreflight {
+                target_count: 3,
+                passed_count: 3,
+                warning_count: 0,
+                failed_count: 0,
+            },
+            targets,
+            created_by_id: 5,
+            frozen_at: "2026-07-21T10:00:00Z".to_string(),
+        };
+        let first = serde_json::to_string(&manifest).unwrap();
+        let second = serde_json::to_string(&manifest).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(sha256_hex(first.as_bytes()), sha256_hex(second.as_bytes()));
+        assert!(first
+            .starts_with(r#"{"schema_version":"iscy.agent-rollout-manifest.v1","manifest_id":"#));
+        assert!(!first.contains('\n'));
     }
 
     #[test]

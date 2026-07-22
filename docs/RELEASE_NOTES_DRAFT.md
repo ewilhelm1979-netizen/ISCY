@@ -43,6 +43,23 @@ fuehrt jedoch keine Remote-Installation, Agent-Befehle, Paketuebertragung oder
 technische Rollback-Ausfuehrung aus. Die Funktion garantiert keine fehlerfreien
 produktiven Rollouts und begruendet keine Produktions-SLO.
 
+## Agent Rollout 2.0 - Phase 2
+
+Migration `0041_rust_agent_rollout_manifest_handoff` ergaenzt pro Ring ein
+unveraenderliches, versioniertes Manifest. ISCY erzeugt kanonisches kompaktes
+JSON mit stabil sortierten Targets und berechnet den SHA-256 ueber exakt diese
+exportierten Manifest-Bytes. Artefakt-/Provenance-, Policy-, Plattform-,
+PKI-/mTLS- und Preflight-Metadaten werden beim Freeze tenantgebunden
+eingefroren; ein Ringstart ohne integres aktives Manifest wird blockiert.
+
+Passive externe Handoffs und begrenzte Result-Pakete dokumentieren die
+Uebergabe an ein externes Deployment-System. Der Import ist auf 1 MiB und 500
+Targets begrenzt, validiert Referenzen und Replay serverseitig und verwendet
+transaktional dieselbe interne Target-Result-Logik wie Phase 1. ISCY speichert
+keine externen Credentials oder Roh-Requests, ruft keine Deployment-URL auf
+und fuehrt weiterhin keine Remote-Installation, Paketuebertragung oder
+automatische Promotion aus.
+
 ## Technische Basis
 
 - Internes Rust-Paket: `0.3.22`
@@ -51,7 +68,7 @@ produktiven Rollouts und begruendet keine Produktions-SLO.
 - MSRV und portabler Release-Builder: Rust `1.88.0`
 - PostgreSQL 16 bleibt der Standard.
 - PostgreSQL 18.4 bleibt ein zusaetzlicher Kompatibilitaetspfad.
-- Aktuell 40 fortlaufende Migrationen, `0001` bis `0040`
+- Aktuell 41 fortlaufende Migrationen, `0001` bis `0041`
 - 36 Visual-Baselines
 - Signaturstatus: `unsigned`
 - Provenance-Status: `prepared_unsigned`

@@ -253,6 +253,10 @@ Umgesetzt:
 - additive Migration `0040_rust_agent_rollout_governance` fuer tenantgebundene Rollout-Plaene, die festen Ringe Lab, Canary, Pilot, Production und Critical, Targets, Checks und Audit-Events
 - serverseitige Preflight-/Postflight-Gates, Observation, explizite menschliche Promotion, Pause/Resume, Abbruch und operatorgefuehrte Rollback-Dokumentation
 - Rollout-Uebersicht und -Detailakte unter `/zero-trust/rollouts/` sowie eingefrorene Management-Review-Aggregate und niedrig-kardinale Operations-Signale
+- additive Migration `0041_rust_agent_rollout_manifest_handoff` fuer unveraenderliche kanonische Ring-Manifeste, sichere externe Handoffs und transaktionale Result-Import-Provenance
+- reproduzierbarer SHA-256 ueber exakt exportierte Manifest-Bytes, stabil sortierte Targets und erneute Manifest-Pruefung vor dem Ringstart
+- passive Handoff-Exporte und begrenzte, replay-geschuetzte Result-Pakete ueber dieselbe Target-Result-Logik wie Phase 1
+- Rollout-, Review- und Operations-Signale fuer fehlende Manifeste, offene Handoffs, fehlende/fehlgeschlagene Rueckmeldungen und Versionsabweichungen
 - klare Betriebsgrenze ohne Remote-Installation, Agent-Befehle, automatische Softwareverteilung, automatische Promotion oder technische Rollback-Ausfuehrung
 
 Offen:
@@ -322,6 +326,7 @@ Erfolgskriterium:
 | Implementiert / Veroeffentlichung ausstehend | Agent-Artefakte und Release-Provenance | Vorhandene Agent-Deployment-Artefakte sind als Manifest mit SHA-256, Signaturstatus, Provenance und Review-Pack-Gaps sichtbar; echte Produktionssignaturen bleiben ein separater Security-Meilenstein. |
 | Implementiert / Veroeffentlichung ausstehend | Agent-PKI, CSR und mTLS-Governance | CA-Provider, CSR-Review, Zertifikatsstatus, mTLS-Bindung, Rotation und Widerruf sind tenantgebunden als Metadata-only-Governance sichtbar; echte CA-Ausstellung bleibt ein separater Security-Meilenstein. |
 | Implementiert / Veroeffentlichung ausstehend | Agent Rollout 2.0 - Phase 1 | Feste Rollout-Ringe, tenantgebundene Targets, Preflight-/Postflight-Gates, menschliche Promotion und operatorgefuehrter Rollback steuern bestehende Agenten ohne Remote-Ausfuehrung. |
+| Implementiert / Veroeffentlichung ausstehend | Agent Rollout 2.0 - Phase 2 | Unveraenderliche Ring-Manifeste, reproduzierbare SHA-256, passive externe Handoffs und kontrollierte Result-Importe schaffen pruefbare Deployment-Evidence ohne Remote-Ausfuehrung. |
 | Umgesetzt / Vertiefung | Management-/Regulatory-Templates | Wiederholbare ISO-27001-, NIS2-, DORA-, KRITIS- und Governance-Pakete werden aus bestehenden Snapshots erzeugt; feinere Varianten koennen spaeter folgen. |
 | Implementiert / Veroeffentlichung ausstehend | Evidence Integrity & Disposition Phase 1 | Manuelle und begrenzte Batch-Re-Hash-Pruefung, Legal Hold, metadata-only Disposition und auditierbare Integritaetsereignisse sind tenantgebunden verfuegbar. |
 | Implementiert / Veroeffentlichung ausstehend | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |

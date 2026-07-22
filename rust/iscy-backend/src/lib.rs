@@ -78,10 +78,11 @@ use agent_pki_store::AgentPkiStore;
 use agent_release_store::AgentReleaseStore;
 use agent_rollout_store::{
     AgentRolloutConfirmationRequest, AgentRolloutDeploymentResultRequest, AgentRolloutError,
-    AgentRolloutErrorKind, AgentRolloutListFilter, AgentRolloutOperationsSummary,
-    AgentRolloutRollbackCompleteRequest, AgentRolloutRollbackRequest, AgentRolloutStore,
-    AgentRolloutTargetAssignmentRequest, AgentRolloutTargetPreviewRequest,
-    AgentRolloutWriteRequest,
+    AgentRolloutErrorKind, AgentRolloutHandoffActionRequest, AgentRolloutHandoffCreateRequest,
+    AgentRolloutListFilter, AgentRolloutManifestFreezeRequest, AgentRolloutOperationsSummary,
+    AgentRolloutResultImportPacket, AgentRolloutRollbackCompleteRequest,
+    AgentRolloutRollbackRequest, AgentRolloutStore, AgentRolloutTargetAssignmentRequest,
+    AgentRolloutTargetPreviewRequest, AgentRolloutWriteRequest,
 };
 use agent_store::AgentStore;
 use ai_governance_store::AiGovernanceStore;
@@ -2325,6 +2326,34 @@ struct WebAgentRolloutResultForm {
     confirmed: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct WebAgentRolloutHandoffForm {
+    manifest_id: String,
+    source_system: String,
+    #[serde(default)]
+    external_batch_id: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    expires_at: String,
+    #[serde(default)]
+    confirmed: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentRolloutHandoffActionForm {
+    reason: String,
+    #[serde(default)]
+    confirmed: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebAgentRolloutResultImportForm {
+    result_packet: String,
+    #[serde(default)]
+    confirmed: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct WebAiGovernanceCreateForm {
     pub product_id: Option<i64>,
@@ -4519,6 +4548,305 @@ async fn agent_rollout_deployment_result(
         .await
     {
         Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_manifest_preview(
+    Path((rollout_id, ring_name)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .manifest_preview(context.tenant_id, rollout_id, &ring_name)
+        .await
+    {
+        Ok(preview) => agent_rollout_response(StatusCode::OK, preview),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_manifest_freeze(
+    Path((rollout_id, ring_name)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutManifestFreezeRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .freeze_manifest(
+            context.tenant_id,
+            rollout_id,
+            &ring_name,
+            context.user_id,
+            payload,
+        )
+        .await
+    {
+        Ok(manifest) => agent_rollout_response(StatusCode::CREATED, manifest),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_manifest_get(
+    Path((rollout_id, manifest_id)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .manifest(context.tenant_id, rollout_id, &manifest_id)
+        .await
+    {
+        Ok(manifest) => agent_rollout_response(StatusCode::OK, manifest),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+fn agent_rollout_json_export_response(body: String, file_stem: &str, sha256: &str) -> Response {
+    let mut response = body.into_response();
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "attachment; filename=\"iscy-agent-rollout-{file_stem}.json\""
+    )) {
+        response.headers_mut().insert(CONTENT_DISPOSITION, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(sha256) {
+        response
+            .headers_mut()
+            .insert("x-iscy-manifest-sha256", value);
+    }
+    response
+}
+
+async fn agent_rollout_manifest_export(
+    Path((rollout_id, manifest_id)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .manifest(context.tenant_id, rollout_id, &manifest_id)
+        .await
+    {
+        Ok(manifest)
+            if format!("{:x}", Sha256::digest(manifest.canonical_json.as_bytes()))
+                == manifest.manifest_sha256 =>
+        {
+            agent_rollout_json_export_response(
+                manifest.canonical_json,
+                &manifest.manifest_id,
+                &manifest.manifest_sha256,
+            )
+        }
+        Ok(_) => agent_rollout_response(
+            StatusCode::CONFLICT,
+            serde_json::json!({"error":"manifest_integrity_mismatch"}),
+        ),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_handoffs(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store.detail(context.tenant_id, rollout_id).await {
+        Ok(detail) => agent_rollout_response(StatusCode::OK, detail.handoffs),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_handoff_create(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutHandoffCreateRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .create_handoff(context.tenant_id, rollout_id, context.user_id, payload)
+        .await
+    {
+        Ok(handoff) => agent_rollout_response(StatusCode::CREATED, handoff),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_handoff_get(
+    Path((rollout_id, handoff_id)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .handoff(context.tenant_id, rollout_id, &handoff_id)
+        .await
+    {
+        Ok(handoff) => agent_rollout_response(StatusCode::OK, handoff),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_handoff_export(
+    Path((rollout_id, handoff_id)): Path<(i64, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    match store
+        .export_handoff(context.tenant_id, rollout_id, &handoff_id, context.user_id)
+        .await
+    {
+        Ok((handoff, canonical_json)) => agent_rollout_json_export_response(
+            canonical_json,
+            &handoff.handoff_id,
+            &handoff.manifest_sha256,
+        ),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_handoff_action(
+    Path((rollout_id, handoff_id, action)): Path<(i64, String, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<AgentRolloutHandoffActionRequest>,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if !matches!(action.as_str(), "acknowledge" | "invalidate" | "complete") {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "rollout_handoff_action_not_found",
+                message: "Die Handoff-Aktion wurde nicht gefunden.".to_string(),
+            }),
+        )
+            .into_response();
+    }
+    match store
+        .change_handoff_status(
+            context.tenant_id,
+            rollout_id,
+            &handoff_id,
+            context.user_id,
+            &action,
+            payload,
+        )
+        .await
+    {
+        Ok(handoff) => agent_rollout_response(StatusCode::OK, handoff),
+        Err(error) => agent_rollout_error_response(error),
+    }
+}
+
+async fn agent_rollout_result_import(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let (context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    let is_json = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.eq_ignore_ascii_case("application/json")
+                || value.to_ascii_lowercase().starts_with("application/json;")
+        });
+    if !is_json || body.is_empty() || body.len() > 1024 * 1024 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "rollout_result_import_invalid_body",
+                message:
+                    "Der Ergebnisimport muss valides JSON innerhalb des Groessenlimits enthalten."
+                        .to_string(),
+            }),
+        )
+            .into_response();
+    }
+    let payload_sha256 = format!("{:x}", Sha256::digest(&body));
+    let packet: AgentRolloutResultImportPacket = match serde_json::from_slice(&body) {
+        Ok(packet) => packet,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorResponse {
+                    accepted: false,
+                    api_version: "v1",
+                    error_code: "rollout_result_import_invalid_json",
+                    message: "Der Ergebnisimport entspricht nicht dem erlaubten Schema."
+                        .to_string(),
+                }),
+            )
+                .into_response()
+        }
+    };
+    match store
+        .import_handoff_results(
+            context.tenant_id,
+            rollout_id,
+            context.user_id,
+            &payload_sha256,
+            packet,
+        )
+        .await
+    {
+        Ok(import) => agent_rollout_response(StatusCode::CREATED, import),
         Err(error) => agent_rollout_error_response(error),
     }
 }
@@ -18050,6 +18378,143 @@ async fn web_agent_rollout_detail(
         })
         .collect::<Vec<_>>()
         .join("");
+    let manifest_rows = detail
+        .manifests
+        .iter()
+        .map(|manifest| {
+            let export_path = web_path_with_context(
+                &format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/manifests/{}/export",
+                    manifest.manifest_id
+                ),
+                Some(&context),
+            );
+            let hash_short = manifest.manifest_sha256.get(..16).unwrap_or(&manifest.manifest_sha256);
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td><code title="{}">{}...</code></td><td>{}</td><td>{}/{}/{}</td><td>{}</td><td>{}</td><td><a class="button secondary" href="{}">JSON</a></td></tr>"#,
+                html_escape(&manifest.ring_name),
+                manifest.manifest_version,
+                agent_rollout_status_badge(&manifest.status),
+                html_escape(&manifest.manifest_sha256),
+                html_escape(hash_short),
+                manifest.target_count,
+                manifest.preflight_passed_count,
+                manifest.preflight_warning_count,
+                manifest.preflight_failed_count,
+                html_escape(manifest.artifact_id.as_deref().unwrap_or("Kein Artefakt")),
+                html_escape(if manifest.policy_revision.is_empty() { "Keine Policy" } else { &manifest.policy_revision }),
+                html_escape(&export_path),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let handoff_rows = detail
+        .handoffs
+        .iter()
+        .map(|handoff| {
+            let export_path = web_path_with_context(
+                &format!(
+                    "/api/v1/agents/rollouts/{rollout_id}/handoffs/{}/export",
+                    handoff.handoff_id
+                ),
+                Some(&context),
+            );
+            let action_path = |action: &str| {
+                web_path_with_context(
+                    &format!(
+                        "/zero-trust/rollouts/{rollout_id}/handoffs/{}/{action}",
+                        handoff.handoff_id
+                    ),
+                    Some(&context),
+                )
+            };
+            let mut actions = vec![format!(
+                r#"<a class="button secondary" href="{}">Manifest exportieren</a>"#,
+                html_escape(&export_path)
+            )];
+            if can_admin && handoff.status == "exported" {
+                actions.push(agent_rollout_confirm_form(&action_path("acknowledge"), "", "Handoff bestaetigen", "Externe Uebergabe wurde bestaetigt."));
+            }
+            if can_admin
+                && matches!(handoff.status.as_str(), "prepared" | "exported" | "awaiting_results" | "partially_reported")
+            {
+                actions.push(agent_rollout_confirm_form(&action_path("invalidate"), "", "Handoff invalidieren", "Externe Uebergabe kontrolliert invalidieren."));
+            }
+            if can_admin
+                && matches!(handoff.status.as_str(), "awaiting_results" | "partially_reported")
+                && handoff.reported_result_count == handoff.expected_result_count
+            {
+                actions.push(agent_rollout_confirm_form(&action_path("complete"), "", "Handoff abschliessen", "Alle erwarteten Ergebnisse wurden geprueft."));
+            }
+            if can_write && matches!(handoff.status.as_str(), "exported" | "awaiting_results" | "partially_reported") {
+                actions.push(format!(r#"<details><summary>Ergebnis-Paket importieren</summary><form method="post" action="{}"><label>JSON-Paket<textarea name="result_packet" maxlength="1048576" required></textarea></label><label><input type="checkbox" name="confirmed" value="yes" required> Import nochmals bestaetigen</label><button type="submit">Importieren</button></form></details>"#, html_escape(&web_path_with_context(&format!("/zero-trust/rollouts/{rollout_id}/result-imports"), Some(&context)))));
+            }
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}/{}</td><td>{}/{}/{}/{}/{}</td><td>{}</td><td><div class="actions">{}</div></td></tr>"#,
+                html_escape(&handoff.ring_name),
+                agent_rollout_status_badge(&handoff.status),
+                html_escape(&handoff.source_system),
+                html_escape(if handoff.external_batch_id.is_empty() { "Noch offen" } else { &handoff.external_batch_id }),
+                handoff.reported_result_count,
+                handoff.expected_result_count,
+                handoff.succeeded_count,
+                handoff.failed_count,
+                handoff.skipped_count,
+                handoff.timed_out_count,
+                handoff.unknown_count,
+                handoff.version_mismatch_count,
+                actions.join(""),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let import_rows = detail
+        .result_imports
+        .iter()
+        .map(|import| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}/{}/{}/{}/{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&import.imported_at),
+                html_escape(&import.source_system),
+                html_escape(&import.external_batch_id),
+                agent_rollout_status_badge(&import.status),
+                import.succeeded_count,
+                import.failed_count,
+                import.skipped_count,
+                import.timed_out_count,
+                import.unknown_count,
+                import.version_mismatch_count,
+                import.replay_count,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let active_manifest_options = detail
+        .manifests
+        .iter()
+        .filter(|manifest| manifest.status == "active")
+        .map(|manifest| {
+            format!(
+                r#"<option value="{}">{} · v{}</option>"#,
+                html_escape(&manifest.manifest_id),
+                html_escape(&manifest.ring_name),
+                manifest.manifest_version
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let handoff_create = if can_admin && !active_manifest_options.is_empty() {
+        format!(
+            r#"<details><summary>Externen Handoff vorbereiten</summary><form method="post" action="{}"><label>Manifest<select name="manifest_id">{}</select></label><label>Quellsystem<input name="source_system" maxlength="96" required></label><label>Externe Batch-ID<input name="external_batch_id" maxlength="128"></label><label>Ablaufzeitpunkt (RFC 3339)<input name="expires_at" maxlength="64"></label><label>Beschreibung<textarea name="description" maxlength="1000"></textarea></label><label><input type="checkbox" name="confirmed" value="yes" required> Handoff nochmals bestaetigen</label><button type="submit">Handoff anlegen</button></form></details>"#,
+            html_escape(&web_path_with_context(
+                &format!("/zero-trust/rollouts/{rollout_id}/handoffs"),
+                Some(&context)
+            )),
+            active_manifest_options
+        )
+    } else {
+        String::new()
+    };
     let overall_actions = agent_rollout_overall_actions(&context, &detail, can_admin);
     let owner = detail
         .rollout
@@ -18060,6 +18525,9 @@ async fn web_agent_rollout_detail(
         <section class="hero compact"><h1>{}</h1><p>Zielversion {} · {}</p><a class="button secondary" href="{}">Zurueck zur Uebersicht</a></section>
         <section class="panel wide"><div class="section-heading"><h2>Rolloutstatus</h2>{}</div><section class="metrics">{}{}{}{}{}</section><dl class="detail-list"><dt>Owner</dt><dd>{}</dd><dt>Scope</dt><dd>{} · {}</dd><dt>Signatur</dt><dd>{}</dd><dt>Zertifikat/mTLS</dt><dd>{}</dd><dt>Rollback-Plan</dt><dd>{}</dd></dl><p class="warning">ISCY dokumentiert Freigaben und Ergebnisse. Es werden keine Remote-Installationen, Agent-Befehle oder technischen Rollbacks ausgefuehrt.</p>{}</section>
         <section class="panel wide"><h2>Ring-Timeline und Gates</h2><table><thead><tr><th>Ring</th><th>Status</th><th>Ziele</th><th>Erfolg</th><th>Max. Fehler</th><th>Beobachtung</th><th>Erfolg/Fehler</th><th>Aktion</th></tr></thead><tbody>{}</tbody></table></section>
+        <section class="panel wide"><h2>Unveraenderliche Rollout-Manifeste</h2><table><thead><tr><th>Ring</th><th>Version</th><th>Status</th><th>SHA-256</th><th>Ziele</th><th>Preflight P/W/F</th><th>Artefakt</th><th>Policy-Revision</th><th>Export</th></tr></thead><tbody>{}</tbody></table></section>
+        <section class="panel wide"><div class="section-heading"><h2>Externe Deployment-Handoffs</h2>{}</div><table><thead><tr><th>Ring</th><th>Status</th><th>Quelle</th><th>Batch</th><th>Gemeldet</th><th>Erfolg/Fehler/Skip/Timeout/Unbekannt</th><th>Versionsabweichungen</th><th>Aktion</th></tr></thead><tbody>{}</tbody></table></section>
+        <section class="panel wide"><h2>Kontrollierte Ergebnisimporte</h2><table><thead><tr><th>Zeit</th><th>Quelle</th><th>Batch</th><th>Status</th><th>Erfolg/Fehler/Skip/Timeout/Unbekannt</th><th>Versionsabweichungen</th><th>Replays</th></tr></thead><tbody>{}</tbody></table></section>
         <section class="panel wide"><h2>Ziel-Devices</h2><table><thead><tr><th>Device</th><th>OS</th><th>Ring</th><th>Status</th><th>Preflight</th><th>Deployment</th><th>Postflight</th><th>Rollback</th><th>Aktion</th></tr></thead><tbody>{}</tbody></table></section>
         <section class="panel wide"><h2>Verfuegbare Devices</h2><table><thead><tr><th>Device</th><th>OS</th><th>Kanal</th><th>Eligibility</th><th>Gruende / Zuordnung</th></tr></thead><tbody>{}</tbody></table></section>
         <section class="panel wide"><h2>Preflight und Postflight</h2><table><thead><tr><th>Ziel</th><th>Phase</th><th>Check</th><th>Status</th><th>Bewertung</th></tr></thead><tbody>{}</tbody></table></section>
@@ -18119,6 +18587,22 @@ async fn web_agent_rollout_detail(
         } else {
             ring_rows
         },
+        if manifest_rows.is_empty() {
+            web_empty_row(9, "Noch kein Manifest eingefroren.")
+        } else {
+            manifest_rows
+        },
+        handoff_create,
+        if handoff_rows.is_empty() {
+            web_empty_row(8, "Noch kein externer Handoff vorbereitet.")
+        } else {
+            handoff_rows
+        },
+        if import_rows.is_empty() {
+            web_empty_row(7, "Noch keine externen Ergebnisse importiert.")
+        } else {
+            import_rows
+        },
         if target_rows.is_empty() {
             web_empty_row(9, "Noch keine Ziele zugeordnet.")
         } else {
@@ -18169,6 +18653,20 @@ fn agent_rollout_ring_actions(
         ));
     }
     if can_admin && ring.status == "ready" {
+        forms.push(agent_rollout_confirm_form(
+            &action("freeze-manifest"),
+            &hidden_ring,
+            "Manifest einfrieren",
+            "Zielmenge, Artefakt, Policy und Preflight fuer diesen Ring einfrieren.",
+        ));
+    }
+    if can_admin
+        && ring.status == "ready"
+        && detail
+            .manifests
+            .iter()
+            .any(|manifest| manifest.ring_id == ring.id && manifest.status == "active")
+    {
         forms.push(agent_rollout_confirm_form(
             &action("start"),
             &hidden_ring,
@@ -18304,9 +18802,8 @@ async fn web_agent_rollout_action(
     };
     let permission = match action.as_str() {
         "preflight" | "postflight" | "evaluate" => AgentRolloutPermission::Write,
-        "validate" | "start" | "promote" | "pause" | "resume" | "abort" | "rollback" => {
-            AgentRolloutPermission::Admin
-        }
+        "validate" | "freeze-manifest" | "start" | "promote" | "pause" | "resume" | "abort"
+        | "rollback" => AgentRolloutPermission::Admin,
         _ => {
             return web_error_page(
                 "Agent-Rollout",
@@ -18348,6 +18845,22 @@ async fn web_agent_rollout_action(
                 )
                 .await
         }
+        "freeze-manifest" => match store
+            .freeze_manifest(
+                context.tenant_id,
+                rollout_id,
+                &form.ring_name,
+                auth_context.user_id,
+                AgentRolloutManifestFreezeRequest {
+                    confirmed: confirmation.confirmed,
+                    reason: confirmation.reason,
+                },
+            )
+            .await
+        {
+            Ok(_) => store.detail(context.tenant_id, rollout_id).await,
+            Err(error) => Err(error),
+        },
         "start" => {
             store
                 .start_ring(
@@ -18577,6 +19090,166 @@ async fn web_agent_rollout_target_result(
             "Agent-Rollout",
             "/zero-trust/rollouts/",
             &context,
+            &error.safe_message,
+        )
+        .into_response(),
+    }
+}
+
+async fn web_agent_rollout_handoff_create(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebAgentRolloutHandoffForm>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent-Rollout", "/zero-trust/rollouts/").into_response();
+    };
+    let (auth_context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(_) => {
+                return web_error_page(
+                    "Agent-Rollout",
+                    "/zero-trust/rollouts/",
+                    &context,
+                    "Diese Aktion benoetigt eine Admin-Rolle.",
+                )
+                .into_response()
+            }
+        };
+    let result = store
+        .create_handoff(
+            context.tenant_id,
+            rollout_id,
+            auth_context.user_id,
+            AgentRolloutHandoffCreateRequest {
+                confirmed: form.confirmed.is_some(),
+                manifest_id: form.manifest_id,
+                source_system: form.source_system,
+                external_batch_id: form.external_batch_id,
+                description: form.description,
+                expires_at: (!form.expires_at.trim().is_empty()).then_some(form.expires_at),
+            },
+        )
+        .await;
+    web_agent_rollout_result_redirect(result, &context, rollout_id)
+}
+
+async fn web_agent_rollout_handoff_action(
+    Path((rollout_id, handoff_id, action)): Path<(i64, String, String)>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebAgentRolloutHandoffActionForm>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent-Rollout", "/zero-trust/rollouts/").into_response();
+    };
+    let (auth_context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
+            Ok(value) => value,
+            Err(_) => {
+                return web_error_page(
+                    "Agent-Rollout",
+                    "/zero-trust/rollouts/",
+                    &context,
+                    "Diese Aktion benoetigt eine Admin-Rolle.",
+                )
+                .into_response()
+            }
+        };
+    let result = store
+        .change_handoff_status(
+            context.tenant_id,
+            rollout_id,
+            &handoff_id,
+            auth_context.user_id,
+            &action,
+            AgentRolloutHandoffActionRequest {
+                confirmed: form.confirmed.is_some(),
+                reason: form.reason,
+            },
+        )
+        .await;
+    web_agent_rollout_result_redirect(result, &context, rollout_id)
+}
+
+async fn web_agent_rollout_result_import(
+    Path(rollout_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<WebContextQuery>,
+    Form(form): Form<WebAgentRolloutResultImportForm>,
+) -> Response {
+    let Some(context) = web_context_from_request(&query, &headers, &state).await else {
+        return web_missing_context("Agent-Rollout", "/zero-trust/rollouts/").into_response();
+    };
+    let (auth_context, store) =
+        match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
+            Ok(value) => value,
+            Err(_) => {
+                return web_error_page(
+                    "Agent-Rollout",
+                    "/zero-trust/rollouts/",
+                    &context,
+                    "Die Rolle ist fuer den Ergebnisimport nicht berechtigt.",
+                )
+                .into_response()
+            }
+        };
+    if form.result_packet.len() > 1024 * 1024 {
+        return web_error_page(
+            "Agent-Rollout",
+            "/zero-trust/rollouts/",
+            &context,
+            "Das Ergebnis-Paket ueberschreitet das Groessenlimit.",
+        )
+        .into_response();
+    }
+    let mut packet: AgentRolloutResultImportPacket = match serde_json::from_str(&form.result_packet)
+    {
+        Ok(packet) => packet,
+        Err(_) => {
+            return web_error_page(
+                "Agent-Rollout",
+                "/zero-trust/rollouts/",
+                &context,
+                "Das Ergebnis-Paket entspricht nicht dem erlaubten JSON-Schema.",
+            )
+            .into_response()
+        }
+    };
+    packet.confirmed = form.confirmed.is_some();
+    let payload_sha256 = format!("{:x}", Sha256::digest(form.result_packet.as_bytes()));
+    let result = store
+        .import_handoff_results(
+            context.tenant_id,
+            rollout_id,
+            auth_context.user_id,
+            &payload_sha256,
+            packet,
+        )
+        .await;
+    web_agent_rollout_result_redirect(result, &context, rollout_id)
+}
+
+fn web_agent_rollout_result_redirect<T>(
+    result: Result<T, AgentRolloutError>,
+    context: &WebContext,
+    rollout_id: i64,
+) -> Response {
+    match result {
+        Ok(_) => Redirect::to(&web_path_with_context(
+            &format!("/zero-trust/rollouts/{rollout_id}/"),
+            Some(context),
+        ))
+        .into_response(),
+        Err(error) => web_error_page(
+            "Agent-Rollout",
+            "/zero-trust/rollouts/",
+            context,
             &error.safe_message,
         )
         .into_response(),
@@ -28702,6 +29375,31 @@ fn push_agent_rollout_metrics(body: &mut String, metrics: &AgentRolloutOperation
             "iscy_agent_rollout_failed_targets",
             "Number of failed agent rollout targets.",
             metrics.failed_targets,
+        ),
+        (
+            "iscy_agent_rollout_rings_without_manifest",
+            "Number of ready rollout rings without an active immutable manifest.",
+            metrics.rings_without_manifest,
+        ),
+        (
+            "iscy_agent_rollout_active_handoffs",
+            "Number of active external rollout handoffs.",
+            metrics.active_handoffs,
+        ),
+        (
+            "iscy_agent_rollout_handoffs_awaiting_results",
+            "Number of external rollout handoffs awaiting results.",
+            metrics.handoffs_awaiting_results,
+        ),
+        (
+            "iscy_agent_rollout_missing_handoff_results",
+            "Number of expected external rollout results not yet reported.",
+            metrics.missing_handoff_results,
+        ),
+        (
+            "iscy_agent_rollout_failed_import_results",
+            "Number of failed, timed-out or unknown imported rollout results.",
+            metrics.failed_import_results,
         ),
     ] {
         body.push_str(&format!(
@@ -42621,6 +43319,42 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(agent_rollout_ring_start),
         )
         .route(
+            "/api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/manifest/preview",
+            get(agent_rollout_manifest_preview),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/rings/{ring_name}/manifest/freeze",
+            post(agent_rollout_manifest_freeze),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/manifests/{manifest_id}",
+            get(agent_rollout_manifest_get),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/manifests/{manifest_id}/export",
+            get(agent_rollout_manifest_export),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/handoffs",
+            get(agent_rollout_handoffs).post(agent_rollout_handoff_create),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/handoffs/{handoff_id}",
+            get(agent_rollout_handoff_get),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/handoffs/{handoff_id}/export",
+            get(agent_rollout_handoff_export),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/handoffs/{handoff_id}/{action}",
+            post(agent_rollout_handoff_action),
+        )
+        .route(
+            "/api/v1/agents/rollouts/{rollout_id}/result-imports",
+            post(agent_rollout_result_import).layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route(
             "/api/v1/agents/rollouts/{rollout_id}/targets/{target_id}/deployment-result",
             post(agent_rollout_deployment_result),
         )
@@ -43307,6 +44041,19 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route(
             "/zero-trust/rollouts/{rollout_id}/targets/{target_id}/result",
             post(web_agent_rollout_target_result),
+        )
+        .route(
+            "/zero-trust/rollouts/{rollout_id}/handoffs",
+            post(web_agent_rollout_handoff_create),
+        )
+        .route(
+            "/zero-trust/rollouts/{rollout_id}/handoffs/{handoff_id}/{action}",
+            post(web_agent_rollout_handoff_action),
+        )
+        .route(
+            "/zero-trust/rollouts/{rollout_id}/result-imports",
+            post(web_agent_rollout_result_import)
+                .layer(DefaultBodyLimit::max(1024 * 1024 + 64 * 1024)),
         )
         .route("/zero-trust/onboarding/", get(web_agent_onboarding))
         .route(
