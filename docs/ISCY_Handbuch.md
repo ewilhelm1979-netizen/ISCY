@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juli 2026 (ISCY V23.7.29 vorbereitet / Rust 0.3.22)
+Version: Arbeitsstand Juli 2026 (ISCY V23.7.30 Release Candidate vorbereitet / Rust 0.3.22)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -1800,19 +1800,20 @@ Skalierbarkeit, SLA-Erfuellung, Zertifizierung oder Rechtskonformitaet.
 
 ### 6.18 Finales Hardening und Release-Vorbereitung
 
-Der stabile Folgerelease `V23.7.29` fuehrt die vorhandenen Pflichtpruefungen
-in `make release-candidate-check` zusammen, ohne einen Tag, ein GitHub Release
-oder eine oeffentliche Veroeffentlichung zu erzeugen. GitHub-CI behaelt die
-getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und Docker-Jobs und
-aggregiert deren Ergebnis erst am Ende. Lokal erzeugte RC-Artefakte bleiben
-unter `artifacts/release-candidate/`, sind unsigniert und werden nicht
-hochgeladen.
+`V23.7.29` bleibt der unveraenderte veroeffentlichte Vorgaenger. `V23.7.30`
+ist als `prepared_not_published` vorbereitet, ohne einen neuen Tag, ein GitHub
+Release oder eine oeffentliche Veroeffentlichung zu erzeugen. Die vorhandenen
+Pflichtpruefungen laufen in `make release-candidate-check` zusammen. GitHub-CI
+behaelt die getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und
+Docker-Jobs und aggregiert deren Ergebnis erst am Ende. Lokal erzeugte
+Candidate-Artefakte bleiben unter `artifacts/release-candidate/`, sind
+unsigniert und werden weder committed noch hochgeladen.
 
 Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
 Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
 und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust
 1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem
-Bootstrap, 40 Migrationen, Restart, Migrationsrennen und einem logischen
+Bootstrap, 41 Migrationen, Restart, Migrationsrennen und einem logischen
 Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der
 PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder
 ein In-place-Upgrade noch ein automatisiertes `pg_upgrade` oder einen
@@ -1826,7 +1827,7 @@ Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-
 Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder
 internen Store-Details.
 
-Die RC-Metadatenpruefung bestaetigt 40 fortlaufende Migrationen, 36 visuelle
+Die RC-Metadatenpruefung bestaetigt 41 fortlaufende Migrationen, 36 visuelle
 Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen
 wertredigierten Sensitive-Data-Scan. `release/release-manifest.json` nutzt
 `git:HEAD` als reproduzierbaren Quellmarker; die lokale Artefakterzeugung loest
@@ -1843,6 +1844,16 @@ Cloud-native Secret-Manager, Multi-Region-HA, automatische Zertifizierung,
 Rechtsbewertung und Behoerdenmeldung bleiben ausdruecklich ausserhalb dieses
 Release. Die vollstaendige Matrix und alle Betriebsgrenzen stehen
 in `docs/RELEASE_CANDIDATE_CHECKLIST.md`.
+
+Der owner-kontrollierte ISCY Codex PR-Orchestrator bietet fuer autorisierte
+Same-Repository-Draft-PRs gegen `main` die Routen `/iscy status`,
+`/iscy review`, `/iscy fix-ci` und `/iscy verify`. Read-only Review/Verify,
+Workspace-begrenzte Korrekturen, Head-/Diff-Pruefungen und hoechstens zwei
+CI-Fix-Versuche folgen Least-Privilege- und fail-closed Grenzen. Codex erhaelt
+keine Merge-, Tag- oder Release-Berechtigung; die Merge-Grenze bleibt
+menschlich. Modellaufrufe setzen separat finanzierte OpenAI-API-Credits voraus.
+Da diese fuer die Candidate-Vorbereitung nicht vorhanden sind, wird kein
+erfolgreicher produktiver Auto-Fix-End-to-End-Lauf behauptet.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
@@ -1902,8 +1913,8 @@ Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 1. Supplier/Product-Security-Workflow fachlich weiter polishen, z. B. feinere Import-Vorbereitung fuer Hersteller-Advisorys, Contract-/Exit-Reifegrade und Review-Pack-Gliederung
 2. Den S3-kompatiblen Evidence-Storage nach menschlicher Security-Review in einer isolierten Betreiberumgebung mit produktiven Endpoint-, Secret-Root- und Restore-Vorgaben pilotieren
 3. Produktive Agent-Paketsignierung und eine spaetere produktive CA-/PKI-Stufe auf Basis des vorbereiteten Artefakt-/Provenance- und PKI-/CSR-Governance-Modells
-4. Den vorbereiteten stabilen Release `V23.7.29` vollstaendig pruefen und erst
-   in einem getrennten Auftrag ueber Tag und Veroeffentlichung entscheiden
+4. Den vorbereiteten Candidate `V23.7.30` vollstaendig pruefen und erst in einem
+   getrennten Auftrag ueber Merge, Tag und Veroeffentlichung entscheiden
 
 Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product Security, AI Governance, Agent-Posture und Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.
 

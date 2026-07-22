@@ -223,7 +223,7 @@ Toolchain stammt weiterhin aus dem unveraenderten nixpkgs-26.05-Flake. Dieser
 Wartungsschritt aendert weder Cargo-Abhaengigkeiten noch Produktfunktionalitaet
 und veroeffentlicht kein Container- oder Release-Artefakt. Die Entscheidung
 ueber eine spaetere Release-Builder-Aktualisierung bleibt auch in der
-Release-Vorbereitung fuer `V23.7.29` bewusst getrennt; der portable Builder
+Release-Vorbereitung fuer `V23.7.30` bewusst getrennt; der portable Builder
 bleibt fuer diesen Stand auf Rust 1.88.
 
 ## Release-Candidate-Prüfung
@@ -233,7 +233,7 @@ veroeffentlicht keine Artefakte. Der Aufruf bricht bei fehlenden Werkzeugen,
 fehlenden Wegwerf-PostgreSQL-URLs oder einem Testfehler ab. Die GitHub-CI nutzt
 weiterhin getrennte zeitbegrenzte Jobs fuer Rust, Nix, MinIO, Performance, HA,
 Visual Regression, Docker und das portable Linux-Binary. Der abschliessende Aggregationsjob prueft deren
-Erfolg sowie Manifest, Checksums, 39 Migrationen, 34 Baselines,
+Erfolg sowie Manifest, Checksums, 41 Migrationen, 36 Baselines,
 Dokumentationsreferenzen und den wertredigierten Sensitive-Data-Scan.
 
 `make release-binary-gate` erzeugt das Release-Binary zweimal cachefrei in

@@ -1,7 +1,7 @@
-# ISCY Development- und Release-Candidate-Checkliste
+# ISCY Release-Candidate-Checkliste V23.7.30
 
-Diese Checkliste beschreibt den kontrollierten Development-Zyklus fuer
-`V23.7.30` und die davon getrennte spaetere Release-Candidate-Vorbereitung.
+Diese Checkliste beschreibt die kontrollierte Release-Candidate-Vorbereitung
+fuer `V23.7.30` auf Basis des gemergten Entwicklungsstands.
 Sie ist ein technischer und fachlicher Review-Nachweis, keine Freigabe,
 Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
 
@@ -11,16 +11,20 @@ Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
 - Basis-Commit: `ba47201885435d57efc5042acde665f42dc000df`
 - Release-ID: `353634425`
 - Published-Snapshot: `release/published/V23.7.29.json`
-- Development-Zielversion: `V23.7.30`
-- Root-Status: `development_unreleased`
+- Zielversion: `V23.7.30`
+- Candidate-Ausgangscommit: `9619466ad72f35ec4d4e69308b97a44d3261498f`
+- Root-Status: `prepared_not_published`
 - Internes Rust-Paket: `0.3.22`
 - Rust-Haupttoolchain: `1.97.0`
 - MSRV und portabler Release-Builder: Rust `1.88`
 - Nix: `nixos-26.05`, Nix-Rust `1.95.0`
 - Datenbank: PostgreSQL 16 bleibt Standard; PostgreSQL 18.4 ist
   kompatibilitaetsgeprueft
-- Migrationen: 39, fortlaufend `0001` bis `0039`
-- Visual Regression: 34 Baselines
+- Migrationen: 41, fortlaufend `0001` bis `0041`
+- Visual Regression: 36 Baselines
+- Rust-Vollsuite auf dem fachlichen Ausgangsstand: 334 Tests bestanden; der
+  bestehende isolierte MinIO-Test bleibt im normalen Cargo-Lauf bewusst
+  ignoriert und wird im separaten Object-Storage-Integrationsjob ausgefuehrt
 - Lizenz: `AGPL-3.0-only`
 
 `V23.7.29`, sein Tag, seine Release-ID und seine sechs Assets bleiben
@@ -29,10 +33,8 @@ veroeffentlichte Metadaten und ist keine Signatur oder Attestation.
 
 ## Lifecycle-Modi
 
-`development_unreleased` ist der normale Root-Status fuer Feature-PRs. Der
-vollstaendige technische Pruefpfad bleibt verpflichtend, erzeugt aber kein
-Release-Bundle. Ein Aufruf von `make release-candidate-artifacts` bricht in
-diesem Modus fail-closed mit `RC_ARTIFACT_ERROR[release_status]` ab. Ein
+`development_unreleased` bleibt der normale Root-Status fuer Feature-PRs. In
+diesem Modus bricht `make release-candidate-artifacts` fail-closed ab und ein
 erfolgreiches Vollgate endet mit `DEV_CHECK_OK`.
 
 In diesem Development-Status bleibt die getrackte SBOM des letzten
@@ -41,9 +43,9 @@ CycloneDX-Struktur validiert. Eine neue Release-SBOM wird erst im Status
 `prepared_not_published` erzeugt; Development erzeugt weder Bundle noch neue
 Release-SBOM.
 
-`prepared_not_published` wird erst in einem separaten Release-Prep-PR gesetzt.
-Dieser Modus verlangt vollstaendige Candidate Notes und erlaubt nach dem
-Binary-Gate die lokale, unsignierte Bundle-Erzeugung. Eine automatische
+`prepared_not_published` ist ausschließlich in diesem separaten
+Release-Prep-PR gesetzt. Dieser Modus verlangt vollstaendige Candidate Notes
+und erlaubt nach dem Binary-Gate die lokale, unsignierte Bundle-Erzeugung. Eine automatische
 Umwandlung aus dem Development-Modus, ein Tag oder eine GitHub-
 Veroeffentlichung findet nicht statt. Das Candidate-Vollgate endet mit
 `RC_CHECK_OK`.
@@ -69,28 +71,32 @@ lueckenlos, eindeutig und aufsteigend sein.
 
 | Bereich | Status | Nachweis oder Einschränkung |
 | --- | --- | --- |
-| Rust/Axum Backend und Weboberfläche | bereit | Locked Build, Clippy, Rust-/HTTP-Tests und Smoke-Pfade sind Pflicht. |
-| SQLite | bereit mit dokumentierter Einschränkung | Lokal und restartbar; kein Mehrinstanz-/HA-Pfad. |
-| PostgreSQL 16 | Prüfung erforderlich | Standardpfad; Leerdatenbank, Bestand, Dump/Restore und Migrations-Race muessen gruen sein. |
-| PostgreSQL 18.4 | Prüfung erforderlich | Zusatzgate fuer frischen Bootstrap, Restart, 39 Migrationen und logischen 16-nach-18-Forward-Restore; noch kein Produktionsstandard. |
-| Lokale Evidence-Speicherung | bereit mit dokumentierter Einschränkung | Authentifiziert und canonical-path-geprueft; nicht HA-faehig. |
-| S3-kompatibler Evidence Storage | Prüfung erforderlich | MinIO-Lifecycle und HA-Cross-Instance-Pfad muessen gruen sein; keine Cloud-Credentials. |
-| Evidence Worker und Disposition | Prüfung erforderlich | Atomare Claims, Legal Hold, Approval, Tombstone und Wiederanlauf werden getestet. |
-| Notifications | bereit mit dokumentierter Einschränkung | Claim/Deduplizierung und sichere Webhooks; kein externer Queue-Cluster. |
-| Supplier/Product Security | bereit | Tenant-, Rollen- und Evidence-Grenzen besitzen Negativtests. |
-| Regulatory und Management Reviews | bereit | Snapshots und Exporte bleiben eingefroren; keine Rechts- oder Compliance-Entscheidung. |
-| AI Governance | bereit | Links und Gap-Tasks sind tenantgebunden und idempotent. |
-| Zero Trust / Agent Fleet | bereit mit dokumentierter Einschränkung | Governance und Onboarding; kein allgemeiner EDR-/MDM-Ersatz. |
-| Agent-Artefakte und Provenance | bereit mit dokumentierter Einschränkung | SHA-256 und Statusmetadaten; produktive Signierung fehlt. |
-| Agent PKI / CSR / mTLS | bereit mit dokumentierter Einschränkung | Metadata-only; keine CA-Ausstellung oder privaten Schluessel. |
-| Liveness, Readiness und Shutdown | Prüfung erforderlich | Graceful-Shutdown-Smoke und sichere Fehlerklassen muessen gruen sein. |
-| Performance-Smoke | Prüfung erforderlich | CI-Budget, keine Produktions-SLO. |
-| Zwei-Instanzen-/Failover-Test | Prüfung erforderlich | PostgreSQL, MinIO und nginx bleiben im Test Einzelinstanzen. |
-| Visual Regression | Prüfung erforderlich | 34/34 Baselines, keine automatische Baseline-Aktualisierung. |
-| Docker/Compose und hardened Build | Prüfung erforderlich | Non-root, Cap-Drop/no-new-privileges und alle Compose-Varianten. |
-| Dependency-/Supply-Chain-Prüfung | Prüfung erforderlich | cargo audit, cargo deny und CI muessen gruen sein. |
+| Rust/Axum Backend und Weboberfläche | implementiert und geprüft | Locked Build, Clippy und 334 Rust-/HTTP-Tests waren auf dem fachlichen Ausgangsstand gruen. |
+| SQLite | geprüft mit dokumentierter Einschränkung | Bootstrap, Restart und Restore; kein Mehrinstanz-/HA-Pfad. |
+| PostgreSQL 16 | Candidate-Prüfung erforderlich | Standardpfad; Leerdatenbank, Bestand, Dump/Restore und Migrations-Race muessen im Candidate-Gate gruen sein. |
+| PostgreSQL 18.4 | Candidate-Prüfung erforderlich | Zusatzgate fuer frischen Bootstrap, Restart, 41 Migrationen und logischen 16-nach-18-Forward-Restore; kein Produktionsstandard. |
+| Lokale Evidence-Speicherung | geprüft mit dokumentierter Einschränkung | Authentifiziert und canonical-path-geprueft; nicht HA-faehig. |
+| S3-kompatibler Evidence Storage | Candidate-Prüfung erforderlich | MinIO-Lifecycle und HA-Cross-Instance-Pfad muessen gruen sein; keine produktiven Cloud-Credentials. |
+| Evidence Worker und Disposition | Candidate-Prüfung erforderlich | Atomare Claims, Legal Hold, Approval, Tombstone und Wiederanlauf werden im Gate geprueft. |
+| Notifications | geprüft mit dokumentierter Einschränkung | Claim/Deduplizierung und sichere Webhooks; kein externer Queue-Cluster. |
+| Supplier/Product Security | implementiert und geprüft | Tenant-, Rollen- und Evidence-Grenzen besitzen Negativtests. |
+| Regulatory und Management Reviews | implementiert und geprüft | Snapshots und Exporte bleiben eingefroren; keine Rechts- oder Compliance-Entscheidung. |
+| AI Governance | implementiert und geprüft | Links und Gap-Tasks sind tenantgebunden und idempotent. |
+| Agent Rollout 2.0 Phase 1 | implementiert und geprüft | Feste Ringe, Preflight/Postflight, menschliche Promotion, Pause, Abbruch und operatorgefuehrter Rollback. |
+| Agent Rollout 2.0 Phase 2 | implementiert und geprüft | Kanonische unveraenderliche Manifeste, SHA-256, passive Handoffs sowie transaktionale Result-Importe mit Replay-/Konfliktschutz. |
+| Externe Agent-Verteilung und Remote-Ausführung | bewusst nicht unterstützt | Keine Paketuebertragung, Deployment-Provider-Anbindung, Agent-Befehle, MDM/RMM/EDR oder C2. |
+| Agent-Artefakte und Provenance | geprüft mit dokumentierter Einschränkung | SHA-256 und Statusmetadaten; produktive Signierung fehlt. |
+| Agent PKI / CSR / mTLS | geprüft mit dokumentierter Einschränkung | Metadata-only; keine CA-Ausstellung oder privaten Schluessel. |
+| Produktive Code-Signierung und CA-Ausstellung | bewusst nicht unterstützt | Signatur bleibt `unsigned`, Provenance `prepared_unsigned`. |
+| Codex PR-Orchestrator | geprüft mit dokumentierter Einschränkung | Guards, Status und Automationstests sind vorhanden; Modellaufrufe brauchen separat finanzierten API-Zugang, produktives Auto-Fix-E2E ist ohne Credits nicht belegt. |
+| Liveness, Readiness und Shutdown | Candidate-Prüfung erforderlich | Graceful-Shutdown-Smoke und sichere Fehlerklassen muessen gruen sein. |
+| Performance-Smoke | Candidate-Prüfung erforderlich | CI-Budget, keine Produktions-SLO. |
+| Zwei-Instanzen-/Failover-Test | Candidate-Prüfung erforderlich | Zwei App-Instanzen; PostgreSQL, MinIO und nginx bleiben im Test Einzelinstanzen. |
+| Visual Regression | Candidate-Prüfung erforderlich | 36/36 Baselines, keine automatische Baseline-Aktualisierung. |
+| Docker/Compose und hardened Build | Candidate-Prüfung erforderlich | Non-root, Cap-Drop/no-new-privileges und alle Compose-Varianten. |
+| Dependency-/Supply-Chain-Prüfung | Candidate-Prüfung erforderlich | cargo audit, cargo deny, SBOM und CI muessen gruen sein. |
 
-`Prüfung erforderlich` bedeutet, dass die Funktion implementiert ist, der
+`Candidate-Prüfung erforderlich` bedeutet, dass die Funktion implementiert ist, der
 konkrete Release-Nachweis aber erst mit der vollstaendigen lokalen beziehungsweise
 GitHub-CI-Ausfuehrung abgeschlossen wird.
 
@@ -160,10 +166,9 @@ export ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL=postgresql://iscy@127.0.0.1:5432/
 make release-candidate-check
 ```
 
-Mit dem Root-Status `development_unreleased` erzeugt dieser Aufruf kein
-Verzeichnis `artifacts/release-candidate/`. Der Uebergang zu
-`prepared_not_published` erfolgt ausschliesslich in einer separaten,
-menschlich geprueften Release-Vorbereitung.
+Mit dem Root-Status `prepared_not_published` erzeugt dieser Aufruf nach allen
+Pflichtgates ausschließlich ein lokales, unsigniertes Bundle unter
+`artifacts/release-candidate/`. Es wird weder hochgeladen noch veroeffentlicht.
 
 Der gepinnte Nix-Dev-Shell stellt die benoetigten Clients und Pruefwerkzeuge
 bereit. Der Aufruf verlangt absichtlich einen erreichbaren lokalen Docker-
@@ -229,7 +234,7 @@ freigegebene Vulnerability-Assertion vorliegt.
 - [ ] Alle lokalen, in der Umgebung ausführbaren Pflichtprüfungen sind grün.
 - [ ] SQLite leer/restartbar und PostgreSQL leer/Bestand/Restore/Race sind grün.
 - [ ] PostgreSQL 18.4 und der logische Forward-Restore 16 nach 18 sind gruen.
-- [ ] MinIO-Lifecycle, Performance, HA und Visual Regression 34/34 sind grün.
+- [ ] MinIO-Lifecycle, Performance, HA und Visual Regression 36/36 sind grün.
 - [ ] Binary-Hygiene, sauberer Runtime-Container und zwei byteidentische
   portable Builds sind gruen.
 - [ ] Manifest, Checksums, Handbuch und Release Notes sind konsistent.
@@ -239,6 +244,6 @@ freigegebene Vulnerability-Assertion vorliegt.
 - [ ] Erst danach darf separat über Ready-for-review, Merge, Tag und Release
   entschieden werden.
 
-Das Oeffnen eines Development-Zyklus erstellt keinen neuen Tag, kein neues
-GitHub Release, kein Asset, keine produktive Signatur und keine oeffentliche
+Diese Candidate-Vorbereitung erstellt keinen neuen Tag, kein GitHub Release,
+keinen Asset-Upload, keine produktive Signatur und keine oeffentliche
 Veroeffentlichung. Der veroeffentlichte Snapshot `V23.7.29` bleibt immutable.

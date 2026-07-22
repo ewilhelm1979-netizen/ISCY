@@ -44,7 +44,7 @@ benannte Compose-Umgebung. Er startet:
 - gehartete ISCY-Testprozesse fuer Source und Target,
 - nur an `127.0.0.1` gebundene Anwendungsports und keine Datenbankports.
 
-Der Lauf prueft Fresh Bootstrap, 39 Migrationen, einen zweiten idempotenten
+Der Lauf prueft Fresh Bootstrap, 41 Migrationen, einen zweiten idempotenten
 Migrationslauf, Restart, Health, Login, Session, 401/403, zentrale Fachbereiche,
 Risiko-Schreiben/-Lesen/-Aendern und einen synthetischen Evidence-Upload.
 Danach erzeugt der PostgreSQL-18-Client einen Custom-Dump der PG16-Quelle,
@@ -112,7 +112,7 @@ Stage-Umgebung.
 6. Den Dump mit `pg_restore --exit-on-error --no-owner --no-privileges`
    einspielen und anschliessend `ANALYZE` ausfuehren.
 7. ISCY `migrate` zweimal ausfuehren. Der zweite Lauf darf keine weitere
-   Migration anwenden; insgesamt muessen 39 Migrationen vorliegen.
+   Migration anwenden; insgesamt muessen 41 Migrationen vorliegen.
 8. Tabellen, Zeilen, Inhaltschecksummen, Sequenzen, Constraints, Tenantdaten,
    Rollen, Evidence-Metadaten und Media-Hashes gegen die eingefrorene Quelle
    vergleichen.
