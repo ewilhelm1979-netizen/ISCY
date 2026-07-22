@@ -4,70 +4,17 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use chrono::Utc;
-use serde_json::{json, Value};
+use iscy_backend::{
+    cve_store::CveStore,
+    vulnerability_intelligence::{
+        import_single_nvd_cve, run_feed_sync, FeedSyncRequest, OfficialVulnerabilityFeedTransport,
+        SOURCE_NVD,
+    },
+};
+use serde_json::json;
 
 fn normalize_legacy(input: &str) -> String {
     input.trim().to_uppercase()
-}
-
-fn nvd_api_key() -> String {
-    env::var("NVD_API_KEY").unwrap_or_default()
-}
-
-fn nvd_endpoint(nvd_url: &str) -> String {
-    format!("{}/rest/json/cves/2.0", nvd_url.trim_end_matches('/'))
-}
-
-fn fetch_nvd_cve(
-    client: &reqwest::blocking::Client,
-    nvd_url: &str,
-    cve_id: &str,
-) -> anyhow::Result<(Value, Value)> {
-    let mut req = client
-        .get(nvd_endpoint(nvd_url))
-        .query(&[("cveId", cve_id.to_string())]);
-    let api_key = nvd_api_key();
-    if !api_key.is_empty() {
-        req = req.header("apiKey", api_key);
-    }
-
-    let response = req.send()?;
-    if !response.status().is_success() {
-        anyhow::bail!(
-            "NVD request fuer {} fehlgeschlagen mit HTTP {}",
-            cve_id,
-            response.status()
-        );
-    }
-    let payload: Value = response.json()?;
-    let cve = payload["vulnerabilities"]
-        .as_array()
-        .and_then(|items| items.first())
-        .and_then(|entry| entry.get("cve"))
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("Keine CVE-Daten fuer {} gefunden", cve_id))?;
-    Ok((cve, payload))
-}
-
-fn post_nvd_upsert(
-    client: &reqwest::blocking::Client,
-    rust_endpoint: &str,
-    cve: &Value,
-    raw_payload: &Value,
-) -> anyhow::Result<Value> {
-    let cve_id = cve.get("id").and_then(Value::as_str).unwrap_or("");
-    let response = client
-        .post(rust_endpoint)
-        .json(&json!({ "cve": cve, "raw_payload": raw_payload }))
-        .send()?;
-    if !response.status().is_success() {
-        anyhow::bail!(
-            "Rust-Upsert fehlgeschlagen fuer {} mit HTTP {}",
-            cve_id,
-            response.status()
-        );
-    }
-    Ok(response.json()?)
 }
 
 fn cmd_parity(args: &[String]) -> anyhow::Result<()> {
@@ -265,296 +212,81 @@ fn cmd_trend(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_import(args: &[String]) -> anyhow::Result<()> {
-    let mut backend_url =
-        env::var("RUST_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
-    let mut nvd_url =
-        env::var("NVD_BASE_URL").unwrap_or_else(|_| "https://services.nvd.nist.gov".to_string());
-    let mut cves: Vec<String> = Vec::new();
-    let mut skip_healthcheck = false;
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--backend-url" && i + 1 < args.len() {
-            backend_url = args[i + 1].trim_end_matches('/').to_string();
-            i += 2;
-            continue;
-        }
-        if args[i] == "--nvd-url" && i + 1 < args.len() {
-            nvd_url = args[i + 1].trim_end_matches('/').to_string();
-            i += 2;
-            continue;
-        }
-        if args[i] == "--skip-healthcheck" {
-            skip_healthcheck = true;
-            i += 1;
-            continue;
-        }
-        cves.push(args[i].clone());
-        i += 1;
-    }
-    if cves.is_empty() {
-        anyhow::bail!("Keine CVE-IDs übergeben.");
-    }
+fn database_url() -> String {
+    env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:///db.sqlite3".to_string())
+}
 
-    let endpoint = format!("{}/api/v1/nvd/upsert", backend_url.trim_end_matches('/'));
-    let client = reqwest::blocking::Client::new();
-    if !skip_healthcheck {
-        let health_url = format!("{}/health", backend_url.trim_end_matches('/'));
-        let health_resp = client.get(&health_url).send()?;
-        if !health_resp.status().is_success() {
-            anyhow::bail!(
-                "Rust-Backend Healthcheck fehlgeschlagen mit HTTP {}",
-                health_resp.status()
-            );
+fn parse_import_args(args: &[String]) -> anyhow::Result<Vec<String>> {
+    if args.iter().any(|value| value.starts_with("--")) {
+        anyhow::bail!(
+            "Der gehaertete Einzelimport akzeptiert keine URL- oder Transportoptionen. Nur CVE-IDs sind zulaessig."
+        );
+    }
+    if args.is_empty() {
+        anyhow::bail!("Keine CVE-IDs uebergeben.");
+    }
+    Ok(args.to_vec())
+}
+
+fn parse_sync_args(args: &[String]) -> anyhow::Result<usize> {
+    let mut max_records = 5_000_usize;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--max-records" if index + 1 < args.len() => {
+                max_records = args[index + 1]
+                    .parse::<usize>()
+                    .map_err(|_| anyhow::anyhow!("--max-records muss eine positive Zahl sein."))?;
+                if max_records == 0 || max_records > 20_000 {
+                    anyhow::bail!("--max-records muss zwischen 1 und 20000 liegen.");
+                }
+                index += 2;
+            }
+            option => {
+                anyhow::bail!(
+                    "Nicht unterstuetzte Legacy-Option: {option}. Der gehaertete Delta-Sync akzeptiert nur --max-records und verwendet den persistenten Checkpoint."
+                );
+            }
         }
     }
-    let mut imported = 0_u64;
+    Ok(max_records)
+}
 
+async fn cmd_import(args: &[String]) -> anyhow::Result<()> {
+    let cves = parse_import_args(args)?;
+    let store = CveStore::connect(&database_url()).await?;
+    let transport = OfficialVulnerabilityFeedTransport::from_environment()?;
+    let mut imported = 0_usize;
     for cve in cves {
-        let normalized = normalize_legacy(&cve);
-        let (cve_payload, raw_payload) = fetch_nvd_cve(&client, &nvd_url, &normalized)?;
-        let body = post_nvd_upsert(&client, &endpoint, &cve_payload, &raw_payload)?;
-        println!("{}", serde_json::to_string(&body)?);
+        let result = import_single_nvd_cve(&store, &transport, &cve, None).await?;
+        println!("{}", serde_json::to_string(&result)?);
         imported += 1;
     }
-
-    println!("Import abgeschlossen. CVEs verarbeitet: {}", imported);
+    println!("Import abgeschlossen. CVEs verarbeitet: {imported}");
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn import_collection(
-    nvd_url: &str,
-    rust_url: &str,
-    has_kev: bool,
-    cve_tag: &str,
-    cpe_name: &str,
-    last_mod_start: &str,
-    last_mod_end: &str,
-    results_per_page: usize,
-    max_pages: usize,
-    skip_healthcheck: bool,
-) -> anyhow::Result<()> {
-    let nvd_api_key = nvd_api_key();
-    let client = reqwest::blocking::Client::new();
-    let nvd_endpoint = nvd_endpoint(nvd_url);
-    let rust_endpoint = format!("{}/api/v1/nvd/upsert", rust_url.trim_end_matches('/'));
-
-    if !skip_healthcheck {
-        let health_resp = client
-            .get(format!("{}/health", rust_url.trim_end_matches('/')))
-            .send()?;
-        if !health_resp.status().is_success() {
-            anyhow::bail!(
-                "Rust-Backend Healthcheck fehlgeschlagen mit HTTP {}",
-                health_resp.status()
-            );
-        }
-    }
-
-    let mut start_index: usize = 0;
-    let mut seen_records: usize = 0;
-    let mut imported_records: usize = 0;
-    let mut page: usize = 0;
-
-    while page < max_pages {
-        let mut req = client.get(&nvd_endpoint).query(&[
-            ("resultsPerPage", results_per_page.to_string()),
-            ("startIndex", start_index.to_string()),
-        ]);
-        if has_kev {
-            req = req.query(&[("hasKev", String::from("true"))]);
-        }
-        if !cve_tag.is_empty() {
-            req = req.query(&[("cveTag", cve_tag.to_string())]);
-        }
-        if !cpe_name.is_empty() {
-            req = req.query(&[("cpeName", cpe_name.to_string())]);
-        }
-        if !last_mod_start.is_empty() && !last_mod_end.is_empty() {
-            req = req.query(&[
-                ("lastModStartDate", last_mod_start.to_string()),
-                ("lastModEndDate", last_mod_end.to_string()),
-            ]);
-        }
-        if !nvd_api_key.is_empty() {
-            req = req.header("apiKey", nvd_api_key.clone());
-        }
-
-        let response = req.send()?;
-        if !response.status().is_success() {
-            anyhow::bail!("NVD request fehlgeschlagen mit HTTP {}", response.status());
-        }
-        let payload: serde_json::Value = response.json()?;
-        let vulnerabilities = payload["vulnerabilities"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        if vulnerabilities.is_empty() {
-            break;
-        }
-
-        for v in vulnerabilities {
-            let cve = &v["cve"];
-            let cve_id = cve["id"].as_str().unwrap_or("").trim().to_string();
-            if cve_id.is_empty() {
-                continue;
-            }
-            post_nvd_upsert(&client, &rust_endpoint, cve, &payload)?;
-            imported_records += 1;
-            seen_records += 1;
-        }
-
-        start_index += results_per_page;
-        page += 1;
-    }
-
-    println!(
-        "{{\"seen_records\":{},\"imported_records\":{},\"max_pages\":{},\"results_per_page\":{}}}",
-        seen_records, imported_records, max_pages, results_per_page
-    );
+async fn cmd_sync(args: &[String]) -> anyhow::Result<()> {
+    let max_records = parse_sync_args(args)?;
+    let store = CveStore::connect(&database_url()).await?;
+    let transport = OfficialVulnerabilityFeedTransport::from_environment()?;
+    let result = run_feed_sync(
+        &store,
+        &transport,
+        FeedSyncRequest {
+            sources: vec![SOURCE_NVD.to_string()],
+            max_records: Some(max_records),
+        },
+        "CLI",
+        None,
+    )
+    .await?;
+    println!("{}", serde_json::to_string(&result)?);
     Ok(())
 }
 
-fn cmd_import_collection(args: &[String]) -> anyhow::Result<()> {
-    let rust_url =
-        env::var("RUST_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
-    let nvd_url =
-        env::var("NVD_BASE_URL").unwrap_or_else(|_| "https://services.nvd.nist.gov".to_string());
-    let mut cve_tag = String::new();
-    let mut cpe_name = String::new();
-    let mut has_kev = false;
-    let mut last_mod_start = String::new();
-    let mut last_mod_end = String::new();
-    let mut results_per_page = 2000_usize;
-    let mut max_pages = 1_usize;
-    let mut skip_healthcheck = false;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--cve-tag" if i + 1 < args.len() => {
-                cve_tag = args[i + 1].clone();
-                i += 2;
-            }
-            "--cpe-name" if i + 1 < args.len() => {
-                cpe_name = args[i + 1].clone();
-                i += 2;
-            }
-            "--has-kev" => {
-                has_kev = true;
-                i += 1;
-            }
-            "--last-mod-start-date" if i + 1 < args.len() => {
-                last_mod_start = args[i + 1].clone();
-                i += 2;
-            }
-            "--last-mod-end-date" if i + 1 < args.len() => {
-                last_mod_end = args[i + 1].clone();
-                i += 2;
-            }
-            "--results-per-page" if i + 1 < args.len() => {
-                results_per_page = args[i + 1].parse::<usize>().unwrap_or(2000).max(1);
-                i += 2;
-            }
-            "--max-pages" if i + 1 < args.len() => {
-                max_pages = args[i + 1].parse::<usize>().unwrap_or(1).max(1);
-                i += 2;
-            }
-            "--skip-healthcheck" => {
-                skip_healthcheck = true;
-                i += 1;
-            }
-            _ => i += 1,
-        }
-    }
-
-    if !last_mod_start.is_empty() && last_mod_end.is_empty() {
-        anyhow::bail!("Bei --last-mod-start-date ist --last-mod-end-date erforderlich.");
-    }
-
-    import_collection(
-        &nvd_url,
-        &rust_url,
-        has_kev,
-        &cve_tag,
-        &cpe_name,
-        &last_mod_start,
-        &last_mod_end,
-        results_per_page,
-        max_pages,
-        skip_healthcheck,
-    )
-}
-
-fn cmd_sync_recent(args: &[String]) -> anyhow::Result<()> {
-    let mut hours = 24_i64;
-    let mut cve_tag = String::new();
-    let mut cpe_name = String::new();
-    let mut has_kev = false;
-    let mut results_per_page = 2000_usize;
-    let mut max_pages = 2_usize;
-    let mut skip_healthcheck = false;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--hours" if i + 1 < args.len() => {
-                hours = args[i + 1].parse::<i64>().unwrap_or(24).max(1);
-                i += 2;
-            }
-            "--cve-tag" if i + 1 < args.len() => {
-                cve_tag = args[i + 1].clone();
-                i += 2;
-            }
-            "--cpe-name" if i + 1 < args.len() => {
-                cpe_name = args[i + 1].clone();
-                i += 2;
-            }
-            "--has-kev" => {
-                has_kev = true;
-                i += 1;
-            }
-            "--results-per-page" if i + 1 < args.len() => {
-                results_per_page = args[i + 1].parse::<usize>().unwrap_or(2000).max(1);
-                i += 2;
-            }
-            "--max-pages" if i + 1 < args.len() => {
-                max_pages = args[i + 1].parse::<usize>().unwrap_or(2).max(1);
-                i += 2;
-            }
-            "--skip-healthcheck" => {
-                skip_healthcheck = true;
-                i += 1;
-            }
-            _ => i += 1,
-        }
-    }
-
-    let end = Utc::now();
-    let start = end - chrono::Duration::hours(hours);
-    let start_iso = start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let end_iso = end.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-
-    let rust_url =
-        env::var("RUST_BACKEND_URL").unwrap_or_else(|_| "http://127.0.0.1:9000".to_string());
-    let nvd_url =
-        env::var("NVD_BASE_URL").unwrap_or_else(|_| "https://services.nvd.nist.gov".to_string());
-    import_collection(
-        &nvd_url,
-        &rust_url,
-        has_kev,
-        &cve_tag,
-        &cpe_name,
-        &start_iso,
-        &end_iso,
-        results_per_page,
-        max_pages,
-        skip_healthcheck,
-    )
-}
-
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let mut args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
         anyhow::bail!(
@@ -565,9 +297,33 @@ fn main() -> anyhow::Result<()> {
     match cmd.as_str() {
         "parity" => cmd_parity(&args),
         "trend" => cmd_trend(&args),
-        "import" => cmd_import(&args),
-        "import-collection" => cmd_import_collection(&args),
-        "sync-recent" => cmd_sync_recent(&args),
+        "import" => cmd_import(&args).await,
+        "import-collection" | "sync-recent" => cmd_sync(&args).await,
         _ => anyhow::bail!("Unbekannter Subcommand: {}", cmd),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_import_args, parse_sync_args};
+
+    #[test]
+    fn hardened_import_rejects_legacy_transport_options() {
+        let args = vec![
+            "--nvd-url".to_string(),
+            "https://example.invalid".to_string(),
+            "CVE-2026-1234".to_string(),
+        ];
+        assert!(parse_import_args(&args).is_err());
+    }
+
+    #[test]
+    fn hardened_sync_accepts_only_bounded_record_limit() {
+        assert_eq!(
+            parse_sync_args(&["--max-records".to_string(), "250".to_string()]).unwrap(),
+            250
+        );
+        assert!(parse_sync_args(&["--max-records".to_string(), "0".to_string()]).is_err());
+        assert!(parse_sync_args(&["--hours".to_string(), "24".to_string()]).is_err());
     }
 }
