@@ -116,7 +116,7 @@ candidate_manifest="$(mutate_manifest prepared_mode '
 candidate_notes="$tmp_dir/candidate-notes.md"
 cat >"$candidate_notes" <<'EOF'
 # ISCY V23.7.30 - Release Notes
-Status: Stabiler Release vorbereitet; Tag und GitHub Release noch nicht erstellt.
+Status: Stabiler Release.
 Vorgänger: `V23.7.29`.
 nginx:1.31-alpine, Rust `1.97.0`, MSRV bleibt Rust `1.88.0`, nixos-26.05.
 PostgreSQL 16 bleibt der Standard; PostgreSQL 18.4 ist zusaetzlich geprueft.

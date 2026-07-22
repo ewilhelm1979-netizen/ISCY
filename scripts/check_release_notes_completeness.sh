@@ -67,10 +67,8 @@ case "$release_status" in
     prepared_not_published)
         require_phrase target_version "ISCY $proposed_version" \
             "Die Zielversion $proposed_version fehlt."
-        require_phrase release_status 'Stabiler Release vorbereitet' \
-            'Der stabile, noch nicht veroeffentlichte Vorbereitungsstatus fehlt.'
-        require_phrase unpublished 'Tag und GitHub Release noch nicht erstellt' \
-            'Die Abgrenzung zu Tag und Veroeffentlichung fehlt.'
+        require_phrase release_status 'Status: Stabiler Release.' \
+            'Der publikationsneutrale Stable-Release-Status fehlt.'
         require_phrase predecessor "Vorgänger: ${backtick}V23.7.29${backtick}" \
             'Der veroeffentlichte Vorgaenger V23.7.29 fehlt.'
         require_phrase nginx 'nginx:1.31-alpine' \
@@ -108,8 +106,30 @@ case "$release_status" in
             'Candidate Notes duerfen keinen Development-Status enthalten.'
         reject_phrase development_placeholder 'unter Unreleased dokumentiert' \
             'Candidate Notes duerfen keinen Development-Platzhalter enthalten.'
+        reject_phrase creation_pending 'Tag und GitHub Release noch nicht erstellt' \
+            'Stable Release Notes duerfen keinen ausstehenden Erstellungszustand behaupten.'
+        reject_phrase tag_pending 'Tag noch nicht erstellt' \
+            'Stable Release Notes duerfen keinen ausstehenden Tag behaupten.'
+        reject_phrase github_release_pending 'GitHub Release noch nicht erstellt' \
+            'Stable Release Notes duerfen keinen ausstehenden GitHub Release behaupten.'
+        reject_phrase unpublished 'noch nicht veroeffentlicht' \
+            'Stable Release Notes duerfen keinen ausstehenden Veroeffentlichungszustand behaupten.'
+        reject_phrase publication_pending 'Veroeffentlichung steht aus' \
+            'Stable Release Notes duerfen keine ausstehende Veroeffentlichung behaupten.'
+        reject_phrase publication_outstanding 'Veroeffentlichung ausstehend' \
+            'Stable Release Notes duerfen keine ausstehende Veroeffentlichung behaupten.'
+        reject_phrase draft_release 'Draft Release' \
+            'Stable Release Notes duerfen keinen Draft-Release-Status behaupten.'
         reject_phrase prerelease 'Prerelease' \
-            'Ein Stable-Candidate darf nicht als GitHub-Prerelease beschrieben werden.'
+            'Stable Release Notes duerfen keinen GitHub-Prerelease-Status behaupten.'
+        reject_phrase already_published 'bereits veroeffentlicht' \
+            'Stable Release Notes duerfen eine Veroeffentlichung nicht vorwegnehmen.'
+        reject_phrase publication_success 'erfolgreich veroeffentlicht' \
+            'Stable Release Notes duerfen eine erfolgreiche Veroeffentlichung nicht behaupten.'
+        reject_phrase latest_release 'Latest Release veroeffentlicht' \
+            'Stable Release Notes duerfen keinen Latest-Status behaupten.'
+        reject_phrase asset_upload_success 'Asset-Upload erfolgreich' \
+            'Stable Release Notes duerfen keinen erfolgreichen Asset-Upload behaupten.'
 
         printf 'RC_NOTES_OK: %s, Platform-Maintenance, PostgreSQL, Governance und rechtliche Grenzen sind konsistent.\n' \
             "$proposed_version"
