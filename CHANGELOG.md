@@ -6,6 +6,15 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Release lifecycle
+
+- beginnt den Entwicklungszyklus fuer `V23.7.31` auf Basis des unveraenderten, veroeffentlichten Stable Release `V23.7.30`
+- dokumentiert Tag, Release-ID, Zielcommit und die sechs geprueften Assets von `V23.7.30` in einem unveraenderlichen Published-Snapshot
+- setzt den Root-Lifecycle fail-closed auf `development_unreleased`; Release-Bundle, Tag, GitHub Release und Upload bleiben einer separaten Release-Vorbereitung vorbehalten
+- enthaelt keine Produkt-, Migrations-, Dependency- oder Plattformaenderung
+
+## V23.7.30 - 2026-07-22
+
 ### Automation
 
 - adds an owner-controlled, same-repository Draft-PR orchestrator for the exact commands `/iscy status`, `/iscy review`, `/iscy fix-ci`, and `/iscy verify`

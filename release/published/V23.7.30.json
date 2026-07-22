@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "tag_name": "V23.7.30",
+  "release_name": "ISCY V23.7.30",
+  "release_id": 358056010,
+  "target_commit": "1c07af4e7cd196076220479d394242a3df589714",
+  "published_at": "2026-07-22T13:43:37Z",
+  "draft": false,
+  "prerelease": false,
+  "latest_at_snapshot": true,
+  "immutable": true,
+  "signature_status": "unsigned",
+  "provenance_status": "prepared_unsigned",
+  "asset_count": 6,
+  "assets": [
+    {
+      "asset_id": 485998917,
+      "name": "iscy-backend",
+      "size_bytes": 32405360,
+      "sha256": "ab3bf5fb8108bfd8fc09cf6d1065a849930300c19a3197f4a4f9ae7351db8a0e",
+      "content_type": "application/octet-stream",
+      "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.30/iscy-backend"
+    },
+    {
+      "asset_id": 485998918,
+      "name": "iscy-backend.cdx.json",
+      "size_bytes": 299091,
+      "sha256": "629cfb3f4f25460622c511cde165b035dc4161e739f0dff9e4ef7c4c07b632e7",
+      "content_type": "application/json",
+      "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.30/iscy-backend.cdx.json"
+    },
+    {
+      "asset_id": 485998916,
+      "name": "ISCY_Handbuch.pdf",
+      "size_bytes": 133792,
+      "sha256": "e6c84bdf9788f816dab31f179580d8c8f19ace8edd46314f70d36b2c2429571d",
+      "content_type": "application/pdf",
+      "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.30/ISCY_Handbuch.pdf"
+    },
+    {
+      "asset_id": 485998920,
+      "name": "release-manifest.json",
+      "size_bytes": 3060,
+      "sha256": "fba791c0808e077293dbc35c294724fd99c39bb9ab33dfe91bdf68185780c37d",
+      "content_type": "application/json",
+      "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.30/release-manifest.json"
+    },
+    {
+      "asset_id": 485998919,
+      "name": "RELEASE_NOTES.md",
+      "size_bytes": 6512,
+      "sha256": "7c00dc4b9558f46980e046cbcc724c14d906621515d4158b0871d0e92fc0f430",
+      "content_type": "text/markdown; charset=utf-8",
+      "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.30/RELEASE_NOTES.md"
+    },
+    {
+      "asset_id": 485998940,
+      "name": "SHA256SUMS",
+      "size_bytes": 422,
+      "sha256": "b010f6d30879e24b303a98b1e37dfc8521c20e7c83c27dbad1ae34d399a34ee3",
+      "content_type": "application/octet-stream",
+      "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.30/SHA256SUMS"
+    }
+  ]
+}

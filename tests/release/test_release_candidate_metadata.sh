@@ -5,7 +5,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 source_manifest='release/release-manifest.json'
-source_snapshot='release/published/V23.7.29.json'
+source_snapshot='release/published/V23.7.30.json'
 source_db_admin='rust/iscy-backend/src/db_admin.rs'
 source_notes='docs/RELEASE_NOTES_DRAFT.md'
 guard='./scripts/check_release_candidate_metadata.sh'
@@ -66,7 +66,7 @@ mutate_snapshot() {
 
 run_guard "$source_manifest" >/dev/null
 
-candidate="$(mutate_manifest wrong_development_version '.proposed_version = "V23.7.31"')"
+candidate="$(mutate_manifest wrong_development_version '.proposed_version = "V23.7.32"')"
 expect_rejected wrong_development_version "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" manifest
 
 candidate="$(mutate_manifest development_stable_claim '
@@ -115,9 +115,9 @@ candidate_manifest="$(mutate_manifest prepared_mode '
 ')"
 candidate_notes="$tmp_dir/candidate-notes.md"
 cat >"$candidate_notes" <<'EOF'
-# ISCY V23.7.30 - Release Notes
+# ISCY V23.7.31 - Release Notes
 Status: Stabiler Release.
-Vorgänger: `V23.7.29`.
+Vorgänger: `V23.7.30`.
 nginx:1.31-alpine, Rust `1.97.0`, MSRV bleibt Rust `1.88.0`, nixos-26.05.
 PostgreSQL 16 bleibt der Standard; PostgreSQL 18.4 ist zusaetzlich geprueft.
 Der NIS2-Relevanz-Wizard erzeugt eine Applicability-Begruendung im NIS2- und
