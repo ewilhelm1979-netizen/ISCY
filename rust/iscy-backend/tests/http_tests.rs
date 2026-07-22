@@ -97,7 +97,7 @@ impl VulnerabilityFeedTransport for NvdFixtureTransport {
             assert_eq!(request.source, "NVD");
             assert_eq!(
                 request.query.first().map(|item| item.0.as_str()),
-                Some("cveIds")
+                Some("cveId")
             );
             let body = self
                 .responses
@@ -245,6 +245,96 @@ async fn software_hygiene_list_ignores_manipulated_tenant_query() {
     assert_eq!(payload["findings"].as_array().unwrap().len(), 1);
     assert_eq!(payload["findings"][0]["title"], "Own Finding");
     assert!(!String::from_utf8_lossy(&body).contains("Foreign Finding"));
+}
+
+#[tokio::test]
+async fn vulnerability_status_hides_global_checkpoint_and_requester_from_tenant_roles() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO vulnerability_intelligence_feed_state (source,status,checkpoint_at,last_attempt_at,last_success_at,last_window_start,last_window_end) VALUES ('NVD','SUCCEEDED','2026-07-22T12:00:00.000Z','2026-07-22T12:00:00.000Z','2026-07-22T12:00:00.000Z','2026-07-22T10:00:00.000Z','2026-07-22T12:00:00.000Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO vulnerability_intelligence_feed_run (source,trigger_type,requested_by_id,lock_token,status,started_at,completed_at,window_start,window_end) VALUES ('NVD','MANUAL',9001,'fixture','SUCCEEDED','2026-07-22T12:00:00.000Z','2026-07-22T12:01:00.000Z','2026-07-22T10:00:00.000Z','2026-07-22T12:00:00.000Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(pool))));
+
+    let tenant_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/vulnerability-intelligence/status")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "SOC_ANALYST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tenant_response.status(), StatusCode::OK);
+    let body = to_bytes(tenant_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let nvd = payload["status"]["feeds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|feed| feed["source"] == "NVD")
+        .unwrap();
+    assert!(nvd["checkpoint_at"].is_null());
+    assert!(nvd["last_window_start"].is_null());
+    assert!(nvd["last_window_end"].is_null());
+    assert!(payload["status"]["recent_runs"][0]["requested_by_id"].is_null());
+    assert!(payload["status"]["recent_runs"][0]["window_start"].is_null());
+    assert!(payload["status"]["recent_runs"][0]["window_end"].is_null());
+
+    let admin_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/vulnerability-intelligence/status")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-is-superuser", "true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admin_response.status(), StatusCode::OK);
+    let body = to_bytes(admin_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let nvd = payload["status"]["feeds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|feed| feed["source"] == "NVD")
+        .unwrap();
+    assert_eq!(nvd["checkpoint_at"], "2026-07-22T12:00:00.000Z");
+    assert_eq!(nvd["last_window_start"], "2026-07-22T10:00:00.000Z");
+    assert_eq!(nvd["last_window_end"], "2026-07-22T12:00:00.000Z");
+    assert_eq!(payload["status"]["recent_runs"][0]["requested_by_id"], 9001);
+    assert_eq!(
+        payload["status"]["recent_runs"][0]["window_start"],
+        "2026-07-22T10:00:00.000Z"
+    );
+    assert_eq!(
+        payload["status"]["recent_runs"][0]["window_end"],
+        "2026-07-22T12:00:00.000Z"
+    );
 }
 
 #[test]
@@ -24426,6 +24516,7 @@ async fn create_cverecord_table(pool: &SqlitePool) {
             epss_percentile decimal NULL,
             epss_model_date TEXT NULL,
             epss_retrieved_at TEXT NULL,
+            epss_last_checked_at TEXT NULL,
             epss_source TEXT NOT NULL DEFAULT '',
             epss_content_sha256 varchar(64) NOT NULL DEFAULT '',
             in_kev_catalog bool NOT NULL DEFAULT 0,

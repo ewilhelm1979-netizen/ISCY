@@ -38323,6 +38323,11 @@ async fn web_cves(
             )
         }
     };
+    let intelligence_status = if can_sync {
+        intelligence_status
+    } else {
+        intelligence_status.redact_global_administration()
+    };
     let hygiene_findings = match store.software_hygiene_findings(context.tenant_id, 50).await {
         Ok(findings) => findings,
         Err(_) => {
@@ -44411,15 +44416,25 @@ async fn vulnerability_intelligence_status(
         return api_database_not_configured("Rust-CVE-Store ist nicht konfiguriert.");
     };
     match store.vulnerability_intelligence_status().await {
-        Ok(status) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "accepted": true,
-                "api_version": "v1",
-                "status": status
-            })),
-        )
-            .into_response(),
+        Ok(status) => {
+            let status = if has_vulnerability_intelligence_permission(
+                &context,
+                PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE,
+            ) {
+                status
+            } else {
+                status.redact_global_administration()
+            };
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "accepted": true,
+                    "api_version": "v1",
+                    "status": status
+                })),
+            )
+                .into_response()
+        }
         Err(_) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "database_error",

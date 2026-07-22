@@ -402,6 +402,7 @@ const POSTGRES_CONTINUOUS_VULNERABILITY_INTELLIGENCE_SCHEMA: &str = r#"
 ALTER TABLE vulnerability_intelligence_cverecord ADD COLUMN IF NOT EXISTS epss_percentile NUMERIC NULL;
 ALTER TABLE vulnerability_intelligence_cverecord ADD COLUMN IF NOT EXISTS epss_model_date TEXT NULL;
 ALTER TABLE vulnerability_intelligence_cverecord ADD COLUMN IF NOT EXISTS epss_retrieved_at TEXT NULL;
+ALTER TABLE vulnerability_intelligence_cverecord ADD COLUMN IF NOT EXISTS epss_last_checked_at TEXT NULL;
 ALTER TABLE vulnerability_intelligence_cverecord ADD COLUMN IF NOT EXISTS epss_source TEXT NOT NULL DEFAULT '';
 ALTER TABLE vulnerability_intelligence_cverecord ADD COLUMN IF NOT EXISTS epss_content_sha256 varchar(64) NOT NULL DEFAULT '';
 ALTER TABLE vulnerability_intelligence_cverecord ADD COLUMN IF NOT EXISTS kev_due_date TEXT NULL;
@@ -5899,6 +5900,7 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'st
                 ("epss_percentile", "decimal NULL"),
                 ("epss_model_date", "TEXT NULL"),
                 ("epss_retrieved_at", "TEXT NULL"),
+                ("epss_last_checked_at", "TEXT NULL"),
                 ("epss_source", "TEXT NOT NULL DEFAULT ''"),
                 ("epss_content_sha256", "varchar(64) NOT NULL DEFAULT ''"),
                 ("kev_due_date", "TEXT NULL"),
@@ -10359,6 +10361,13 @@ mod tests {
             vec!["0043_rust_continuous_vulnerability_intelligence"]
         );
         assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+        let epss_rotation_column: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('vulnerability_intelligence_cverecord') WHERE name='epss_last_checked_at'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(epss_rotation_column, 1);
 
         let preserved: (String, String, String, String) = sqlx::query_as(
             "SELECT v.title,v.cve,c.status,c.rationale FROM product_security_vulnerability v JOIN product_security_cvecorrelation c ON c.tenant_id=v.tenant_id AND c.id=14301 WHERE v.tenant_id=143 AND v.id=14301",
