@@ -1,6 +1,6 @@
 # Performance-, HA- und Visual-Regression-Tests
 
-Stand: ISCY Unreleased / Rust 0.3.22
+Stand: ISCY V23.7.31 Release Candidate / Rust 0.3.22
 
 Diese Tests erkennen grobe Betriebs- und UI-Regressionen vor einem spaeteren
 Release Candidate. Sie sind keine SLA-Zusage, kein Produktionslasttest und kein
@@ -24,7 +24,7 @@ Nachweis fuer beliebige Skalierbarkeit oder vollstaendige Hochverfuegbarkeit.
 | Migrationen | separates Admin-Kommando | PostgreSQL-Migrationen werden mit einem Advisory Lock maximal 60 Sekunden serialisiert; SQLite bleibt Single-Instance. |
 | Operations-/Prometheus-Signale | Runtime plus DB-Aggregate | Keine Request-Payloads, User-Profile, Connection Strings oder Secrets. |
 | nginx | Reverse Proxy | Zwei Backend-Upstreams werden getestet; nginx selbst bleibt eine Einzelinstanz. |
-| GUI-Screenshots | Nix-/Playwright-Testpfad | 34 feste Baselines, zwei Viewports, keine automatische Aktualisierung in CI. |
+| GUI-Screenshots | Nix-/Playwright-Testpfad | 42 feste Baselines, zwei Viewports, keine automatische Aktualisierung in CI. |
 
 ## Systempruefungen
 
@@ -83,7 +83,7 @@ SIGTERM und muessen mit Exitcode 0 enden. Danach wird die Daten- und
 Object-Storage-Konsistenz erneut geprueft.
 
 Ein zweites leeres PostgreSQL-Testschema startet zwei Migrationen nahezu
-gleichzeitig. Der Advisory Lock muss exakt einen konsistenten Satz von 39
+gleichzeitig. Der Advisory Lock muss exakt einen konsistenten Satz von 45
 Migrationen hinterlassen; beide Aufrufe muessen erfolgreich enden.
 
 Der Test belegt nur den geprueften Anwendungsbetrieb mit gemeinsamem PostgreSQL

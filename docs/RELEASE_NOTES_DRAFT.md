@@ -1,109 +1,163 @@
-# ISCY V23.7.31 - Development Notes
+# ISCY V23.7.31 - Release Notes
 
-Status: Development / Unreleased.
+Status: Stabiler Release.
 
-Basis: `V23.7.30` (`1c07af4e7cd196076220479d394242a3df589714`).
+Vorgänger: `V23.7.30` (`1c07af4e7cd196076220479d394242a3df589714`).
 
-Dieser Entwicklungsstand wurde noch nicht veroeffentlicht. Es gibt noch keinen
-Tag und noch kein GitHub Release fuer `V23.7.31`. Implementierte Aenderungen
-werden bis zur naechsten Release-Vorbereitung unter Unreleased dokumentiert.
+`V23.7.31` buendelt drei passive Security-Governance-Bereiche: Native Threat
+Intelligence und Security Observations, Continuous Vulnerability Intelligence
+und Software Approval and Exception Policies. Der Funktionsumfang ist fuer
+diesen Candidate eingefroren. ISCY bleibt eine selbst gehostete, local-first
+und datenschutzbewusste Open-Source-Plattform unter `AGPL-3.0-only`.
 
-## Fortbestehende Basis
+Die Funktionen unterstuetzen nachvollziehbare Entscheidungen und Nachweise.
+Sie garantieren weder Compliance noch Schwachstellenfreiheit und ersetzen
+keine unabhaengige menschliche Security-Review.
 
-ISCY bleibt eine selbst gehostete, local-first und datenschutzbewusste
-Open-Source-Plattform unter `AGPL-3.0-only`. Der veroeffentlichte Stand
-`V23.7.30` bleibt unveraendert und ist im Repository unter
-`release/published/V23.7.30.json` als Metadaten-Snapshot dokumentiert.
+## Native Threat Intelligence und Security Observations
 
-Die vorhandenen Governance- und Nachweisfunktionen unterstuetzen unter anderem
-ISO 27001, NIS2, KRITIS, DORA, den Cyber Resilience Act, den EU AI Act und die
-DSGVO. Diese Unterstuetzung ist keine Rechtsberatung, Zertifizierung,
-Konformitaetsentscheidung oder automatische Behoerdenmeldung.
+- Tenantisolierte Indicators fuer IPv4, IPv6, Domains, HTTP(S)-URLs und
+  SHA-256 werden lokal validiert und mit Provenance, Confidence, Gueltigkeit,
+  Lifecycle und Klassifizierung verwaltet.
+- Security Observations bleiben begrenzte Triage-Datensaetze. Bestehende
+  Agent Findings und Product-Security-Vulnerability-Findings bleiben die
+  kanonischen Quellen.
+- Indicator-/Observation-Links werden manuell erstellt, tenantlokal
+  dedupliziert und zusammen mit Triage und Auditspur gespeichert.
+- Rollen und direkte beziehungsweise gruppenbasierte Permissions werden
+  serverseitig ausgewertet. Bestehende Rollen erhalten keine automatische
+  neue Berechtigung.
+- Threat Intelligence erzeugt keine automatische aktive Reaktion, keinen
+  Incident, keine Evidence, kein Risiko, keinen Roadmap-Task und keinen
+  Agentenbefehl.
 
-## Entwicklungsgrenzen
+## Continuous Vulnerability Intelligence
 
-- In diesem Stand wird kein Release-Bundle vorbereitet oder erzeugt.
-- `V23.7.31` besitzt noch keinen Release Candidate und keine Stable-/Latest-
-  Freigabe.
-- Neue Produktfunktionen werden nach ihrer Implementierung und Pruefung unter
-  `Unreleased` dokumentiert.
-- Native Threat Intelligence und Security Observations - Phase 1 sind in
-  diesem Entwicklungsstand implementiert, aber noch nicht veroeffentlicht.
-- Continuous Vulnerability Intelligence und Software Hygiene - Phase 1 sind
-  in diesem Entwicklungsstand implementiert, aber noch nicht veroeffentlicht.
-- Software Approval und Exception Policy - Phase 2 ist in diesem
-  Entwicklungsstand implementiert, aber noch nicht veroeffentlicht.
+- Der bestehende NVD-Pfad wurde um begrenzte NVD-2.0-Deltas, persistente
+  Checkpoints und Leases sowie CISA-KEV- und FIRST-EPSS-Anreicherung erweitert.
+- Vorhandene Products, Assets, Softwarekomponenten, SBOM-Importe und Product-
+  Security-Findings werden wiederverwendet. CPE-/Versionskorrelationen bleiben
+  erklaerbar und konservativ.
+- Provenance, Parserstand, Abrufzeit und Datenalter bleiben nachvollziehbar.
+  Unvollstaendige Laeufe liefern keine Entwarnung und aktualisieren den letzten
+  vollstaendigen Auswertungsstand nicht.
+- Continuous Vulnerability Intelligence ueberschreibt keine manuelle Triage,
+  VEX-Aussage, Risk Acceptance oder dokumentierten Compensating Control.
+- Es entstehen weder automatische VEX-Aussagen noch automatische Risk
+  Acceptances, Incidents, Evidence, Security Observations oder aktive
+  technische Massnahmen.
 
-## Software Approval und Exception Policy - Phase 2
+## Software Approval and Exception Policy
 
-- tenantgebundene, versionierte Policies fuer exakte vorhandene Produkte,
-  Assets, kanonische Komponenten und importierte SBOM-Komponenten
-- Entscheidungen `APPROVED`, `RESTRICTED` und `PROHIBITED` mit deterministischer
-  restriktivster Praezedenz und fail-closed `UNMANAGED` beziehungsweise
-  `REVIEW_REQUIRED`
-- befristete Ausnahmen mit Draft, Einreichung, unabhaengiger Entscheidung,
-  Widerruf und Ablauf; Self-Approval bleibt auch bei kombinierten Rollen
-  serverseitig gesperrt
-- Ablaufpruefung auf Basis der Server-UTC-Zeit ohne Scheduler-Abhaengigkeit,
-  Optimistic Concurrency sowie PostgreSQL-/SQLite-Transaktionsschutz
-- granulare Permissions, tenantgebundene API und Webarbeitsbereich
-  `/software-policies/` mit Audit und Provenance
-- keine Softwareaenderung, kein Agentenbefehl, kein Incident, keine Evidence,
-  keine Security Observation, kein VEX und keine Risk Acceptance als
-  Nebenwirkung
-- eine Freigabe behauptet keine Schwachstellenfreiheit; fehlende Policy oder
-  fehlende bekannte CVE bedeutet nie automatisch `APPROVED`
+- Tenantgebundene Policies gelten nur fuer exakte vorhandene Products, Assets,
+  kanonische Komponenten oder importierte SBOM-Komponenten.
+- Policy-Entscheidungen sind `APPROVED`, `RESTRICTED` und `PROHIBITED`.
+  Ohne wirksame Ausnahme gilt die deterministische Praezedenz
+  `PROHIBITED > RESTRICTED > APPROVED`.
+- `EXCEPTION_ACTIVE`, `UNMANAGED` und `REVIEW_REQUIRED` sind eigenstaendige
+  effektive Zustaende. Fehlende Policy bedeutet nicht `APPROVED`; fehlende
+  bekannte Schwachstellen bedeuten ebenfalls nicht `APPROVED`.
+- Zeitlich begrenzte Exceptions durchlaufen einen getrennten Antrag-, Review-,
+  Entscheidungs- und Widerrufsprozess. Self-Approval bleibt auch bei
+  kombinierten Rollen serverseitig gesperrt.
+- Abgelaufene oder widerrufene Exceptions sind bei jeder Auswertung
+  unmittelbar unwirksam; dafuer ist kein Scheduler erforderlich.
+- `EXCEPTION_ACTIVE` ist keine regulaere Freigabe. Eine Exception ist weder
+  VEX noch Risk Acceptance und veraendert keine Finding-Triage.
+- Policy-Auswertungen bleiben passiv. ISCY blockiert, installiert oder
+  deinstalliert keine Software und sendet keinen Agentenbefehl.
 
-## Continuous Vulnerability Intelligence und Software Hygiene - Phase 1
+## Migrationen und Upgrade
 
-- gehaerteter NVD-2.0-Einzel-/Deltapfad mit Pagination, UTC-Overlap,
-  persistentem Checkpoint, Lease, begrenztem Retry und sicherem Laufstatus
-- atomare CISA-KEV- und gebatchte FIRST-EPSS-Anreicherung vorhandener globaler
-  CVE-Referenzdaten mit Provenance und Schutz neuerer Modelldaten
-- konservative tenantgebundene CPE-/Versionskorrelation vorhandener Assets,
-  Komponenten und SBOM-Importe; vorhandene Product-Security-Vulnerability-
-  Findings werden bei kanonischem Produktbezug wiederverwendet, reine
-  Asset-Matches bleiben pruefbare Korrelationen
-- erklaerbare passive Priorisierung mit CVSS, KEV, EPSS, Assetkritikalitaet,
-  Datenalter, VEX und dokumentierten Compensating Controls
-- feste offizielle HTTPS-Quellen und DNS-/SSRF-, Redirect-, Timeout-,
-  Kompressions-, Payload-, Parser- und Secret-Grenzen
-- transaktionales Lease-Fencing, KEV-Count-/Rollback-Pruefung, faire
-  EPSS-Batchrotation und pruefpflichtige komplexe NVD-CPE-Kontexte
-- tenantgebundene Evaluationsgenerationen mit Stale-Reconciliation nur nach
-  vollstaendig erfolgreichem Scope; unvollstaendige Laeufe erzeugen keine
-  Entwarnung, waehrend manuelle Triage, VEX, Controls und Risk Acceptance
-  erhalten bleiben
-- globale Checkpoint-/Fenster-Zeitpunkte und anfordernde Plattform-Actor-IDs
-  bleiben fuer Tenantrollen redigiert
-- keine automatische Security Observation, kein Incident, keine Evidence,
-  kein Agentenbefehl und keine aktive Reaktion; EOL/EOS, Lizenzbewertung,
-  unscharfe Regeln und aktive Durchsetzung bleiben ausserhalb von Phase 2
+Migration `0045_rust_software_approval_exception_policy` ergaenzt die
+tenantgebundenen Policy-, Exception-, Evaluations- und Auditstrukturen. Die
+Migrationskette umfasst 45 fortlaufende Migrationen von `0001` bis `0045`.
+Die vorherigen neuen Bereiche werden durch `0042`, `0043` und `0044`
+eingefuehrt beziehungsweise gehaertet.
 
-## Native Threat Intelligence und Security Observations - Phase 1
+Vor dem Upgrade:
 
-- tenantgebundene, lokal validierte Indicators fuer IPv4, IPv6, Domains, URLs
-  und SHA-256 mit Provenance, Confidence, Gueltigkeit, Lifecycle und
-  Klassifizierung
-- normalisierte, begrenzte Security Observations aus manueller Erfassung oder
-  vorhandenen Agent-/Vulnerability-Findings; die vorhandenen Findings bleiben
-  kanonisch
-- manuelle, triagierbare Indicator-Links mit transaktionaler Auditspur und
-  tenantlokaler Deduplizierung
-- Rollen `SOC_ANALYST` und `SECURITY_ADMIN` sowie granulare direkte und
-  gruppenbasierte Permissions ohne automatische Zuweisung an Bestandsrollen
-- Rust-API und Webarbeitsbereich `/security-observations/`
-- keine externen Feeds oder Netzwerk-Lookups, keine Raw-Logs, keine
-  automatische Incident-/Evidence-Erzeugung und keine aktive Reaktion
+1. Datenbank und Evidence-/Object-Storage-Metadaten nach dem bestehenden
+   Betreiberverfahren sichern.
+2. Die Wiederherstellbarkeit in einer getrennten Umgebung pruefen.
+3. Schreibzugriffe waehrend Migration und Anwendungswechsel koordinieren.
+4. Fuer PostgreSQL weiterhin PostgreSQL 16 als Standard verwenden. PostgreSQL
+   18.4 ist nur der separat gepruefte Kompatibilitaets- und logische
+   Forward-Restore-Pfad.
 
-## Technische Basis
+Beim Start fuehrt das bestehende Migrationskommando nur fehlende additive
+Migrationen aus. Es erzeugt keine Policy und keine Exception, setzt keine
+vorhandene Software auf `APPROVED` und veraendert keine bestehende manuelle
+Triage, VEX-Aussage, Risk Acceptance oder Compensating Controls.
 
-- Internes Rust-Paket: `0.3.22`
-- Rust-Haupttoolchain: `1.97.0`
-- MSRV und portabler Release-Builder: Rust `1.88.0`
-- PostgreSQL 16 bleibt der Standard.
-- PostgreSQL 18.4 bleibt ein zusaetzlicher Kompatibilitaetspfad.
-- Aktuell 45 fortlaufende Migrationen, `0001` bis `0045`
-- 42 Visual-Baselines
-- Signaturstatus: `unsigned`
-- Provenance-Status: `prepared_unsigned`
+Nach dem Upgrade:
+
+1. Readiness und den vollstaendigen Migrationsstand pruefen.
+2. Tenant- und Rollenvergabe fuer die neuen Bereiche explizit reviewen.
+3. Feedstatus, Provenance und Datenalter vor fachlichen Entscheidungen
+   kontrollieren.
+4. Software ohne passende Policy als `UNMANAGED` behandeln und Exceptions
+   unabhaengig pruefen.
+
+## Rueckfall und Wiederherstellung
+
+Vor jeder Rueckkehr ist ein getestetes Backup des vorherigen Anwendungs- und
+Datenbankstands erforderlich. Ein Binary-Downgrade auf einen Stand vor
+Migration `0045` ist kein Schema-Rollback. Der sichere Rueckfallpfad besteht
+aus dem Wiederherstellen des zusammenpassenden Backups von Anwendung,
+Datenbank und Evidence-/Object-Storage-Referenzen. PostgreSQL 16 nach 18 ist
+als logischer Forward-Restore geprueft; ein In-place-Upgrade und ein
+Rueckwaertsrestore nach PostgreSQL 16 werden nicht zugesagt.
+
+## Security und Supply Chain
+
+- Tenant-Isolation, RBAC, gruppenbasierte Permissions, Foreign-Tenant-IDs,
+  Self-Approval, Revisionen, Parallelitaet und atomare Audittransaktionen
+  besitzen negative beziehungsweise fokussierte Regressionstests.
+- Externe Vulnerability-Daten sind untrusted input. Nur feste offizielle
+  HTTPS-Quellen sind zugelassen; Redirect-, DNS-/SSRF-, Timeout-, Payload-,
+  Kompressions-, Parser- und Secret-Grenzen bleiben fail-closed.
+- `Cargo.lock`, cargo audit, cargo deny, Sensitive-Data-Scan, CycloneDX-1.5-
+  SBOM und reproduzierbarer Doppel-Build bleiben Pflicht.
+- Release-Artefakte sind unsigniert; der Provenance-Status ist
+  `prepared_unsigned`. Die SBOM ist keine Signatur, VEX-Aussage oder
+  Vulnerability-Freigabe.
+
+## Plattform
+
+nginx:1.31-alpine, Rust `1.97.0` und nixos-26.05 bleiben die geprueften
+Plattformgrenzen. Die MSRV bleibt Rust `1.88.0`; auch der portable
+Release-Builder bleibt auf Rust 1.88. PostgreSQL 16 bleibt der Standard.
+PostgreSQL 18.4 bleibt ein zusaetzlicher Kompatibilitaets- und logischer
+Forward-Restore-Pfad. SQLite bleibt ein lokaler Single-Instance-Pfad und ist
+kein HA-Modell.
+
+## Governance- und Rechtsgrenzen
+
+Der NIS2-Relevanz-Wizard dokumentiert eine Applicability-Begruendung im
+NIS2- und KRITIS-Kontext, liefert aber keine rechtsverbindliche Einstufung.
+Eine DORA-Konformitaetsbewertung erfolgt nicht. Fuer den Cyber Resilience Act
+(CRA) gibt es keine automatische Konformitaetsbewertung oder CE-Freigabe.
+ISCY liefert keine automatische Zertifizierung und ersetzt keine
+Rechtsberatung, Behoerdenmeldung oder unabhaengige fachliche Pruefung.
+
+## Bekannte Einschraenkungen und bewusst verschobene Funktionen
+
+- keine EOL-/EOS-Integration
+- keine erweiterte PURL-/CPE-Auswertung ueber die konservativen vorhandenen
+  Regeln hinaus
+- keine neuen externen Feeds
+- keine aktiven Reaktionsmassnahmen
+- keine automatische Softwareblockierung oder Deinstallation
+- keine automatische VEX-Aussage
+- keine automatische Risk Acceptance
+- keine automatische Incident- oder Evidence-Erzeugung aus den neuen
+  Bereichen
+- keine produktive Code-Signierung, CA-Ausstellung oder Cloud-native
+  Secret-Manager-Anbindung
+- keine Multi-Region-HA; PostgreSQL und Object Storage benoetigen fuer echte
+  Hochverfuegbarkeit eine Betreiber-Clusterung
+- Performance-CI-Budgets sind keine Produktions-SLOs
+
+Jede Freigabe, Exception, Schwachstellenbewertung und regulatorische Einordnung
+bleibt eine verantwortete menschliche Entscheidung.

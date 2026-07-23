@@ -223,7 +223,7 @@ Toolchain stammt weiterhin aus dem unveraenderten nixpkgs-26.05-Flake. Dieser
 Wartungsschritt aendert weder Cargo-Abhaengigkeiten noch Produktfunktionalitaet
 und veroeffentlicht kein Container- oder Release-Artefakt. Die Entscheidung
 ueber eine spaetere Release-Builder-Aktualisierung bleibt auch in der
-Release-Vorbereitung fuer `V23.7.30` bewusst getrennt; der portable Builder
+Release-Vorbereitung fuer `V23.7.31` bewusst getrennt; der portable Builder
 bleibt fuer diesen Stand auf Rust 1.88.
 
 ## Release-Candidate-Prüfung
