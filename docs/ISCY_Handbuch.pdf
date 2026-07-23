@@ -12,7 +12,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 5 0 R >>
 endobj
 5 0 obj
-<< /Length 3419 >>
+<< /Length 3437 >>
 stream
 BT
 /F1 9 Tf
@@ -22,7 +22,7 @@ BT
 T*
 () Tj
 T*
-(Version: Arbeitsstand Juli 2026 \(ISCY V23.7.31 Development / Rust 0.3.22\)) Tj
+(Version: Arbeitsstand Juli 2026 \(ISCY V23.7.31 Release Candidate vorbereitet / Rust 0.3.22\)) Tj
 T*
 () Tj
 T*
@@ -4879,7 +4879,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 67 0 R >>
 endobj
 67 0 obj
-<< /Length 4924 >>
+<< /Length 4985 >>
 stream
 BT
 /F1 9 Tf
@@ -4911,13 +4911,15 @@ T*
 T*
 (V23.7.30 bleibt der unveraenderte veroeffentlichte Stable-/Latest-Stand.) Tj
 T*
-(V23.7.31 ist als developmentunreleased geoeffnet, ohne Tag, GitHub) Tj
+(V23.7.31 ist repositorykonform als preparednotpublished vorbereitet.) Tj
 T*
-(Release oder Upload. Eine spaetere Release-Vorbereitung und Freigabe bleiben) Tj
+(Dieser Status erzeugt weder einen Tag noch ein GitHub Release oder einen) Tj
 T*
-(getrennte menschliche Entscheidungen. Die vorhandenen Pflichtpruefungen laufen) Tj
+(Upload. Freigabe und Publikation bleiben getrennte menschliche Entscheidungen.) Tj
 T*
-(in make release-candidate-check zusammen. GitHub-CI) Tj
+(Die vorhandenen Pflichtpruefungen laufen in make release-candidate-check) Tj
+T*
+(zusammen. GitHub-CI) Tj
 T*
 (behaelt die getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und) Tj
 T*
@@ -5001,6 +5003,24 @@ T*
 T*
 () Tj
 T*
+(Der Funktionsumfang von V23.7.31 ist fuer die Candidate-Pruefung) Tj
+T*
+(eingefroren. Enthalten sind Native Threat Intelligence und Security) Tj
+T*
+(Observations, Continuous Vulnerability Intelligence sowie tenantgebundene) Tj
+T*
+(Software Approval and Exception Policies. Alle drei Bereiche bleiben passiv:) Tj
+T*
+(Sie erzeugen keine aktive Reaktion, ueberschreiben keine manuelle Triage und) Tj
+T*
+(installieren, blockieren oder deinstallieren keine Software. Eine Exception) Tj
+T*
+(ist weder VEX noch Risk Acceptance. Fehlende Policies oder fehlende bekannte) Tj
+T*
+(Schwachstellen ergeben niemals automatisch APPROVED.) Tj
+T*
+() Tj
+T*
 (Der owner-kontrollierte ISCY Codex PR-Orchestrator bietet fuer autorisierte) Tj
 T*
 (Same-Repository-Draft-PRs gegen main die Routen /iscy status,) Tj
@@ -5009,6 +5029,19 @@ T*
 T*
 (Workspace-begrenzte Korrekturen, Head-/Diff-Pruefungen und hoechstens zwei) Tj
 T*
+ET
+endstream
+endobj
+68 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 69 0 R >>
+endobj
+69 0 obj
+<< /Length 4735 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (CI-Fix-Versuche folgen Least-Privilege- und fail-closed Grenzen. Codex erhaelt) Tj
 T*
 (keine Merge-, Tag- oder Release-Berechtigung; die Merge-Grenze bleibt) Tj
@@ -5029,19 +5062,6 @@ T*
 T*
 (- ISMS: Managementsystem fuer Informationssicherheit) Tj
 T*
-ET
-endstream
-endobj
-68 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 69 0 R >>
-endobj
-69 0 obj
-<< /Length 5022 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- NIS2: EU-Regelwerk fuer Cybersecurity-Pflichten wesentlicher und wichtiger Einrichtungen) Tj
 T*
 (- KRITIS: Kritische Infrastrukturen) Tj
@@ -5166,6 +5186,19 @@ T*
 T*
 (Restore-/Integritaetsdrills ohne neues Speichersystem. Migration) Tj
 T*
+ET
+endstream
+endobj
+70 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 71 0 R >>
+endobj
+71 0 obj
+<< /Length 5376 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (0034rustsupplierproductsecuritygovernance verbindet Lieferanten, Produkte/Services, lokale) Tj
 T*
 (Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und) Tj
@@ -5186,19 +5219,6 @@ T*
 T*
 (GitHub-Release-Veroeffentlichung einzufuehren. Migration 0037rustagentpkicsrgovernance) Tj
 T*
-ET
-endstream
-endobj
-70 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 71 0 R >>
-endobj
-71 0 obj
-<< /Length 5052 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (ergaenzt Agent-PKI-/CSR-/mTLS-Governance als Metadata-only-Modell ohne produktive CA, private) Tj
 T*
 (Schluessel, CA-Secrets, externe Ausstellung oder automatische mTLS-Aktivierung. Migration) Tj
@@ -5323,6 +5343,19 @@ T*
 T*
 (Policy ab. UNMANAGED und REVIEWREQUIRED bleiben fail-closed sichtbar.) Tj
 T*
+ET
+endstream
+endobj
+72 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 73 0 R >>
+endobj
+73 0 obj
+<< /Length 1998 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Self-Approval, fremde Tenantziele, veraltete Revisionen und unbefristete) Tj
 T*
 (Ausnahmen werden serverseitig abgewiesen. Die Funktion aendert keine) Tj
@@ -5343,19 +5376,6 @@ T*
 T*
 (Review-Pack-Gliederung) Tj
 T*
-ET
-endstream
-endobj
-72 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 73 0 R >>
-endobj
-73 0 obj
-<< /Length 1409 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (2. Den S3-kompatiblen Evidence-Storage nach menschlicher Security-Review in einer isolierten) Tj
 T*
 (Betreiberumgebung mit produktiven Endpoint-, Secret-Root- und Restore-Vorgaben pilotieren) Tj
@@ -5415,76 +5435,76 @@ xref
 0000000352 00000 n
 0000000422 00000 n
 0000000548 00000 n
-0000004018 00000 n
-0000004144 00000 n
-0000007013 00000 n
-0000007139 00000 n
-0000009802 00000 n
-0000009930 00000 n
-0000011867 00000 n
-0000011995 00000 n
-0000015020 00000 n
-0000015148 00000 n
-0000019439 00000 n
-0000019567 00000 n
-0000022789 00000 n
-0000022917 00000 n
-0000027077 00000 n
-0000027205 00000 n
-0000031388 00000 n
-0000031516 00000 n
-0000033515 00000 n
-0000033643 00000 n
-0000038230 00000 n
-0000038358 00000 n
-0000042339 00000 n
-0000042467 00000 n
-0000047633 00000 n
-0000047761 00000 n
-0000052123 00000 n
-0000052251 00000 n
-0000055955 00000 n
-0000056083 00000 n
-0000059729 00000 n
-0000059857 00000 n
-0000064205 00000 n
-0000064333 00000 n
-0000069086 00000 n
-0000069214 00000 n
-0000073783 00000 n
-0000073911 00000 n
-0000078274 00000 n
-0000078402 00000 n
-0000081681 00000 n
-0000081809 00000 n
-0000085959 00000 n
-0000086087 00000 n
-0000090892 00000 n
-0000091020 00000 n
-0000095773 00000 n
-0000095901 00000 n
-0000100740 00000 n
-0000100868 00000 n
-0000105125 00000 n
-0000105253 00000 n
-0000109547 00000 n
-0000109675 00000 n
-0000113888 00000 n
-0000114016 00000 n
-0000118620 00000 n
-0000118748 00000 n
-0000123385 00000 n
-0000123513 00000 n
-0000128351 00000 n
-0000128479 00000 n
-0000133455 00000 n
-0000133583 00000 n
-0000138657 00000 n
-0000138785 00000 n
-0000143889 00000 n
-0000144017 00000 n
+0000004036 00000 n
+0000004162 00000 n
+0000007031 00000 n
+0000007157 00000 n
+0000009820 00000 n
+0000009948 00000 n
+0000011885 00000 n
+0000012013 00000 n
+0000015038 00000 n
+0000015166 00000 n
+0000019457 00000 n
+0000019585 00000 n
+0000022807 00000 n
+0000022935 00000 n
+0000027095 00000 n
+0000027223 00000 n
+0000031406 00000 n
+0000031534 00000 n
+0000033533 00000 n
+0000033661 00000 n
+0000038248 00000 n
+0000038376 00000 n
+0000042357 00000 n
+0000042485 00000 n
+0000047651 00000 n
+0000047779 00000 n
+0000052141 00000 n
+0000052269 00000 n
+0000055973 00000 n
+0000056101 00000 n
+0000059747 00000 n
+0000059875 00000 n
+0000064223 00000 n
+0000064351 00000 n
+0000069104 00000 n
+0000069232 00000 n
+0000073801 00000 n
+0000073929 00000 n
+0000078292 00000 n
+0000078420 00000 n
+0000081699 00000 n
+0000081827 00000 n
+0000085977 00000 n
+0000086105 00000 n
+0000090910 00000 n
+0000091038 00000 n
+0000095791 00000 n
+0000095919 00000 n
+0000100758 00000 n
+0000100886 00000 n
+0000105143 00000 n
+0000105271 00000 n
+0000109565 00000 n
+0000109693 00000 n
+0000113906 00000 n
+0000114034 00000 n
+0000118638 00000 n
+0000118766 00000 n
+0000123403 00000 n
+0000123531 00000 n
+0000128369 00000 n
+0000128497 00000 n
+0000133534 00000 n
+0000133662 00000 n
+0000138449 00000 n
+0000138577 00000 n
+0000144005 00000 n
+0000144133 00000 n
 trailer
 << /Size 74 /Root 1 0 R >>
 startxref
-145478
+146183
 %%EOF

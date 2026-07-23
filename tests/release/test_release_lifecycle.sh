@@ -15,8 +15,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[[ "$(jq -r '.release_status' "$source_manifest")" == 'development_unreleased' ]] || {
-    echo 'RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest ist nicht development_unreleased.' >&2
+[[ "$(jq -r '.release_status' "$source_manifest")" == 'prepared_not_published' ]] || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest ist nicht prepared_not_published.' >&2
     exit 1
 }
 [[ "$(sha256sum "$published_snapshot" | cut -d ' ' -f 1)" == "$published_snapshot_sha256" ]] || {

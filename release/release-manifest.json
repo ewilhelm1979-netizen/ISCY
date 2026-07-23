@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "proposed_version": "V23.7.31",
-  "release_status": "development_unreleased",
+  "release_status": "prepared_not_published",
   "source_commit": "git:HEAD",
   "source_base_commit": "1c07af4e7cd196076220479d394242a3df589714",
   "source_date_epoch": null,
@@ -16,7 +16,7 @@
   "cargo_package_version": "0.3.22",
   "cargo_lock_sha256": "f5bb49559a438e3cd388141fee38734cb4ced0a3c25882b49b169c8b209e711f",
   "flake_lock_sha256": "9f9358302aa0ef8400983fe1bd54786ff94fc9560f36f37708aba1713ec6d680",
-  "handbook_sha256": "2289f4adb726aa26bd4003f3e925bd0950f44c7fe1901e78e50d8ce058184e0d",
+  "handbook_sha256": "f5354d1040786b8e0da3d19e60d7b56befdb6c320f241ea11b0ae3049ee14712",
   "migration_count": 45,
   "platform_versions": {
     "nginx": "1.31-alpine",
@@ -57,7 +57,7 @@
       "rust"
     ],
     "visual_baselines": 42,
-    "status": "development_validation_required"
+    "status": "validated_by_release_candidate_check_and_ci"
   },
   "release_artifact": {
     "type": "linux-x86_64-glibc",
@@ -72,13 +72,13 @@
     ],
     "rpath_status": "absent",
     "path_remapping": "container_build_roots_only",
-    "reproducibility_status": "not_prepared",
+    "reproducibility_status": "required_two_build_sha256",
     "binary_sha256": null
   },
   "provenance_status": "prepared_unsigned",
   "signature_status": "unsigned",
   "sbom_status": "generated_cyclonedx_1.5",
-  "sbom_sha256": "629cfb3f4f25460622c511cde165b035dc4161e739f0dff9e4ef7c4c07b632e7",
+  "sbom_sha256": "f6a882163cfa6b15cbba58666ebce7c4a1fa167b2b6eca17f96aee371324dd24",
   "vex_status": "not_generated_no_release_vulnerability_assertion",
   "known_limitations_reference": "docs/RELEASE_CANDIDATE_CHECKLIST.md#bekannte-betriebsgrenzen"
 }

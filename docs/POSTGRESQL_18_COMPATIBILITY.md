@@ -1,6 +1,6 @@
 # PostgreSQL-18-Kompatibilitaet und Upgradepfad
 
-Stand: ISCY Unreleased
+Stand: ISCY V23.7.31 Release Candidate
 
 ISCY verwendet weiterhin PostgreSQL 16 als Standard- und Produktionspfad.
 PostgreSQL 18 wird zusaetzlich als Anwendungskompatibilitaet und als Ziel eines
@@ -18,7 +18,7 @@ automatisches Upgradeversprechen noch eine Freigabe fuer ein In-place-Upgrade.
 | PostgreSQL-18-Volumeziel | `/var/lib/postgresql` |
 | PostgreSQL-18-PGDATA | `/var/lib/postgresql/18/docker` |
 | Datenuebertragung | logischer Dump und Restore mit PostgreSQL-18-Clientwerkzeugen |
-| Migrationen | alle 39 bestehenden Migrationen, ohne neue PG18-Migration |
+| Migrationen | alle 45 bestehenden Migrationen, ohne eigene PG18-Migration |
 
 Der am 2026-07-13 read-only gegen Docker Hub gepruefte OCI-Index fuer
 `postgres:18` war

@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juli 2026 (ISCY V23.7.31 Development / Rust 0.3.22)
+Version: Arbeitsstand Juli 2026 (ISCY V23.7.31 Release Candidate vorbereitet / Rust 0.3.22)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -1958,10 +1958,11 @@ Skalierbarkeit, SLA-Erfuellung, Zertifizierung oder Rechtskonformitaet.
 ### 6.18 Finales Hardening und Release-Vorbereitung
 
 `V23.7.30` bleibt der unveraenderte veroeffentlichte Stable-/Latest-Stand.
-`V23.7.31` ist als `development_unreleased` geoeffnet, ohne Tag, GitHub
-Release oder Upload. Eine spaetere Release-Vorbereitung und Freigabe bleiben
-getrennte menschliche Entscheidungen. Die vorhandenen Pflichtpruefungen laufen
-in `make release-candidate-check` zusammen. GitHub-CI
+`V23.7.31` ist repositorykonform als `prepared_not_published` vorbereitet.
+Dieser Status erzeugt weder einen Tag noch ein GitHub Release oder einen
+Upload. Freigabe und Publikation bleiben getrennte menschliche Entscheidungen.
+Die vorhandenen Pflichtpruefungen laufen in `make release-candidate-check`
+zusammen. GitHub-CI
 behaelt die getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und
 Docker-Jobs und aggregiert deren Ergebnis erst am Ende. Lokal erzeugte
 Candidate-Artefakte bleiben unter `artifacts/release-candidate/`, sind
@@ -2002,6 +2003,15 @@ Cloud-native Secret-Manager, Multi-Region-HA, automatische Zertifizierung,
 Rechtsbewertung und Behoerdenmeldung bleiben ausdruecklich ausserhalb dieses
 Release. Die vollstaendige Matrix und alle Betriebsgrenzen stehen
 in `docs/RELEASE_CANDIDATE_CHECKLIST.md`.
+
+Der Funktionsumfang von `V23.7.31` ist fuer die Candidate-Pruefung
+eingefroren. Enthalten sind Native Threat Intelligence und Security
+Observations, Continuous Vulnerability Intelligence sowie tenantgebundene
+Software Approval and Exception Policies. Alle drei Bereiche bleiben passiv:
+Sie erzeugen keine aktive Reaktion, ueberschreiben keine manuelle Triage und
+installieren, blockieren oder deinstallieren keine Software. Eine Exception
+ist weder VEX noch Risk Acceptance. Fehlende Policies oder fehlende bekannte
+Schwachstellen ergeben niemals automatisch `APPROVED`.
 
 Der owner-kontrollierte ISCY Codex PR-Orchestrator bietet fuer autorisierte
 Same-Repository-Draft-PRs gegen `main` die Routen `/iscy status`,

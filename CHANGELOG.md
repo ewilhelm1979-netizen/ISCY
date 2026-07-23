@@ -40,6 +40,11 @@ The project uses release tags for immutable release points. Changes under **Unre
 - setzt den Root-Lifecycle fail-closed auf `development_unreleased`; Release-Bundle, Tag, GitHub Release und Upload bleiben einer separaten Release-Vorbereitung vorbehalten
 - oeffnet die Produktentwicklung fuer `V23.7.31`; die darunter dokumentierten
   Unreleased-Aenderungen sind weiterhin weder getaggt noch veroeffentlicht
+- bereitet `V23.7.31` repositorykonform als `prepared_not_published` mit
+  Candidate Notes, 45 Migrationen, 42 Visual-Baselines, reproduzierbarer
+  CycloneDX-SBOM und lokalem unsigniertem Artefaktvertrag vor; Feature Freeze
+  gilt, und Tag, GitHub Release sowie Upload bleiben einem getrennten Auftrag
+  vorbehalten
 
 ## V23.7.30 - 2026-07-22
 

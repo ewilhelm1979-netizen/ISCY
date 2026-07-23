@@ -1,7 +1,7 @@
-# ISCY Development- und Release-Candidate-Checkliste
+# ISCY Release-Candidate-Checkliste V23.7.31
 
-Diese Checkliste beschreibt den kontrollierten Development-Zyklus fuer
-`V23.7.31` und die davon getrennte spaetere Release-Candidate-Vorbereitung.
+Diese Checkliste beschreibt die kontrollierte Release-Candidate-Vorbereitung
+fuer `V23.7.31` auf Basis des vollstaendig gemergten Entwicklungsstands.
 Sie ist ein technischer und fachlicher Review-Nachweis, keine Freigabe,
 Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
 
@@ -11,8 +11,10 @@ Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
 - Basis-Commit: `1c07af4e7cd196076220479d394242a3df589714`
 - Release-ID: `358056010`
 - Published-Snapshot: `release/published/V23.7.30.json`
-- Development-Zielversion: `V23.7.31`
-- Root-Status: `development_unreleased`
+- Zielversion: `V23.7.31`
+- Candidate-Ausgangscommit: `74ba1f4a2239afbba2cb74c16199664914deb1c9`
+- Enthaltene Feature-PRs: `#86`, `#87`, `#88`
+- Root-Status: `prepared_not_published`
 - Internes Rust-Paket: `0.3.22`
 - Rust-Haupttoolchain: `1.97.0`
 - MSRV und portabler Release-Builder: Rust `1.88`
@@ -32,10 +34,8 @@ veroeffentlichte Metadaten und ist keine Signatur oder Attestation.
 
 ## Lifecycle-Modi
 
-`development_unreleased` ist der normale Root-Status fuer Feature-PRs. Der
-vollstaendige technische Pruefpfad bleibt verpflichtend, erzeugt aber kein
-Release-Bundle. Ein Aufruf von `make release-candidate-artifacts` bricht in
-diesem Modus fail-closed mit `RC_ARTIFACT_ERROR[release_status]` ab. Ein
+`development_unreleased` bleibt der normale Root-Status fuer Feature-PRs. In
+diesem Modus bricht `make release-candidate-artifacts` fail-closed ab und ein
 erfolgreiches Vollgate endet mit `DEV_CHECK_OK`.
 
 In diesem Development-Status bleibt die getrackte SBOM des letzten
@@ -44,8 +44,8 @@ CycloneDX-Struktur validiert. Eine neue Release-SBOM wird erst im Status
 `prepared_not_published` erzeugt; Development erzeugt weder Bundle noch neue
 Release-SBOM.
 
-`prepared_not_published` wird erst in einem separaten Release-Prep-PR gesetzt.
-Dieser Modus verlangt vollstaendige Candidate Notes
+`prepared_not_published` ist ausschliesslich in diesem separaten
+Release-Prep-PR gesetzt. Dieser Modus verlangt vollstaendige Candidate Notes
 und erlaubt nach dem Binary-Gate die lokale, unsignierte Bundle-Erzeugung. Eine automatische
 Umwandlung aus dem Development-Modus, ein Tag oder eine GitHub-
 Veroeffentlichung findet nicht statt. Das Candidate-Vollgate endet mit
@@ -81,6 +81,8 @@ lueckenlos, eindeutig und aufsteigend sein.
 | Evidence Worker und Disposition | Candidate-Prüfung erforderlich | Atomare Claims, Legal Hold, Approval, Tombstone und Wiederanlauf werden im Gate geprueft. |
 | Notifications | geprüft mit dokumentierter Einschränkung | Claim/Deduplizierung und sichere Webhooks; kein externer Queue-Cluster. |
 | Supplier/Product Security | implementiert und geprüft | Tenant-, Rollen- und Evidence-Grenzen besitzen Negativtests. |
+| Native Threat Intelligence und Security Observations | implementiert und geprüft | Tenantgebundene Indicators, begrenzte Observations, manuelle Links, Rollen und transaktionale Auditspur; keine aktive Reaktion oder automatische Incident-/Evidence-Erzeugung. |
+| Continuous Vulnerability Intelligence | implementiert und geprüft | Feste offizielle Quellen, Provenance, Datenalter, konservative Korrelation und fail-closed unvollstaendige Laeufe; manuelle Triage, VEX und Risk Acceptance bleiben erhalten. |
 | Software Approval und Exceptions | implementiert und geprüft | Exakte Tenantziele, restriktive Praezedenz, Pflichtablauf, Self-Approval-Schutz, Revisionen und passive Side-Effect-Grenze. |
 | Regulatory und Management Reviews | implementiert und geprüft | Snapshots und Exporte bleiben eingefroren; keine Rechts- oder Compliance-Entscheidung. |
 | AI Governance | implementiert und geprüft | Links und Gap-Tasks sind tenantgebunden und idempotent. |
@@ -132,6 +134,12 @@ Bestätigte Grenzen:
   permissive Wildcard-CORS-Konfiguration.
 - Evidence-Downloads und S3-Laufzeitoperationen bleiben authentifiziert,
   tenant-, rollen- und objektgebunden sowie `private/no-store`.
+- Der Release-Diff von `V23.7.30` bis zum Candidate-Ausgangscommit wurde auf
+  Cross-Tenant-IDOR, Privilege Escalation, Self-Approval, manipulierte IDs,
+  Mass Assignment, XSS, SQL-/Command-Injection, SSRF, Race-/Replay-Zustaende,
+  Revisionen, Rollback/Audit und unvollstaendige externe Daten geprueft. Es
+  bleibt kein offener Critical-, High- oder releaseblockierender
+  Medium-Befund.
 
 Nach Release zeitnah prüfen:
 
@@ -168,10 +176,9 @@ export ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL=postgresql://iscy@127.0.0.1:5432/
 make release-candidate-check
 ```
 
-Mit dem Root-Status `development_unreleased` erzeugt dieser Aufruf kein
-Verzeichnis `artifacts/release-candidate/`. Der Uebergang zu
-`prepared_not_published` erfolgt ausschliesslich in einer separaten,
-menschlich geprueften Release-Vorbereitung.
+Mit dem Root-Status `prepared_not_published` erzeugt dieser Aufruf nach allen
+Pflichtgates ausschliesslich ein lokales, unsigniertes Bundle unter
+`artifacts/release-candidate/`. Es wird weder hochgeladen noch veroeffentlicht.
 
 Der gepinnte Nix-Dev-Shell stellt die benoetigten Clients und Pruefwerkzeuge
 bereit. Der Aufruf verlangt absichtlich einen erreichbaren lokalen Docker-
@@ -227,6 +234,11 @@ freigegebene Vulnerability-Assertion vorliegt.
 - PostgreSQL und MinIO bleiben ohne Betreiber-Cluster Single Points of Failure.
 - Keine Multi-Region-HA und keine automatische horizontale Skalierung.
 - SQLite und `local_filesystem` sind keine Mehrinstanz-/HA-Pfade.
+- Keine EOL-/EOS-Integration, keine erweiterten PURL-/CPE-Regeln und keine
+  zusaetzlichen externen Feeds in diesem Candidate.
+- Keine aktive Reaktion, automatische Softwareblockierung oder Deinstallation.
+- Keine automatische VEX-Aussage, Risk Acceptance, Incident- oder
+  Evidence-Erzeugung durch die drei neuen Bereiche.
 - Keine produktive CA-/PKI-Provider-Anbindung oder Agent-Paketsignierung.
 - Keine Cloud-native Secret-Manager-Anbindung.
 - Performance-CI-Budgets sind keine Produktions-SLOs.
@@ -247,6 +259,6 @@ freigegebene Vulnerability-Assertion vorliegt.
 - [ ] Erst danach darf separat über Ready-for-review, Merge, Tag und Release
   entschieden werden.
 
-Das Oeffnen eines Development-Zyklus erstellt keinen neuen Tag, kein neues
-GitHub Release, kein Asset, keine produktive Signatur und keine oeffentliche
+Diese Candidate-Vorbereitung erstellt keinen neuen Tag, kein GitHub Release,
+keinen Asset-Upload, keine produktive Signatur und keine oeffentliche
 Veroeffentlichung. Der veroeffentlichte Snapshot `V23.7.30` bleibt immutable.
