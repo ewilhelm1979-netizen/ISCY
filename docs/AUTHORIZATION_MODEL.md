@@ -97,4 +97,34 @@ Komponenten und Findings, die Redaktion globaler Checkpoint-/Fenster-/Actor-Date
 idempotente Korrelationen sowie ausbleibende Incident-, Evidence- und
 Active-Response-Nebenwirkungen.
 
+### Software Approval und Exceptions
+
+Migration `0045_rust_software_approval_exception_policy` ergaenzt neun
+granulare Permissions:
+
+- Policy: `view_software_policy`, `add_software_policy`,
+  `change_software_policy`, `activate_software_policy`,
+  `evaluate_software_policy` und `view_software_policy_audit`
+- Ausnahme: `request_software_exception`, `review_software_exception` und
+  `revoke_software_exception`
+
+`SECURITY_ADMIN` und `COMPLIANCE_MANAGER` erhalten die tenantlokale
+Gesamtbearbeitung, `SOC_ANALYST` Lesen, passive Bewertung und Antrag,
+`AUDITOR` Lesen und Audit. Admin-, Staff- und Superuser-Semantik bleibt
+erhalten; direkte und gruppenbasierte Permissions werden weiterhin
+serverseitig ausgewertet. Self-Approval wird unabhaengig von der Rolle im
+Store abgewiesen.
+
+Tenant, Applicant und entscheidender Actor stammen ausschliesslich aus dem
+authentifizierten Kontext. Product-, Asset-, Component-, SBOM-Component-,
+Policy-, Exception-, Owner- und Auditabfragen enthalten den Tenant im SQL.
+Interne Actor-IDs werden nicht serialisiert; zugelassene Tenantrollen sehen
+begrenzte Anzeigenamen. Foreign-Tenant- und Not-Found-Zugriffe liefern dieselbe
+generische Fehlerklasse.
+
+Die Negativtests pruefen unautorisierte Rollen, fremde Ziele und Owner,
+fremde Policy-/Exception-IDs, manipulierte Tenant-Parameter, Self-Approval,
+veraltete Revisionen, parallele Entscheidungen, Pagination und gespeicherte
+XSS-Payloads. Eine UI-Schaltflaeche ist nie die Berechtigungsgrenze.
+
 Evidence-Uploads validieren tenantgebundene Session-, Massnahmen-, Incident- und Versionsvorgaenger-Referenzen vor dem Insert. Bei einer ungueltigen oder fremden Referenz antwortet die API mit `400 invalid_evidence_upload`, gibt keine Fremdmandantendaten preis und entfernt eine bereits temporaer geschriebene Upload-Datei. Die Negativtest-Matrix bleibt ein fortlaufendes Release-Gate: neue objektbezogene Read-, Write- oder Export-Routen muessen einen Fremdmandantenfall erhalten.

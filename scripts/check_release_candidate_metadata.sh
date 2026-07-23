@@ -110,7 +110,7 @@ jq -e '
     .test_suite_summary.aggregation_job == "release-candidate-check" and
     .test_suite_summary.aggregation_job_count == 1 and
     .test_suite_summary.codeql_checks == ["actions", "javascript-typescript", "rust"] and
-    .test_suite_summary.visual_baselines == 40 and
+    .test_suite_summary.visual_baselines == 42 and
     .signature_status == "unsigned" and
     .provenance_status == "prepared_unsigned" and
     .sbom_status == "generated_cyclonedx_1.5" and
