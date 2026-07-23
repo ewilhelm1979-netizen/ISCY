@@ -16,8 +16,8 @@
   "cargo_package_version": "0.3.22",
   "cargo_lock_sha256": "f5bb49559a438e3cd388141fee38734cb4ced0a3c25882b49b169c8b209e711f",
   "flake_lock_sha256": "9f9358302aa0ef8400983fe1bd54786ff94fc9560f36f37708aba1713ec6d680",
-  "handbook_sha256": "1c1f60613d314e9ac4e7bbee3f30624bde7a9bb53c62c690330058a80360624b",
-  "migration_count": 43,
+  "handbook_sha256": "e7ad3fe9769d3d6acd8724514551039352dadc57025f25f91a06d1b2e653bdeb",
+  "migration_count": 44,
   "platform_versions": {
     "nginx": "1.31-alpine",
     "nixpkgs": "nixos-26.05"

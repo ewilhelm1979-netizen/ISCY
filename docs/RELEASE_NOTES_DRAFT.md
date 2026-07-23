@@ -48,8 +48,12 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
   Kompressions-, Payload-, Parser- und Secret-Grenzen
 - transaktionales Lease-Fencing, KEV-Count-/Rollback-Pruefung, faire
   EPSS-Batchrotation und pruefpflichtige komplexe NVD-CPE-Kontexte
-- globale Checkpoint-/Fenster-Zeitpunkte und anfordernde Plattform-Actor-IDs bleiben fuer
-  Tenantrollen redigiert
+- tenantgebundene Evaluationsgenerationen mit Stale-Reconciliation nur nach
+  vollstaendig erfolgreichem Scope; unvollstaendige Laeufe erzeugen keine
+  Entwarnung, waehrend manuelle Triage, VEX, Controls und Risk Acceptance
+  erhalten bleiben
+- globale Checkpoint-/Fenster-Zeitpunkte und anfordernde Plattform-Actor-IDs
+  bleiben fuer Tenantrollen redigiert
 - keine automatische Security Observation, kein Incident, keine Evidence,
   kein Agentenbefehl und keine aktive Reaktion; EOL/EOS und weitergehende
   Software-Policy bleiben ohne belastbare Quelle Phase 2
@@ -77,7 +81,7 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
 - MSRV und portabler Release-Builder: Rust `1.88.0`
 - PostgreSQL 16 bleibt der Standard.
 - PostgreSQL 18.4 bleibt ein zusaetzlicher Kompatibilitaetspfad.
-- Aktuell 43 fortlaufende Migrationen, `0001` bis `0043`
+- Aktuell 44 fortlaufende Migrationen, `0001` bis `0044`
 - 40 Visual-Baselines
 - Signaturstatus: `unsigned`
 - Provenance-Status: `prepared_unsigned`

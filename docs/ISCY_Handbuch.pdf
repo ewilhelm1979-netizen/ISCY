@@ -3,7 +3,7 @@
 << /Type /Catalog /Pages 2 0 R >>
 endobj
 2 0 obj
-<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R 40 0 R 42 0 R 44 0 R 46 0 R 48 0 R 50 0 R 52 0 R 54 0 R 56 0 R 58 0 R 60 0 R 62 0 R 64 0 R 66 0 R 68 0 R] /Count 33 >>
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R 40 0 R 42 0 R 44 0 R 46 0 R 48 0 R 50 0 R 52 0 R 54 0 R 56 0 R 58 0 R 60 0 R 62 0 R 64 0 R 66 0 R 68 0 R 70 0 R] /Count 34 >>
 endobj
 3 0 obj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
@@ -4784,7 +4784,7 @@ T*
 T*
 (1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem) Tj
 T*
-(Bootstrap, 43 Migrationen, Restart, Migrationsrennen und einem logischen) Tj
+(Bootstrap, 44 Migrationen, Restart, Migrationsrennen und einem logischen) Tj
 T*
 (Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der) Tj
 T*
@@ -4812,7 +4812,7 @@ T*
 T*
 () Tj
 T*
-(Die RC-Metadatenpruefung bestaetigt 43 fortlaufende Migrationen, 40 visuelle) Tj
+(Die RC-Metadatenpruefung bestaetigt 44 fortlaufende Migrationen, 40 visuelle) Tj
 T*
 (Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen) Tj
 T*
@@ -5036,7 +5036,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 69 0 R >>
 endobj
 69 0 obj
-<< /Length 4429 >>
+<< /Length 5164 >>
 stream
 BT
 /F1 9 Tf
@@ -5118,6 +5118,48 @@ T*
 T*
 () Tj
 T*
+(Migration 0044rustvulnerabilityhygienelifecycle ergaenzt dafuer) Tj
+T*
+(tenantgebundene Evaluationslaeufe und Last-Seen-Generationen. Eine aktive) Tj
+T*
+(Korrelation wird nur nach einem vollstaendig erfolgreichen Scope als STALE) Tj
+T*
+(markiert, wenn sie nicht erneut beobachtet wurde. Das zugehoerige Finding) Tj
+T*
+(bleibt bei einer anderen aktiven bestaetigten Korrelation ACTIVE, wird bei) Tj
+T*
+(ausschliesslich unsicheren aktiven Kandidaten REVIEW und ohne aktive) Tj
+T*
+(Korrelation HISTORICAL. Eine spaetere belastbare Beobachtung reaktiviert) Tj
+T*
+(dieselben Datensaetze; historische Provenance bleibt erhalten.) Tj
+T*
+() Tj
+T*
+(Query-/Kandidatenlimits, unvollstaendige Inventarquellen, Parser- oder) Tj
+T*
+(Datenbankfehler und verlorene Leases kennzeichnen den Lauf als) Tj
+T*
+(INCOMPLETE. Solche Laeufe duerfen keine Stale-Markierung oder Entwarnung aus) Tj
+T*
+(blosser Nichtbeobachtung ableiten und ersetzen nicht den letzten) Tj
+T*
+(vollstaendigen Evaluationszeitpunkt. Nicht erneut beobachtet bedeutet auch) Tj
+T*
+(nach einem vollstaendigen Lauf nicht automatisch nicht betroffen und) Tj
+T*
+(erzeugt keine VEX-Aussage. Manuelle Triage, Verantwortliche, Fristen, VEX,) Tj
+T*
+(Risk Acceptance, Kommentare und Compensating Controls bleiben erhalten.) Tj
+T*
+(/cves/ und die Software-Hygiene-API zeigen Lifecycle, Datenalter und den) Tj
+T*
+(sicher begrenzten Laufstatus, ohne interne Lease-, Actor- oder globale) Tj
+T*
+(Checkpointdetails an Tenantrollen offenzulegen.) Tj
+T*
+() Tj
+T*
 (Die priorisierte Roadmap liegt in docs/ISCYSTRATEGICROADMAP.md und umfasst:) Tj
 T*
 () Tj
@@ -5144,6 +5186,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+70 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 71 0 R >>
+endobj
+71 0 obj
+<< /Length 792 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern) Tj
 T*
 (Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product) Tj
@@ -5180,79 +5235,81 @@ ET
 endstream
 endobj
 xref
-0 70
+0 72
 0000000000 65535 f
 0000000009 00000 n
 0000000058 00000 n
-0000000338 00000 n
-0000000408 00000 n
-0000000534 00000 n
-0000004022 00000 n
-0000004148 00000 n
-0000007017 00000 n
-0000007143 00000 n
-0000009806 00000 n
-0000009934 00000 n
-0000011871 00000 n
-0000011999 00000 n
-0000015024 00000 n
-0000015152 00000 n
-0000019443 00000 n
-0000019571 00000 n
-0000022793 00000 n
-0000022921 00000 n
-0000027081 00000 n
-0000027209 00000 n
-0000031392 00000 n
-0000031520 00000 n
-0000033519 00000 n
-0000033647 00000 n
-0000038234 00000 n
-0000038362 00000 n
-0000042343 00000 n
-0000042471 00000 n
-0000047637 00000 n
-0000047765 00000 n
-0000052127 00000 n
-0000052255 00000 n
-0000055706 00000 n
-0000055834 00000 n
-0000060031 00000 n
-0000060159 00000 n
-0000064994 00000 n
-0000065122 00000 n
-0000069532 00000 n
-0000069660 00000 n
-0000074128 00000 n
-0000074256 00000 n
-0000077542 00000 n
-0000077670 00000 n
-0000081735 00000 n
-0000081863 00000 n
-0000086744 00000 n
-0000086872 00000 n
-0000091543 00000 n
-0000091671 00000 n
-0000096544 00000 n
-0000096672 00000 n
-0000100991 00000 n
-0000101119 00000 n
-0000105310 00000 n
-0000105438 00000 n
-0000109664 00000 n
-0000109792 00000 n
-0000114401 00000 n
-0000114529 00000 n
-0000119153 00000 n
-0000119281 00000 n
-0000124126 00000 n
-0000124254 00000 n
-0000129238 00000 n
-0000129366 00000 n
-0000134415 00000 n
-0000134543 00000 n
+0000000345 00000 n
+0000000415 00000 n
+0000000541 00000 n
+0000004029 00000 n
+0000004155 00000 n
+0000007024 00000 n
+0000007150 00000 n
+0000009813 00000 n
+0000009941 00000 n
+0000011878 00000 n
+0000012006 00000 n
+0000015031 00000 n
+0000015159 00000 n
+0000019450 00000 n
+0000019578 00000 n
+0000022800 00000 n
+0000022928 00000 n
+0000027088 00000 n
+0000027216 00000 n
+0000031399 00000 n
+0000031527 00000 n
+0000033526 00000 n
+0000033654 00000 n
+0000038241 00000 n
+0000038369 00000 n
+0000042350 00000 n
+0000042478 00000 n
+0000047644 00000 n
+0000047772 00000 n
+0000052134 00000 n
+0000052262 00000 n
+0000055713 00000 n
+0000055841 00000 n
+0000060038 00000 n
+0000060166 00000 n
+0000065001 00000 n
+0000065129 00000 n
+0000069539 00000 n
+0000069667 00000 n
+0000074135 00000 n
+0000074263 00000 n
+0000077549 00000 n
+0000077677 00000 n
+0000081742 00000 n
+0000081870 00000 n
+0000086751 00000 n
+0000086879 00000 n
+0000091550 00000 n
+0000091678 00000 n
+0000096551 00000 n
+0000096679 00000 n
+0000100998 00000 n
+0000101126 00000 n
+0000105317 00000 n
+0000105445 00000 n
+0000109671 00000 n
+0000109799 00000 n
+0000114408 00000 n
+0000114536 00000 n
+0000119160 00000 n
+0000119288 00000 n
+0000124133 00000 n
+0000124261 00000 n
+0000129245 00000 n
+0000129373 00000 n
+0000134422 00000 n
+0000134550 00000 n
+0000139766 00000 n
+0000139894 00000 n
 trailer
-<< /Size 70 /Root 1 0 R >>
+<< /Size 72 /Root 1 0 R >>
 startxref
-139024
+140737
 %%EOF

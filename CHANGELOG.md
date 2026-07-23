@@ -13,6 +13,7 @@ The project uses release tags for immutable release points. Changes under **Unre
 - correlates existing tenant-scoped assets, software components and SBOM imports conservatively through explainable CPE/version evidence and reuses existing Product Security Vulnerability Findings where a canonical product binding exists
 - adds deterministic passive hygiene priority from CVSS, KEV, EPSS, asset criticality, freshness, VEX and documented controls without creating Security Observations, Incidents, Evidence or active actions
 - adds migration `0043_rust_continuous_vulnerability_intelligence`, granular view/review/global-sync permissions, minimal status/sync/hygiene APIs and the `/cves/` workflow
+- adds migration `0044_rust_vulnerability_hygiene_lifecycle` with tenant-scoped evaluation generations, complete-scope-only stale reconciliation, transactional finding re-evaluation and explicit incomplete-run status without overwriting manual triage, VEX, controls or risk acceptance
 - restricts feed access to fixed official HTTPS sources with DNS/SSRF, redirect, timeout, compression, payload, parser, retry and secret-handling controls; no SIEM/EDR/XDR, Wazuh, scanning, Agent command, remote execution or Hackback capability is introduced
 - hardens the Phase-1 review findings with transaction-time lease fencing, current NVD single-CVE parameters, KEV count/rollback validation, fair EPSS coverage, conservative handling of complex CPE contexts, scoped compensating controls, requester audit attribution and redacted global operational metadata for tenant roles
 

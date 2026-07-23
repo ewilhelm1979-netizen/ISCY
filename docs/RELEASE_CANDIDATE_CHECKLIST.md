@@ -19,9 +19,9 @@ Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
 - Nix: `nixos-26.05`, Nix-Rust `1.95.0`
 - Datenbank: PostgreSQL 16 bleibt Standard; PostgreSQL 18.4 ist
   kompatibilitaetsgeprueft
-- Migrationen: 43, fortlaufend `0001` bis `0043`
+- Migrationen: 44, fortlaufend `0001` bis `0044`
 - Visual Regression: 40 Baselines
-- Rust-Vollsuite auf dem aktuellen Entwicklungsstand: 353 Tests bestanden; der
+- Rust-Vollsuite auf dem aktuellen Entwicklungsstand: 365 Tests bestanden; der
   bestehende isolierte MinIO-Test bleibt im normalen Cargo-Lauf bewusst
   ignoriert und wird im separaten Object-Storage-Integrationsjob ausgefuehrt
 - Lizenz: `AGPL-3.0-only`
@@ -72,10 +72,10 @@ lueckenlos, eindeutig und aufsteigend sein.
 
 | Bereich | Status | Nachweis oder Einschränkung |
 | --- | --- | --- |
-| Rust/Axum Backend und Weboberfläche | implementiert und geprüft | Locked Build, Clippy und 353 Rust-/HTTP-Tests sind auf dem aktuellen Entwicklungsstand gruen. |
+| Rust/Axum Backend und Weboberfläche | implementiert und geprüft | Locked Build, Clippy und 365 Rust-/HTTP-Tests sind auf dem aktuellen Entwicklungsstand gruen. |
 | SQLite | geprüft mit dokumentierter Einschränkung | Bootstrap, Restart und Restore; kein Mehrinstanz-/HA-Pfad. |
 | PostgreSQL 16 | Candidate-Prüfung erforderlich | Standardpfad; Leerdatenbank, Bestand, Dump/Restore und Migrations-Race muessen im Candidate-Gate gruen sein. |
-| PostgreSQL 18.4 | Candidate-Prüfung erforderlich | Zusatzgate fuer frischen Bootstrap, Restart, 43 Migrationen und logischen 16-nach-18-Forward-Restore; kein Produktionsstandard. |
+| PostgreSQL 18.4 | Candidate-Prüfung erforderlich | Zusatzgate fuer frischen Bootstrap, Restart, 44 Migrationen und logischen 16-nach-18-Forward-Restore; kein Produktionsstandard. |
 | Lokale Evidence-Speicherung | geprüft mit dokumentierter Einschränkung | Authentifiziert und canonical-path-geprueft; nicht HA-faehig. |
 | S3-kompatibler Evidence Storage | Candidate-Prüfung erforderlich | MinIO-Lifecycle und HA-Cross-Instance-Pfad muessen gruen sein; keine produktiven Cloud-Credentials. |
 | Evidence Worker und Disposition | Candidate-Prüfung erforderlich | Atomare Claims, Legal Hold, Approval, Tombstone und Wiederanlauf werden im Gate geprueft. |

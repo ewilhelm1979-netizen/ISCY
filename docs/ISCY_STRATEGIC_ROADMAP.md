@@ -361,8 +361,12 @@ Umgesetzt:
   Assetkritikalitaet, Matchstatus, Datenalter, VEX und Controls
 - minimale Rollen- und Web-/API-Oberflaeche fuer Status, autorisierten Sync,
   passive Bewertung, Matchbasis, Provenance und Empfehlungen
-- SQLite-/PostgreSQL-Migrationspfad `0043` und negative Feed-, Rollen-,
-  Tenant-, Deduplizierungs-, Checkpoint- und Side-Effect-Tests
+- SQLite-/PostgreSQL-Migrationspfade `0043` und `0044`, tenantgebundene
+  Evaluationsgenerationen sowie negative Feed-, Rollen-, Tenant-,
+  Deduplizierungs-, Checkpoint-, Stale-/Rollback- und Side-Effect-Tests
+- Stale-Reconciliation ausschliesslich nach vollstaendig erfolgreichem Scope;
+  partielle oder begrenzte Laeufe bleiben sichtbar unvollstaendig und erzeugen
+  weder Entwarnung noch automatische VEX-Aussage
 
 Bewusste Grenze:
 

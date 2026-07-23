@@ -1901,7 +1901,7 @@ Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
 Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
 und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust
 1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem
-Bootstrap, 43 Migrationen, Restart, Migrationsrennen und einem logischen
+Bootstrap, 44 Migrationen, Restart, Migrationsrennen und einem logischen
 Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der
 PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder
 ein In-place-Upgrade noch ein automatisiertes `pg_upgrade` oder einen
@@ -1915,7 +1915,7 @@ Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-
 Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder
 internen Store-Details.
 
-Die RC-Metadatenpruefung bestaetigt 43 fortlaufende Migrationen, 40 visuelle
+Die RC-Metadatenpruefung bestaetigt 44 fortlaufende Migrationen, 40 visuelle
 Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen
 wertredigierten Sensitive-Data-Scan. `release/release-manifest.json` nutzt
 `git:HEAD` als reproduzierbaren Quellmarker; die lokale Artefakterzeugung loest
@@ -2010,6 +2010,27 @@ erklaerbare Match-, Datenalter-, Hygiene- und Prioritaetsfelder. Neue
 Permissions werden keiner Bestandsrolle automatisch zugewiesen. Der Pfad
 erzeugt keine Security Observation, keinen Incident, keine Evidence und keine
 aktive Reaktion.
+
+Migration `0044_rust_vulnerability_hygiene_lifecycle` ergaenzt dafuer
+tenantgebundene Evaluationslaeufe und Last-Seen-Generationen. Eine aktive
+Korrelation wird nur nach einem vollstaendig erfolgreichen Scope als `STALE`
+markiert, wenn sie nicht erneut beobachtet wurde. Das zugehoerige Finding
+bleibt bei einer anderen aktiven bestaetigten Korrelation `ACTIVE`, wird bei
+ausschliesslich unsicheren aktiven Kandidaten `REVIEW` und ohne aktive
+Korrelation `HISTORICAL`. Eine spaetere belastbare Beobachtung reaktiviert
+dieselben Datensaetze; historische Provenance bleibt erhalten.
+
+Query-/Kandidatenlimits, unvollstaendige Inventarquellen, Parser- oder
+Datenbankfehler und verlorene Leases kennzeichnen den Lauf als
+`INCOMPLETE`. Solche Laeufe duerfen keine Stale-Markierung oder Entwarnung aus
+blosser Nichtbeobachtung ableiten und ersetzen nicht den letzten
+vollstaendigen Evaluationszeitpunkt. `Nicht erneut beobachtet` bedeutet auch
+nach einem vollstaendigen Lauf nicht automatisch `nicht betroffen` und
+erzeugt keine VEX-Aussage. Manuelle Triage, Verantwortliche, Fristen, VEX,
+Risk Acceptance, Kommentare und Compensating Controls bleiben erhalten.
+`/cves/` und die Software-Hygiene-API zeigen Lifecycle, Datenalter und den
+sicher begrenzten Laufstatus, ohne interne Lease-, Actor- oder globale
+Checkpointdetails an Tenantrollen offenzulegen.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
