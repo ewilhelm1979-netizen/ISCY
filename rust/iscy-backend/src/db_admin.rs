@@ -280,7 +280,146 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_CONTINUOUS_VULNERABILITY_INTELLIGENCE_SCHEMA,
         postgres_sql: POSTGRES_CONTINUOUS_VULNERABILITY_INTELLIGENCE_SCHEMA,
     },
+    Migration {
+        version: "0044_rust_vulnerability_hygiene_lifecycle",
+        sqlite_sql: SQLITE_VULNERABILITY_HYGIENE_LIFECYCLE_SCHEMA,
+        postgres_sql: POSTGRES_VULNERABILITY_HYGIENE_LIFECYCLE_SCHEMA,
+    },
 ];
+
+const SQLITE_VULNERABILITY_HYGIENE_LIFECYCLE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS vulnerability_intelligence_hygiene_run (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    evaluator_id INTEGER NOT NULL,
+    lock_token varchar(64) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'RUNNING',
+    scope_complete bool NOT NULL DEFAULT 0,
+    incomplete_reasons_json TEXT NOT NULL DEFAULT '[]',
+    evaluated_cves INTEGER NOT NULL DEFAULT 0,
+    evaluated_inventory_items INTEGER NOT NULL DEFAULT 0,
+    observed_correlations INTEGER NOT NULL DEFAULT 0,
+    stale_correlations INTEGER NOT NULL DEFAULT 0,
+    reevaluated_findings INTEGER NOT NULL DEFAULT 0,
+    error_code varchar(64) NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL,
+    completed_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    CHECK(status IN ('RUNNING','SUCCEEDED','INCOMPLETE','FAILED')),
+    CHECK(evaluator_id > 0),
+    CHECK(length(lock_token) BETWEEN 1 AND 64),
+    CHECK(length(incomplete_reasons_json) <= 2048),
+    CHECK(evaluated_cves >= 0 AND evaluated_inventory_items >= 0),
+    CHECK(observed_correlations >= 0 AND stale_correlations >= 0 AND reevaluated_findings >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_hygiene_run_tenant_started
+    ON vulnerability_intelligence_hygiene_run(tenant_id, started_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_hygiene_run_tenant_status
+    ON vulnerability_intelligence_hygiene_run(tenant_id, status, id DESC);
+
+CREATE TABLE IF NOT EXISTS vulnerability_intelligence_hygiene_state (
+    tenant_id INTEGER PRIMARY KEY,
+    current_run_id INTEGER NULL,
+    last_complete_run_id INTEGER NULL,
+    last_complete_at TEXT NULL,
+    lock_token varchar(64) NOT NULL DEFAULT '',
+    lock_owner_id INTEGER NULL,
+    lock_acquired_at TEXT NULL,
+    lock_expires_at TEXT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, current_run_id)
+        REFERENCES vulnerability_intelligence_hygiene_run(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, last_complete_run_id)
+        REFERENCES vulnerability_intelligence_hygiene_run(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(length(lock_token) <= 64)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cve_correlation_hygiene_lifecycle
+    ON product_security_cvecorrelation(tenant_id, match_lifecycle_status, vulnerability_id, last_seen_hygiene_run_id);
+CREATE INDEX IF NOT EXISTS idx_product_security_vulnerability_hygiene_lifecycle
+    ON product_security_vulnerability(tenant_id, hygiene_lifecycle_status, last_complete_evaluated_at, updated_at);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_audit_hygiene_run
+    ON vulnerability_intelligence_audit_event(hygiene_run_id, created_at);
+"#;
+
+const POSTGRES_VULNERABILITY_HYGIENE_LIFECYCLE_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS vulnerability_intelligence_hygiene_run (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    evaluator_id BIGINT NOT NULL,
+    lock_token varchar(64) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'RUNNING',
+    scope_complete BOOLEAN NOT NULL DEFAULT FALSE,
+    incomplete_reasons_json TEXT NOT NULL DEFAULT '[]',
+    evaluated_cves BIGINT NOT NULL DEFAULT 0,
+    evaluated_inventory_items BIGINT NOT NULL DEFAULT 0,
+    observed_correlations BIGINT NOT NULL DEFAULT 0,
+    stale_correlations BIGINT NOT NULL DEFAULT 0,
+    reevaluated_findings BIGINT NOT NULL DEFAULT 0,
+    error_code varchar(64) NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL,
+    completed_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id, id),
+    CHECK(status IN ('RUNNING','SUCCEEDED','INCOMPLETE','FAILED')),
+    CHECK(evaluator_id > 0),
+    CHECK(length(lock_token) BETWEEN 1 AND 64),
+    CHECK(length(incomplete_reasons_json) <= 2048),
+    CHECK(evaluated_cves >= 0 AND evaluated_inventory_items >= 0),
+    CHECK(observed_correlations >= 0 AND stale_correlations >= 0 AND reevaluated_findings >= 0)
+);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_hygiene_run_tenant_started
+    ON vulnerability_intelligence_hygiene_run(tenant_id, started_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_hygiene_run_tenant_status
+    ON vulnerability_intelligence_hygiene_run(tenant_id, status, id DESC);
+
+CREATE TABLE IF NOT EXISTS vulnerability_intelligence_hygiene_state (
+    tenant_id BIGINT PRIMARY KEY REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    current_run_id BIGINT NULL,
+    last_complete_run_id BIGINT NULL,
+    last_complete_at TEXT NULL,
+    lock_token varchar(64) NOT NULL DEFAULT '',
+    lock_owner_id BIGINT NULL,
+    lock_acquired_at TEXT NULL,
+    lock_expires_at TEXT NULL,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    FOREIGN KEY (tenant_id, current_run_id)
+        REFERENCES vulnerability_intelligence_hygiene_run(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, last_complete_run_id)
+        REFERENCES vulnerability_intelligence_hygiene_run(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(length(lock_token) <= 64)
+);
+
+ALTER TABLE product_security_cvecorrelation
+    ADD COLUMN IF NOT EXISTS match_lifecycle_status varchar(16) NOT NULL DEFAULT 'ACTIVE';
+ALTER TABLE product_security_cvecorrelation
+    ADD COLUMN IF NOT EXISTS system_match_status varchar(16) NOT NULL DEFAULT 'UNKNOWN';
+ALTER TABLE product_security_cvecorrelation
+    ADD COLUMN IF NOT EXISTS last_seen_hygiene_run_id BIGINT NULL;
+ALTER TABLE product_security_cvecorrelation ADD COLUMN IF NOT EXISTS stale_at TEXT NULL;
+ALTER TABLE product_security_cvecorrelation
+    ADD COLUMN IF NOT EXISTS stale_reason varchar(128) NOT NULL DEFAULT '';
+
+ALTER TABLE product_security_vulnerability
+    ADD COLUMN IF NOT EXISTS hygiene_lifecycle_status varchar(16) NOT NULL DEFAULT 'ACTIVE';
+ALTER TABLE product_security_vulnerability
+    ADD COLUMN IF NOT EXISTS last_hygiene_run_id BIGINT NULL;
+ALTER TABLE product_security_vulnerability
+    ADD COLUMN IF NOT EXISTS last_complete_evaluated_at TEXT NULL;
+
+ALTER TABLE vulnerability_intelligence_audit_event
+    ADD COLUMN IF NOT EXISTS hygiene_run_id BIGINT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_cve_correlation_hygiene_lifecycle
+    ON product_security_cvecorrelation(tenant_id, match_lifecycle_status, vulnerability_id, last_seen_hygiene_run_id);
+CREATE INDEX IF NOT EXISTS idx_product_security_vulnerability_hygiene_lifecycle
+    ON product_security_vulnerability(tenant_id, hygiene_lifecycle_status, last_complete_evaluated_at, updated_at);
+CREATE INDEX IF NOT EXISTS idx_vulnerability_audit_hygiene_run
+    ON vulnerability_intelligence_audit_event(hygiene_run_id, created_at);
+"#;
 
 const SQLITE_CONTINUOUS_VULNERABILITY_INTELLIGENCE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS vulnerability_intelligence_feed_state (
@@ -5984,11 +6123,50 @@ pub async fn run_sqlite_migrations(pool: &SqlitePool) -> anyhow::Result<Vec<&'st
                     .await?;
             }
         }
+        if migration.version == "0044_rust_vulnerability_hygiene_lifecycle" {
+            for (column, definition) in [
+                (
+                    "match_lifecycle_status",
+                    "varchar(16) NOT NULL DEFAULT 'ACTIVE' CHECK(match_lifecycle_status IN ('ACTIVE','STALE'))",
+                ),
+                (
+                    "system_match_status",
+                    "varchar(16) NOT NULL DEFAULT 'UNKNOWN' CHECK(system_match_status IN ('UNKNOWN','CONFIRMED','REVIEW'))",
+                ),
+                ("last_seen_hygiene_run_id", "INTEGER NULL"),
+                ("stale_at", "TEXT NULL"),
+                ("stale_reason", "varchar(128) NOT NULL DEFAULT ''"),
+            ] {
+                ensure_sqlite_column(pool, "product_security_cvecorrelation", column, definition)
+                    .await?;
+            }
+            for (column, definition) in [
+                (
+                    "hygiene_lifecycle_status",
+                    "varchar(16) NOT NULL DEFAULT 'ACTIVE' CHECK(hygiene_lifecycle_status IN ('ACTIVE','REVIEW','HISTORICAL'))",
+                ),
+                ("last_hygiene_run_id", "INTEGER NULL"),
+                ("last_complete_evaluated_at", "TEXT NULL"),
+            ] {
+                ensure_sqlite_column(pool, "product_security_vulnerability", column, definition)
+                    .await?;
+            }
+            ensure_sqlite_column(
+                pool,
+                "vulnerability_intelligence_audit_event",
+                "hygiene_run_id",
+                "INTEGER NULL",
+            )
+            .await?;
+        }
         execute_sqlite_script(pool, migration.sqlite_sql)
             .await
             .with_context(|| format!("SQLite-Migration {} fehlgeschlagen", migration.version))?;
         if migration.version == "0043_rust_continuous_vulnerability_intelligence" {
             ensure_sqlite_correlation_triggers(pool).await?;
+        }
+        if migration.version == "0044_rust_vulnerability_hygiene_lifecycle" {
+            ensure_sqlite_hygiene_lifecycle_triggers(pool).await?;
         }
         sqlx::query("INSERT INTO iscy_schema_migrations (version, applied_at) VALUES (?, ?)")
             .bind(migration.version)
@@ -6120,6 +6298,46 @@ async fn run_postgres_migrations_locked(pool: &PgPool) -> anyhow::Result<Vec<&'s
                     "product_security_vulnerability",
                     "fk_vulnerability_component_tenant",
                     "FOREIGN KEY (tenant_id, component_id) REFERENCES product_security_component(tenant_id, id) ON DELETE RESTRICT NOT VALID",
+                ),
+            ] {
+                ensure_postgres_constraint(pool, table, name, definition).await?;
+            }
+        }
+        if migration.version == "0044_rust_vulnerability_hygiene_lifecycle" {
+            for (table, name, definition) in [
+                (
+                    "product_security_cvecorrelation",
+                    "fk_cve_correlation_hygiene_run_tenant",
+                    "FOREIGN KEY (tenant_id, last_seen_hygiene_run_id) REFERENCES vulnerability_intelligence_hygiene_run(tenant_id, id) ON DELETE RESTRICT NOT VALID",
+                ),
+                (
+                    "product_security_vulnerability",
+                    "fk_vulnerability_hygiene_run_tenant",
+                    "FOREIGN KEY (tenant_id, last_hygiene_run_id) REFERENCES vulnerability_intelligence_hygiene_run(tenant_id, id) ON DELETE RESTRICT NOT VALID",
+                ),
+                (
+                    "vulnerability_intelligence_audit_event",
+                    "fk_vulnerability_audit_hygiene_run_tenant",
+                    "FOREIGN KEY (tenant_id, hygiene_run_id) REFERENCES vulnerability_intelligence_hygiene_run(tenant_id, id) ON DELETE RESTRICT NOT VALID",
+                ),
+            ] {
+                ensure_postgres_constraint(pool, table, name, definition).await?;
+            }
+            for (table, name, definition) in [
+                (
+                    "product_security_cvecorrelation",
+                    "ck_cve_correlation_match_lifecycle_status",
+                    "CHECK (match_lifecycle_status IN ('ACTIVE','STALE')) NOT VALID",
+                ),
+                (
+                    "product_security_cvecorrelation",
+                    "ck_cve_correlation_system_match_status",
+                    "CHECK (system_match_status IN ('UNKNOWN','CONFIRMED','REVIEW')) NOT VALID",
+                ),
+                (
+                    "product_security_vulnerability",
+                    "ck_vulnerability_hygiene_lifecycle_status",
+                    "CHECK (hygiene_lifecycle_status IN ('ACTIVE','REVIEW','HISTORICAL')) NOT VALID",
                 ),
             ] {
                 ensure_postgres_constraint(pool, table, name, definition).await?;
@@ -6352,6 +6570,99 @@ async fn ensure_sqlite_correlation_triggers(pool: &SqlitePool) -> anyhow::Result
             .execute(pool)
             .await
             .context("SQLite-CVE-Korrelations-Trigger konnte nicht angelegt werden")?;
+    }
+    Ok(())
+}
+
+async fn ensure_sqlite_hygiene_lifecycle_triggers(pool: &SqlitePool) -> anyhow::Result<()> {
+    for statement in [
+        r#"
+        CREATE TRIGGER IF NOT EXISTS trg_hygiene_correlation_run_insert
+        BEFORE INSERT ON product_security_cvecorrelation
+        WHEN NEW.last_seen_hygiene_run_id IS NOT NULL
+        BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+                SELECT 1 FROM vulnerability_intelligence_hygiene_run
+                WHERE tenant_id=NEW.tenant_id AND id=NEW.last_seen_hygiene_run_id
+            ) THEN RAISE(ABORT, 'invalid_tenant_hygiene_run_reference') END;
+        END
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS trg_hygiene_correlation_run_update
+        BEFORE UPDATE OF tenant_id,last_seen_hygiene_run_id ON product_security_cvecorrelation
+        WHEN NEW.last_seen_hygiene_run_id IS NOT NULL
+        BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+                SELECT 1 FROM vulnerability_intelligence_hygiene_run
+                WHERE tenant_id=NEW.tenant_id AND id=NEW.last_seen_hygiene_run_id
+            ) THEN RAISE(ABORT, 'invalid_tenant_hygiene_run_reference') END;
+        END
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS trg_hygiene_finding_run_insert
+        BEFORE INSERT ON product_security_vulnerability
+        WHEN NEW.last_hygiene_run_id IS NOT NULL
+        BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+                SELECT 1 FROM vulnerability_intelligence_hygiene_run
+                WHERE tenant_id=NEW.tenant_id AND id=NEW.last_hygiene_run_id
+            ) THEN RAISE(ABORT, 'invalid_tenant_hygiene_run_reference') END;
+        END
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS trg_hygiene_finding_run_update
+        BEFORE UPDATE OF tenant_id,last_hygiene_run_id ON product_security_vulnerability
+        WHEN NEW.last_hygiene_run_id IS NOT NULL
+        BEGIN
+            SELECT CASE WHEN NOT EXISTS (
+                SELECT 1 FROM vulnerability_intelligence_hygiene_run
+                WHERE tenant_id=NEW.tenant_id AND id=NEW.last_hygiene_run_id
+            ) THEN RAISE(ABORT, 'invalid_tenant_hygiene_run_reference') END;
+        END
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS trg_hygiene_audit_run_insert
+        BEFORE INSERT ON vulnerability_intelligence_audit_event
+        WHEN NEW.hygiene_run_id IS NOT NULL
+        BEGIN
+            SELECT CASE WHEN NEW.tenant_id IS NULL OR NOT EXISTS (
+                SELECT 1 FROM vulnerability_intelligence_hygiene_run
+                WHERE tenant_id=NEW.tenant_id AND id=NEW.hygiene_run_id
+            ) THEN RAISE(ABORT, 'invalid_tenant_hygiene_run_reference') END;
+        END
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS trg_hygiene_audit_run_update
+        BEFORE UPDATE OF tenant_id,hygiene_run_id ON vulnerability_intelligence_audit_event
+        WHEN NEW.hygiene_run_id IS NOT NULL
+        BEGIN
+            SELECT CASE WHEN NEW.tenant_id IS NULL OR NOT EXISTS (
+                SELECT 1 FROM vulnerability_intelligence_hygiene_run
+                WHERE tenant_id=NEW.tenant_id AND id=NEW.hygiene_run_id
+            ) THEN RAISE(ABORT, 'invalid_tenant_hygiene_run_reference') END;
+        END
+        "#,
+        r#"
+        CREATE TRIGGER IF NOT EXISTS trg_hygiene_run_reference_delete
+        BEFORE DELETE ON vulnerability_intelligence_hygiene_run
+        BEGIN
+            SELECT CASE WHEN EXISTS (
+                SELECT 1 FROM product_security_cvecorrelation
+                WHERE tenant_id=OLD.tenant_id AND last_seen_hygiene_run_id=OLD.id
+            ) OR EXISTS (
+                SELECT 1 FROM product_security_vulnerability
+                WHERE tenant_id=OLD.tenant_id AND last_hygiene_run_id=OLD.id
+            ) OR EXISTS (
+                SELECT 1 FROM vulnerability_intelligence_audit_event
+                WHERE tenant_id=OLD.tenant_id AND hygiene_run_id=OLD.id
+            ) THEN RAISE(ABORT, 'hygiene_run_still_referenced') END;
+        END
+        "#,
+    ] {
+        sqlx::query(statement)
+            .execute(pool)
+            .await
+            .context("SQLite-Hygiene-Lifecycle-Trigger konnte nicht angelegt werden")?;
     }
     Ok(())
 }
@@ -10285,17 +10596,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sqlite_0043_is_restartable_tenant_safe_and_preserves_vulnerability_data() {
+    async fn sqlite_0043_and_0044_are_restartable_tenant_safe_and_preserve_vulnerability_data() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .unwrap();
         let applied = run_sqlite_migrations(&pool).await.unwrap();
-        assert_eq!(applied.len(), 43);
+        assert_eq!(applied.len(), 44);
         assert_eq!(
             applied.last().copied(),
-            Some("0043_rust_continuous_vulnerability_intelligence")
+            Some("0044_rust_vulnerability_hygiene_lifecycle")
         );
         sqlx::query("PRAGMA foreign_keys=ON")
             .execute(&pool)
@@ -10336,6 +10647,13 @@ mod tests {
             "trg_product_hygiene_reference_delete",
             "trg_component_hygiene_reference_delete",
             "trg_import_component_correlation_reference_delete",
+            "trg_hygiene_correlation_run_insert",
+            "trg_hygiene_correlation_run_update",
+            "trg_hygiene_finding_run_insert",
+            "trg_hygiene_finding_run_update",
+            "trg_hygiene_audit_run_insert",
+            "trg_hygiene_audit_run_update",
+            "trg_hygiene_run_reference_delete",
         ] {
             sqlx::query(&format!("DROP TRIGGER {trigger}"))
                 .execute(&pool)
@@ -10343,7 +10661,9 @@ mod tests {
                 .unwrap();
         }
         for table in [
+            "vulnerability_intelligence_hygiene_state",
             "vulnerability_intelligence_audit_event",
+            "vulnerability_intelligence_hygiene_run",
             "vulnerability_intelligence_feed_run",
             "vulnerability_intelligence_feed_state",
         ] {
@@ -10354,11 +10674,16 @@ mod tests {
         }
         sqlx::query("DELETE FROM iscy_schema_migrations WHERE version='0043_rust_continuous_vulnerability_intelligence'")
             .execute(&pool).await.unwrap();
+        sqlx::query("DELETE FROM iscy_schema_migrations WHERE version='0044_rust_vulnerability_hygiene_lifecycle'")
+            .execute(&pool).await.unwrap();
 
         let reapplied = run_sqlite_migrations(&pool).await.unwrap();
         assert_eq!(
             reapplied,
-            vec!["0043_rust_continuous_vulnerability_intelligence"]
+            vec![
+                "0043_rust_continuous_vulnerability_intelligence",
+                "0044_rust_vulnerability_hygiene_lifecycle"
+            ]
         );
         assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
         let epss_rotation_column: i64 = sqlx::query_scalar(
@@ -10384,6 +10709,35 @@ mod tests {
                 "Existing correlation".to_string()
             )
         );
+        let preserved_lifecycle: (String, String, Option<i64>, String, Option<i64>) =
+            sqlx::query_as(
+                "SELECT c.match_lifecycle_status,c.system_match_status,c.last_seen_hygiene_run_id,v.hygiene_lifecycle_status,v.last_hygiene_run_id FROM product_security_cvecorrelation c JOIN product_security_vulnerability v ON v.tenant_id=c.tenant_id AND v.id=14301 WHERE c.tenant_id=143 AND c.id=14301",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            preserved_lifecycle,
+            (
+                "ACTIVE".to_string(),
+                "UNKNOWN".to_string(),
+                None,
+                "ACTIVE".to_string(),
+                None
+            )
+        );
+        assert!(sqlx::query(
+            "UPDATE product_security_cvecorrelation SET match_lifecycle_status='INVALID' WHERE tenant_id=143 AND id=14301",
+        )
+        .execute(&pool)
+        .await
+        .is_err());
+        assert!(sqlx::query(
+            "UPDATE product_security_vulnerability SET hygiene_lifecycle_status='INVALID' WHERE tenant_id=143 AND id=14301",
+        )
+        .execute(&pool)
+        .await
+        .is_err());
         let permission_counts: (i64, i64) = sqlx::query_as(
             "SELECT (SELECT COUNT(*) FROM auth_permission WHERE codename IN ('sync_vulnerability_intelligence','view_vulnerability_intelligence','review_software_hygiene')),(SELECT COUNT(*) FROM auth_group_permissions gp JOIN auth_permission p ON p.id=gp.permission_id WHERE p.codename IN ('sync_vulnerability_intelligence','view_vulnerability_intelligence','review_software_hygiene'))",
         )
@@ -10392,12 +10746,12 @@ mod tests {
         .unwrap();
         assert_eq!(permission_counts, (3, 0));
         let trigger_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN ('trg_cve_correlation_tenant_insert','trg_cve_correlation_tenant_update','trg_hygiene_vulnerability_tenant_insert','trg_hygiene_vulnerability_tenant_update','trg_cve_correlation_vulnerability_delete','trg_hygiene_correlation_delete','trg_cve_record_reference_delete','trg_asset_correlation_reference_delete','trg_product_hygiene_reference_delete','trg_component_hygiene_reference_delete','trg_import_component_correlation_reference_delete')",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN ('trg_cve_correlation_tenant_insert','trg_cve_correlation_tenant_update','trg_hygiene_vulnerability_tenant_insert','trg_hygiene_vulnerability_tenant_update','trg_cve_correlation_vulnerability_delete','trg_hygiene_correlation_delete','trg_cve_record_reference_delete','trg_asset_correlation_reference_delete','trg_product_hygiene_reference_delete','trg_component_hygiene_reference_delete','trg_import_component_correlation_reference_delete','trg_hygiene_correlation_run_insert','trg_hygiene_correlation_run_update','trg_hygiene_finding_run_insert','trg_hygiene_finding_run_update','trg_hygiene_audit_run_insert','trg_hygiene_audit_run_update','trg_hygiene_run_reference_delete')",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(trigger_count, 11);
+        assert_eq!(trigger_count, 18);
 
         for delete in [
             "DELETE FROM vulnerability_intelligence_cverecord WHERE id=14301",

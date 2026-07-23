@@ -38339,6 +38339,17 @@ async fn web_cves(
             )
         }
     };
+    let hygiene_run_status = match store.software_hygiene_status(context.tenant_id).await {
+        Ok(status) => status,
+        Err(_) => {
+            return web_error_page(
+                "Vulnerability Intelligence",
+                "/cves/",
+                &context,
+                "Software-Hygiene-Laufstatus konnte nicht sicher gelesen werden.",
+            )
+        }
+    };
     let form_options = if can_write {
         match store.assessment_form_options(context.tenant_id).await {
             Ok(options) => Some(options),
@@ -38427,16 +38438,23 @@ async fn web_cves(
         .map(|finding| {
             let kev = if finding.in_kev_catalog { "KEV" } else { "-" };
             format!(
-                r#"<tr><td><strong>{}</strong><div class="muted">{}</div></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                r#"<tr><td><strong>{}</strong><div class="muted">{}</div></td><td>{}</td><td class="hygiene-detail">{}</td><td>{}</td><td>{}</td><td class="hygiene-detail">{}</td><td class="hygiene-detail">{}</td><td class="hygiene-detail">{}</td><td>{}</td><td>{}</td></tr>"#,
                 html_escape(&finding.cve),
                 html_escape(&finding.title),
                 html_escape(&finding.product_name),
                 html_escape(finding.component_name.as_deref().unwrap_or("-")),
+                html_escape(&finding.lifecycle_status),
                 html_escape(&finding.priority),
                 html_escape(kev),
                 html_escape(&finding.match_type),
                 html_escape(&finding.observed_version),
                 html_escape(&finding.recommendation),
+                html_escape(
+                    finding
+                        .last_complete_evaluated_at
+                        .as_deref()
+                        .unwrap_or("-")
+                ),
             )
         })
         .collect::<Vec<_>>()
@@ -38457,6 +38475,22 @@ async fn web_cves(
     } else {
         String::new()
     };
+    let hygiene_run_badge = match hygiene_run_status.latest_status.as_str() {
+        "SUCCEEDED" if hygiene_run_status.latest_scope_complete => web_badge("vollstaendig", "ok"),
+        "INCOMPLETE" | "FAILED" => web_badge("unvollstaendig - keine Entwarnung", "warn"),
+        "RUNNING" => web_badge("laufend", "info"),
+        _ => web_badge("noch nicht bewertet", "muted"),
+    };
+    let hygiene_run_context = format!(
+        r#"<div class="muted">Letzter Lauf: {} | Letzte vollstaendige Bewertung: {}</div>"#,
+        html_escape(&hygiene_run_status.latest_status),
+        html_escape(
+            hygiene_run_status
+                .last_complete_evaluation_at
+                .as_deref()
+                .unwrap_or("-")
+        )
+    );
     let body = format!(
         r#"
         <section class="hero compact"><h1>Vulnerability Intelligence</h1><p>Globaler CVE-Feed plus tenantgebundene Assessments direkt aus Rust. Tenant {} ist aktuell aktiv.</p></section>
@@ -38485,9 +38519,9 @@ async fn web_cves(
             </table>
           </article>
           <article class="panel wide">
-            <div class="section-heading"><h2>Software-Hygiene</h2>{}</div>
-            <table>
-              <thead><tr><th>Finding</th><th>Produkt</th><th>Komponente</th><th>Prioritaet</th><th>KEV</th><th>Match</th><th>Version</th><th>Empfehlung</th></tr></thead>
+            <div class="section-heading"><h2>Software-Hygiene</h2><div>{}{}</div></div>{}
+            <table class="hygiene-table">
+              <thead><tr><th>Finding</th><th>Produkt</th><th class="hygiene-detail">Komponente</th><th>Lifecycle</th><th>Prioritaet</th><th class="hygiene-detail">KEV</th><th class="hygiene-detail">Match</th><th class="hygiene-detail">Version</th><th>Empfehlung</th><th>Letzte vollstaendige Bewertung</th></tr></thead>
               <tbody>{}</tbody>
             </table>
           </article>
@@ -38547,12 +38581,11 @@ async fn web_cves(
         } else {
             feed_rows
         },
+        hygiene_run_badge,
         hygiene_action,
+        hygiene_run_context,
         if hygiene_rows.is_empty() {
-            web_empty_row(
-                8,
-                "Noch keine bestaetigten Software-Hygiene-Findings vorhanden.",
-            )
+            web_empty_row(10, "Noch keine Software-Hygiene-Findings vorhanden.")
         } else {
             hygiene_rows
         },
@@ -40277,6 +40310,7 @@ fn web_page(
     button {{ justify-self:start; border:0; border-radius:6px; background:var(--accent); color:#fff; padding:10px 14px; font-weight:700; cursor:pointer; }}
     button:hover {{ background:#0b5f58; }}
     a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {{ outline:3px solid #99f6e4; outline-offset:2px; }}
+    @media (max-width: 1100px) {{ .hygiene-table .hygiene-detail {{ display:none; }} }}
     @media (max-width: 720px) {{ header {{ grid-template-columns:1fr; align-items:start; padding:12px 16px; }} nav {{ width:100%; flex-wrap:nowrap; overflow-x:auto; padding-bottom:2px; }} h1 {{ font-size:32px; }} .context {{ justify-content:flex-start; }} .zt-focus {{ grid-template-columns:1fr; }} main {{ padding:22px 14px 36px; }} }}
   </style>
 </head>
@@ -44515,17 +44549,25 @@ async fn software_hygiene_findings(
         .software_hygiene_findings(context.tenant_id, query.limit.unwrap_or(100))
         .await
     {
-        Ok(findings) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "accepted": true,
-                "api_version": "v1",
-                "tenant_id": context.tenant_id,
-                "findings": findings,
-                "disclaimer": "Passive Bewertung: Findings sind weder Incident noch Angriffsnachweis oder automatisch erzeugte Evidence."
-            })),
-        )
-            .into_response(),
+        Ok(findings) => match store.software_hygiene_status(context.tenant_id).await {
+            Ok(evaluation_status) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "accepted": true,
+                    "api_version": "v1",
+                    "tenant_id": context.tenant_id,
+                    "findings": findings,
+                    "evaluation_status": evaluation_status,
+                    "disclaimer": "Passive Bewertung: Findings sind weder Incident noch Angriffsnachweis oder automatisch erzeugte Evidence. Ein unvollstaendiger Lauf ist keine Entwarnung."
+                })),
+            )
+                .into_response(),
+            Err(_) => api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "Software-Hygiene-Laufstatus konnte nicht gelesen werden.",
+            ),
+        },
         Err(_) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "database_error",
@@ -44568,6 +44610,16 @@ async fn software_hygiene_evaluate(State(state): State<AppState>, headers: Heade
             "software_hygiene_input_invalid",
             "Software-Hygiene-Bewertung konnte mit diesem Kontext nicht gestartet werden.",
         ),
+        Err(error)
+            if error.to_string().starts_with("conflict:")
+                || error.to_string().starts_with("hygiene_lease_lost:") =>
+        {
+            api_error_response(
+                StatusCode::CONFLICT,
+                "software_hygiene_evaluation_conflict",
+                "Software-Hygiene-Bewertung konnte wegen eines parallelen oder abgeloesten Laufs nicht abgeschlossen werden.",
+            )
+        }
         Err(_) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "database_error",

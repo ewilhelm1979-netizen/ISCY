@@ -215,10 +215,11 @@ async fn software_hygiene_list_ignores_manipulated_tenant_query() {
         r#"
         INSERT INTO product_security_vulnerability (
             tenant_id,product_id,title,cve,severity,status,origin_key,
-            hygiene_status,priority,provenance_json,recommendation
+            hygiene_status,hygiene_lifecycle_status,priority,provenance_json,recommendation,
+            last_complete_evaluated_at
         ) VALUES
-            (501,50101,'Own Finding','CVE-2026-5001','HIGH','OPEN','own-finding','ACTION_REQUIRED','HIGH','{}','Review own finding.'),
-            (502,50201,'Foreign Finding','CVE-2026-5002','CRITICAL','OPEN','foreign-finding','ACTION_REQUIRED','CRITICAL','{}','Foreign tenant data.')
+            (501,50101,'Own Finding','CVE-2026-5001','HIGH','OPEN','own-finding','NEEDS_REVIEW','HISTORICAL','HIGH','{}','Review own finding.','2026-07-23T10:00:00Z'),
+            (502,50201,'Foreign Finding','CVE-2026-5002','CRITICAL','OPEN','foreign-finding','ACTION_REQUIRED','ACTIVE','CRITICAL','{}','Foreign tenant data.','2026-07-23T11:00:00Z')
         "#,
     )
     .execute(&pool)
@@ -244,7 +245,15 @@ async fn software_hygiene_list_ignores_manipulated_tenant_query() {
     assert_eq!(payload["tenant_id"], 501);
     assert_eq!(payload["findings"].as_array().unwrap().len(), 1);
     assert_eq!(payload["findings"][0]["title"], "Own Finding");
+    assert_eq!(payload["findings"][0]["lifecycle_status"], "HISTORICAL");
+    assert_eq!(payload["findings"][0]["match_lifecycle_status"], "STALE");
+    assert_eq!(payload["evaluation_status"]["latest_status"], "NEVER_RUN");
+    assert!(payload["disclaimer"]
+        .as_str()
+        .unwrap()
+        .contains("unvollstaendiger Lauf ist keine Entwarnung"));
     assert!(!String::from_utf8_lossy(&body).contains("Foreign Finding"));
+    assert!(!String::from_utf8_lossy(&body).contains("2026-07-23T11:00:00Z"));
 }
 
 #[tokio::test]
@@ -1127,8 +1136,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0043_rust_continuous_vulnerability_intelligence"));
-    assert!(html.contains("43/43 angewendet"));
+    assert!(html.contains("0044_rust_vulnerability_hygiene_lifecycle"));
+    assert!(html.contains("44/44 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -16668,6 +16677,8 @@ async fn rust_web_cves_renders_feed_from_database() {
     assert!(html.contains("Kritisch"));
     assert!(html.contains("Sensor Gateway"));
     assert!(html.contains("Rust auth bypass vulnerability"));
+    assert!(html.contains("Letzte vollstaendige Bewertung"));
+    assert!(html.contains("noch nicht bewertet"));
     assert!(!html.contains("Rust-Webroute aktiv."));
 }
 
@@ -17178,7 +17189,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0040_rust_agent_rollout_governance",
             "0041_rust_agent_rollout_manifest_handoff",
             "0042_rust_native_threat_intelligence_observations",
-            "0043_rust_continuous_vulnerability_intelligence"
+            "0043_rust_continuous_vulnerability_intelligence",
+            "0044_rust_vulnerability_hygiene_lifecycle"
         ]
     );
     assert!(
@@ -20372,6 +20384,9 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             eol_eos_status varchar(16) NOT NULL DEFAULT 'UNKNOWN',
             eol_eos_source varchar(255) NOT NULL DEFAULT '',
             last_evaluated_at TEXT NULL,
+            hygiene_lifecycle_status varchar(16) NOT NULL DEFAULT 'ACTIVE',
+            last_hygiene_run_id INTEGER NULL,
+            last_complete_evaluated_at TEXT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -20579,6 +20594,11 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             recommendation TEXT NOT NULL DEFAULT '',
             hygiene_status varchar(24) NOT NULL DEFAULT 'NEEDS_REVIEW',
             eol_eos_status varchar(16) NOT NULL DEFAULT 'UNKNOWN',
+            match_lifecycle_status varchar(16) NOT NULL DEFAULT 'ACTIVE',
+            system_match_status varchar(16) NOT NULL DEFAULT 'UNKNOWN',
+            last_seen_hygiene_run_id INTEGER NULL,
+            stale_at TEXT NULL,
+            stale_reason varchar(128) NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(tenant_id, cve, match_type, match_value)
@@ -24585,9 +24605,38 @@ async fn create_cverecord_table(pool: &SqlitePool) {
         r#"
         CREATE TABLE vulnerability_intelligence_audit_event (
             id INTEGER PRIMARY KEY AUTOINCREMENT,tenant_id INTEGER NULL,run_id INTEGER NULL,
+            hygiene_run_id INTEGER NULL,
             object_type TEXT NOT NULL,object_key TEXT NOT NULL,event_type TEXT NOT NULL,
             actor_id INTEGER NULL,summary TEXT NOT NULL,detail_json TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE vulnerability_intelligence_hygiene_run (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,tenant_id INTEGER NOT NULL,evaluator_id INTEGER NOT NULL,
+            lock_token TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'RUNNING',scope_complete bool NOT NULL DEFAULT 0,
+            incomplete_reasons_json TEXT NOT NULL DEFAULT '[]',evaluated_cves INTEGER NOT NULL DEFAULT 0,
+            evaluated_inventory_items INTEGER NOT NULL DEFAULT 0,observed_correlations INTEGER NOT NULL DEFAULT 0,
+            stale_correlations INTEGER NOT NULL DEFAULT 0,reevaluated_findings INTEGER NOT NULL DEFAULT 0,
+            error_code TEXT NOT NULL DEFAULT '',started_at TEXT NOT NULL,completed_at TEXT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE vulnerability_intelligence_hygiene_state (
+            tenant_id INTEGER PRIMARY KEY,current_run_id INTEGER NULL,last_complete_run_id INTEGER NULL,
+            last_complete_at TEXT NULL,lock_token TEXT NOT NULL DEFAULT '',lock_owner_id INTEGER NULL,
+            lock_acquired_at TEXT NULL,lock_expires_at TEXT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         "#,
     )
