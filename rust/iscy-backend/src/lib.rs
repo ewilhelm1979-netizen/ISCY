@@ -67,6 +67,7 @@ pub mod requirement_store;
 pub mod risk_store;
 pub mod roadmap_store;
 pub mod security_store;
+pub mod software_policy_store;
 pub mod supplier_product_security_store;
 pub mod supplier_store;
 pub mod tenant_store;
@@ -122,6 +123,17 @@ use requirement_store::RequirementStore;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
 use security_store::SecurityStore;
+use software_policy_store::{
+    SoftwareExceptionCreateRequest, SoftwareExceptionTransitionRequest,
+    SoftwarePolicyCreateRequest, SoftwarePolicyError, SoftwarePolicyErrorKind,
+    SoftwarePolicyEvaluationRequest, SoftwarePolicyStore, SoftwarePolicyTarget,
+    SoftwarePolicyTransitionRequest, SoftwarePolicyUpdateRequest,
+    PERMISSION_ACTIVATE_SOFTWARE_POLICY, PERMISSION_ADD_SOFTWARE_POLICY,
+    PERMISSION_CHANGE_SOFTWARE_POLICY, PERMISSION_EVALUATE_SOFTWARE_POLICY,
+    PERMISSION_REQUEST_SOFTWARE_EXCEPTION, PERMISSION_REVIEW_SOFTWARE_EXCEPTION,
+    PERMISSION_REVOKE_SOFTWARE_EXCEPTION, PERMISSION_VIEW_SOFTWARE_POLICY,
+    PERMISSION_VIEW_SOFTWARE_POLICY_AUDIT,
+};
 use supplier_product_security_store::{
     SupplierProductSecurityErrorKind, SupplierProductSecurityStore,
 };
@@ -167,6 +179,7 @@ pub struct AppState {
     pub risk_store: Option<RiskStore>,
     pub roadmap_store: Option<RoadmapStore>,
     pub security_store: Option<SecurityStore>,
+    pub software_policy_store: Option<SoftwarePolicyStore>,
     pub supplier_product_security_store: Option<SupplierProductSecurityStore>,
     pub supplier_store: Option<SupplierStore>,
     pub tenant_store: Option<TenantStore>,
@@ -238,6 +251,7 @@ impl AppState {
             risk_store: None,
             roadmap_store: None,
             security_store: None,
+            software_policy_store: None,
             supplier_product_security_store: None,
             supplier_store: None,
             tenant_store: None,
@@ -279,6 +293,7 @@ impl AppState {
             risk_store: None,
             roadmap_store: None,
             security_store: None,
+            software_policy_store: None,
             supplier_product_security_store: None,
             supplier_store: None,
             tenant_store,
@@ -482,6 +497,14 @@ impl AppState {
         self.threat_intelligence_store = threat_intelligence_store;
         self
     }
+
+    pub fn with_software_policy_store(
+        mut self,
+        software_policy_store: Option<SoftwarePolicyStore>,
+    ) -> Self {
+        self.software_policy_store = software_policy_store;
+        self
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -531,6 +554,25 @@ struct ThreatIntelligenceApiResponse<T> {
 #[derive(Debug, Default, Deserialize)]
 struct ThreatIntelligenceListQuery {
     limit: Option<i64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SoftwarePolicyListQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SoftwarePolicyEffectiveQuery {
+    target_type: String,
+    target_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct SoftwarePolicyApiResponse<T> {
+    accepted: bool,
+    api_version: &'static str,
+    data: T,
 }
 
 #[derive(Debug, Serialize)]
@@ -2359,6 +2401,65 @@ struct WebObservationIndicatorLinkTriageForm {
     triage_status: String,
     #[serde(default)]
     rationale: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSoftwarePolicyCreateForm {
+    name: String,
+    #[serde(default)]
+    description: String,
+    decision: String,
+    target: String,
+    rationale: String,
+    #[serde(default)]
+    owner_id: Option<i64>,
+    #[serde(default)]
+    valid_from: String,
+    #[serde(default)]
+    valid_until: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSoftwarePolicyUpdateForm {
+    expected_revision: i64,
+    name: String,
+    #[serde(default)]
+    description: String,
+    decision: String,
+    rationale: String,
+    #[serde(default)]
+    owner_id: Option<i64>,
+    #[serde(default)]
+    valid_from: String,
+    #[serde(default)]
+    valid_until: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSoftwarePolicyTransitionForm {
+    expected_revision: i64,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSoftwarePolicyEvaluationForm {
+    target: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSoftwareExceptionCreateForm {
+    policy_id: i64,
+    justification: String,
+    #[serde(default)]
+    compensating_controls: String,
+    requested_valid_from: String,
+    expires_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WebSoftwareExceptionTransitionForm {
+    expected_revision: i64,
+    reason: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4245,6 +4346,70 @@ fn vulnerability_intelligence_permission_error(
     ))
 }
 
+fn has_software_policy_permission(context: &AuthenticatedTenantContext, permission: &str) -> bool {
+    if context.is_superuser || context.is_staff || context.has_role("ADMIN") {
+        return true;
+    }
+    if context.has_permission(permission) {
+        return true;
+    }
+    if context.has_role("SECURITY_ADMIN") || context.has_role("COMPLIANCE_MANAGER") {
+        return matches!(
+            permission,
+            PERMISSION_VIEW_SOFTWARE_POLICY
+                | PERMISSION_ADD_SOFTWARE_POLICY
+                | PERMISSION_CHANGE_SOFTWARE_POLICY
+                | PERMISSION_ACTIVATE_SOFTWARE_POLICY
+                | PERMISSION_EVALUATE_SOFTWARE_POLICY
+                | PERMISSION_VIEW_SOFTWARE_POLICY_AUDIT
+                | PERMISSION_REQUEST_SOFTWARE_EXCEPTION
+                | PERMISSION_REVIEW_SOFTWARE_EXCEPTION
+                | PERMISSION_REVOKE_SOFTWARE_EXCEPTION
+        );
+    }
+    if context.has_role("SOC_ANALYST") {
+        return matches!(
+            permission,
+            PERMISSION_VIEW_SOFTWARE_POLICY
+                | PERMISSION_EVALUATE_SOFTWARE_POLICY
+                | PERMISSION_REQUEST_SOFTWARE_EXCEPTION
+        );
+    }
+    context.has_role("AUDITOR")
+        && matches!(
+            permission,
+            PERMISSION_VIEW_SOFTWARE_POLICY | PERMISSION_VIEW_SOFTWARE_POLICY_AUDIT
+        )
+}
+
+fn software_policy_permission_error(
+    context: &AuthenticatedTenantContext,
+    permission: &str,
+) -> Option<Response> {
+    if has_software_policy_permission(context, permission) {
+        return None;
+    }
+    Some(api_error_response(
+        StatusCode::FORBIDDEN,
+        "insufficient_software_policy_permission",
+        "Fuer diese Software-Policy-Operation fehlt die Berechtigung.",
+    ))
+}
+
+fn software_policy_error_response(error: SoftwarePolicyError) -> Response {
+    let status = match error.kind() {
+        SoftwarePolicyErrorKind::InvalidInput => StatusCode::BAD_REQUEST,
+        SoftwarePolicyErrorKind::NotFound => StatusCode::NOT_FOUND,
+        SoftwarePolicyErrorKind::Conflict => StatusCode::CONFLICT,
+        SoftwarePolicyErrorKind::Database => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    api_error_response(status, error.code(), error.message())
+}
+
+fn software_policy_store_unavailable() -> Response {
+    api_database_not_configured("Rust-Software-Policy-Store ist nicht konfiguriert.")
+}
+
 fn vulnerability_intelligence_error_response(error: VulnerabilityIntelligenceError) -> Response {
     let status = if error.is_conflict() {
         StatusCode::CONFLICT
@@ -4652,6 +4817,555 @@ async fn security_observation_audit_list(
         })
         .into_response(),
         Err(error) => threat_intelligence_error_response(error),
+    }
+}
+
+async fn software_policies_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SoftwarePolicyListQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_VIEW_SOFTWARE_POLICY)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    match store
+        .list_policies(
+            context.tenant_id,
+            query.limit.unwrap_or(100),
+            query.offset.unwrap_or(0),
+        )
+        .await
+    {
+        Ok(policies) => Json(SoftwarePolicyApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: policies,
+        })
+        .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_policy_detail(
+    Path(policy_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_VIEW_SOFTWARE_POLICY)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    match store.get_policy(context.tenant_id, policy_id).await {
+        Ok(policy) => Json(SoftwarePolicyApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: policy,
+        })
+        .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_policy_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SoftwarePolicyCreateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_ADD_SOFTWARE_POLICY)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    match store
+        .create_policy(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(result) => (
+            if result.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(SoftwarePolicyApiResponse {
+                accepted: true,
+                api_version: "v1",
+                data: result,
+            }),
+        )
+            .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_policy_update(
+    Path(policy_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SoftwarePolicyUpdateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_CHANGE_SOFTWARE_POLICY)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    match store
+        .update_policy(context.tenant_id, context.user_id, policy_id, payload)
+        .await
+    {
+        Ok(policy) => Json(SoftwarePolicyApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: policy,
+        })
+        .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_policy_activate(
+    Path(policy_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SoftwarePolicyTransitionRequest>,
+) -> Response {
+    software_policy_transition(
+        state,
+        headers,
+        policy_id,
+        payload,
+        SoftwarePolicyAction::Activate,
+    )
+    .await
+}
+
+async fn software_policy_archive(
+    Path(policy_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SoftwarePolicyTransitionRequest>,
+) -> Response {
+    software_policy_transition(
+        state,
+        headers,
+        policy_id,
+        payload,
+        SoftwarePolicyAction::Archive,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum SoftwarePolicyAction {
+    Activate,
+    Archive,
+}
+
+async fn software_policy_transition(
+    state: AppState,
+    headers: HeaderMap,
+    policy_id: i64,
+    payload: SoftwarePolicyTransitionRequest,
+    action: SoftwarePolicyAction,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_ACTIVATE_SOFTWARE_POLICY)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    let result = match action {
+        SoftwarePolicyAction::Activate => {
+            store
+                .activate_policy(context.tenant_id, context.user_id, policy_id, payload)
+                .await
+        }
+        SoftwarePolicyAction::Archive => {
+            store
+                .archive_policy(context.tenant_id, context.user_id, policy_id, payload)
+                .await
+        }
+    };
+    match result {
+        Ok(policy) => Json(SoftwarePolicyApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: policy,
+        })
+        .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_policy_effective(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SoftwarePolicyEffectiveQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_VIEW_SOFTWARE_POLICY)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    match store
+        .get_evaluation(
+            context.tenant_id,
+            SoftwarePolicyTarget {
+                target_type: query.target_type,
+                target_id: query.target_id,
+            },
+        )
+        .await
+    {
+        Ok(evaluation) => Json(SoftwarePolicyApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: evaluation,
+        })
+        .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_policy_evaluate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SoftwarePolicyEvaluationRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_EVALUATE_SOFTWARE_POLICY)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    match store
+        .evaluate(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(evaluation) => Json(SoftwarePolicyApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: evaluation,
+        })
+        .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_policy_target_options(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SoftwarePolicyListQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_VIEW_SOFTWARE_POLICY)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    match store
+        .list_target_options(context.tenant_id, query.limit.unwrap_or(100))
+        .await
+    {
+        Ok(targets) => Json(SoftwarePolicyApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: targets,
+        })
+        .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_exceptions_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SoftwarePolicyListQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_VIEW_SOFTWARE_POLICY)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    match store
+        .list_exceptions(
+            context.tenant_id,
+            query.limit.unwrap_or(100),
+            query.offset.unwrap_or(0),
+        )
+        .await
+    {
+        Ok(exceptions) => Json(SoftwarePolicyApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: exceptions,
+        })
+        .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_exception_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SoftwareExceptionCreateRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_REQUEST_SOFTWARE_EXCEPTION)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    match store
+        .create_exception(context.tenant_id, context.user_id, payload)
+        .await
+    {
+        Ok(result) => (
+            if result.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(SoftwarePolicyApiResponse {
+                accepted: true,
+                api_version: "v1",
+                data: result,
+            }),
+        )
+            .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_exception_submit(
+    Path(exception_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SoftwareExceptionTransitionRequest>,
+) -> Response {
+    software_exception_transition(
+        state,
+        headers,
+        exception_id,
+        payload,
+        SoftwareExceptionAction::Submit,
+    )
+    .await
+}
+
+async fn software_exception_approve(
+    Path(exception_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SoftwareExceptionTransitionRequest>,
+) -> Response {
+    software_exception_transition(
+        state,
+        headers,
+        exception_id,
+        payload,
+        SoftwareExceptionAction::Approve,
+    )
+    .await
+}
+
+async fn software_exception_reject(
+    Path(exception_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SoftwareExceptionTransitionRequest>,
+) -> Response {
+    software_exception_transition(
+        state,
+        headers,
+        exception_id,
+        payload,
+        SoftwareExceptionAction::Reject,
+    )
+    .await
+}
+
+async fn software_exception_revoke(
+    Path(exception_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SoftwareExceptionTransitionRequest>,
+) -> Response {
+    software_exception_transition(
+        state,
+        headers,
+        exception_id,
+        payload,
+        SoftwareExceptionAction::Revoke,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum SoftwareExceptionAction {
+    Submit,
+    Approve,
+    Reject,
+    Revoke,
+}
+
+async fn software_exception_transition(
+    state: AppState,
+    headers: HeaderMap,
+    exception_id: i64,
+    payload: SoftwareExceptionTransitionRequest,
+    action: SoftwareExceptionAction,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    let permission = match action {
+        SoftwareExceptionAction::Submit => PERMISSION_REQUEST_SOFTWARE_EXCEPTION,
+        SoftwareExceptionAction::Approve | SoftwareExceptionAction::Reject => {
+            PERMISSION_REVIEW_SOFTWARE_EXCEPTION
+        }
+        SoftwareExceptionAction::Revoke => PERMISSION_REVOKE_SOFTWARE_EXCEPTION,
+    };
+    if let Some(response) = software_policy_permission_error(&context, permission) {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    let result = match action {
+        SoftwareExceptionAction::Submit => {
+            store
+                .submit_exception(context.tenant_id, context.user_id, exception_id, payload)
+                .await
+        }
+        SoftwareExceptionAction::Approve => {
+            store
+                .approve_exception(context.tenant_id, context.user_id, exception_id, payload)
+                .await
+        }
+        SoftwareExceptionAction::Reject => {
+            store
+                .reject_exception(context.tenant_id, context.user_id, exception_id, payload)
+                .await
+        }
+        SoftwareExceptionAction::Revoke => {
+            store
+                .revoke_exception(context.tenant_id, context.user_id, exception_id, payload)
+                .await
+        }
+    };
+    match result {
+        Ok(exception) => Json(SoftwarePolicyApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: exception,
+        })
+        .into_response(),
+        Err(error) => software_policy_error_response(error),
+    }
+}
+
+async fn software_policy_audit_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SoftwarePolicyListQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return api_context_error(error),
+    };
+    if let Some(response) =
+        software_policy_permission_error(&context, PERMISSION_VIEW_SOFTWARE_POLICY_AUDIT)
+    {
+        return response;
+    }
+    let Some(store) = state.software_policy_store else {
+        return software_policy_store_unavailable();
+    };
+    match store
+        .list_audit_events(
+            context.tenant_id,
+            query.limit.unwrap_or(100),
+            query.offset.unwrap_or(0),
+        )
+        .await
+    {
+        Ok(events) => Json(SoftwarePolicyApiResponse {
+            accepted: true,
+            api_version: "v1",
+            data: events,
+        })
+        .into_response(),
+        Err(error) => software_policy_error_response(error),
     }
 }
 
@@ -22085,6 +22799,902 @@ fn web_context_from_auth(context: &AuthenticatedTenantContext) -> WebContext {
         user_id: context.user_id,
         user_email: context.user_email.clone(),
     }
+}
+
+fn parse_software_policy_target(value: &str) -> Result<SoftwarePolicyTarget, SoftwarePolicyError> {
+    let Some((target_type, target_id)) = value.trim().split_once(':') else {
+        return Err(SoftwarePolicyError::invalid(
+            "invalid_software_policy_target",
+            "Das Software-Policy-Ziel ist ungueltig.",
+        ));
+    };
+    let target_id = target_id.parse::<i64>().map_err(|_| {
+        SoftwarePolicyError::invalid(
+            "invalid_software_policy_target",
+            "Das Software-Policy-Ziel ist ungueltig.",
+        )
+    })?;
+    Ok(SoftwarePolicyTarget {
+        target_type: target_type.to_string(),
+        target_id,
+    })
+}
+
+fn optional_web_value(value: String) -> Option<String> {
+    let value = value.trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+fn web_software_policy_error(context: &WebContext, error: SoftwarePolicyError) -> Response {
+    let status = match error.kind() {
+        SoftwarePolicyErrorKind::InvalidInput => StatusCode::BAD_REQUEST,
+        SoftwarePolicyErrorKind::NotFound => StatusCode::NOT_FOUND,
+        SoftwarePolicyErrorKind::Conflict => StatusCode::CONFLICT,
+        SoftwarePolicyErrorKind::Database => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    let message = if error.kind() == SoftwarePolicyErrorKind::Database {
+        "Software-Policy-Daten konnten intern nicht verarbeitet werden."
+    } else {
+        error.message()
+    };
+    (
+        status,
+        web_error_page("Software Approval", "/software-policies/", context, message),
+    )
+        .into_response()
+}
+
+fn software_policy_badge(value: &str) -> String {
+    let class_name = match value {
+        "APPROVED" | "ACTIVE" => "ok",
+        "EXCEPTION_ACTIVE" | "RESTRICTED" | "PENDING_REVIEW" | "DRAFT" => "warn",
+        "PROHIBITED" | "REVIEW_REQUIRED" | "INDETERMINATE" => "danger",
+        _ => "muted-badge",
+    };
+    web_badge(value, class_name)
+}
+
+fn software_policy_target_option_tags(
+    options: &[software_policy_store::SoftwarePolicyTargetOption],
+) -> String {
+    if options.is_empty() {
+        return "<option value=\"\">Keine tenantgebundenen Ziele vorhanden</option>".to_string();
+    }
+    options
+        .iter()
+        .map(|option| {
+            format!(
+                r#"<option value="{}:{}">{} · {}</option>"#,
+                html_escape(&option.target.target_type),
+                option.target.target_id,
+                html_escape(&option.target.target_type),
+                html_escape(&option.label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+async fn web_software_policies(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Software Approval", "/software-policies/").into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_software_policy_permission(&auth_context, PERMISSION_VIEW_SOFTWARE_POLICY) {
+        return (
+            StatusCode::FORBIDDEN,
+            web_error_page(
+                "Software Approval",
+                "/software-policies/",
+                &context,
+                "Fuer diese Ansicht fehlt die Software-Policy-Berechtigung.",
+            ),
+        )
+            .into_response();
+    }
+    let Some(store) = state.software_policy_store else {
+        return web_store_missing(
+            "Software Approval",
+            "/software-policies/",
+            &context,
+            "Software Policy",
+        )
+        .into_response();
+    };
+    let policies = match store.list_policies(context.tenant_id, 100, 0).await {
+        Ok(items) => items,
+        Err(error) => return web_software_policy_error(&context, error),
+    };
+    let exceptions = match store.list_exceptions(context.tenant_id, 100, 0).await {
+        Ok(items) => items,
+        Err(error) => return web_software_policy_error(&context, error),
+    };
+    let evaluations = match store.list_evaluations(context.tenant_id, 100, 0).await {
+        Ok(items) => items,
+        Err(error) => return web_software_policy_error(&context, error),
+    };
+    let targets = match store.list_target_options(context.tenant_id, 100).await {
+        Ok(items) => items,
+        Err(error) => return web_software_policy_error(&context, error),
+    };
+    let can_audit =
+        has_software_policy_permission(&auth_context, PERMISSION_VIEW_SOFTWARE_POLICY_AUDIT);
+    let audit = if can_audit {
+        match store.list_audit_events(context.tenant_id, 100, 0).await {
+            Ok(items) => items,
+            Err(error) => return web_software_policy_error(&context, error),
+        }
+    } else {
+        Vec::new()
+    };
+    let can_add = has_software_policy_permission(&auth_context, PERMISSION_ADD_SOFTWARE_POLICY);
+    let can_change =
+        has_software_policy_permission(&auth_context, PERMISSION_CHANGE_SOFTWARE_POLICY);
+    let can_activate =
+        has_software_policy_permission(&auth_context, PERMISSION_ACTIVATE_SOFTWARE_POLICY);
+    let can_evaluate =
+        has_software_policy_permission(&auth_context, PERMISSION_EVALUATE_SOFTWARE_POLICY);
+    let can_request =
+        has_software_policy_permission(&auth_context, PERMISSION_REQUEST_SOFTWARE_EXCEPTION);
+    let can_review =
+        has_software_policy_permission(&auth_context, PERMISSION_REVIEW_SOFTWARE_EXCEPTION);
+    let can_revoke =
+        has_software_policy_permission(&auth_context, PERMISSION_REVOKE_SOFTWARE_EXCEPTION);
+
+    let target_options = software_policy_target_option_tags(&targets);
+    let create_panel = if can_add {
+        format!(
+            r#"<section class="panel wide">
+              <h2>Policy-Entwurf</h2>
+              <form method="post" action="{}">
+                <div class="form-grid">
+                  <label>Name<input name="name" maxlength="255" required></label>
+                  <label>Entscheidung<select name="decision"><option>APPROVED</option><option>RESTRICTED</option><option>PROHIBITED</option></select></label>
+                  <label>Exaktes Ziel<select name="target" required>{}</select></label>
+                  <label>Gueltig ab, UTC RFC 3339<input name="valid_from" placeholder="2026-08-01T00:00:00Z"></label>
+                  <label>Gueltig bis, UTC RFC 3339<input name="valid_until" placeholder="2026-12-31T23:59:59Z"></label>
+                </div>
+                <label>Beschreibung<textarea name="description" rows="2" maxlength="4000"></textarea></label>
+                <label>Fachliche Begruendung<textarea name="rationale" rows="3" maxlength="4000" required></textarea></label>
+                <button type="submit">Entwurf speichern</button>
+              </form>
+            </section>"#,
+            html_escape(&web_path_with_context(
+                "/software-policies/create",
+                Some(&context)
+            )),
+            target_options,
+        )
+    } else {
+        String::new()
+    };
+
+    let policy_rows = if policies.is_empty() {
+        web_empty_row(
+            7,
+            "Keine Policy vorhanden. Das bedeutet UNMANAGED, nicht APPROVED.",
+        )
+    } else {
+        policies
+            .iter()
+            .map(|policy| {
+                let validity = format!(
+                    "{} bis {}",
+                    policy.valid_from.as_deref().unwrap_or("sofort"),
+                    policy.valid_until.as_deref().unwrap_or("ohne Policy-Ende")
+                );
+                let mut actions = String::new();
+                if can_change && policy.status == "DRAFT" {
+                    actions.push_str(&format!(
+                        r#"<details><summary>Bearbeiten</summary>
+                        <form method="post" action="{}">
+                          <input type="hidden" name="expected_revision" value="{}">
+                          <input type="hidden" name="owner_id" value="{}">
+                          <label>Name<input name="name" value="{}" maxlength="255" required></label>
+                          <label>Entscheidung<select name="decision">{}{}{} </select></label>
+                          <label>Beschreibung<textarea name="description" maxlength="4000">{}</textarea></label>
+                          <label>Begruendung<textarea name="rationale" maxlength="4000" required>{}</textarea></label>
+                          <label>Gueltig ab UTC<input name="valid_from" value="{}"></label>
+                          <label>Gueltig bis UTC<input name="valid_until" value="{}"></label>
+                          <button type="submit">Aenderung speichern</button>
+                        </form></details>"#,
+                        html_escape(&web_path_with_context(
+                            &format!("/software-policies/{}/update", policy.id),
+                            Some(&context)
+                        )),
+                        policy.revision,
+                        policy.owner_id.map(|id| id.to_string()).unwrap_or_default(),
+                        html_escape(&policy.name),
+                        option_tag("APPROVED", "APPROVED", &policy.decision),
+                        option_tag("RESTRICTED", "RESTRICTED", &policy.decision),
+                        option_tag("PROHIBITED", "PROHIBITED", &policy.decision),
+                        html_escape(&policy.description),
+                        html_escape(&policy.rationale),
+                        html_escape(policy.valid_from.as_deref().unwrap_or("")),
+                        html_escape(policy.valid_until.as_deref().unwrap_or("")),
+                    ));
+                }
+                if can_activate && policy.status == "DRAFT" {
+                    actions.push_str(&software_policy_transition_form(
+                        &context,
+                        policy.id,
+                        policy.revision,
+                        "activate",
+                        "Aktivieren",
+                    ));
+                }
+                if can_activate && policy.status != "ARCHIVED" {
+                    actions.push_str(&software_policy_transition_form(
+                        &context,
+                        policy.id,
+                        policy.revision,
+                        "archive",
+                        "Archivieren",
+                    ));
+                }
+                format!(
+                    r#"<tr><td><strong>{}</strong><br><small>{}</small></td><td>{}</td><td>{}<br>{}</td><td>{}</td><td>{}</td><td>Revision {}</td><td>{}</td></tr>"#,
+                    html_escape(&policy.name),
+                    html_escape(&policy.description),
+                    software_policy_badge(&policy.decision),
+                    html_escape(&policy.target.target_type),
+                    html_escape(&policy.target_label),
+                    software_policy_badge(&policy.status),
+                    html_escape(&validity),
+                    policy.revision,
+                    actions,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    let evaluation_rows = if evaluations.is_empty() {
+        web_empty_row(
+            6,
+            "Noch keine belastbare Bewertung. Ziele bleiben UNMANAGED / NOT_EVALUATED.",
+        )
+    } else {
+        evaluations
+            .iter()
+            .map(|evaluation| {
+                format!(
+                    r#"<tr><td>{}<br><small>{}</small></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                    html_escape(&evaluation.target_label),
+                    html_escape(&evaluation.target.target_type),
+                    software_policy_badge(&evaluation.effective_decision),
+                    software_policy_badge(&evaluation.completeness_status),
+                    html_escape(&evaluation.decision_path),
+                    html_escape(if evaluation.evaluated_at.is_empty() {
+                        "Noch nicht bewertet"
+                    } else {
+                        &evaluation.evaluated_at
+                    }),
+                    html_escape(if evaluation.data_fresh_at.is_empty() {
+                        "Nicht verfuegbar"
+                    } else {
+                        &evaluation.data_fresh_at
+                    }),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let evaluation_form = if can_evaluate {
+        format!(
+            r#"<form method="post" action="{}"><label>Exaktes Ziel<select name="target" required>{}</select></label><button type="submit">Passiv neu bewerten</button></form>"#,
+            html_escape(&web_path_with_context(
+                "/software-policies/evaluate",
+                Some(&context)
+            )),
+            software_policy_target_option_tags(&targets),
+        )
+    } else {
+        String::new()
+    };
+
+    let eligible_policies = policies
+        .iter()
+        .filter(|policy| {
+            policy.status != "ARCHIVED"
+                && matches!(policy.decision.as_str(), "RESTRICTED" | "PROHIBITED")
+        })
+        .map(|policy| {
+            format!(
+                r#"<option value="{}">{} · {} · {}</option>"#,
+                policy.id,
+                html_escape(&policy.decision),
+                html_escape(&policy.name),
+                html_escape(&policy.target_label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let exception_form = if can_request && !eligible_policies.is_empty() {
+        format!(
+            r#"<section class="panel wide"><h2>Befristete Ausnahme beantragen</h2>
+            <form method="post" action="{}">
+              <label>Restriktive Policy<select name="policy_id">{}</select></label>
+              <label>Begruendung<textarea name="justification" rows="3" maxlength="4000" required></textarea></label>
+              <label>Kompensierende Massnahmen<textarea name="compensating_controls" rows="2" maxlength="4000"></textarea></label>
+              <div class="form-grid">
+                <label>Beginn, UTC RFC 3339<input name="requested_valid_from" placeholder="2026-08-01T00:00:00Z" required></label>
+                <label>Zwingender Ablauf, UTC RFC 3339<input name="expires_at" placeholder="2026-08-31T23:59:59Z" required></label>
+              </div>
+              <button type="submit">Ausnahme als Entwurf speichern</button>
+            </form></section>"#,
+            html_escape(&web_path_with_context(
+                "/software-policies/exceptions/create",
+                Some(&context)
+            )),
+            eligible_policies,
+        )
+    } else {
+        String::new()
+    };
+    let exception_rows =
+        software_exception_rows(&exceptions, &context, can_request, can_review, can_revoke);
+    let audit_panel = if can_audit {
+        let rows = if audit.is_empty() {
+            web_empty_row(7, "Noch keine Software-Policy-Auditereignisse.")
+        } else {
+            audit
+                .iter()
+                .map(|event| {
+                    format!(
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{} → {}</td><td>{}</td><td>Revision {}</td></tr>"#,
+                        html_escape(&event.created_at),
+                        html_escape(&event.event_type),
+                        html_escape(&event.object_type),
+                        html_escape(&event.actor_display),
+                        html_escape(&event.previous_state),
+                        html_escape(&event.new_state),
+                        html_escape(&event.reason),
+                        event.revision,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("")
+        };
+        format!(
+            r#"<section class="panel wide"><h2>Audit und Provenance</h2><div class="table-wrap"><table><thead><tr><th>Zeit</th><th>Ereignis</th><th>Objekt</th><th>Actor</th><th>Zustand</th><th>Grund</th><th>Revision</th></tr></thead><tbody>{rows}</tbody></table></div></section>"#
+        )
+    } else {
+        String::new()
+    };
+
+    let body = format!(
+        r#"<section class="hero compact"><p class="eyebrow">Continuous Software Hygiene · Phase 2</p><h1>Software Approval &amp; Exceptions</h1><p>Passive, tenantgebundene Governance. Keine Policy bedeutet nicht freigegeben; eine Ausnahme bleibt befristet und ist weder VEX noch Risk Acceptance.</p></section>
+        <section class="panel wide"><h2>Zuletzt gespeicherte effektive Entscheidungen</h2><p>Die aktuelle Gueltigkeit wird beim Abruf eines konkreten Ziels oder bei einer passiven Neubewertung gegen die Serverzeit geprueft.</p>{evaluation_form}<div class="table-wrap"><table><thead><tr><th>Ziel</th><th>Entscheidung</th><th>Vollstaendigkeit</th><th>Entscheidungsweg</th><th>Bewertet</th><th>Datenstand</th></tr></thead><tbody>{evaluation_rows}</tbody></table></div></section>
+        {create_panel}
+        <section class="panel wide"><h2>Policies</h2><div class="table-wrap"><table><thead><tr><th>Policy</th><th>Entscheidung</th><th>Ziel</th><th>Status</th><th>Gueltigkeit</th><th>Revision</th><th>Aktionen</th></tr></thead><tbody>{policy_rows}</tbody></table></div></section>
+        {exception_form}
+        <section class="panel wide"><h2>Ausnahmen</h2><div class="table-wrap"><table><thead><tr><th>Policy / Ziel</th><th>Status</th><th>Antrag</th><th>Pruefung</th><th>Zeitraum</th><th>Massnahmen</th><th>Aktionen</th></tr></thead><tbody>{exception_rows}</tbody></table></div></section>
+        {audit_panel}"#
+    );
+    web_page(
+        "Software Approval",
+        "/software-policies/",
+        Some(&context),
+        &body,
+    )
+    .into_response()
+}
+
+fn software_policy_transition_form(
+    context: &WebContext,
+    policy_id: i64,
+    revision: i64,
+    action: &str,
+    label: &str,
+) -> String {
+    format!(
+        r#"<form class="inline-form" method="post" action="{}"><input type="hidden" name="expected_revision" value="{}"><input name="reason" maxlength="1000" placeholder="Begruendung" required><button type="submit">{}</button></form>"#,
+        html_escape(&web_path_with_context(
+            &format!("/software-policies/{policy_id}/{action}"),
+            Some(context)
+        )),
+        revision,
+        html_escape(label),
+    )
+}
+
+fn software_exception_rows(
+    exceptions: &[software_policy_store::SoftwareExceptionSummary],
+    context: &WebContext,
+    can_request: bool,
+    can_review: bool,
+    can_revoke: bool,
+) -> String {
+    if exceptions.is_empty() {
+        return web_empty_row(7, "Keine Ausnahmen vorhanden.");
+    }
+    exceptions
+        .iter()
+        .map(|exception| {
+            let mut actions = String::new();
+            if can_request
+                && exception.status == "DRAFT"
+                && exception.applicant_id == context.user_id
+            {
+                actions.push_str(&software_exception_transition_form(
+                    context,
+                    exception.id,
+                    exception.revision,
+                    "submit",
+                    "Einreichen",
+                ));
+            }
+            if can_review
+                && exception.status == "PENDING_REVIEW"
+                && exception.applicant_id != context.user_id
+            {
+                actions.push_str(&software_exception_transition_form(
+                    context,
+                    exception.id,
+                    exception.revision,
+                    "approve",
+                    "Genehmigen",
+                ));
+                actions.push_str(&software_exception_transition_form(
+                    context,
+                    exception.id,
+                    exception.revision,
+                    "reject",
+                    "Ablehnen",
+                ));
+            }
+            if can_revoke && exception.status == "APPROVED" {
+                actions.push_str(&software_exception_transition_form(
+                    context,
+                    exception.id,
+                    exception.revision,
+                    "revoke",
+                    "Widerrufen",
+                ));
+            }
+            format!(
+                r#"<tr><td><strong>{}</strong><br>{} · {}</td><td>{}</td><td>{}<br>{}</td><td>{}<br>{}</td><td>{} bis {}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&exception.policy_name),
+                html_escape(&exception.target.target_type),
+                html_escape(&exception.target_label),
+                software_policy_badge(&exception.status),
+                html_escape(&exception.applicant_display),
+                html_escape(&exception.justification),
+                html_escape(exception.reviewer_display.as_deref().unwrap_or("Noch offen")),
+                html_escape(if exception.decision_reason.is_empty() {
+                    "-"
+                } else {
+                    &exception.decision_reason
+                }),
+                html_escape(&exception.requested_valid_from),
+                html_escape(&exception.expires_at),
+                html_escape(if exception.compensating_controls.is_empty() {
+                    "Keine dokumentiert"
+                } else {
+                    &exception.compensating_controls
+                }),
+                actions,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn software_exception_transition_form(
+    context: &WebContext,
+    exception_id: i64,
+    revision: i64,
+    action: &str,
+    label: &str,
+) -> String {
+    format!(
+        r#"<form class="inline-form" method="post" action="{}"><input type="hidden" name="expected_revision" value="{}"><input name="reason" maxlength="1000" placeholder="Begruendung" required><button type="submit">{}</button></form>"#,
+        html_escape(&web_path_with_context(
+            &format!("/software-policies/exceptions/{exception_id}/{action}"),
+            Some(context)
+        )),
+        revision,
+        html_escape(label),
+    )
+}
+
+async fn web_software_policy_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSoftwarePolicyCreateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Software Approval", "/software-policies/").into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_software_policy_permission(&auth_context, PERMISSION_ADD_SOFTWARE_POLICY) {
+        return web_software_policy_forbidden(&context);
+    }
+    let target = match parse_software_policy_target(&form.target) {
+        Ok(target) => target,
+        Err(error) => return web_software_policy_error(&context, error),
+    };
+    let Some(store) = state.software_policy_store else {
+        return web_store_missing(
+            "Software Approval",
+            "/software-policies/",
+            &context,
+            "Software Policy",
+        )
+        .into_response();
+    };
+    match store
+        .create_policy(
+            context.tenant_id,
+            context.user_id,
+            SoftwarePolicyCreateRequest {
+                name: form.name,
+                description: optional_web_value(form.description),
+                decision: form.decision,
+                target,
+                rationale: form.rationale,
+                owner_id: form.owner_id.or(Some(context.user_id)),
+                valid_from: optional_web_value(form.valid_from),
+                valid_until: optional_web_value(form.valid_until),
+            },
+        )
+        .await
+    {
+        Ok(_) => Redirect::to(&web_path_with_context(
+            "/software-policies/",
+            Some(&context),
+        ))
+        .into_response(),
+        Err(error) => web_software_policy_error(&context, error),
+    }
+}
+
+async fn web_software_policy_update(
+    Path(policy_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSoftwarePolicyUpdateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Software Approval", "/software-policies/").into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_software_policy_permission(&auth_context, PERMISSION_CHANGE_SOFTWARE_POLICY) {
+        return web_software_policy_forbidden(&context);
+    }
+    let Some(store) = state.software_policy_store else {
+        return web_store_missing(
+            "Software Approval",
+            "/software-policies/",
+            &context,
+            "Software Policy",
+        )
+        .into_response();
+    };
+    match store
+        .update_policy(
+            context.tenant_id,
+            context.user_id,
+            policy_id,
+            SoftwarePolicyUpdateRequest {
+                expected_revision: form.expected_revision,
+                name: form.name,
+                description: optional_web_value(form.description),
+                decision: form.decision,
+                rationale: form.rationale,
+                owner_id: form.owner_id,
+                valid_from: optional_web_value(form.valid_from),
+                valid_until: optional_web_value(form.valid_until),
+            },
+        )
+        .await
+    {
+        Ok(_) => web_software_policy_redirect(&context),
+        Err(error) => web_software_policy_error(&context, error),
+    }
+}
+
+async fn web_software_policy_activate(
+    Path(policy_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSoftwarePolicyTransitionForm>,
+) -> Response {
+    web_software_policy_transition_submit(state, headers, policy_id, form, true).await
+}
+
+async fn web_software_policy_archive(
+    Path(policy_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSoftwarePolicyTransitionForm>,
+) -> Response {
+    web_software_policy_transition_submit(state, headers, policy_id, form, false).await
+}
+
+async fn web_software_policy_transition_submit(
+    state: AppState,
+    headers: HeaderMap,
+    policy_id: i64,
+    form: WebSoftwarePolicyTransitionForm,
+    activate: bool,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Software Approval", "/software-policies/").into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_software_policy_permission(&auth_context, PERMISSION_ACTIVATE_SOFTWARE_POLICY) {
+        return web_software_policy_forbidden(&context);
+    }
+    let Some(store) = state.software_policy_store else {
+        return web_store_missing(
+            "Software Approval",
+            "/software-policies/",
+            &context,
+            "Software Policy",
+        )
+        .into_response();
+    };
+    let request = SoftwarePolicyTransitionRequest {
+        expected_revision: form.expected_revision,
+        reason: form.reason,
+    };
+    let result = if activate {
+        store
+            .activate_policy(context.tenant_id, context.user_id, policy_id, request)
+            .await
+    } else {
+        store
+            .archive_policy(context.tenant_id, context.user_id, policy_id, request)
+            .await
+    };
+    match result {
+        Ok(_) => web_software_policy_redirect(&context),
+        Err(error) => web_software_policy_error(&context, error),
+    }
+}
+
+async fn web_software_policy_evaluate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSoftwarePolicyEvaluationForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Software Approval", "/software-policies/").into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_software_policy_permission(&auth_context, PERMISSION_EVALUATE_SOFTWARE_POLICY) {
+        return web_software_policy_forbidden(&context);
+    }
+    let target = match parse_software_policy_target(&form.target) {
+        Ok(target) => target,
+        Err(error) => return web_software_policy_error(&context, error),
+    };
+    let Some(store) = state.software_policy_store else {
+        return web_store_missing(
+            "Software Approval",
+            "/software-policies/",
+            &context,
+            "Software Policy",
+        )
+        .into_response();
+    };
+    match store
+        .evaluate(
+            context.tenant_id,
+            context.user_id,
+            SoftwarePolicyEvaluationRequest { target },
+        )
+        .await
+    {
+        Ok(_) => web_software_policy_redirect(&context),
+        Err(error) => web_software_policy_error(&context, error),
+    }
+}
+
+async fn web_software_exception_create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSoftwareExceptionCreateForm>,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Software Approval", "/software-policies/").into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    if !has_software_policy_permission(&auth_context, PERMISSION_REQUEST_SOFTWARE_EXCEPTION) {
+        return web_software_policy_forbidden(&context);
+    }
+    let Some(store) = state.software_policy_store else {
+        return web_store_missing(
+            "Software Approval",
+            "/software-policies/",
+            &context,
+            "Software Policy",
+        )
+        .into_response();
+    };
+    match store
+        .create_exception(
+            context.tenant_id,
+            context.user_id,
+            SoftwareExceptionCreateRequest {
+                policy_id: form.policy_id,
+                justification: form.justification,
+                compensating_controls: optional_web_value(form.compensating_controls),
+                requested_valid_from: form.requested_valid_from,
+                expires_at: form.expires_at,
+            },
+        )
+        .await
+    {
+        Ok(_) => web_software_policy_redirect(&context),
+        Err(error) => web_software_policy_error(&context, error),
+    }
+}
+
+async fn web_software_exception_submit(
+    Path(exception_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSoftwareExceptionTransitionForm>,
+) -> Response {
+    web_software_exception_transition_submit(
+        state,
+        headers,
+        exception_id,
+        form,
+        SoftwareExceptionAction::Submit,
+    )
+    .await
+}
+
+async fn web_software_exception_approve(
+    Path(exception_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSoftwareExceptionTransitionForm>,
+) -> Response {
+    web_software_exception_transition_submit(
+        state,
+        headers,
+        exception_id,
+        form,
+        SoftwareExceptionAction::Approve,
+    )
+    .await
+}
+
+async fn web_software_exception_reject(
+    Path(exception_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSoftwareExceptionTransitionForm>,
+) -> Response {
+    web_software_exception_transition_submit(
+        state,
+        headers,
+        exception_id,
+        form,
+        SoftwareExceptionAction::Reject,
+    )
+    .await
+}
+
+async fn web_software_exception_revoke(
+    Path(exception_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(form): Form<WebSoftwareExceptionTransitionForm>,
+) -> Response {
+    web_software_exception_transition_submit(
+        state,
+        headers,
+        exception_id,
+        form,
+        SoftwareExceptionAction::Revoke,
+    )
+    .await
+}
+
+async fn web_software_exception_transition_submit(
+    state: AppState,
+    headers: HeaderMap,
+    exception_id: i64,
+    form: WebSoftwareExceptionTransitionForm,
+    action: SoftwareExceptionAction,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Software Approval", "/software-policies/").into_response()
+        }
+    };
+    let context = web_context_from_auth(&auth_context);
+    let permission = match action {
+        SoftwareExceptionAction::Submit => PERMISSION_REQUEST_SOFTWARE_EXCEPTION,
+        SoftwareExceptionAction::Approve | SoftwareExceptionAction::Reject => {
+            PERMISSION_REVIEW_SOFTWARE_EXCEPTION
+        }
+        SoftwareExceptionAction::Revoke => PERMISSION_REVOKE_SOFTWARE_EXCEPTION,
+    };
+    if !has_software_policy_permission(&auth_context, permission) {
+        return web_software_policy_forbidden(&context);
+    }
+    let Some(store) = state.software_policy_store else {
+        return web_store_missing(
+            "Software Approval",
+            "/software-policies/",
+            &context,
+            "Software Policy",
+        )
+        .into_response();
+    };
+    let request = SoftwareExceptionTransitionRequest {
+        expected_revision: form.expected_revision,
+        reason: form.reason,
+    };
+    let result = match action {
+        SoftwareExceptionAction::Submit => {
+            store
+                .submit_exception(context.tenant_id, context.user_id, exception_id, request)
+                .await
+        }
+        SoftwareExceptionAction::Approve => {
+            store
+                .approve_exception(context.tenant_id, context.user_id, exception_id, request)
+                .await
+        }
+        SoftwareExceptionAction::Reject => {
+            store
+                .reject_exception(context.tenant_id, context.user_id, exception_id, request)
+                .await
+        }
+        SoftwareExceptionAction::Revoke => {
+            store
+                .revoke_exception(context.tenant_id, context.user_id, exception_id, request)
+                .await
+        }
+    };
+    match result {
+        Ok(_) => web_software_policy_redirect(&context),
+        Err(error) => web_software_policy_error(&context, error),
+    }
+}
+
+fn web_software_policy_forbidden(context: &WebContext) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        web_error_page(
+            "Software Approval",
+            "/software-policies/",
+            context,
+            "Fuer diese Software-Policy-Operation fehlt die Berechtigung.",
+        ),
+    )
+        .into_response()
+}
+
+fn web_software_policy_redirect(context: &WebContext) -> Response {
+    Redirect::to(&web_path_with_context("/software-policies/", Some(context))).into_response()
 }
 
 fn web_threat_permission_denied(context: &WebContext) -> Response {
@@ -40169,6 +41779,7 @@ fn web_page(
         ("/security-observations/", "Threat Intel"),
         ("/incidents/", "Incidents"),
         ("/cves/", "CVEs"),
+        ("/software-policies/", "Software Approval"),
         ("/risks/", "Risks"),
         ("/evidence/", "Evidence"),
         ("/roadmap/", "Roadmap"),
@@ -45685,6 +47296,58 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(software_hygiene_evaluate),
         )
         .route(
+            "/api/v1/software-policies",
+            get(software_policies_list).post(software_policy_create),
+        )
+        .route(
+            "/api/v1/software-policies/targets",
+            get(software_policy_target_options),
+        )
+        .route(
+            "/api/v1/software-policies/effective",
+            get(software_policy_effective),
+        )
+        .route(
+            "/api/v1/software-policies/evaluate",
+            post(software_policy_evaluate),
+        )
+        .route(
+            "/api/v1/software-policies/audit",
+            get(software_policy_audit_list),
+        )
+        .route(
+            "/api/v1/software-policies/{policy_id}",
+            get(software_policy_detail).patch(software_policy_update),
+        )
+        .route(
+            "/api/v1/software-policies/{policy_id}/activate",
+            post(software_policy_activate),
+        )
+        .route(
+            "/api/v1/software-policies/{policy_id}/archive",
+            post(software_policy_archive),
+        )
+        .route(
+            "/api/v1/software-policy-exceptions",
+            get(software_exceptions_list).post(software_exception_create),
+        )
+        .route(
+            "/api/v1/software-policy-exceptions/{exception_id}/submit",
+            post(software_exception_submit),
+        )
+        .route(
+            "/api/v1/software-policy-exceptions/{exception_id}/approve",
+            post(software_exception_approve),
+        )
+        .route(
+            "/api/v1/software-policy-exceptions/{exception_id}/reject",
+            post(software_exception_reject),
+        )
+        .route(
+            "/api/v1/software-policy-exceptions/{exception_id}/revoke",
+            post(software_exception_revoke),
+        )
+        .route(
             "/api/v1/cve-assessments",
             get(cve_assessment_register).post(cve_assessment_create),
         )
@@ -45706,6 +47369,47 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/operations/incidents/", get(web_operations_incidents))
         .route("/zero-trust/", get(web_zero_trust))
         .route("/security-observations/", get(web_security_observations))
+        .route("/software-policies/", get(web_software_policies))
+        .route(
+            "/software-policies/create",
+            post(web_software_policy_create),
+        )
+        .route(
+            "/software-policies/evaluate",
+            post(web_software_policy_evaluate),
+        )
+        .route(
+            "/software-policies/{policy_id}/update",
+            post(web_software_policy_update),
+        )
+        .route(
+            "/software-policies/{policy_id}/activate",
+            post(web_software_policy_activate),
+        )
+        .route(
+            "/software-policies/{policy_id}/archive",
+            post(web_software_policy_archive),
+        )
+        .route(
+            "/software-policies/exceptions/create",
+            post(web_software_exception_create),
+        )
+        .route(
+            "/software-policies/exceptions/{exception_id}/submit",
+            post(web_software_exception_submit),
+        )
+        .route(
+            "/software-policies/exceptions/{exception_id}/approve",
+            post(web_software_exception_approve),
+        )
+        .route(
+            "/software-policies/exceptions/{exception_id}/reject",
+            post(web_software_exception_reject),
+        )
+        .route(
+            "/software-policies/exceptions/{exception_id}/revoke",
+            post(web_software_exception_revoke),
+        )
         .route(
             "/security-observations/indicators/",
             post(web_threat_indicator_create),
