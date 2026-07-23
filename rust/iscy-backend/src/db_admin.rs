@@ -285,7 +285,422 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_VULNERABILITY_HYGIENE_LIFECYCLE_SCHEMA,
         postgres_sql: POSTGRES_VULNERABILITY_HYGIENE_LIFECYCLE_SCHEMA,
     },
+    Migration {
+        version: "0045_rust_software_approval_exception_policy",
+        sqlite_sql: SQLITE_SOFTWARE_APPROVAL_EXCEPTION_POLICY_SCHEMA,
+        postgres_sql: POSTGRES_SOFTWARE_APPROVAL_EXCEPTION_POLICY_SCHEMA,
+    },
 ];
+
+const SQLITE_SOFTWARE_APPROVAL_EXCEPTION_POLICY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS software_approval_policy (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    policy_key varchar(64) NOT NULL,
+    name varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status varchar(16) NOT NULL DEFAULT 'DRAFT',
+    decision varchar(16) NOT NULL,
+    target_type varchar(24) NOT NULL,
+    product_id INTEGER NULL,
+    asset_id INTEGER NULL,
+    component_id INTEGER NULL,
+    sbom_component_id INTEGER NULL,
+    rationale TEXT NOT NULL,
+    owner_id INTEGER NULL,
+    created_by_id INTEGER NOT NULL,
+    updated_by_id INTEGER NOT NULL,
+    valid_from TEXT NULL,
+    valid_until TEXT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    activated_at TEXT NULL,
+    archived_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, policy_key),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, asset_id)
+        REFERENCES assets_app_informationasset(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, component_id)
+        REFERENCES product_security_component(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, sbom_component_id)
+        REFERENCES product_security_importcomponent(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(status IN ('DRAFT','ACTIVE','ARCHIVED')),
+    CHECK(decision IN ('APPROVED','RESTRICTED','PROHIBITED')),
+    CHECK(target_type IN ('PRODUCT','ASSET','COMPONENT','SBOM_COMPONENT')),
+    CHECK(
+        (target_type='PRODUCT' AND product_id IS NOT NULL AND asset_id IS NULL AND component_id IS NULL AND sbom_component_id IS NULL)
+        OR (target_type='ASSET' AND product_id IS NULL AND asset_id IS NOT NULL AND component_id IS NULL AND sbom_component_id IS NULL)
+        OR (target_type='COMPONENT' AND product_id IS NULL AND asset_id IS NULL AND component_id IS NOT NULL AND sbom_component_id IS NULL)
+        OR (target_type='SBOM_COMPONENT' AND product_id IS NULL AND asset_id IS NULL AND component_id IS NULL AND sbom_component_id IS NOT NULL)
+    ),
+    CHECK(length(policy_key)=64),
+    CHECK(length(name) BETWEEN 1 AND 255),
+    CHECK(length(description) <= 4000),
+    CHECK(length(rationale) BETWEEN 1 AND 4000),
+    CHECK(revision > 0),
+    CHECK(valid_until IS NULL OR valid_from IS NULL OR valid_until > valid_from)
+);
+CREATE INDEX IF NOT EXISTS idx_software_policy_tenant_status
+    ON software_approval_policy(tenant_id, status, target_type, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_software_policy_target
+    ON software_approval_policy(tenant_id, target_type, product_id, asset_id, component_id, sbom_component_id);
+
+CREATE TABLE IF NOT EXISTS software_policy_exception (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    policy_id INTEGER NOT NULL,
+    request_key varchar(64) NOT NULL,
+    applicant_id INTEGER NOT NULL,
+    justification TEXT NOT NULL,
+    compensating_controls TEXT NOT NULL DEFAULT '',
+    requested_valid_from TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    status varchar(24) NOT NULL DEFAULT 'DRAFT',
+    reviewer_id INTEGER NULL,
+    decision_reason TEXT NOT NULL DEFAULT '',
+    decision_at TEXT NULL,
+    revoked_at TEXT NULL,
+    expired_at TEXT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, request_key),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, policy_id)
+        REFERENCES software_approval_policy(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(status IN ('DRAFT','PENDING_REVIEW','APPROVED','REJECTED','REVOKED','EXPIRED')),
+    CHECK(length(request_key)=64),
+    CHECK(length(justification) BETWEEN 1 AND 4000),
+    CHECK(length(compensating_controls) <= 4000),
+    CHECK(length(decision_reason) <= 4000),
+    CHECK(expires_at > requested_valid_from),
+    CHECK(revision > 0),
+    CHECK(applicant_id > 0),
+    CHECK(reviewer_id IS NULL OR reviewer_id > 0),
+    CHECK(reviewer_id IS NULL OR reviewer_id <> applicant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_software_exception_tenant_status
+    ON software_policy_exception(tenant_id, status, expires_at, id DESC);
+CREATE INDEX IF NOT EXISTS idx_software_exception_policy
+    ON software_policy_exception(tenant_id, policy_id, status, expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_software_exception_one_approved
+    ON software_policy_exception(tenant_id, policy_id)
+    WHERE status='APPROVED';
+
+CREATE TABLE IF NOT EXISTS software_policy_evaluation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    target_type varchar(24) NOT NULL,
+    product_id INTEGER NULL,
+    asset_id INTEGER NULL,
+    component_id INTEGER NULL,
+    sbom_component_id INTEGER NULL,
+    effective_decision varchar(24) NOT NULL,
+    completeness_status varchar(24) NOT NULL,
+    policy_ids_json TEXT NOT NULL DEFAULT '[]',
+    exception_id INTEGER NULL,
+    decision_path TEXT NOT NULL,
+    review_required bool NOT NULL DEFAULT 0,
+    evaluated_by_id INTEGER NOT NULL,
+    evaluated_at TEXT NOT NULL,
+    data_fresh_at TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, asset_id)
+        REFERENCES assets_app_informationasset(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, component_id)
+        REFERENCES product_security_component(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, sbom_component_id)
+        REFERENCES product_security_importcomponent(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, exception_id)
+        REFERENCES software_policy_exception(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(target_type IN ('PRODUCT','ASSET','COMPONENT','SBOM_COMPONENT')),
+    CHECK(
+        (target_type='PRODUCT' AND product_id IS NOT NULL AND asset_id IS NULL AND component_id IS NULL AND sbom_component_id IS NULL)
+        OR (target_type='ASSET' AND product_id IS NULL AND asset_id IS NOT NULL AND component_id IS NULL AND sbom_component_id IS NULL)
+        OR (target_type='COMPONENT' AND product_id IS NULL AND asset_id IS NULL AND component_id IS NOT NULL AND sbom_component_id IS NULL)
+        OR (target_type='SBOM_COMPONENT' AND product_id IS NULL AND asset_id IS NULL AND component_id IS NULL AND sbom_component_id IS NOT NULL)
+    ),
+    CHECK(effective_decision IN ('APPROVED','RESTRICTED','PROHIBITED','EXCEPTION_ACTIVE','UNMANAGED','REVIEW_REQUIRED')),
+    CHECK(completeness_status IN ('COMPLETE','INDETERMINATE')),
+    CHECK(length(policy_ids_json) <= 4096),
+    CHECK(length(decision_path) BETWEEN 1 AND 4000),
+    CHECK(revision > 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_software_evaluation_target
+    ON software_policy_evaluation(
+        tenant_id,target_type,
+        COALESCE(product_id,0),COALESCE(asset_id,0),
+        COALESCE(component_id,0),COALESCE(sbom_component_id,0)
+    );
+
+CREATE TABLE IF NOT EXISTS software_policy_audit_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    object_type varchar(16) NOT NULL,
+    object_id INTEGER NOT NULL,
+    event_type varchar(48) NOT NULL,
+    actor_id INTEGER NOT NULL,
+    previous_state varchar(64) NOT NULL DEFAULT '',
+    new_state varchar(64) NOT NULL DEFAULT '',
+    reason varchar(1000) NOT NULL DEFAULT '',
+    revision INTEGER NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    CHECK(object_type IN ('POLICY','EXCEPTION','EVALUATION')),
+    CHECK(length(event_type) BETWEEN 1 AND 48),
+    CHECK(length(reason) <= 1000),
+    CHECK(length(detail_json) <= 4096),
+    CHECK(revision > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_software_policy_audit_object
+    ON software_policy_audit_event(tenant_id, object_type, object_id, created_at DESC, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_software_policy_audit_idempotent
+    ON software_policy_audit_event(tenant_id, object_type, object_id, event_type, revision);
+
+INSERT OR IGNORE INTO django_content_type (app_label, model) VALUES
+    ('software_policy', 'softwareapprovalpolicy'),
+    ('software_policy', 'softwarepolicyexception');
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view software approval policy', id, 'view_software_policy' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can add software approval policy', id, 'add_software_policy' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can change software approval policy', id, 'change_software_policy' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can activate or archive software approval policy', id, 'activate_software_policy' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can evaluate software approval policy', id, 'evaluate_software_policy' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view software policy audit', id, 'view_software_policy_audit' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can request software policy exception', id, 'request_software_exception' FROM django_content_type WHERE app_label='software_policy' AND model='softwarepolicyexception';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can review software policy exception', id, 'review_software_exception' FROM django_content_type WHERE app_label='software_policy' AND model='softwarepolicyexception';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can revoke software policy exception', id, 'revoke_software_exception' FROM django_content_type WHERE app_label='software_policy' AND model='softwarepolicyexception';
+"#;
+
+const POSTGRES_SOFTWARE_APPROVAL_EXCEPTION_POLICY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS software_approval_policy (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    policy_key varchar(64) NOT NULL,
+    name varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    status varchar(16) NOT NULL DEFAULT 'DRAFT',
+    decision varchar(16) NOT NULL,
+    target_type varchar(24) NOT NULL,
+    product_id BIGINT NULL,
+    asset_id BIGINT NULL,
+    component_id BIGINT NULL,
+    sbom_component_id BIGINT NULL,
+    rationale TEXT NOT NULL,
+    owner_id BIGINT NULL,
+    created_by_id BIGINT NOT NULL,
+    updated_by_id BIGINT NOT NULL,
+    valid_from TEXT NULL,
+    valid_until TEXT NULL,
+    revision BIGINT NOT NULL DEFAULT 1,
+    activated_at TEXT NULL,
+    archived_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, policy_key),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, asset_id)
+        REFERENCES assets_app_informationasset(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, component_id)
+        REFERENCES product_security_component(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, sbom_component_id)
+        REFERENCES product_security_importcomponent(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(status IN ('DRAFT','ACTIVE','ARCHIVED')),
+    CHECK(decision IN ('APPROVED','RESTRICTED','PROHIBITED')),
+    CHECK(target_type IN ('PRODUCT','ASSET','COMPONENT','SBOM_COMPONENT')),
+    CHECK(
+        (target_type='PRODUCT' AND product_id IS NOT NULL AND asset_id IS NULL AND component_id IS NULL AND sbom_component_id IS NULL)
+        OR (target_type='ASSET' AND product_id IS NULL AND asset_id IS NOT NULL AND component_id IS NULL AND sbom_component_id IS NULL)
+        OR (target_type='COMPONENT' AND product_id IS NULL AND asset_id IS NULL AND component_id IS NOT NULL AND sbom_component_id IS NULL)
+        OR (target_type='SBOM_COMPONENT' AND product_id IS NULL AND asset_id IS NULL AND component_id IS NULL AND sbom_component_id IS NOT NULL)
+    ),
+    CHECK(length(policy_key)=64),
+    CHECK(length(name) BETWEEN 1 AND 255),
+    CHECK(length(description) <= 4000),
+    CHECK(length(rationale) BETWEEN 1 AND 4000),
+    CHECK(revision > 0),
+    CHECK(valid_until IS NULL OR valid_from IS NULL OR valid_until > valid_from)
+);
+CREATE INDEX IF NOT EXISTS idx_software_policy_tenant_status
+    ON software_approval_policy(tenant_id, status, target_type, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_software_policy_target
+    ON software_approval_policy(tenant_id, target_type, product_id, asset_id, component_id, sbom_component_id);
+
+CREATE TABLE IF NOT EXISTS software_policy_exception (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    policy_id BIGINT NOT NULL,
+    request_key varchar(64) NOT NULL,
+    applicant_id BIGINT NOT NULL,
+    justification TEXT NOT NULL,
+    compensating_controls TEXT NOT NULL DEFAULT '',
+    requested_valid_from TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    status varchar(24) NOT NULL DEFAULT 'DRAFT',
+    reviewer_id BIGINT NULL,
+    decision_reason TEXT NOT NULL DEFAULT '',
+    decision_at TEXT NULL,
+    revoked_at TEXT NULL,
+    expired_at TEXT NULL,
+    revision BIGINT NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, request_key),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, policy_id)
+        REFERENCES software_approval_policy(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(status IN ('DRAFT','PENDING_REVIEW','APPROVED','REJECTED','REVOKED','EXPIRED')),
+    CHECK(length(request_key)=64),
+    CHECK(length(justification) BETWEEN 1 AND 4000),
+    CHECK(length(compensating_controls) <= 4000),
+    CHECK(length(decision_reason) <= 4000),
+    CHECK(expires_at > requested_valid_from),
+    CHECK(revision > 0),
+    CHECK(applicant_id > 0),
+    CHECK(reviewer_id IS NULL OR reviewer_id > 0),
+    CHECK(reviewer_id IS NULL OR reviewer_id <> applicant_id)
+);
+CREATE INDEX IF NOT EXISTS idx_software_exception_tenant_status
+    ON software_policy_exception(tenant_id, status, expires_at, id DESC);
+CREATE INDEX IF NOT EXISTS idx_software_exception_policy
+    ON software_policy_exception(tenant_id, policy_id, status, expires_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_software_exception_one_approved
+    ON software_policy_exception(tenant_id, policy_id)
+    WHERE status='APPROVED';
+
+CREATE TABLE IF NOT EXISTS software_policy_evaluation (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    target_type varchar(24) NOT NULL,
+    product_id BIGINT NULL,
+    asset_id BIGINT NULL,
+    component_id BIGINT NULL,
+    sbom_component_id BIGINT NULL,
+    effective_decision varchar(24) NOT NULL,
+    completeness_status varchar(24) NOT NULL,
+    policy_ids_json TEXT NOT NULL DEFAULT '[]',
+    exception_id BIGINT NULL,
+    decision_path TEXT NOT NULL,
+    review_required BOOLEAN NOT NULL DEFAULT FALSE,
+    evaluated_by_id BIGINT NOT NULL,
+    evaluated_at TEXT NOT NULL,
+    data_fresh_at TEXT NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id, id),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, asset_id)
+        REFERENCES assets_app_informationasset(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, component_id)
+        REFERENCES product_security_component(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, sbom_component_id)
+        REFERENCES product_security_importcomponent(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, exception_id)
+        REFERENCES software_policy_exception(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(target_type IN ('PRODUCT','ASSET','COMPONENT','SBOM_COMPONENT')),
+    CHECK(
+        (target_type='PRODUCT' AND product_id IS NOT NULL AND asset_id IS NULL AND component_id IS NULL AND sbom_component_id IS NULL)
+        OR (target_type='ASSET' AND product_id IS NULL AND asset_id IS NOT NULL AND component_id IS NULL AND sbom_component_id IS NULL)
+        OR (target_type='COMPONENT' AND product_id IS NULL AND asset_id IS NULL AND component_id IS NOT NULL AND sbom_component_id IS NULL)
+        OR (target_type='SBOM_COMPONENT' AND product_id IS NULL AND asset_id IS NULL AND component_id IS NULL AND sbom_component_id IS NOT NULL)
+    ),
+    CHECK(effective_decision IN ('APPROVED','RESTRICTED','PROHIBITED','EXCEPTION_ACTIVE','UNMANAGED','REVIEW_REQUIRED')),
+    CHECK(completeness_status IN ('COMPLETE','INDETERMINATE')),
+    CHECK(length(policy_ids_json) <= 4096),
+    CHECK(length(decision_path) BETWEEN 1 AND 4000),
+    CHECK(revision > 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_software_evaluation_target
+    ON software_policy_evaluation(
+        tenant_id,target_type,
+        COALESCE(product_id,0),COALESCE(asset_id,0),
+        COALESCE(component_id,0),COALESCE(sbom_component_id,0)
+    );
+
+CREATE TABLE IF NOT EXISTS software_policy_audit_event (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    object_type varchar(16) NOT NULL,
+    object_id BIGINT NOT NULL,
+    event_type varchar(48) NOT NULL,
+    actor_id BIGINT NOT NULL,
+    previous_state varchar(64) NOT NULL DEFAULT '',
+    new_state varchar(64) NOT NULL DEFAULT '',
+    reason varchar(1000) NOT NULL DEFAULT '',
+    revision BIGINT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    CHECK(object_type IN ('POLICY','EXCEPTION','EVALUATION')),
+    CHECK(length(event_type) BETWEEN 1 AND 48),
+    CHECK(length(reason) <= 1000),
+    CHECK(length(detail_json) <= 4096),
+    CHECK(revision > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_software_policy_audit_object
+    ON software_policy_audit_event(tenant_id, object_type, object_id, created_at DESC, id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_software_policy_audit_idempotent
+    ON software_policy_audit_event(tenant_id, object_type, object_id, event_type, revision);
+
+INSERT INTO django_content_type (app_label, model) VALUES
+    ('software_policy', 'softwareapprovalpolicy'),
+    ('software_policy', 'softwarepolicyexception')
+ON CONFLICT(app_label, model) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view software approval policy', id, 'view_software_policy' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can add software approval policy', id, 'add_software_policy' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can change software approval policy', id, 'change_software_policy' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can activate or archive software approval policy', id, 'activate_software_policy' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can evaluate software approval policy', id, 'evaluate_software_policy' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view software policy audit', id, 'view_software_policy_audit' FROM django_content_type WHERE app_label='software_policy' AND model='softwareapprovalpolicy'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can request software policy exception', id, 'request_software_exception' FROM django_content_type WHERE app_label='software_policy' AND model='softwarepolicyexception'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can review software policy exception', id, 'review_software_exception' FROM django_content_type WHERE app_label='software_policy' AND model='softwarepolicyexception'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+INSERT INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can revoke software policy exception', id, 'revoke_software_exception' FROM django_content_type WHERE app_label='software_policy' AND model='softwarepolicyexception'
+ON CONFLICT(content_type_id, codename) DO NOTHING;
+"#;
 
 const SQLITE_VULNERABILITY_HYGIENE_LIFECYCLE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS vulnerability_intelligence_hygiene_run (
@@ -10603,10 +11018,10 @@ mod tests {
             .await
             .unwrap();
         let applied = run_sqlite_migrations(&pool).await.unwrap();
-        assert_eq!(applied.len(), 44);
+        assert_eq!(applied.len(), 45);
         assert_eq!(
             applied.last().copied(),
-            Some("0044_rust_vulnerability_hygiene_lifecycle")
+            Some("0045_rust_software_approval_exception_policy")
         );
         sqlx::query("PRAGMA foreign_keys=ON")
             .execute(&pool)
@@ -10797,5 +11212,162 @@ mod tests {
         )
         .fetch_one(&pool).await.unwrap();
         assert_eq!(correlation_link, None);
+    }
+
+    #[tokio::test]
+    async fn sqlite_0045_is_restartable_tenant_safe_and_preserves_existing_software_data() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        for statement in [
+            "DROP TABLE software_policy_audit_event",
+            "DROP TABLE software_policy_evaluation",
+            "DROP TABLE software_policy_exception",
+            "DROP TABLE software_approval_policy",
+            "DELETE FROM iscy_schema_migrations WHERE version='0045_rust_software_approval_exception_policy'",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO organizations_tenant (id,name,slug) VALUES
+             (145,'Policy Migration A','policy-migration-a'),
+             (146,'Policy Migration B','policy-migration-b')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO accounts_user (id,username,tenant_id,role,is_active) VALUES
+             (14501,'policy-migration-owner',145,'SECURITY_ADMIN',1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO product_security_product (id,tenant_id,name,code) VALUES
+             (14501,145,'Existing Policy Product','POL-145'),
+             (14601,146,'Foreign Policy Product','POL-146')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO product_security_vulnerability (
+                id,tenant_id,product_id,title,cve,status,vex_status,vex_justification,origin_key
+             ) VALUES (
+                14501,145,14501,'Existing finding','CVE-2026-4501','OPEN',
+                'AFFECTED','Existing manual VEX statement','existing-policy-migration-finding'
+             )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(
+            applied,
+            vec!["0045_rust_software_approval_exception_policy"]
+        );
+        let automatic_records: (i64, i64, i64) = sqlx::query_as(
+            "SELECT
+             (SELECT COUNT(*) FROM software_approval_policy),
+             (SELECT COUNT(*) FROM software_policy_exception),
+             (SELECT COUNT(*) FROM software_policy_evaluation)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(automatic_records, (0, 0, 0));
+        let preserved: (String, String, String) = sqlx::query_as(
+            "SELECT p.name,v.title,v.vex_justification
+             FROM product_security_product p
+             JOIN product_security_vulnerability v
+               ON v.tenant_id=p.tenant_id AND v.product_id=p.id
+             WHERE p.tenant_id=145 AND p.id=14501",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            preserved,
+            (
+                "Existing Policy Product".to_string(),
+                "Existing finding".to_string(),
+                "Existing manual VEX statement".to_string()
+            )
+        );
+        let permission_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM auth_permission WHERE codename IN (
+                'view_software_policy','add_software_policy','change_software_policy',
+                'activate_software_policy','evaluate_software_policy',
+                'view_software_policy_audit','request_software_exception',
+                'review_software_exception','revoke_software_exception'
+             )",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(permission_count, 9);
+
+        sqlx::query(
+            "INSERT INTO software_approval_policy (
+                id,tenant_id,policy_key,name,status,decision,target_type,product_id,
+                rationale,owner_id,created_by_id,updated_by_id
+             ) VALUES (
+                14501,145,?1,'Existing policy','DRAFT','RESTRICTED','PRODUCT',14501,
+                'Existing rationale',14501,14501,14501
+             )",
+        )
+        .bind("a".repeat(64))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version='0045_rust_software_approval_exception_policy'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let reapplied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(
+            reapplied,
+            vec!["0045_rust_software_approval_exception_policy"]
+        );
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+        let preserved_policy: (String, String, i64) = sqlx::query_as(
+            "SELECT name,decision,revision FROM software_approval_policy
+             WHERE tenant_id=145 AND id=14501",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            preserved_policy,
+            ("Existing policy".to_string(), "RESTRICTED".to_string(), 1)
+        );
+        let permission_count_after_restart: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM auth_permission WHERE codename LIKE '%software_policy%'
+                OR codename LIKE '%software_exception%'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(permission_count_after_restart, 9);
+        let foreign_target = sqlx::query(
+            "INSERT INTO software_approval_policy (
+                tenant_id,policy_key,name,status,decision,target_type,product_id,
+                rationale,created_by_id,updated_by_id
+             ) VALUES (
+                145,?1,'Foreign target','DRAFT','PROHIBITED','PRODUCT',14601,
+                'Must fail',14501,14501
+             )",
+        )
+        .bind("b".repeat(64))
+        .execute(&pool)
+        .await;
+        assert!(foreign_target.is_err());
     }
 }
