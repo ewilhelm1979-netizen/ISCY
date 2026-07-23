@@ -26,8 +26,9 @@ services:
       RUST_BACKEND_BIND: "0.0.0.0:9000"
       DATABASE_URL: ${DATABASE_URL:-postgresql://isms:isms@db:5432/isms}
       ISCY_MEDIA_ROOT: ${ISCY_MEDIA_ROOT:-/app/media}
-      NVD_API_BASE_URL: ${NVD_API_BASE_URL:-https://services.nvd.nist.gov}
       NVD_API_KEY: ${NVD_API_KEY:-}
+      NVD_API_KEY_FILE: ${NVD_API_KEY_FILE:-}
+      ISCY_VULNERABILITY_SYNC_INTERVAL_SECONDS: ${ISCY_VULNERABILITY_SYNC_INTERVAL_SECONDS:-0}
     volumes:
       - media_data:/app/media
     healthcheck:

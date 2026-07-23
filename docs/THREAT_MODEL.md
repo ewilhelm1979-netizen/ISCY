@@ -217,6 +217,36 @@ Incident or active response without review.
 Confidence and provenance support review but do not establish truth. External
 feeds and automatic matching require a separately reviewed trust boundary.
 
+### External vulnerability-feed poisoning, SSRF, or stale data
+
+**Threat:** Malformed or manipulated NVD, CISA KEV or FIRST EPSS responses
+cause unsafe writes, unbounded resource use, internal network access, false
+tenant findings, premature checkpoints or disclosure of an NVD API key.
+
+**Controls:**
+
+- fixed official HTTPS URLs and exact source/host mapping
+- public-IP DNS validation, request-time pinning and no redirects
+- TLS verification, no user-controlled URLs and no `file://` transport
+- connection/total timeout, uncompressed-response policy and byte/record limits
+- strict JSON, identifier, date, score, pagination and version-range parsing
+- bounded retries with backoff/jitter and source-specific rate delay
+- persistent per-source fenced lease, transaction-time lease revalidation and
+  checkpoint only after complete success
+- atomic CISA-KEV catalog processing with count/rollback validation, fair EPSS
+  selection and monotonic EPSS model dates
+- API key only through the secret abstraction and never in status, audit or logs
+- global checkpoint and requesting-actor details visible only to explicit
+  platform sync authorization, not tenant view roles
+- no tenant finding from feed data alone; a tenant-scoped conservative match is required
+- complex NVD CPE `AND` or non-vulnerable platform contexts remain review-only
+- no automatic Incident, Evidence, Agent command or active response
+
+**Residual risk:** The official feeds are transported over HTTPS but are not
+cryptographically signed and may be unavailable, delayed or factually wrong.
+Operators must monitor provenance and staleness, review uncertain correlations
+and retain human ownership of remediation decisions.
+
 ### Secret disclosure through logs, Git, or backups
 
 **Threat:** Database credentials or tokens appear in console logs, committed files, CI artifacts, or backup environment snapshots.
@@ -305,6 +335,8 @@ A release must not knowingly violate these rules:
 | Webhook replay | HMAC nonce/timestamp tests |
 | Agent secret binding | enrollment, heartbeat, findings, and rotation tests |
 | Threat indicators and observations | local normalization, bounded-input, permission, foreign-tenant, deduplication, concurrency and no-side-effect tests |
+| Vulnerability intelligence feeds | fixed-target/SSRF, redirect, size, parser, retry, checkpoint, lock, stale-data and secret-redaction tests |
+| Software-hygiene correlation | conservative CPE/version matching, foreign-tenant, idempotency, VEX/control and no-Incident/Evidence tests |
 
 ## Known limitations and next steps
 

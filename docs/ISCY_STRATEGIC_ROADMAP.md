@@ -157,7 +157,11 @@ Umgesetzt:
 - Weboberflaeche `/suppliers/product-security/` zeigt Lieferant, Produkt/Service, Kritikalitaet, Advisory-/CVE-/PSIRT-Bezug, betroffene und behobene Versionen, Status, Owner, Faelligkeit, Evidence, Vertragsstatus, Exit-Plan-Status und DORA-/NIS2-/DSGVO-Relevanz.
 - API-Pfade `GET`/`POST /api/v1/suppliers/product-security`, `GET`/`PATCH /api/v1/suppliers/product-security/{record_id}`, Status-, Evidence- und Event-Endpunkte sowie Supplier-bezogene Contract-/Exit-History-Abfragen.
 - Vertrags-/Exit-Plan-Aenderungen werden als Historie mit Version, Akteurreferenz, Zeitpunkt, Grund, vorherigem/neuem Status, Summary und Evidence-Referenzen gefuehrt.
-- Advisory-/PSIRT-/CVE-Referenzen bleiben lokale Metadaten und Import-Vorbereitung. ISCY ruft keine externen Hersteller-, NVD-, GitHub-Advisory- oder sonstigen Live-Feeds ab.
+- Advisory-/PSIRT-/CVE-Referenzen im Supplier-Modul bleiben lokale Metadaten
+  und Import-Vorbereitung. Das Modul ruft keine freien Hersteller- oder
+  GitHub-Advisory-Feeds ab; offizielle NVD-, CISA-KEV- und FIRST-EPSS-Daten
+  werden ausschliesslich ueber den getrennten zentralen
+  Vulnerability-Intelligence-Dienst synchronisiert.
 
 Naechste Vertiefung:
 
@@ -290,7 +294,7 @@ Umgesetzt:
 - Zwei-Instanzen-Topologie mit PostgreSQL 16, S3-kompatiblem MinIO und nginx 1.31
 - Cross-Instance-Schreiben/Lesen, Evidence-Upload/Verify und Failover in beide Richtungen
 - isolierter PostgreSQL-18-Kompatibilitaets- und PG16-zu-PG18-Forward-Restore-Test mit getrennten Volumes, dynamischem Datenintegritaetsvergleich, Anwendungssmoke und Migrationsrennen; PostgreSQL 16 bleibt Standard
-- Nix-/Playwright-basierte visuelle Regression fuer 19 Bereiche und zwei Viewports mit 38 bewusst versionierten Baselines
+- Nix-/Playwright-basierte visuelle Regression fuer 20 Bereiche und zwei Viewports mit 40 bewusst versionierten Baselines
 - getrennte CI-Artefakte fuer Performance-Bericht und visuelle Abweichungen
 
 Bewusste Grenze:
@@ -336,6 +340,53 @@ Erfolgskriterium:
   Findings gemeinsam triagieren, ohne ein zweites Finding-System oder
   unbeabsichtigte operative Nebenwirkungen einzufuehren.
 
+## Prioritaet 10: Continuous Vulnerability Intelligence und Software Hygiene
+
+Status: Phase 1 im Entwicklungsstand `V23.7.31` implementiert.
+
+Umgesetzt:
+
+- gehaerteter Einzelimport und begrenzte NVD-2.0-Deltasynchronisation mit
+  UTC-Fenster, Pagination, Overlap, persistentem Checkpoint, Lease, Retry und
+  sicherer Laufhistorie
+- atomare CISA-KEV-Anreicherung mit Removal-Historie sowie gebatchte FIRST-
+  EPSS-Anreicherung mit Schutz neuerer Modelldaten
+- feste offizielle HTTPS-Quellen, Host-/IP-Allowlist, Redirect-, DNS-/SSRF-,
+  Timeout-, Kompressions-, Response- und Datensatzgrenzen
+- globale CVE-/KEV-/EPSS-Referenzdaten und tenantgebundene CPE-/Versions-
+  Korrelationen auf vorhandene Assets, Komponenten und SBOM-Importe
+- idempotente Wiederverwendung vorhandener Product-Security-Vulnerability-
+  Findings bei vorhandenem Produktbezug; reine Asset-Matches bleiben
+  pruefbare Korrelationen. Die Priorisierung bleibt erklaerbar aus CVSS, KEV, EPSS,
+  Assetkritikalitaet, Matchstatus, Datenalter, VEX und Controls
+- minimale Rollen- und Web-/API-Oberflaeche fuer Status, autorisierten Sync,
+  passive Bewertung, Matchbasis, Provenance und Empfehlungen
+- SQLite-/PostgreSQL-Migrationspfade `0043` und `0044`, tenantgebundene
+  Evaluationsgenerationen sowie negative Feed-, Rollen-, Tenant-,
+  Deduplizierungs-, Checkpoint-, Stale-/Rollback- und Side-Effect-Tests
+- Stale-Reconciliation ausschliesslich nach vollstaendig erfolgreichem Scope;
+  partielle oder begrenzte Laeufe bleiben sichtbar unvollstaendig und erzeugen
+  weder Entwarnung noch automatische VEX-Aussage
+
+Bewusste Grenze:
+
+- unklare Versionen bleiben Review-Kandidaten; Produktnamenaehnlichkeit oder
+  PURL ohne belastbare Quellsemantik wird nicht als bestaetigter NVD-Match
+  dargestellt
+- EOL/EOS bleibt ohne belastbare dokumentierte Quelle `UNKNOWN`; automatische
+  Lifecycle-Feeds und eine schmale Software-Approval-/Exception-Policy sind
+  Phase 2
+- keine Security-Observation-Duplizierung, Incidents, Evidence, Patches,
+  Agentenbefehle, Active Response, Remote-Ausfuehrung oder Hackback
+
+Erfolgskriterium:
+
+- Offizielle Referenzdaten koennen sicher aktualisiert und belastbare
+  tenantgebundene Softwarematches bei kanonischem Produktbezug als vorhandene
+  Vulnerability Findings nachvollziehbar priorisiert werden. Reine
+  Asset-Matches bleiben Korrelationen; es entstehen keine operativen
+  Nebenwirkungen.
+
 ## Empfohlene Umsetzungsreihenfolge
 
 1. Den vorbereiteten Release Candidate vollstaendig lokal und in GitHub-CI pruefen und danach menschlich fachlich, technisch und sicherheitsseitig reviewen.
@@ -367,8 +418,10 @@ Erfolgskriterium:
 | Implementiert / Veroeffentlichung ausstehend | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |
 | Implementiert / Veroeffentlichung ausstehend | Evidence-Worker, kontrollierte physische Disposition und Object-Storage-Vorbereitung | Begrenzte Integritaets-Worker-Laeufe, Approval-gebundene physische Disposition, Tombstone-Metadaten und vorbereitete Object-Storage-Konfiguration sind tenantgebunden auditierbar. |
 | Implementiert / Veroeffentlichung ausstehend | S3-kompatibler Evidence-Storage-Runtime-Client | Explizite Secret-Referenzen, SigV4, DNS-/SSRF-Revalidierung, kanonische Object-IDs, begrenzte PUT-/HEAD-/GET-Operationen und kontrolliertes Remote-DELETE sind mit MinIO-Integrationstest umgesetzt. |
-| Implementiert / Veroeffentlichung ausstehend | Performance, HA und visuelle Regression | Grosszuegige CI-Budgets, gepruefter PostgreSQL-/S3-Zwei-Instanzen-Betrieb und 38 UI-Baselines machen grobe Regressionen sichtbar, ohne allgemeine HA oder SLA zu behaupten. |
+| Implementiert / Veroeffentlichung ausstehend | Performance, HA und visuelle Regression | Grosszuegige CI-Budgets, gepruefter PostgreSQL-/S3-Zwei-Instanzen-Betrieb und 40 UI-Baselines machen grobe Regressionen sichtbar, ohne allgemeine HA oder SLA zu behaupten. |
 | Implementiert / Veroeffentlichung ausstehend | Native Threat Intelligence und Security Observations - Phase 1 | Lokal validierte Indicators, normalisierte Referenzen auf vorhandene Findings, manuelle Matches, Triage und Audit sind tenantgebunden verfuegbar, ohne Feed-, SIEM- oder Active-Response-Funktion. |
+| Implementiert / Veroeffentlichung ausstehend | Continuous Vulnerability Intelligence und Software Hygiene - Phase 1 | NVD-Deltas, CISA KEV und FIRST EPSS reichern globale CVEs an; tenantgebundene, erklaerbare CPE-/Versionsmatches aktualisieren vorhandene Vulnerability Findings ausschliesslich passiv. |
+| Phase 2 | Software-Lifecycle und Approval-Policy | Belastbare EOL/EOS-Quellen, ecosystemspezifische PURL-Semantik und eine schmale tenantgebundene Approval-/Exception-Policy werden getrennt fachlich entschieden. |
 | Release Candidate vorbereitet | Finales Hardening und Release Readiness | Zentrale RC-Pruefung, Readiness-Matrix, Release Notes, Manifest, Checksums, Sensitive-Data-Scan und CI-Aggregation sind vorbereitet; Tag und Veroeffentlichung bleiben ausstehend. |
 
 ## Abgrenzung

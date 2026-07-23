@@ -12,6 +12,7 @@ const pages = [
   ["supplier-review", "/suppliers/", true],
   ["supplier-product-security", "/suppliers/product-security/", true],
   ["product-security-psirt", "/product-security/", true],
+  ["continuous-vulnerability-intelligence", "/cves/", true],
   ["ai-governance", "/ai-governance/", true],
   ["zero-trust-agent-fleet", "/zero-trust/", true],
   ["threat-intelligence-observations", "/security-observations/", true],

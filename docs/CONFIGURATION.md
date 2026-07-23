@@ -32,8 +32,8 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 | `ISCY_INITIAL_ADMIN_PASSWORD` | Initiales Admin-Passwort | fuer `init-admin` ja | keine | mind. 14 Zeichen, kein Beispielwert | Erzeugt ersten Admin ohne Demo-Zugangsdaten | ja, `ISCY_INITIAL_ADMIN_PASSWORD_FILE` |
 | `ISCY_POSTGRES_RESTORE_DRILL_SOURCE_URL` | Disposable PostgreSQL-Quelle fuer Restore-Drill | nur fuer Drill | leer | PostgreSQL-URL | Wird durch `make rust-postgres-restore-drill` mit Demo-Daten initialisiert | nein |
 | `ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL` | Disposable PostgreSQL-Ziel fuer Restore-Drill | nur fuer Drill | leer | PostgreSQL-URL | Ziel-Schema wird beim Drill geloescht und aus Dump wiederhergestellt | nein |
-| `NVD_API_BASE_URL` | Optionale NVD-Quelle | nein | NVD Default | URL | Externe Verbindung nur bei aktivem CVE-Abgleich | nein |
-| `NVD_API_KEY` | Optionaler NVD API Key | nein | leer | Secret | Darf nicht in Logs oder Supportpaketen landen | ja, noch nicht fuer alle Callpaths |
+| `NVD_API_KEY` | Optionaler NVD API Key | nein | leer | Secret | Wird nur als `apiKey`-Header zur fest verdrahteten offiziellen NVD-API gesendet und nie protokolliert | ja, `NVD_API_KEY_FILE` |
+| `ISCY_VULNERABILITY_SYNC_INTERVAL_SECONDS` | Periodischer Vulnerability-Intelligence-Runner | nein | `0` | `0` oder 7200 bis 604800 Sekunden | `0` deaktiviert; jeder Feed laeuft isoliert, vorhandene Daten bleiben bei Ausfall erhalten | nein |
 
 ## Secret-Dateien
 
@@ -58,6 +58,8 @@ ISCY_NOTIFICATION_ALLOW_HTTP=0
 ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS=soc-webhook.example.org
 ISCY_AGENT_NOTIFICATION_SECRET=<strong-channel-secret>
 ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy-initial-admin-password
+NVD_API_KEY_FILE=/run/secrets/iscy-nvd-api-key
+ISCY_VULNERABILITY_SYNC_INTERVAL_SECONDS=7200
 ```
 
 Ein Agent-Notification-Kanal speichert fuer Bearer oder HMAC nur den Namen der
@@ -65,6 +67,13 @@ Secret-Variable, beispielsweise `ISCY_AGENT_NOTIFICATION_SECRET`, nie den
 Secret-Wert. Die referenzierte Variable muss im Backend-Prozess gesetzt sein.
 
 Identity-Header duerfen produktiv nur aktiviert werden, wenn der Reverse Proxy eingehende `x-iscy-tenant-id`, `x-iscy-user-id`, `x-iscy-user-email`, `x-iscy-roles`, `x-iscy-is-staff` und `x-iscy-is-superuser` immer entfernt und nur selbst neu setzt.
+
+Die Vulnerability-Intelligence-Quellen sind nicht konfigurierbar: NVD API 2.0,
+der CISA-KEV-JSON-Katalog und die FIRST-EPSS-API werden ausschliesslich ueber
+ihre fest definierten offiziellen HTTPS-URLs angesprochen. Freie Feed-URLs,
+Redirects, private oder lokale Ziele und `file://` werden abgewiesen. Ohne
+Netzverbindung oder NVD-Key startet ISCY weiterhin; lediglich der jeweilige
+Sync-Lauf meldet einen begrenzten Fehlerstatus.
 
 ## Initial-Admin ohne Demo-Seed
 

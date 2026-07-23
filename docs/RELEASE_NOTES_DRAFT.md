@@ -29,6 +29,34 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
   `Unreleased` dokumentiert.
 - Native Threat Intelligence und Security Observations - Phase 1 sind in
   diesem Entwicklungsstand implementiert, aber noch nicht veroeffentlicht.
+- Continuous Vulnerability Intelligence und Software Hygiene - Phase 1 sind
+  in diesem Entwicklungsstand implementiert, aber noch nicht veroeffentlicht.
+
+## Continuous Vulnerability Intelligence und Software Hygiene - Phase 1
+
+- gehaerteter NVD-2.0-Einzel-/Deltapfad mit Pagination, UTC-Overlap,
+  persistentem Checkpoint, Lease, begrenztem Retry und sicherem Laufstatus
+- atomare CISA-KEV- und gebatchte FIRST-EPSS-Anreicherung vorhandener globaler
+  CVE-Referenzdaten mit Provenance und Schutz neuerer Modelldaten
+- konservative tenantgebundene CPE-/Versionskorrelation vorhandener Assets,
+  Komponenten und SBOM-Importe; vorhandene Product-Security-Vulnerability-
+  Findings werden bei kanonischem Produktbezug wiederverwendet, reine
+  Asset-Matches bleiben pruefbare Korrelationen
+- erklaerbare passive Priorisierung mit CVSS, KEV, EPSS, Assetkritikalitaet,
+  Datenalter, VEX und dokumentierten Compensating Controls
+- feste offizielle HTTPS-Quellen und DNS-/SSRF-, Redirect-, Timeout-,
+  Kompressions-, Payload-, Parser- und Secret-Grenzen
+- transaktionales Lease-Fencing, KEV-Count-/Rollback-Pruefung, faire
+  EPSS-Batchrotation und pruefpflichtige komplexe NVD-CPE-Kontexte
+- tenantgebundene Evaluationsgenerationen mit Stale-Reconciliation nur nach
+  vollstaendig erfolgreichem Scope; unvollstaendige Laeufe erzeugen keine
+  Entwarnung, waehrend manuelle Triage, VEX, Controls und Risk Acceptance
+  erhalten bleiben
+- globale Checkpoint-/Fenster-Zeitpunkte und anfordernde Plattform-Actor-IDs
+  bleiben fuer Tenantrollen redigiert
+- keine automatische Security Observation, kein Incident, keine Evidence,
+  kein Agentenbefehl und keine aktive Reaktion; EOL/EOS und weitergehende
+  Software-Policy bleiben ohne belastbare Quelle Phase 2
 
 ## Native Threat Intelligence und Security Observations - Phase 1
 
@@ -53,7 +81,7 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
 - MSRV und portabler Release-Builder: Rust `1.88.0`
 - PostgreSQL 16 bleibt der Standard.
 - PostgreSQL 18.4 bleibt ein zusaetzlicher Kompatibilitaetspfad.
-- Aktuell 42 fortlaufende Migrationen, `0001` bis `0042`
-- 38 Visual-Baselines
+- Aktuell 44 fortlaufende Migrationen, `0001` bis `0044`
+- 40 Visual-Baselines
 - Signaturstatus: `unsigned`
 - Provenance-Status: `prepared_unsigned`

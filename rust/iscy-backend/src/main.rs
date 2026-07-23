@@ -1,7 +1,7 @@
 mod evidence_download;
 mod security_boundary;
 
-use std::{future::IntoFuture, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{future::IntoFuture, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{middleware, routing::get, Router};
 use iscy_backend::{
@@ -39,6 +39,10 @@ use iscy_backend::{
     supplier_store::SupplierStore,
     tenant_store::TenantStore,
     threat_intelligence_store::ThreatIntelligenceStore,
+    vulnerability_intelligence::{
+        run_feed_sync, FeedSyncRequest, OfficialVulnerabilityFeedTransport,
+        VulnerabilityFeedTransport, SOURCE_CISA_KEV, SOURCE_FIRST_EPSS, SOURCE_NVD,
+    },
     wizard_store::WizardStore,
     AppState,
 };
@@ -187,6 +191,17 @@ async fn main() -> anyhow::Result<()> {
         ),
     };
     let notification_worker_store = agent_governance_store.clone();
+    let vulnerability_worker_store = cve_store.clone();
+    let vulnerability_feed_transport: Option<Arc<dyn VulnerabilityFeedTransport>> =
+        match OfficialVulnerabilityFeedTransport::from_environment() {
+            Ok(transport) => Some(Arc::new(transport)),
+            Err(_) => {
+                eprintln!(
+                    "ISCY Vulnerability-Intelligence-Transport konnte nicht initialisiert werden. Feed-Sync bleibt deaktiviert."
+                );
+                None
+            }
+        };
     let threat_intelligence_store = match database_url.as_deref() {
         Some(database_url) => Some(ThreatIntelligenceStore::connect(database_url).await?),
         None => None,
@@ -221,12 +236,18 @@ async fn main() -> anyhow::Result<()> {
         .with_product_security_store(product_security_store)
         .with_ai_governance_store(ai_governance_store)
         .with_threat_intelligence_store(threat_intelligence_store)
+        .with_vulnerability_feed_transport(vulnerability_feed_transport.clone())
         .with_database_url(database_url)
         .with_security_config(security_config.clone());
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let notification_worker =
         start_agent_notification_worker(notification_worker_store, shutdown_rx.clone());
+    let vulnerability_worker = start_vulnerability_intelligence_worker(
+        vulnerability_worker_store,
+        vulnerability_feed_transport,
+        shutdown_rx.clone(),
+    );
 
     let listener = TcpListener::bind(addr).await?;
     println!("ISCY Rust backend listening on http://{}", addr);
@@ -279,7 +300,72 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(|_| anyhow::anyhow!("Notification-Worker-Shutdown-Timeout"))??;
     }
+    if let Some(worker) = vulnerability_worker {
+        tokio::time::timeout(Duration::from_secs(10), worker)
+            .await
+            .map_err(|_| anyhow::anyhow!("Vulnerability-Intelligence-Worker-Shutdown-Timeout"))??;
+    }
     serve_result
+}
+
+fn start_vulnerability_intelligence_worker(
+    store: Option<CveStore>,
+    transport: Option<Arc<dyn VulnerabilityFeedTransport>>,
+    mut shutdown: watch::Receiver<bool>,
+) -> Option<JoinHandle<()>> {
+    let store = store?;
+    let transport = transport?;
+    let interval_seconds = std::env::var("ISCY_VULNERABILITY_SYNC_INTERVAL_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    if interval_seconds == 0 {
+        return None;
+    }
+    let interval_seconds = interval_seconds.clamp(7_200, 604_800);
+    Some(tokio::spawn(async move {
+        let period = Duration::from_secs(interval_seconds);
+        let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return;
+                    }
+                    continue;
+                }
+                _ = interval.tick() => {}
+            }
+            for source in [SOURCE_NVD, SOURCE_CISA_KEV, SOURCE_FIRST_EPSS] {
+                let result = run_feed_sync(
+                    &store,
+                    transport.as_ref(),
+                    FeedSyncRequest {
+                        sources: vec![source.to_string()],
+                        max_records: None,
+                    },
+                    "SCHEDULED",
+                    None,
+                )
+                .await;
+                match result {
+                    Ok(batch) => {
+                        if let Some(result) = batch.results.first() {
+                            println!(
+                                "ISCY Vulnerability-Intelligence source={} processed={} unchanged={}",
+                                result.source, result.processed_count, result.unchanged_count
+                            );
+                        }
+                    }
+                    Err(error) => eprintln!(
+                        "ISCY Vulnerability-Intelligence source={source} failed_code={}",
+                        error.code()
+                    ),
+                }
+            }
+        }
+    }))
 }
 
 fn start_agent_notification_worker(

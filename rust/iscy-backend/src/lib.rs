@@ -71,6 +71,7 @@ pub mod supplier_product_security_store;
 pub mod supplier_store;
 pub mod tenant_store;
 pub mod threat_intelligence_store;
+pub mod vulnerability_intelligence;
 pub mod wizard_store;
 
 use account_store::AccountStore;
@@ -93,7 +94,7 @@ use auth_store::AuthStore;
 use catalog_store::CatalogStore;
 use change_store::ChangeStore;
 use control_store::ControlStore;
-use cve_store::{CveStore, NvdCveRecord};
+use cve_store::CveStore;
 use dashboard_store::DashboardStore;
 use evidence_artifact_storage::{
     EvidenceArtifactDisposition, EvidenceArtifactDrill, EvidenceArtifactMetadata,
@@ -132,6 +133,11 @@ use threat_intelligence_store::{
     ThreatIndicatorUpdateRequest, ThreatIndicatorWriteRequest, ThreatIntelligenceError,
     ThreatIntelligenceErrorKind, ThreatIntelligenceStore,
 };
+use vulnerability_intelligence::{
+    import_single_nvd_cve, run_feed_sync, FeedSyncRequest, VulnerabilityFeedTransport,
+    VulnerabilityIntelligenceError, PERMISSION_REVIEW_SOFTWARE_HYGIENE,
+    PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE, PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE,
+};
 use wizard_store::WizardStore;
 
 #[derive(Clone, Default)]
@@ -166,8 +172,8 @@ pub struct AppState {
     pub tenant_store: Option<TenantStore>,
     pub threat_intelligence_store: Option<ThreatIntelligenceStore>,
     pub wizard_store: Option<WizardStore>,
+    pub vulnerability_feed_transport: Option<Arc<dyn VulnerabilityFeedTransport>>,
     pub evidence_media_root: Option<PathBuf>,
-    pub nvd_api_base_url: Option<String>,
     pub database_url: Option<String>,
     pub security_config: CommunitySecurityConfig,
     runtime_status: RuntimeStatus,
@@ -237,8 +243,8 @@ impl AppState {
             tenant_store: None,
             threat_intelligence_store: None,
             wizard_store: None,
+            vulnerability_feed_transport: None,
             evidence_media_root: None,
-            nvd_api_base_url: None,
             database_url: None,
             security_config: CommunitySecurityConfig::default(),
             runtime_status: RuntimeStatus::default(),
@@ -278,8 +284,8 @@ impl AppState {
             tenant_store,
             threat_intelligence_store: None,
             wizard_store: None,
+            vulnerability_feed_transport: None,
             evidence_media_root: None,
-            nvd_api_base_url: None,
             database_url: None,
             security_config: CommunitySecurityConfig::default(),
             runtime_status: RuntimeStatus::default(),
@@ -364,8 +370,11 @@ impl AppState {
         self
     }
 
-    pub fn with_nvd_api_base_url(mut self, nvd_api_base_url: Option<String>) -> Self {
-        self.nvd_api_base_url = nvd_api_base_url;
+    pub fn with_vulnerability_feed_transport(
+        mut self,
+        vulnerability_feed_transport: Option<Arc<dyn VulnerabilityFeedTransport>>,
+    ) -> Self {
+        self.vulnerability_feed_transport = vulnerability_feed_transport;
         self
     }
 
@@ -3107,11 +3116,6 @@ pub struct CveSummaryResponse {
     pub risk_hotspot_score: f64,
 }
 
-const DEFAULT_NVD_API_BASE_URL: &str = "https://services.nvd.nist.gov";
-const NVD_API_REQUEST_TIMEOUT_SECS: u64 = 30;
-const NVD_API_MAX_RETRIES: usize = 2;
-const NVD_API_RETRY_DELAY_MILLIS: u64 = 500;
-
 pub fn normalize_cve_id(input: &str) -> String {
     input.trim().to_uppercase()
 }
@@ -3173,134 +3177,6 @@ fn validated_cve_id(raw_cve_id: &str) -> Result<String, ApiError> {
         });
     }
     Ok(normalized)
-}
-
-fn nvd_import_base_url(state: &AppState) -> String {
-    state
-        .nvd_api_base_url
-        .clone()
-        .or_else(|| std::env::var("NVD_API_BASE_URL").ok())
-        .map(|value| value.trim().trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_NVD_API_BASE_URL.to_string())
-}
-
-fn nvd_api_key() -> Option<String> {
-    std::env::var("NVD_API_KEY")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn nvd_retryable_status(status: reqwest::StatusCode) -> bool {
-    matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
-}
-
-async fn fetch_nvd_payload(state: &AppState, cve_id: &str) -> Result<Value, Response> {
-    let base_url = nvd_import_base_url(state);
-    if let Some(path) = base_url.strip_prefix("file://") {
-        let payload = fs::read_to_string(path).map_err(|err| {
-            api_error_response(
-                StatusCode::BAD_GATEWAY,
-                "nvd_upstream_error",
-                format!("NVD-Fixture konnte fuer {cve_id} nicht gelesen werden: {err}"),
-            )
-        })?;
-        return serde_json::from_str::<Value>(&payload).map_err(|err| {
-            api_error_response(
-                StatusCode::BAD_GATEWAY,
-                "nvd_invalid_payload",
-                format!("NVD-Fixture konnte nicht als JSON gelesen werden: {err}"),
-            )
-        });
-    }
-    let api_key = nvd_api_key();
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(NVD_API_REQUEST_TIMEOUT_SECS))
-        .build()
-        .map_err(|err| {
-            api_error_response(
-                StatusCode::BAD_GATEWAY,
-                "nvd_upstream_error",
-                format!("Rust-NVD-Client konnte nicht aufgebaut werden: {err}"),
-            )
-        })?;
-    let url = format!("{base_url}/rest/json/cves/2.0");
-
-    for attempt in 0..=NVD_API_MAX_RETRIES {
-        let mut request = client
-            .get(&url)
-            .query(&[("cveId", cve_id)])
-            .header(reqwest::header::ACCEPT, "application/json");
-        if let Some(api_key) = api_key.as_deref() {
-            request = request.header("apiKey", api_key);
-        }
-
-        match request.send().await {
-            Ok(response) => {
-                let status = response.status();
-                if status.is_success() {
-                    return response.json::<Value>().await.map_err(|err| {
-                        api_error_response(
-                            StatusCode::BAD_GATEWAY,
-                            "nvd_invalid_payload",
-                            format!("NVD-Antwort konnte nicht als JSON gelesen werden: {err}"),
-                        )
-                    });
-                }
-
-                let detail = response
-                    .text()
-                    .await
-                    .ok()
-                    .map(|body| body.trim().to_string())
-                    .filter(|body| !body.is_empty())
-                    .unwrap_or_else(|| format!("HTTP {}", status.as_u16()));
-                if nvd_retryable_status(status) && attempt < NVD_API_MAX_RETRIES {
-                    tokio::time::sleep(Duration::from_millis(
-                        NVD_API_RETRY_DELAY_MILLIS * (attempt as u64 + 1),
-                    ))
-                    .await;
-                    continue;
-                }
-                return Err(api_error_response(
-                    StatusCode::BAD_GATEWAY,
-                    "nvd_upstream_error",
-                    format!("NVD lieferte fuer {cve_id} einen Fehler: {detail}"),
-                ));
-            }
-            Err(err) => {
-                let retryable = err.is_timeout() || err.is_connect() || err.is_request();
-                if retryable && attempt < NVD_API_MAX_RETRIES {
-                    tokio::time::sleep(Duration::from_millis(
-                        NVD_API_RETRY_DELAY_MILLIS * (attempt as u64 + 1),
-                    ))
-                    .await;
-                    continue;
-                }
-                return Err(api_error_response(
-                    StatusCode::BAD_GATEWAY,
-                    "nvd_upstream_error",
-                    format!("NVD konnte fuer {cve_id} nicht erreicht werden: {err}"),
-                ));
-            }
-        }
-    }
-
-    Err(api_error_response(
-        StatusCode::BAD_GATEWAY,
-        "nvd_upstream_error",
-        format!("NVD konnte fuer {cve_id} nicht erreicht werden."),
-    ))
-}
-
-fn first_nvd_cve(payload: &Value) -> Option<Value> {
-    payload
-        .get("vulnerabilities")
-        .and_then(Value::as_array)
-        .and_then(|vulnerabilities| vulnerabilities.first())
-        .and_then(|entry| entry.get("cve"))
-        .cloned()
 }
 
 fn nvd_normalize_response(payload: NvdImportRequest) -> Response {
@@ -4331,6 +4207,58 @@ fn threat_intelligence_permission_error(
         )
             .into_response(),
     )
+}
+
+fn has_vulnerability_intelligence_permission(
+    context: &AuthenticatedTenantContext,
+    permission: &str,
+) -> bool {
+    if context.has_permission(permission) {
+        return true;
+    }
+    if permission == PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE {
+        return context.is_superuser;
+    }
+    if context.is_superuser || context.is_staff || context.has_role("ADMIN") {
+        return true;
+    }
+    if context.has_role("SECURITY_ADMIN") {
+        return matches!(
+            permission,
+            PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE | PERMISSION_REVIEW_SOFTWARE_HYGIENE
+        );
+    }
+    context.has_role("SOC_ANALYST") && permission == PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE
+}
+
+fn vulnerability_intelligence_permission_error(
+    context: &AuthenticatedTenantContext,
+    permission: &str,
+) -> Option<Response> {
+    if has_vulnerability_intelligence_permission(context, permission) {
+        return None;
+    }
+    Some(api_error_response(
+        StatusCode::FORBIDDEN,
+        "insufficient_vulnerability_intelligence_permission",
+        "Fuer diese Vulnerability-Intelligence-Operation fehlt die Berechtigung.",
+    ))
+}
+
+fn vulnerability_intelligence_error_response(error: VulnerabilityIntelligenceError) -> Response {
+    let status = if error.is_conflict() {
+        StatusCode::CONFLICT
+    } else {
+        match error.code() {
+            "cve_not_found" => StatusCode::NOT_FOUND,
+            "invalid_cve_id" | "feed_source_invalid" | "nvd_run_record_limit" => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
+            "vulnerability_intelligence_database_error" => StatusCode::INTERNAL_SERVER_ERROR,
+            _ => StatusCode::BAD_GATEWAY,
+        }
+    };
+    api_error_response(status, error.code(), error.public_message())
 }
 
 fn threat_intelligence_error_response(error: ThreatIntelligenceError) -> Response {
@@ -29959,11 +29887,7 @@ async fn web_status(
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "nicht gesetzt".to_string());
-    let nvd_base = state
-        .nvd_api_base_url
-        .as_deref()
-        .unwrap_or("NVD-Default")
-        .to_string();
+    let nvd_base = vulnerability_intelligence::NVD_API_URL.to_string();
     let runtime_rows = [
         (
             "Rust-only",
@@ -30385,11 +30309,7 @@ async fn status_operations_payload(
                 .evidence_media_root
                 .as_ref()
                 .map(|path| path.display().to_string()),
-            nvd_api_base_url: state
-                .nvd_api_base_url
-                .as_deref()
-                .unwrap_or("NVD-Default")
-                .to_string(),
+            nvd_api_base_url: vulnerability_intelligence::NVD_API_URL.to_string(),
         },
         security: StatusSecurityJson {
             app_mode: state.security_config.mode_label().to_string(),
@@ -38314,22 +38234,37 @@ fn web_cve_assessment_form_panel(
 async fn web_cves(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<WebContextQuery>,
+    Query(_query): Query<WebContextQuery>,
 ) -> Html<String> {
-    let display_context = web_context_from_request(&query, &headers, &state).await;
-    let auth_context = authenticated_tenant_context(&state, &headers).await.ok();
-    let Some(context) = display_context.or_else(|| {
-        auth_context.as_ref().map(|context| WebContext {
-            tenant_id: context.tenant_id,
-            user_id: context.user_id,
-            user_email: context.user_email.clone(),
-        })
-    }) else {
-        return web_missing_context("Vulnerability Intelligence", "/cves/");
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Vulnerability Intelligence", "/cves/"),
     };
-    let can_write = auth_context
-        .as_ref()
-        .is_some_and(|context| context.can_write());
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !has_vulnerability_intelligence_permission(
+        &auth_context,
+        PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE,
+    ) {
+        return web_error_page(
+            "Vulnerability Intelligence",
+            "/cves/",
+            &context,
+            "Fuer diese Ansicht fehlt die Vulnerability-Intelligence-Berechtigung.",
+        );
+    }
+    let can_write = auth_context.can_write();
+    let can_sync = has_vulnerability_intelligence_permission(
+        &auth_context,
+        PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE,
+    );
+    let can_review = has_vulnerability_intelligence_permission(
+        &auth_context,
+        PERMISSION_REVIEW_SOFTWARE_HYGIENE,
+    );
     let Some(store) = state.cve_store else {
         return web_store_missing("Vulnerability Intelligence", "/cves/", &context, "CVE");
     };
@@ -38374,6 +38309,44 @@ async fn web_cves(
                 "/cves/",
                 &context,
                 &err.to_string(),
+            )
+        }
+    };
+    let intelligence_status = match store.vulnerability_intelligence_status().await {
+        Ok(status) => status,
+        Err(_) => {
+            return web_error_page(
+                "Vulnerability Intelligence",
+                "/cves/",
+                &context,
+                "Feed-Status konnte nicht sicher gelesen werden.",
+            )
+        }
+    };
+    let intelligence_status = if can_sync {
+        intelligence_status
+    } else {
+        intelligence_status.redact_global_administration()
+    };
+    let hygiene_findings = match store.software_hygiene_findings(context.tenant_id, 50).await {
+        Ok(findings) => findings,
+        Err(_) => {
+            return web_error_page(
+                "Vulnerability Intelligence",
+                "/cves/",
+                &context,
+                "Software-Hygiene-Findings konnten nicht sicher gelesen werden.",
+            )
+        }
+    };
+    let hygiene_run_status = match store.software_hygiene_status(context.tenant_id).await {
+        Ok(status) => status,
+        Err(_) => {
+            return web_error_page(
+                "Vulnerability Intelligence",
+                "/cves/",
+                &context,
+                "Software-Hygiene-Laufstatus konnte nicht sicher gelesen werden.",
             )
         }
     };
@@ -38440,10 +38413,89 @@ async fn web_cves(
         })
         .collect::<Vec<_>>()
         .join("");
+    let feed_rows = intelligence_status
+        .feeds
+        .iter()
+        .map(|feed| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&feed.source),
+                html_escape(&feed.status),
+                html_escape(feed.last_attempt_at.as_deref().unwrap_or("-")),
+                html_escape(feed.last_success_at.as_deref().unwrap_or("-")),
+                html_escape(feed.retrieved_at.as_deref().unwrap_or("-")),
+                if feed.stale {
+                    web_badge("veraltet", "warn")
+                } else {
+                    web_badge("aktuell", "ok")
+                },
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let hygiene_rows = hygiene_findings
+        .iter()
+        .map(|finding| {
+            let kev = if finding.in_kev_catalog { "KEV" } else { "-" };
+            format!(
+                r#"<tr><td><strong>{}</strong><div class="muted">{}</div></td><td>{}</td><td class="hygiene-detail">{}</td><td>{}</td><td>{}</td><td class="hygiene-detail">{}</td><td class="hygiene-detail">{}</td><td class="hygiene-detail">{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&finding.cve),
+                html_escape(&finding.title),
+                html_escape(&finding.product_name),
+                html_escape(finding.component_name.as_deref().unwrap_or("-")),
+                html_escape(&finding.lifecycle_status),
+                html_escape(&finding.priority),
+                html_escape(kev),
+                html_escape(&finding.match_type),
+                html_escape(&finding.observed_version),
+                html_escape(&finding.recommendation),
+                html_escape(
+                    finding
+                        .last_complete_evaluated_at
+                        .as_deref()
+                        .unwrap_or("-")
+                ),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let feed_action = if can_sync {
+        format!(
+            r#"<form method="post" action="{}"><button type="submit">Offizielle Feeds synchronisieren</button></form>"#,
+            web_path_with_context("/cves/vulnerability-sync", Some(&context))
+        )
+    } else {
+        String::new()
+    };
+    let hygiene_action = if can_review {
+        format!(
+            r#"<form method="post" action="{}"><button type="submit">Software-Hygiene bewerten</button></form>"#,
+            web_path_with_context("/cves/software-hygiene/evaluate", Some(&context))
+        )
+    } else {
+        String::new()
+    };
+    let hygiene_run_badge = match hygiene_run_status.latest_status.as_str() {
+        "SUCCEEDED" if hygiene_run_status.latest_scope_complete => web_badge("vollstaendig", "ok"),
+        "INCOMPLETE" | "FAILED" => web_badge("unvollstaendig - keine Entwarnung", "warn"),
+        "RUNNING" => web_badge("laufend", "info"),
+        _ => web_badge("noch nicht bewertet", "muted"),
+    };
+    let hygiene_run_context = format!(
+        r#"<div class="muted">Letzter Lauf: {} | Letzte vollstaendige Bewertung: {}</div>"#,
+        html_escape(&hygiene_run_status.latest_status),
+        html_escape(
+            hygiene_run_status
+                .last_complete_evaluation_at
+                .as_deref()
+                .unwrap_or("-")
+        )
+    );
     let body = format!(
         r#"
         <section class="hero compact"><h1>Vulnerability Intelligence</h1><p>Globaler CVE-Feed plus tenantgebundene Assessments direkt aus Rust. Tenant {} ist aktuell aktiv.</p></section>
         <section class="metrics">
+          {}
           {}
           {}
           {}
@@ -38459,6 +38511,20 @@ async fn web_cves(
           {}
           {}
           {}
+          <article class="panel wide">
+            <div class="section-heading"><h2>Feed-Status</h2>{}</div>
+            <table>
+              <thead><tr><th>Quelle</th><th>Status</th><th>Letzter Versuch</th><th>Letzter Erfolg</th><th>Abruf</th><th>Aktualitaet</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
+          <article class="panel wide">
+            <div class="section-heading"><h2>Software-Hygiene</h2><div>{}{}</div></div>{}
+            <table class="hygiene-table">
+              <thead><tr><th>Finding</th><th>Produkt</th><th class="hygiene-detail">Komponente</th><th>Lifecycle</th><th>Prioritaet</th><th class="hygiene-detail">KEV</th><th class="hygiene-detail">Match</th><th class="hygiene-detail">Version</th><th>Empfehlung</th><th>Letzte vollstaendige Bewertung</th></tr></thead>
+              <tbody>{}</tbody>
+            </table>
+          </article>
           <article class="panel wide">
             <h2>Letzte Assessments</h2>
             <table>
@@ -38487,6 +38553,7 @@ async fn web_cves(
             "Hotspot",
             assessment_summary.risk_hotspot_score.round() as i64
         ),
+        metric_card("Hygiene Findings", hygiene_findings.len() as i64),
         web_link_card(
             "JSON Feed",
             &web_path_with_context("/api/v1/cves", Some(&context)),
@@ -38508,6 +38575,20 @@ async fn web_cves(
             "Verknuepfte Produkt- und Vulnerability-Perspektive",
         ),
         web_cve_assessment_form_panel(&context, form_options.as_ref(), can_write),
+        feed_action,
+        if feed_rows.is_empty() {
+            web_empty_row(6, "Noch kein Feed-Status vorhanden.")
+        } else {
+            feed_rows
+        },
+        hygiene_run_badge,
+        hygiene_action,
+        hygiene_run_context,
+        if hygiene_rows.is_empty() {
+            web_empty_row(10, "Noch keine Software-Hygiene-Findings vorhanden.")
+        } else {
+            hygiene_rows
+        },
         if assessment_rows.is_empty() {
             web_empty_row(7, "Noch keine tenantgebundenen CVE-Assessments vorhanden.")
         } else {
@@ -38580,6 +38661,115 @@ async fn web_cves_submit(
         )
         .into_response(),
     }
+}
+
+async fn web_vulnerability_intelligence_sync_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Vulnerability Intelligence", "/cves/").into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !has_vulnerability_intelligence_permission(
+        &auth_context,
+        PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE,
+    ) {
+        return web_error_page(
+            "Vulnerability Intelligence",
+            "/cves/",
+            &context,
+            "Fuer die globale Feed-Synchronisation fehlt die explizite Berechtigung.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.cve_store.as_ref() else {
+        return web_store_missing("Vulnerability Intelligence", "/cves/", &context, "CVE")
+            .into_response();
+    };
+    let Some(transport) = state.vulnerability_feed_transport.as_ref() else {
+        return web_error_page(
+            "Vulnerability Intelligence",
+            "/cves/",
+            &context,
+            "Der sichere Feed-Transport ist nicht verfuegbar.",
+        )
+        .into_response();
+    };
+    if run_feed_sync(
+        store,
+        transport.as_ref(),
+        FeedSyncRequest {
+            sources: Vec::new(),
+            max_records: None,
+        },
+        "MANUAL",
+        Some(auth_context.user_id),
+    )
+    .await
+    .is_err()
+    {
+        return web_error_page(
+            "Vulnerability Intelligence",
+            "/cves/",
+            &context,
+            "Feed-Synchronisation wurde nicht vollstaendig abgeschlossen. Der Checkpoint bleibt fail-closed.",
+        )
+        .into_response();
+    }
+    Redirect::to(&web_path_with_context("/cves/", Some(&context))).into_response()
+}
+
+async fn web_software_hygiene_evaluate_submit(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => {
+            return web_missing_context("Vulnerability Intelligence", "/cves/").into_response()
+        }
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !has_vulnerability_intelligence_permission(&auth_context, PERMISSION_REVIEW_SOFTWARE_HYGIENE)
+    {
+        return web_error_page(
+            "Vulnerability Intelligence",
+            "/cves/",
+            &context,
+            "Fuer die tenantgebundene Software-Hygiene-Bewertung fehlt die Berechtigung.",
+        )
+        .into_response();
+    }
+    let Some(store) = state.cve_store.as_ref() else {
+        return web_store_missing("Vulnerability Intelligence", "/cves/", &context, "CVE")
+            .into_response();
+    };
+    if store
+        .evaluate_software_hygiene(auth_context.tenant_id, auth_context.user_id)
+        .await
+        .is_err()
+    {
+        return web_error_page(
+            "Vulnerability Intelligence",
+            "/cves/",
+            &context,
+            "Software-Hygiene-Bewertung konnte nicht sicher abgeschlossen werden.",
+        )
+        .into_response();
+    }
+    Redirect::to(&web_path_with_context("/cves/", Some(&context))).into_response()
 }
 
 fn web_cve_llm_test_page(
@@ -40120,6 +40310,7 @@ fn web_page(
     button {{ justify-self:start; border:0; border-radius:6px; background:var(--accent); color:#fff; padding:10px 14px; font-weight:700; cursor:pointer; }}
     button:hover {{ background:#0b5f58; }}
     a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {{ outline:3px solid #99f6e4; outline-offset:2px; }}
+    @media (max-width: 1100px) {{ .hygiene-table .hygiene-detail {{ display:none; }} }}
     @media (max-width: 720px) {{ header {{ grid-template-columns:1fr; align-items:start; padding:12px 16px; }} nav {{ width:100%; flex-wrap:nowrap; overflow-x:auto; padding-bottom:2px; }} h1 {{ font-size:32px; }} .context {{ justify-content:flex-start; }} .zt-focus {{ grid-template-columns:1fr; }} main {{ padding:22px 14px 36px; }} }}
   </style>
 </head>
@@ -44140,14 +44331,39 @@ async fn cve_assessment_detail(
     }
 }
 
-async fn nvd_normalize(Json(payload): Json<NvdImportRequest>) -> Response {
+async fn nvd_normalize(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<NvdImportRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return required_context_error_response(error),
+    };
+    if let Some(response) = vulnerability_intelligence_permission_error(
+        &context,
+        PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE,
+    ) {
+        return response;
+    }
     nvd_normalize_response(payload)
 }
 
 async fn nvd_import(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<NvdImportRequest>,
 ) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return required_context_error_response(error),
+    };
+    if let Some(response) = vulnerability_intelligence_permission_error(
+        &context,
+        PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE,
+    ) {
+        return response;
+    }
     let normalized = match validated_cve_id(&payload.cve_id) {
         Ok(normalized) => normalized,
         Err(err) => return err.into_response(),
@@ -44159,25 +44375,22 @@ async fn nvd_import(
             "Rust-CVE-Store ist nicht konfiguriert.",
         );
     };
-    let raw_payload = match fetch_nvd_payload(&state, &normalized).await {
-        Ok(payload) => payload,
-        Err(response) => return response,
-    };
-    let Some(cve) = first_nvd_cve(&raw_payload) else {
+    let Some(transport) = state.vulnerability_feed_transport.as_ref() else {
         return api_error_response(
-            StatusCode::NOT_FOUND,
-            "cve_not_found",
-            format!("Keine CVE-Daten fuer {normalized} gefunden."),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "vulnerability_feed_transport_unavailable",
+            "Der sichere Vulnerability-Intelligence-Transport ist nicht verfuegbar.",
         );
     };
-    let record = NvdCveRecord::from_nvd_value(&cve, &raw_payload, &normalized)
-        .with_cve_id(normalized.clone());
-    if let Err(err) = store.upsert_nvd_cve(&record).await {
-        return api_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "database_error",
-            format!("CVE konnte nicht persistiert werden: {err}"),
-        );
+    if let Err(error) = import_single_nvd_cve(
+        store,
+        transport.as_ref(),
+        &normalized,
+        Some(context.user_id),
+    )
+    .await
+    {
+        return vulnerability_intelligence_error_response(error);
     }
     (
         StatusCode::OK,
@@ -44194,44 +44407,225 @@ async fn nvd_import(
 
 async fn nvd_upsert(
     State(state): State<AppState>,
-    Json(payload): Json<NvdPersistRequest>,
+    headers: HeaderMap,
+    Json(_payload): Json<NvdPersistRequest>,
 ) -> Response {
-    let raw_payload = payload.raw_payload.unwrap_or_else(|| payload.cve.clone());
-    let fallback_cve_id = payload.cve_id.as_deref().unwrap_or("");
-    let record = NvdCveRecord::from_nvd_value(&payload.cve, &raw_payload, fallback_cve_id);
-    let normalized = match validated_cve_id(&record.cve_id) {
-        Ok(normalized) => normalized,
-        Err(err) => return err.into_response(),
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return required_context_error_response(error),
     };
+    if let Some(response) = vulnerability_intelligence_permission_error(
+        &context,
+        PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE,
+    ) {
+        return response;
+    }
+    api_error_response(
+        StatusCode::GONE,
+        "nvd_arbitrary_upsert_disabled",
+        "Der direkte NVD-Payload-Upsert ist deaktiviert. Verwende den autorisierten Import oder Feed-Sync aus festen offiziellen Quellen.",
+    )
+}
 
+#[derive(Debug, Deserialize)]
+struct SoftwareHygieneListQuery {
+    limit: Option<i64>,
+}
+
+async fn vulnerability_intelligence_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return required_context_error_response(error),
+    };
+    if let Some(response) = vulnerability_intelligence_permission_error(
+        &context,
+        PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE,
+    ) {
+        return response;
+    }
     let Some(store) = state.cve_store.as_ref() else {
-        return api_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "database_not_configured",
-            "Rust-CVE-Store ist nicht konfiguriert.",
-        );
+        return api_database_not_configured("Rust-CVE-Store ist nicht konfiguriert.");
     };
-
-    let record = record.with_cve_id(normalized.clone());
-    if let Err(err) = store.upsert_nvd_cve(&record).await {
-        return api_error_response(
+    match store.vulnerability_intelligence_status().await {
+        Ok(status) => {
+            let status = if has_vulnerability_intelligence_permission(
+                &context,
+                PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE,
+            ) {
+                status
+            } else {
+                status.redact_global_administration()
+            };
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "accepted": true,
+                    "api_version": "v1",
+                    "status": status
+                })),
+            )
+                .into_response()
+        }
+        Err(_) => api_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "database_error",
-            format!("CVE konnte nicht persistiert werden: {err}"),
-        );
+            "Vulnerability-Intelligence-Status konnte nicht gelesen werden.",
+        ),
     }
+}
 
-    (
-        StatusCode::OK,
-        Json(NvdPersistResponse {
-            accepted: true,
-            api_version: "v1",
-            cve_id: normalized,
-            source: "NVD",
-            persisted: true,
-        }),
+async fn vulnerability_intelligence_sync(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<FeedSyncRequest>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return required_context_error_response(error),
+    };
+    if let Some(response) = vulnerability_intelligence_permission_error(
+        &context,
+        PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE,
+    ) {
+        return response;
+    }
+    let Some(store) = state.cve_store.as_ref() else {
+        return api_database_not_configured("Rust-CVE-Store ist nicht konfiguriert.");
+    };
+    let Some(transport) = state.vulnerability_feed_transport.as_ref() else {
+        return api_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "vulnerability_feed_transport_unavailable",
+            "Der sichere Vulnerability-Intelligence-Transport ist nicht verfuegbar.",
+        );
+    };
+    match run_feed_sync(
+        store,
+        transport.as_ref(),
+        payload,
+        "MANUAL",
+        Some(context.user_id),
     )
-        .into_response()
+    .await
+    {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "accepted": true,
+                "api_version": "v1",
+                "result": result,
+                "active_response": false,
+                "incidents_created": 0,
+                "evidence_created": 0
+            })),
+        )
+            .into_response(),
+        Err(error) => vulnerability_intelligence_error_response(error),
+    }
+}
+
+async fn software_hygiene_findings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<SoftwareHygieneListQuery>,
+) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return required_context_error_response(error),
+    };
+    if let Some(response) = vulnerability_intelligence_permission_error(
+        &context,
+        PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE,
+    ) {
+        return response;
+    }
+    let Some(store) = state.cve_store.as_ref() else {
+        return api_database_not_configured("Rust-CVE-Store ist nicht konfiguriert.");
+    };
+    match store
+        .software_hygiene_findings(context.tenant_id, query.limit.unwrap_or(100))
+        .await
+    {
+        Ok(findings) => match store.software_hygiene_status(context.tenant_id).await {
+            Ok(evaluation_status) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "accepted": true,
+                    "api_version": "v1",
+                    "tenant_id": context.tenant_id,
+                    "findings": findings,
+                    "evaluation_status": evaluation_status,
+                    "disclaimer": "Passive Bewertung: Findings sind weder Incident noch Angriffsnachweis oder automatisch erzeugte Evidence. Ein unvollstaendiger Lauf ist keine Entwarnung."
+                })),
+            )
+                .into_response(),
+            Err(_) => api_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "database_error",
+                "Software-Hygiene-Laufstatus konnte nicht gelesen werden.",
+            ),
+        },
+        Err(_) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Software-Hygiene-Findings konnten nicht gelesen werden.",
+        ),
+    }
+}
+
+async fn software_hygiene_evaluate(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(error) => return required_context_error_response(error),
+    };
+    if let Some(response) =
+        vulnerability_intelligence_permission_error(&context, PERMISSION_REVIEW_SOFTWARE_HYGIENE)
+    {
+        return response;
+    }
+    let Some(store) = state.cve_store.as_ref() else {
+        return api_database_not_configured("Rust-CVE-Store ist nicht konfiguriert.");
+    };
+    match store
+        .evaluate_software_hygiene(context.tenant_id, context.user_id)
+        .await
+    {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "accepted": true,
+                "api_version": "v1",
+                "result": result,
+                "active_response": false,
+                "incidents_created": 0,
+                "evidence_created": 0
+            })),
+        )
+            .into_response(),
+        Err(error) if error.to_string().starts_with("validation:") => api_error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "software_hygiene_input_invalid",
+            "Software-Hygiene-Bewertung konnte mit diesem Kontext nicht gestartet werden.",
+        ),
+        Err(error)
+            if error.to_string().starts_with("conflict:")
+                || error.to_string().starts_with("hygiene_lease_lost:") =>
+        {
+            api_error_response(
+                StatusCode::CONFLICT,
+                "software_hygiene_evaluation_conflict",
+                "Software-Hygiene-Bewertung konnte wegen eines parallelen oder abgeloesten Laufs nicht abgeschlossen werden.",
+            )
+        }
+        Err(_) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database_error",
+            "Software-Hygiene-Bewertung konnte nicht sicher abgeschlossen werden.",
+        ),
+    }
 }
 
 fn llm_runtime_info() -> LlmRuntimeInfo {
@@ -45275,6 +45669,22 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/cves", get(cve_feed))
         .route("/api/v1/cves/{cve_id}", get(cve_detail))
         .route(
+            "/api/v1/vulnerability-intelligence/status",
+            get(vulnerability_intelligence_status),
+        )
+        .route(
+            "/api/v1/vulnerability-intelligence/sync",
+            post(vulnerability_intelligence_sync),
+        )
+        .route(
+            "/api/v1/software-hygiene/findings",
+            get(software_hygiene_findings),
+        )
+        .route(
+            "/api/v1/software-hygiene/evaluate",
+            post(software_hygiene_evaluate),
+        )
+        .route(
             "/api/v1/cve-assessments",
             get(cve_assessment_register).post(cve_assessment_create),
         )
@@ -45723,6 +46133,14 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/cves/", get(web_cves).post(web_cves_submit))
         .route(
+            "/cves/vulnerability-sync",
+            post(web_vulnerability_intelligence_sync_submit),
+        )
+        .route(
+            "/cves/software-hygiene/evaluate",
+            post(web_software_hygiene_evaluate_submit),
+        )
+        .route(
             "/cves/llm-test/",
             get(web_cve_llm_test).post(web_cve_llm_test_submit),
         )
@@ -45753,11 +46171,81 @@ mod tests {
     use super::{
         agent_installation_command, alertmanager_hmac_message, alertmanager_hmac_secret_matches,
         evidence_disposition_preview_from_item, evidence_object_storage_bucket_valid,
-        hex_encode_bytes, is_agent_payload_error, normalize_cve_id, powershell_quote, shell_quote,
-        simple_pdf_document, AlertmanagerHmacSha256,
+        has_vulnerability_intelligence_permission, hex_encode_bytes, is_agent_payload_error,
+        normalize_cve_id, powershell_quote, shell_quote, simple_pdf_document,
+        AlertmanagerHmacSha256,
     };
     use crate::evidence_artifact_storage::FilesystemEvidenceArtifactStorage;
     use crate::evidence_store::EvidenceIntegrityItem;
+    use crate::request_context::AuthenticatedTenantContext;
+    use crate::vulnerability_intelligence::{
+        PERMISSION_REVIEW_SOFTWARE_HYGIENE, PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE,
+        PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE,
+    };
+
+    fn vulnerability_context(
+        roles: &[&str],
+        permissions: &[&str],
+        is_superuser: bool,
+    ) -> AuthenticatedTenantContext {
+        AuthenticatedTenantContext {
+            tenant_id: 7,
+            user_id: 11,
+            user_email: None,
+            roles: roles.iter().map(|role| (*role).to_string()).collect(),
+            permissions: permissions
+                .iter()
+                .map(|permission| (*permission).to_string())
+                .collect(),
+            is_staff: false,
+            is_superuser,
+        }
+    }
+
+    #[test]
+    fn vulnerability_intelligence_permissions_separate_global_sync_from_tenant_review() {
+        let analyst = vulnerability_context(&["SOC_ANALYST"], &[], false);
+        assert!(has_vulnerability_intelligence_permission(
+            &analyst,
+            PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE
+        ));
+        assert!(!has_vulnerability_intelligence_permission(
+            &analyst,
+            PERMISSION_REVIEW_SOFTWARE_HYGIENE
+        ));
+        assert!(!has_vulnerability_intelligence_permission(
+            &analyst,
+            PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE
+        ));
+
+        let security_admin = vulnerability_context(&["SECURITY_ADMIN"], &[], false);
+        assert!(has_vulnerability_intelligence_permission(
+            &security_admin,
+            PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE
+        ));
+        assert!(has_vulnerability_intelligence_permission(
+            &security_admin,
+            PERMISSION_REVIEW_SOFTWARE_HYGIENE
+        ));
+        assert!(!has_vulnerability_intelligence_permission(
+            &security_admin,
+            PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE
+        ));
+
+        let explicitly_authorized = vulnerability_context(
+            &["CONTRIBUTOR"],
+            &[PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE],
+            false,
+        );
+        assert!(has_vulnerability_intelligence_permission(
+            &explicitly_authorized,
+            PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE
+        ));
+        assert!(has_vulnerability_intelligence_permission(
+            &vulnerability_context(&[], &[], true),
+            PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE
+        ));
+    }
 
     fn evidence_integrity_test_item(
         file_name: Option<String>,

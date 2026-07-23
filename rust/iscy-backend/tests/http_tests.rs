@@ -41,6 +41,9 @@ use iscy_backend::{
         ObservationIndicatorLinkWriteRequest, SecurityObservationWriteRequest,
         ThreatIndicatorWriteRequest, ThreatIntelligenceStore,
     },
+    vulnerability_intelligence::{
+        FeedRequest, FeedResponse, FeedTransportError, VulnerabilityFeedTransport,
+    },
     wizard_store::WizardStore,
     AppState,
 };
@@ -50,18 +53,298 @@ use sqlx::{
     Row, SqlitePool,
 };
 use std::{
+    collections::VecDeque,
     fs,
+    future::Future,
     path::{Path, PathBuf},
+    pin::Pin,
     str::FromStr,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tower::util::ServiceExt;
 
 type IncidentTimelineRow = (String, Option<String>, Option<String>, Option<i64>);
+
+struct NvdFixtureTransport {
+    responses: Mutex<VecDeque<Vec<u8>>>,
+    calls: AtomicUsize,
+}
+
+impl NvdFixtureTransport {
+    fn new(payload: serde_json::Value) -> Self {
+        Self {
+            responses: Mutex::new(VecDeque::from([serde_json::to_vec(&payload).unwrap()])),
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl VulnerabilityFeedTransport for NvdFixtureTransport {
+    fn fetch<'a>(
+        &'a self,
+        request: FeedRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<FeedResponse, FeedTransportError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(request.source, "NVD");
+            assert_eq!(
+                request.query.first().map(|item| item.0.as_str()),
+                Some("cveId")
+            );
+            let body = self
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("fixture response");
+            Ok(FeedResponse {
+                body,
+                retrieved_at: chrono::Utc::now(),
+            })
+        })
+    }
+
+    fn applies_rate_delay(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn vulnerability_feed_sync_denies_unauthenticated_and_tenant_roles_before_io() {
+    let transport = Arc::new(NvdFixtureTransport::new(serde_json::json!({
+        "resultsPerPage": 0,
+        "startIndex": 0,
+        "totalResults": 0,
+        "format": "NVD_CVE",
+        "version": "2.0",
+        "timestamp": "2026-07-22T12:00:00.000Z",
+        "vulnerabilities": []
+    })));
+    let app = app_router_with_state(
+        AppState::default().with_vulnerability_feed_transport(Some(transport.clone())),
+    );
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/vulnerability-intelligence/sync")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"sources":["NVD"],"max_records":1}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    for role in ["CONTRIBUTOR", "SOC_ANALYST", "SECURITY_ADMIN"] {
+        let denied = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/vulnerability-intelligence/sync")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", role)
+                    .body(Body::from(r#"{"sources":["NVD"],"max_records":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN, "role {role}");
+    }
+    assert_eq!(transport.calls(), 0);
+}
+
+#[tokio::test]
+async fn direct_nvd_payload_upsert_is_closed_even_for_superusers() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/nvd/upsert")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-is-superuser", "true")
+                .body(Body::from(
+                    r#"{"cve":{"id":"CVE-2026-9999","description":"caller-controlled"}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::GONE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "nvd_arbitrary_upsert_disabled");
+}
+
+#[tokio::test]
+async fn software_hygiene_list_ignores_manipulated_tenant_query() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO organizations_tenant (id,name,slug) VALUES (501,'Own Tenant','own-tenant'),(502,'Foreign Tenant','foreign-tenant')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO product_security_product (id,tenant_id,name,code) VALUES (50101,501,'Own Product','own-product'),(50201,502,'Foreign Product','foreign-product')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_vulnerability (
+            tenant_id,product_id,title,cve,severity,status,origin_key,
+            hygiene_status,hygiene_lifecycle_status,priority,provenance_json,recommendation,
+            last_complete_evaluated_at
+        ) VALUES
+            (501,50101,'Own Finding','CVE-2026-5001','HIGH','OPEN','own-finding','NEEDS_REVIEW','HISTORICAL','HIGH','{}','Review own finding.','2026-07-23T10:00:00Z'),
+            (502,50201,'Foreign Finding','CVE-2026-5002','CRITICAL','OPEN','foreign-finding','ACTION_REQUIRED','ACTIVE','CRITICAL','{}','Foreign tenant data.','2026-07-23T11:00:00Z')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(pool))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/software-hygiene/findings?tenant_id=502&limit=10")
+                .header("x-iscy-tenant-id", "501")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "SOC_ANALYST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["tenant_id"], 501);
+    assert_eq!(payload["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["findings"][0]["title"], "Own Finding");
+    assert_eq!(payload["findings"][0]["lifecycle_status"], "HISTORICAL");
+    assert_eq!(payload["findings"][0]["match_lifecycle_status"], "STALE");
+    assert_eq!(payload["evaluation_status"]["latest_status"], "NEVER_RUN");
+    assert!(payload["disclaimer"]
+        .as_str()
+        .unwrap()
+        .contains("unvollstaendiger Lauf ist keine Entwarnung"));
+    assert!(!String::from_utf8_lossy(&body).contains("Foreign Finding"));
+    assert!(!String::from_utf8_lossy(&body).contains("2026-07-23T11:00:00Z"));
+}
+
+#[tokio::test]
+async fn vulnerability_status_hides_global_checkpoint_and_requester_from_tenant_roles() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO vulnerability_intelligence_feed_state (source,status,checkpoint_at,last_attempt_at,last_success_at,last_window_start,last_window_end) VALUES ('NVD','SUCCEEDED','2026-07-22T12:00:00.000Z','2026-07-22T12:00:00.000Z','2026-07-22T12:00:00.000Z','2026-07-22T10:00:00.000Z','2026-07-22T12:00:00.000Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO vulnerability_intelligence_feed_run (source,trigger_type,requested_by_id,lock_token,status,started_at,completed_at,window_start,window_end) VALUES ('NVD','MANUAL',9001,'fixture','SUCCEEDED','2026-07-22T12:00:00.000Z','2026-07-22T12:01:00.000Z','2026-07-22T10:00:00.000Z','2026-07-22T12:00:00.000Z')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(pool))));
+
+    let tenant_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/vulnerability-intelligence/status")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "SOC_ANALYST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tenant_response.status(), StatusCode::OK);
+    let body = to_bytes(tenant_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let nvd = payload["status"]["feeds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|feed| feed["source"] == "NVD")
+        .unwrap();
+    assert!(nvd["checkpoint_at"].is_null());
+    assert!(nvd["last_window_start"].is_null());
+    assert!(nvd["last_window_end"].is_null());
+    assert!(payload["status"]["recent_runs"][0]["requested_by_id"].is_null());
+    assert!(payload["status"]["recent_runs"][0]["window_start"].is_null());
+    assert!(payload["status"]["recent_runs"][0]["window_end"].is_null());
+
+    let admin_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/vulnerability-intelligence/status")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-is-superuser", "true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admin_response.status(), StatusCode::OK);
+    let body = to_bytes(admin_response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let nvd = payload["status"]["feeds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|feed| feed["source"] == "NVD")
+        .unwrap();
+    assert_eq!(nvd["checkpoint_at"], "2026-07-22T12:00:00.000Z");
+    assert_eq!(nvd["last_window_start"], "2026-07-22T10:00:00.000Z");
+    assert_eq!(nvd["last_window_end"], "2026-07-22T12:00:00.000Z");
+    assert_eq!(payload["status"]["recent_runs"][0]["requested_by_id"], 9001);
+    assert_eq!(
+        payload["status"]["recent_runs"][0]["window_start"],
+        "2026-07-22T10:00:00.000Z"
+    );
+    assert_eq!(
+        payload["status"]["recent_runs"][0]["window_end"],
+        "2026-07-22T12:00:00.000Z"
+    );
+}
 
 #[test]
 fn docs_markdown_screenshot_references_resolve() {
@@ -853,8 +1136,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0042_rust_native_threat_intelligence_observations"));
-    assert!(html.contains("42/42 angewendet"));
+    assert!(html.contains("0044_rust_vulnerability_hygiene_lifecycle"));
+    assert!(html.contains("44/44 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -16375,7 +16658,10 @@ async fn rust_web_cves_renders_feed_from_database() {
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/cves/?tenant_id=42&user_id=7")
+                .uri("/cves/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -16391,6 +16677,8 @@ async fn rust_web_cves_renders_feed_from_database() {
     assert!(html.contains("Kritisch"));
     assert!(html.contains("Sensor Gateway"));
     assert!(html.contains("Rust auth bypass vulnerability"));
+    assert!(html.contains("Letzte vollstaendige Bewertung"));
+    assert!(html.contains("noch nicht bewertet"));
     assert!(!html.contains("Rust-Webroute aktiv."));
 }
 
@@ -16900,7 +17188,9 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0039_rust_evidence_s3_runtime_client",
             "0040_rust_agent_rollout_governance",
             "0041_rust_agent_rollout_manifest_handoff",
-            "0042_rust_native_threat_intelligence_observations"
+            "0042_rust_native_threat_intelligence_observations",
+            "0043_rust_continuous_vulnerability_intelligence",
+            "0044_rust_vulnerability_hygiene_lifecycle"
         ]
     );
     assert!(
@@ -18097,52 +18387,49 @@ async fn nvd_import_endpoint_fetches_and_persists_cve_record() {
         .await
         .unwrap();
     create_cverecord_table(&pool).await;
-    let nvd_base_url = nvd_fixture_base_url(
-        "nvd-import-cve",
-        serde_json::json!({
-            "resultsPerPage": 1,
-            "startIndex": 0,
-            "totalResults": 1,
-            "format": "NVD_CVE",
-            "version": "2.0",
-            "timestamp": "2026-04-25T12:00:00.000",
-            "vulnerabilities": [{
-                "cve": {
-                    "id": "CVE-2026-9999",
-                    "published": "2026-04-20T10:00:00.000",
-                    "lastModified": "2026-04-22T10:00:00.000",
-                    "descriptions": [{
-                        "lang": "en",
-                        "value": "Rust imported CVE"
-                    }],
-                    "metrics": {
-                        "cvssMetricV31": [{
-                            "cvssData": {
-                                "baseScore": 8.8,
-                                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
-                            },
-                            "baseSeverity": "HIGH"
-                        }]
-                    },
-                    "weaknesses": [{
-                        "description": [{
-                            "lang": "en",
-                            "value": "CWE-79"
-                        }]
-                    }],
-                    "references": [{
-                        "url": "https://example.test/CVE-2026-9999"
-                    }],
-                    "configurations": [{
-                        "nodes": []
+    let transport = Arc::new(NvdFixtureTransport::new(serde_json::json!({
+        "resultsPerPage": 1,
+        "startIndex": 0,
+        "totalResults": 1,
+        "format": "NVD_CVE",
+        "version": "2.0",
+        "timestamp": "2026-04-25T12:00:00.000",
+        "vulnerabilities": [{
+            "cve": {
+                "id": "CVE-2026-9999",
+                "published": "2026-04-20T10:00:00.000",
+                "lastModified": "2026-04-22T10:00:00.000Z",
+                "descriptions": [{
+                    "lang": "en",
+                    "value": "Rust imported CVE"
+                }],
+                "metrics": {
+                    "cvssMetricV31": [{
+                        "cvssData": {
+                            "baseScore": 8.8,
+                            "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+                        },
+                        "baseSeverity": "HIGH"
                     }]
-                }
-            }]
-        }),
-    );
+                },
+                "weaknesses": [{
+                    "description": [{
+                        "lang": "en",
+                        "value": "CWE-79"
+                    }]
+                }],
+                "references": [{
+                    "url": "https://example.test/CVE-2026-9999"
+                }],
+                "configurations": [{
+                    "nodes": []
+                }]
+            }
+        }]
+    })));
     let app = app_router_with_state(
         AppState::new(Some(CveStore::from_sqlite_pool(pool.clone())))
-            .with_nvd_api_base_url(Some(nvd_base_url)),
+            .with_vulnerability_feed_transport(Some(transport)),
     );
 
     let response = app
@@ -18151,6 +18438,9 @@ async fn nvd_import_endpoint_fetches_and_persists_cve_record() {
                 .method("POST")
                 .uri("/api/v1/nvd/import")
                 .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-is-superuser", "true")
                 .body(Body::from(r#"{"cve_id":" cve-2026-9999 "}"#))
                 .unwrap(),
         )
@@ -18196,21 +18486,18 @@ async fn nvd_import_endpoint_returns_not_found_for_missing_cve() {
         .await
         .unwrap();
     create_cverecord_table(&pool).await;
-    let nvd_base_url = nvd_fixture_base_url(
-        "nvd-import-missing",
-        serde_json::json!({
-            "resultsPerPage": 0,
-            "startIndex": 0,
-            "totalResults": 0,
-            "format": "NVD_CVE",
-            "version": "2.0",
-            "timestamp": "2026-04-25T12:00:00.000",
-            "vulnerabilities": []
-        }),
-    );
+    let transport = Arc::new(NvdFixtureTransport::new(serde_json::json!({
+        "resultsPerPage": 0,
+        "startIndex": 0,
+        "totalResults": 0,
+        "format": "NVD_CVE",
+        "version": "2.0",
+        "timestamp": "2026-04-25T12:00:00.000",
+        "vulnerabilities": []
+    })));
     let app = app_router_with_state(
         AppState::new(Some(CveStore::from_sqlite_pool(pool.clone())))
-            .with_nvd_api_base_url(Some(nvd_base_url)),
+            .with_vulnerability_feed_transport(Some(transport)),
     );
 
     let response = app
@@ -18219,6 +18506,9 @@ async fn nvd_import_endpoint_returns_not_found_for_missing_cve() {
                 .method("POST")
                 .uri("/api/v1/nvd/import")
                 .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-is-superuser", "true")
                 .body(Body::from(r#"{"cve_id":"CVE-2026-9999"}"#))
                 .unwrap(),
         )
@@ -18450,6 +18740,9 @@ async fn nvd_normalize_endpoint_returns_versioned_payload() {
                 .method("POST")
                 .uri("/api/v1/nvd/normalize")
                 .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "SOC_ANALYST")
                 .body(Body::from(r#"{"cve_id":" cve-2026-4242 "}"#))
                 .unwrap(),
         )
@@ -18472,6 +18765,9 @@ async fn nvd_normalize_endpoint_rejects_invalid_cve_id_with_error_code() {
                 .method("POST")
                 .uri("/api/v1/nvd/normalize")
                 .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "SOC_ANALYST")
                 .body(Body::from(r#"{"cve_id":"not-a-cve"}"#))
                 .unwrap(),
         )
@@ -18487,29 +18783,32 @@ async fn nvd_normalize_endpoint_rejects_invalid_cve_id_with_error_code() {
 }
 
 #[tokio::test]
-async fn nvd_upsert_endpoint_requires_configured_database() {
+async fn nvd_upsert_endpoint_is_disabled_without_database_dependency() {
     let response = app_router()
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/api/v1/nvd/upsert")
                 .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-is-superuser", "true")
                 .body(Body::from(r#"{"cve":{"id":"CVE-2026-4242"}}"#))
                 .unwrap(),
         )
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.status(), StatusCode::GONE);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["accepted"], false);
     assert_eq!(payload["api_version"], "v1");
-    assert_eq!(payload["error_code"], "database_not_configured");
+    assert_eq!(payload["error_code"], "nvd_arbitrary_upsert_disabled");
 }
 
 #[tokio::test]
-async fn nvd_upsert_endpoint_persists_cve_record() {
+async fn nvd_upsert_endpoint_rejects_payload_without_partial_write() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
@@ -18526,6 +18825,9 @@ async fn nvd_upsert_endpoint_persists_cve_record() {
                 .method("POST")
                 .uri("/api/v1/nvd/upsert")
                 .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-is-superuser", "true")
                 .body(Body::from(
                     r#"{
                         "cve": {
@@ -18554,34 +18856,19 @@ async fn nvd_upsert_endpoint_persists_cve_record() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.status(), StatusCode::GONE);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["accepted"], false);
     assert_eq!(payload["api_version"], "v1");
-    assert_eq!(payload["cve_id"], "CVE-2026-4242");
-    assert_eq!(payload["persisted"], true);
-
-    let row = sqlx::query(
-        r#"
-        SELECT cve_id, description, severity, weakness_ids_json, references_json, raw_json
-        FROM vulnerability_intelligence_cverecord
-        WHERE cve_id = ?
-        "#,
+    assert_eq!(payload["error_code"], "nvd_arbitrary_upsert_disabled");
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM vulnerability_intelligence_cverecord WHERE cve_id='CVE-2026-4242'",
     )
-    .bind("CVE-2026-4242")
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(row.get::<String, _>("cve_id"), "CVE-2026-4242");
-    assert_eq!(row.get::<String, _>("description"), "Rust persisted CVE");
-    assert_eq!(row.get::<String, _>("severity"), "HIGH");
-    assert_eq!(row.get::<String, _>("weakness_ids_json"), r#"["CWE-79"]"#);
-    assert_eq!(
-        row.get::<String, _>("references_json"),
-        r#"["https://example.test/cve"]"#
-    );
-    assert_eq!(row.get::<String, _>("raw_json"), r#"{"source":"test"}"#);
+    assert_eq!(count, 0);
 }
 
 #[tokio::test]
@@ -18683,13 +18970,6 @@ fn regular_file_count(path: &std::path::Path) -> usize {
             }
         })
         .sum()
-}
-
-fn nvd_fixture_base_url(name: &str, payload: serde_json::Value) -> String {
-    let root = test_media_root(name);
-    let path = root.join("nvd-response.json");
-    fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
-    format!("file://{}", path.display())
 }
 
 fn import_preview_xlsx_fixture() -> Vec<u8> {
@@ -20090,6 +20370,23 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             vex_justification TEXT NOT NULL DEFAULT '',
             fixed_version varchar(128) NOT NULL DEFAULT '',
             vex_updated_at TEXT NULL,
+            cve_record_id INTEGER NULL,
+            correlation_id INTEGER NULL,
+            origin_key varchar(64) NOT NULL DEFAULT '',
+            hygiene_status varchar(24) NOT NULL DEFAULT 'NEEDS_REVIEW',
+            priority varchar(16) NOT NULL DEFAULT 'MEDIUM',
+            priority_factors_json TEXT NOT NULL DEFAULT '{}',
+            match_basis_json TEXT NOT NULL DEFAULT '{}',
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            recommendation TEXT NOT NULL DEFAULT '',
+            data_freshness_status varchar(16) NOT NULL DEFAULT 'UNKNOWN',
+            data_freshness_at TEXT NULL,
+            eol_eos_status varchar(16) NOT NULL DEFAULT 'UNKNOWN',
+            eol_eos_source varchar(255) NOT NULL DEFAULT '',
+            last_evaluated_at TEXT NULL,
+            hygiene_lifecycle_status varchar(16) NOT NULL DEFAULT 'ACTIVE',
+            last_hygiene_run_id INTEGER NULL,
+            last_complete_evaluated_at TEXT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -20278,6 +20575,30 @@ async fn create_product_security_tables(pool: &SqlitePool) {
             confidence INTEGER NOT NULL DEFAULT 80,
             status varchar(16) NOT NULL DEFAULT 'SUGGESTED',
             rationale TEXT NOT NULL DEFAULT '',
+            vulnerability_id INTEGER NULL,
+            import_component_id INTEGER NULL,
+            matched_identifier TEXT NOT NULL DEFAULT '',
+            observed_version varchar(128) NOT NULL DEFAULT '',
+            affected_version_range varchar(512) NOT NULL DEFAULT '',
+            source_reference varchar(255) NOT NULL DEFAULT '',
+            source_observed_at TEXT NULL,
+            evaluated_at TEXT NULL,
+            evaluator_type varchar(16) NOT NULL DEFAULT 'SYSTEM',
+            evaluator_id INTEGER NULL,
+            deduplication_key varchar(64) NOT NULL DEFAULT '',
+            provenance_json TEXT NOT NULL DEFAULT '{}',
+            data_freshness_status varchar(16) NOT NULL DEFAULT 'UNKNOWN',
+            data_freshness_at TEXT NULL,
+            priority varchar(16) NOT NULL DEFAULT 'MEDIUM',
+            priority_factors_json TEXT NOT NULL DEFAULT '{}',
+            recommendation TEXT NOT NULL DEFAULT '',
+            hygiene_status varchar(24) NOT NULL DEFAULT 'NEEDS_REVIEW',
+            eol_eos_status varchar(16) NOT NULL DEFAULT 'UNKNOWN',
+            match_lifecycle_status varchar(16) NOT NULL DEFAULT 'ACTIVE',
+            system_match_status varchar(16) NOT NULL DEFAULT 'UNKNOWN',
+            last_seen_hygiene_run_id INTEGER NULL,
+            stale_at TEXT NULL,
+            stale_reason varchar(128) NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             UNIQUE(tenant_id, cve, match_type, match_value)
@@ -24212,15 +24533,110 @@ async fn create_cverecord_table(pool: &SqlitePool) {
             references_json TEXT NOT NULL,
             configurations_json TEXT NOT NULL,
             epss_score decimal NULL,
-            in_kev_catalog bool NOT NULL,
+            epss_percentile decimal NULL,
+            epss_model_date TEXT NULL,
+            epss_retrieved_at TEXT NULL,
+            epss_last_checked_at TEXT NULL,
+            epss_source TEXT NOT NULL DEFAULT '',
+            epss_content_sha256 varchar(64) NOT NULL DEFAULT '',
+            in_kev_catalog bool NOT NULL DEFAULT 0,
             kev_date_added date NULL,
-            kev_vendor_project varchar(255) NOT NULL,
-            kev_product varchar(255) NOT NULL,
-            kev_required_action TEXT NOT NULL,
-            kev_known_ransomware bool NOT NULL,
+            kev_vendor_project varchar(255) NOT NULL DEFAULT '',
+            kev_product varchar(255) NOT NULL DEFAULT '',
+            kev_required_action TEXT NOT NULL DEFAULT '',
+            kev_known_ransomware bool NOT NULL DEFAULT 0,
+            kev_due_date TEXT NULL,
+            kev_catalog_version varchar(64) NOT NULL DEFAULT '',
+            kev_source_updated_at TEXT NULL,
+            kev_retrieved_at TEXT NULL,
+            kev_source TEXT NOT NULL DEFAULT '',
+            kev_content_sha256 varchar(64) NOT NULL DEFAULT '',
+            kev_last_seen_at TEXT NULL,
+            kev_removed_at TEXT NULL,
+            nvd_retrieved_at TEXT NULL,
+            nvd_source TEXT NOT NULL DEFAULT '',
+            nvd_content_sha256 varchar(64) NOT NULL DEFAULT '',
+            nvd_parser_version varchar(32) NOT NULL DEFAULT 'iscy-nvd-v1',
+            nvd_import_run_id INTEGER NULL,
             raw_json TEXT NOT NULL,
             published_at TEXT NULL,
             modified_at TEXT NULL
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE vulnerability_intelligence_feed_state (
+            source TEXT PRIMARY KEY,status TEXT NOT NULL DEFAULT 'NEVER_RUN',
+            checkpoint_at TEXT NULL,last_attempt_at TEXT NULL,last_success_at TEXT NULL,
+            last_window_start TEXT NULL,last_window_end TEXT NULL,last_processed_count INTEGER NOT NULL DEFAULT 0,
+            last_error_code TEXT NOT NULL DEFAULT '',last_error_summary TEXT NOT NULL DEFAULT '',
+            source_version TEXT NOT NULL DEFAULT '',content_sha256 TEXT NOT NULL DEFAULT '',
+            parser_version TEXT NOT NULL DEFAULT 'iscy-v1',retrieved_at TEXT NULL,
+            lock_token TEXT NOT NULL DEFAULT '',lock_owner TEXT NOT NULL DEFAULT '',
+            lock_acquired_at TEXT NULL,lock_expires_at TEXT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE vulnerability_intelligence_feed_run (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,source TEXT NOT NULL,trigger_type TEXT NOT NULL,
+            requested_by_id INTEGER NULL,lock_token TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'RUNNING',
+            started_at TEXT NOT NULL,completed_at TEXT NULL,window_start TEXT NULL,window_end TEXT NULL,
+            page_count INTEGER NOT NULL DEFAULT 0,received_count INTEGER NOT NULL DEFAULT 0,
+            processed_count INTEGER NOT NULL DEFAULT 0,unchanged_count INTEGER NOT NULL DEFAULT 0,
+            error_code TEXT NOT NULL DEFAULT '',error_summary TEXT NOT NULL DEFAULT '',
+            source_version TEXT NOT NULL DEFAULT '',content_sha256 TEXT NOT NULL DEFAULT '',
+            parser_version TEXT NOT NULL DEFAULT 'iscy-v1',created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE vulnerability_intelligence_audit_event (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,tenant_id INTEGER NULL,run_id INTEGER NULL,
+            hygiene_run_id INTEGER NULL,
+            object_type TEXT NOT NULL,object_key TEXT NOT NULL,event_type TEXT NOT NULL,
+            actor_id INTEGER NULL,summary TEXT NOT NULL,detail_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE vulnerability_intelligence_hygiene_run (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,tenant_id INTEGER NOT NULL,evaluator_id INTEGER NOT NULL,
+            lock_token TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'RUNNING',scope_complete bool NOT NULL DEFAULT 0,
+            incomplete_reasons_json TEXT NOT NULL DEFAULT '[]',evaluated_cves INTEGER NOT NULL DEFAULT 0,
+            evaluated_inventory_items INTEGER NOT NULL DEFAULT 0,observed_correlations INTEGER NOT NULL DEFAULT 0,
+            stale_correlations INTEGER NOT NULL DEFAULT 0,reevaluated_findings INTEGER NOT NULL DEFAULT 0,
+            error_code TEXT NOT NULL DEFAULT '',started_at TEXT NOT NULL,completed_at TEXT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        CREATE TABLE vulnerability_intelligence_hygiene_state (
+            tenant_id INTEGER PRIMARY KEY,current_run_id INTEGER NULL,last_complete_run_id INTEGER NULL,
+            last_complete_at TEXT NULL,lock_token TEXT NOT NULL DEFAULT '',lock_owner_id INTEGER NULL,
+            lock_acquired_at TEXT NULL,lock_expires_at TEXT NULL,updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         "#,
     )
