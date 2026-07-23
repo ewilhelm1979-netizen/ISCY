@@ -41,6 +41,7 @@ Out of scope unless explicitly added by an operator:
 | Webhook secrets and nonces | confidentiality, authenticity, replay resistance |
 | Database credentials and runtime secrets | confidentiality |
 | SBOM/CSAF/VEX and vulnerability data | integrity, provenance, availability |
+| Software policies, exceptions and effective decisions | integrity, tenant isolation, expiry, traceability |
 | Audit events and review decisions | integrity, non-ambiguity, traceability |
 | Backups | confidentiality, integrity, recoverability |
 
@@ -247,6 +248,40 @@ cryptographically signed and may be unavailable, delayed or factually wrong.
 Operators must monitor provenance and staleness, review uncertain correlations
 and retain human ownership of remediation decisions.
 
+### Software-policy shadowing, self-approval, or stale exception
+
+**Threat:** A broad approval hides a restrictive rule, a caller links a policy
+to a foreign tenant object, an applicant approves their own exception, or an
+expired exception remains effective because no scheduler ran.
+
+**Controls:**
+
+- exact existing tenant targets and composite tenant foreign keys
+- no free-text matcher, wildcard, regex, version expression or executable rule
+- deterministic restrictive precedence independent of row order
+- `PROHIBITED` before `RESTRICTED` before `APPROVED`
+- an exception covers only its referenced policy and exact target
+- mandatory UTC expiry checked on every current evaluation
+- read views derive expired status immediately; mutating evaluation persists
+  expiry and its audit event
+- separate request/review/revoke permissions plus unconditional self-approval
+  denial
+- immutable approved request content and optimistic revision checks
+- transactional policy/exception/audit writes with rollback on audit failure
+- PostgreSQL row/advisory locks, SQLite write serialization and unique
+  constraints for concurrent decisions
+- tenant-bound actor/owner validation and redacted internal actor IDs
+- HTML escaping, bounded text and pagination, strict request structures and
+  generic safe database errors
+- no Incident, Evidence, VEX, Risk Acceptance, Security Observation, agent
+  command or software-change side effect
+
+**Residual risk:** A human can approve an unsuitable policy or exception, and
+canonical inventory can be stale. Policy state is governance assistance, not
+proof of software safety, legal compliance or a technical enforcement control.
+Vendor-wide rules, version ranges, EOL/EOS and license decisions require later
+separately reviewed data and semantics.
+
 ### Secret disclosure through logs, Git, or backups
 
 **Threat:** Database credentials or tokens appear in console logs, committed files, CI artifacts, or backup environment snapshots.
@@ -326,6 +361,7 @@ A release must not knowingly violate these rules:
 | Identity query sanitization | `security_boundary` unit tests and production HTTP negative tests |
 | Identity header trust | `hardening` tests and route negative tests |
 | Tenant isolation | store and HTTP foreign-tenant tests |
+| Software approval and exceptions | exact-target FK tests, RBAC/self-approval, precedence, expiry, concurrency and rollback tests |
 | Evidence upload | size/type/reference tests and restore smoke |
 | Direct evidence serving | reverse-proxy configuration test/manual HTTP check |
 | Authenticated Evidence download | session-only authentication, tenant-scoped lookup, protection-class tests, and path-manipulation negative tests |

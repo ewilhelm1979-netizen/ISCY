@@ -34,6 +34,7 @@ use iscy_backend::{
     risk_store::RiskStore,
     roadmap_store::RoadmapStore,
     security_store::SecurityStore,
+    software_policy_store::SoftwarePolicyStore,
     supplier_product_security_store::SupplierProductSecurityStore,
     supplier_store::SupplierStore,
     tenant_store::TenantStore,
@@ -1136,8 +1137,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0044_rust_vulnerability_hygiene_lifecycle"));
-    assert!(html.contains("44/44 angewendet"));
+    assert!(html.contains("0045_rust_software_approval_exception_policy"));
+    assert!(html.contains("45/45 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -17190,7 +17191,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0041_rust_agent_rollout_manifest_handoff",
             "0042_rust_native_threat_intelligence_observations",
             "0043_rust_continuous_vulnerability_intelligence",
-            "0044_rust_vulnerability_hygiene_lifecycle"
+            "0044_rust_vulnerability_hygiene_lifecycle",
+            "0045_rust_software_approval_exception_policy"
         ]
     );
     assert!(
@@ -26427,4 +26429,446 @@ async fn threat_intelligence_store_parallel_retries_are_idempotent() {
     let _ = fs::remove_file(&path);
     let _ = fs::remove_file(path.with_extension("sqlite3-shm"));
     let _ = fs::remove_file(path.with_extension("sqlite3-wal"));
+}
+
+#[tokio::test]
+async fn software_policy_api_enforces_rbac_tenant_revision_and_self_approval() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect("sqlite::memory:?cache=shared")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO organizations_tenant (id,name,slug) VALUES
+         (601,'Policy API A','policy-api-a'),(602,'Policy API B','policy-api-b')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO accounts_user (
+            id,username,email,tenant_id,role,is_active,is_staff,is_superuser
+         ) VALUES
+         (60101,'policy-admin-a','admin-a@example.invalid',601,'SECURITY_ADMIN',1,0,0),
+         (60102,'policy-admin-b','admin-b@example.invalid',601,'SECURITY_ADMIN',1,0,0),
+         (60103,'policy-analyst','analyst@example.invalid',601,'SOC_ANALYST',1,0,0),
+         (60201,'foreign-policy-admin','foreign@example.invalid',602,'SECURITY_ADMIN',1,0,0)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO product_security_product (id,tenant_id,name,code) VALUES
+         (60110,601,'API Policy Product','API-A'),
+         (60210,602,'Foreign API Product','API-B')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_software_policy_store(Some(SoftwarePolicyStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/software-policies")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/software-policies")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60103")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(
+                    r#"{"name":"Denied","decision":"PROHIBITED","target":{"target_type":"PRODUCT","target_id":60110},"rationale":"Denied request"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    for body in [
+        r#"{"name":"Foreign target","decision":"PROHIBITED","target":{"target_type":"PRODUCT","target_id":60210},"rationale":"Must not cross tenant"}"#,
+        r#"{"name":"Foreign owner","decision":"PROHIBITED","target":{"target_type":"PRODUCT","target_id":60110},"rationale":"Must not cross tenant","owner_id":60201}"#,
+    ] {
+        let manipulated_reference = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/software-policies")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "601")
+                    .header("x-iscy-user-id", "60101")
+                    .header("x-iscy-roles", "SECURITY_ADMIN")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(manipulated_reference.status(), StatusCode::NOT_FOUND);
+    }
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/software-policies?tenant_id=602")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60101")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(
+                    r#"{"name":"<script>alert(1)</script>","description":"Exact product policy","decision":"PROHIBITED","target":{"target_type":"PRODUCT","target_id":60110},"rationale":"Reviewed restriction","owner_id":60101}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let create_body = to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&create_body).unwrap();
+    assert_eq!(
+        created["data"]["policy"]["name"],
+        "<script>alert(1)</script>"
+    );
+    assert_eq!(created["data"]["policy"]["tenant_id"], 601);
+    for internal_actor_field in ["owner_id", "created_by_id", "updated_by_id"] {
+        assert!(created["data"]["policy"]
+            .get(internal_actor_field)
+            .is_none());
+    }
+    let policy_id = created["data"]["policy"]["id"].as_i64().unwrap();
+    let policy_revision = created["data"]["policy"]["revision"].as_i64().unwrap();
+
+    let foreign = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/software-policies/{policy_id}"))
+                .header("x-iscy-tenant-id", "602")
+                .header("x-iscy-user-id", "60201")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+
+    let activate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/software-policies/{policy_id}/activate"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60101")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(format!(
+                    r#"{{"expected_revision":{policy_revision},"reason":"Independent policy approval"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(activate.status(), StatusCode::OK);
+
+    let stale_archive = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/software-policies/{policy_id}/archive"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60101")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(format!(
+                    r#"{{"expected_revision":{policy_revision},"reason":"Stale request"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(stale_archive.status(), StatusCode::CONFLICT);
+
+    let evaluate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/software-policies/evaluate")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60103")
+                .header("x-iscy-roles", "SOC_ANALYST")
+                .body(Body::from(
+                    r#"{"target":{"target_type":"PRODUCT","target_id":60110}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(evaluate.status(), StatusCode::OK);
+    let evaluation: serde_json::Value =
+        serde_json::from_slice(&to_bytes(evaluate.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(evaluation["data"]["effective_decision"], "PROHIBITED");
+
+    let valid_from = (chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
+    let expires_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let exception_create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/software-policy-exceptions")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60101")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(
+                    serde_json::json!({
+                        "policy_id": policy_id,
+                        "justification": "<img src=x onerror=alert(1)> temporary need",
+                        "compensating_controls": "Restricted segment",
+                        "requested_valid_from": valid_from,
+                        "expires_at": expires_at
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(exception_create.status(), StatusCode::CREATED);
+    let exception: serde_json::Value = serde_json::from_slice(
+        &to_bytes(exception_create.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let exception_id = exception["data"]["exception"]["id"].as_i64().unwrap();
+    let exception_revision = exception["data"]["exception"]["revision"].as_i64().unwrap();
+
+    let submit = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/software-policy-exceptions/{exception_id}/submit"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60101")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(format!(
+                    r#"{{"expected_revision":{exception_revision},"reason":"Submit"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(submit.status(), StatusCode::OK);
+    let pending: serde_json::Value =
+        serde_json::from_slice(&to_bytes(submit.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let pending_revision = pending["data"]["revision"].as_i64().unwrap();
+    for internal_actor_field in ["applicant_id", "reviewer_id"] {
+        assert!(pending["data"].get(internal_actor_field).is_none());
+    }
+
+    let foreign_approve = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/software-policy-exceptions/{exception_id}/approve"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "602")
+                .header("x-iscy-user-id", "60201")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(format!(
+                    r#"{{"expected_revision":{pending_revision},"reason":"Foreign decision"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_approve.status(), StatusCode::NOT_FOUND);
+
+    let self_approve = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/software-policy-exceptions/{exception_id}/approve"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60101")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(format!(
+                    r#"{{"expected_revision":{pending_revision},"reason":"Must fail"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(self_approve.status(), StatusCode::CONFLICT);
+    let self_approve_payload: serde_json::Value = serde_json::from_slice(
+        &to_bytes(self_approve.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        self_approve_payload["error_code"],
+        "software_exception_self_approval_denied"
+    );
+
+    let analyst_approve = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/software-policy-exceptions/{exception_id}/approve"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60103")
+                .header("x-iscy-roles", "SOC_ANALYST")
+                .body(Body::from(format!(
+                    r#"{{"expected_revision":{pending_revision},"reason":"Denied role"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(analyst_approve.status(), StatusCode::FORBIDDEN);
+
+    let approve = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/software-policy-exceptions/{exception_id}/approve"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60102")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(format!(
+                    r#"{{"expected_revision":{pending_revision},"reason":"Independent approval"}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approve.status(), StatusCode::OK);
+
+    let reevaluate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/software-policies/evaluate")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60102")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(
+                    r#"{"target":{"target_type":"PRODUCT","target_id":60110}}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reevaluate.status(), StatusCode::OK);
+    let reevaluation: serde_json::Value =
+        serde_json::from_slice(&to_bytes(reevaluate.into_body(), usize::MAX).await.unwrap())
+            .unwrap();
+    assert_eq!(
+        reevaluation["data"]["effective_decision"],
+        "EXCEPTION_ACTIVE"
+    );
+
+    let page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/software-policies/")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60102")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let page_body = String::from_utf8(
+        to_bytes(page.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(page_body.contains("EXCEPTION_ACTIVE"));
+    assert!(page_body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+    assert!(page_body.contains("&lt;img src=x onerror=alert(1)&gt;"));
+    assert!(!page_body.contains("<script>alert(1)</script>"));
+    assert!(!page_body.contains("<img src=x onerror=alert(1)>"));
+    assert!(page_body.contains("Keine Policy bedeutet nicht freigegeben"));
+
+    let invalid_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/software-policies?limit=201")
+                .header("x-iscy-tenant-id", "601")
+                .header("x-iscy-user-id", "60101")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(invalid_page.status(), StatusCode::BAD_REQUEST);
+
+    let own_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM software_approval_policy WHERE tenant_id=601")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let foreign_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM software_approval_policy WHERE tenant_id=602")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((own_count, foreign_count), (1, 0));
 }

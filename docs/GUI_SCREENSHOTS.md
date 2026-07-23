@@ -6,7 +6,7 @@ Diese Screenshots dokumentieren die aktuelle serverseitige ISCY-Weboberflaeche f
 
 Die getrennten Visual-Regression-Baselines unter `../tests/visual/baselines/`
 werden mit dem durch `flake.lock` gepinnten Playwright-/Chromium-Pfad erzeugt.
-Sie pruefen 19 zentrale Bereiche bei 1440 x 1200 und 1024 x 900. Die
+Sie pruefen 21 zentrale Bereiche bei 1440 x 1200 und 1024 x 900. Die
 Dokumentationsbilder in `docs/assets/` werden nicht automatisch als
 Testbaselines verwendet oder durch CI ueberschrieben. Update- und Diff-Prozess
 sind in `PERFORMANCE_HA_VISUAL_TESTING.md` beschrieben.
@@ -53,6 +53,14 @@ Agent-Befehle oder automatische Softwareverteilung aus.
 ## CVEs
 
 ![CVEs](assets/iscy-cves.png)
+
+## Software Approval und Exceptions
+
+Der Visual-Regression-Pfad prueft den passiven tenantgebundenen Arbeitsbereich
+fuer exakte Policies, gespeicherte effektive Bewertungen, befristete
+Ausnahmen und Audit. `APPROVED`, `EXCEPTION_ACTIVE`, `UNMANAGED` und
+`REVIEW_REQUIRED` bleiben textlich unterscheidbar; eine abgelaufene Ausnahme
+wird nicht als normale Freigabe dargestellt.
 
 ## Threat Intelligence und Security Observations
 

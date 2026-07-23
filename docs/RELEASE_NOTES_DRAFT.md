@@ -31,6 +31,28 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
   diesem Entwicklungsstand implementiert, aber noch nicht veroeffentlicht.
 - Continuous Vulnerability Intelligence und Software Hygiene - Phase 1 sind
   in diesem Entwicklungsstand implementiert, aber noch nicht veroeffentlicht.
+- Software Approval und Exception Policy - Phase 2 ist in diesem
+  Entwicklungsstand implementiert, aber noch nicht veroeffentlicht.
+
+## Software Approval und Exception Policy - Phase 2
+
+- tenantgebundene, versionierte Policies fuer exakte vorhandene Produkte,
+  Assets, kanonische Komponenten und importierte SBOM-Komponenten
+- Entscheidungen `APPROVED`, `RESTRICTED` und `PROHIBITED` mit deterministischer
+  restriktivster Praezedenz und fail-closed `UNMANAGED` beziehungsweise
+  `REVIEW_REQUIRED`
+- befristete Ausnahmen mit Draft, Einreichung, unabhaengiger Entscheidung,
+  Widerruf und Ablauf; Self-Approval bleibt auch bei kombinierten Rollen
+  serverseitig gesperrt
+- Ablaufpruefung auf Basis der Server-UTC-Zeit ohne Scheduler-Abhaengigkeit,
+  Optimistic Concurrency sowie PostgreSQL-/SQLite-Transaktionsschutz
+- granulare Permissions, tenantgebundene API und Webarbeitsbereich
+  `/software-policies/` mit Audit und Provenance
+- keine Softwareaenderung, kein Agentenbefehl, kein Incident, keine Evidence,
+  keine Security Observation, kein VEX und keine Risk Acceptance als
+  Nebenwirkung
+- eine Freigabe behauptet keine Schwachstellenfreiheit; fehlende Policy oder
+  fehlende bekannte CVE bedeutet nie automatisch `APPROVED`
 
 ## Continuous Vulnerability Intelligence und Software Hygiene - Phase 1
 
@@ -55,8 +77,8 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
 - globale Checkpoint-/Fenster-Zeitpunkte und anfordernde Plattform-Actor-IDs
   bleiben fuer Tenantrollen redigiert
 - keine automatische Security Observation, kein Incident, keine Evidence,
-  kein Agentenbefehl und keine aktive Reaktion; EOL/EOS und weitergehende
-  Software-Policy bleiben ohne belastbare Quelle Phase 2
+  kein Agentenbefehl und keine aktive Reaktion; EOL/EOS, Lizenzbewertung,
+  unscharfe Regeln und aktive Durchsetzung bleiben ausserhalb von Phase 2
 
 ## Native Threat Intelligence und Security Observations - Phase 1
 
@@ -81,7 +103,7 @@ Konformitaetsentscheidung oder automatische Behoerdenmeldung.
 - MSRV und portabler Release-Builder: Rust `1.88.0`
 - PostgreSQL 16 bleibt der Standard.
 - PostgreSQL 18.4 bleibt ein zusaetzlicher Kompatibilitaetspfad.
-- Aktuell 44 fortlaufende Migrationen, `0001` bis `0044`
-- 40 Visual-Baselines
+- Aktuell 45 fortlaufende Migrationen, `0001` bis `0045`
+- 42 Visual-Baselines
 - Signaturstatus: `unsigned`
 - Provenance-Status: `prepared_unsigned`

@@ -6,6 +6,14 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Software Approval and Exception Policy - Phase 2
+
+- adds migration `0045_rust_software_approval_exception_policy` with tenant-scoped policies, mandatory-expiry exceptions, persisted evaluations and bounded audit events for exact existing product, asset, component and imported SBOM-component targets
+- adds deterministic restrictive precedence for `APPROVED`, `RESTRICTED`, `PROHIBITED`, `EXCEPTION_ACTIVE`, `UNMANAGED` and `REVIEW_REQUIRED`, with current server-time expiry checks and no fail-open approval
+- adds separate request/review/revoke permissions, unconditional self-approval denial, immutable approved requests, optimistic revisions, PostgreSQL locking, SQLite write serialization and atomic state/audit rollback
+- adds the `/software-policies/` workspace and tenant-bound `/api/v1/software-policies*` and `/api/v1/software-policy-exceptions*` endpoints with IDOR, RBAC, concurrency, expiry, pagination and XSS regression coverage
+- remains passive and advisory: no software enforcement, Agent command, Incident, Evidence, Security Observation, VEX, Risk Acceptance or synthetic CVE is created or changed
+
 ### Continuous Vulnerability Intelligence and Software Hygiene - Phase 1
 
 - hardens the existing NVD import boundary and disables caller-controlled CVE payload upserts while preserving a validated, authorized single-CVE import

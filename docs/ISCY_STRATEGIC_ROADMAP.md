@@ -294,7 +294,7 @@ Umgesetzt:
 - Zwei-Instanzen-Topologie mit PostgreSQL 16, S3-kompatiblem MinIO und nginx 1.31
 - Cross-Instance-Schreiben/Lesen, Evidence-Upload/Verify und Failover in beide Richtungen
 - isolierter PostgreSQL-18-Kompatibilitaets- und PG16-zu-PG18-Forward-Restore-Test mit getrennten Volumes, dynamischem Datenintegritaetsvergleich, Anwendungssmoke und Migrationsrennen; PostgreSQL 16 bleibt Standard
-- Nix-/Playwright-basierte visuelle Regression fuer 20 Bereiche und zwei Viewports mit 40 bewusst versionierten Baselines
+- Nix-/Playwright-basierte visuelle Regression fuer 21 Bereiche und zwei Viewports mit 42 bewusst versionierten Baselines
 - getrennte CI-Artefakte fuer Performance-Bericht und visuelle Abweichungen
 
 Bewusste Grenze:
@@ -342,7 +342,8 @@ Erfolgskriterium:
 
 ## Prioritaet 10: Continuous Vulnerability Intelligence und Software Hygiene
 
-Status: Phase 1 im Entwicklungsstand `V23.7.31` implementiert.
+Status: Phase 1 und die schmale Software-Approval-/Exception-Policy aus
+Phase 2 sind im Entwicklungsstand `V23.7.31` implementiert.
 
 Umgesetzt:
 
@@ -367,6 +368,20 @@ Umgesetzt:
 - Stale-Reconciliation ausschliesslich nach vollstaendig erfolgreichem Scope;
   partielle oder begrenzte Laeufe bleiben sichtbar unvollstaendig und erzeugen
   weder Entwarnung noch automatische VEX-Aussage
+- Migration `0045_rust_software_approval_exception_policy` mit exakten
+  tenantgebundenen Product-, Asset-, Component- und importierten
+  SBOM-Component-Zielen
+- versionierte Policy-Entscheidungen `APPROVED`, `RESTRICTED` und
+  `PROHIBITED` sowie deterministische restriktivste Praezedenz
+- befristeter Exception-Lifecycle mit getrenntem Antrag und Review,
+  Self-Approval-Schutz, UTC-Ablauf ohne Scheduler-Abhaengigkeit und
+  transaktionaler Auditspur
+- effektive Zustaende `APPROVED`, `RESTRICTED`, `PROHIBITED`,
+  `EXCEPTION_ACTIVE`, `UNMANAGED` und `REVIEW_REQUIRED`; keine Policy und eine
+  unvollstaendige Bewertung werden niemals als Freigabe dargestellt
+- Webarbeitsbereich `/software-policies/`, tenantgebundene API, granulare
+  Permissions, Revision-/Parallelitaetskontrollen und negative RBAC-/IDOR-/
+  Side-Effect-Tests
 
 Bewusste Grenze:
 
@@ -374,8 +389,10 @@ Bewusste Grenze:
   PURL ohne belastbare Quellsemantik wird nicht als bestaetigter NVD-Match
   dargestellt
 - EOL/EOS bleibt ohne belastbare dokumentierte Quelle `UNKNOWN`; automatische
-  Lifecycle-Feeds und eine schmale Software-Approval-/Exception-Policy sind
-  Phase 2
+  Lifecycle-Feeds bleiben ein spaeterer, separat zu pruefender Schritt
+- Software-Policies arbeiten nur mit exakten kanonischen Identitaeten; keine
+  Hersteller-Wildcards, freie Versionssprache, PURL-/CPE-Heuristik,
+  Lizenz-Compliance oder generische Workflow-Engine
 - keine Security-Observation-Duplizierung, Incidents, Evidence, Patches,
   Agentenbefehle, Active Response, Remote-Ausfuehrung oder Hackback
 
@@ -385,7 +402,10 @@ Erfolgskriterium:
   tenantgebundene Softwarematches bei kanonischem Produktbezug als vorhandene
   Vulnerability Findings nachvollziehbar priorisiert werden. Reine
   Asset-Matches bleiben Korrelationen; es entstehen keine operativen
-  Nebenwirkungen.
+  Nebenwirkungen. Verantwortliche koennen dieselben exakten Ziele zusaetzlich
+  passiv freigeben, einschraenken oder untersagen und befristete Ausnahmen
+  nachvollziehbar entscheiden, ohne CVE-, VEX- oder Risk-Acceptance-Semantik
+  zu veraendern.
 
 ## Empfohlene Umsetzungsreihenfolge
 

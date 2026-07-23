@@ -35,6 +35,7 @@ use iscy_backend::{
     risk_store::RiskStore,
     roadmap_store::RoadmapStore,
     security_store::SecurityStore,
+    software_policy_store::SoftwarePolicyStore,
     supplier_product_security_store::SupplierProductSecurityStore,
     supplier_store::SupplierStore,
     tenant_store::TenantStore,
@@ -206,6 +207,10 @@ async fn main() -> anyhow::Result<()> {
         Some(database_url) => Some(ThreatIntelligenceStore::connect(database_url).await?),
         None => None,
     };
+    let software_policy_store = match database_url.as_deref() {
+        Some(database_url) => Some(SoftwarePolicyStore::connect(database_url).await?),
+        None => None,
+    };
     let state = AppState::with_stores(cve_store, tenant_store)
         .with_account_store(account_store)
         .with_agent_governance_store(agent_governance_store)
@@ -236,6 +241,7 @@ async fn main() -> anyhow::Result<()> {
         .with_product_security_store(product_security_store)
         .with_ai_governance_store(ai_governance_store)
         .with_threat_intelligence_store(threat_intelligence_store)
+        .with_software_policy_store(software_policy_store)
         .with_vulnerability_feed_transport(vulnerability_feed_transport.clone())
         .with_database_url(database_url)
         .with_security_config(security_config.clone());

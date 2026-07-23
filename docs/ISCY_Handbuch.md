@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juli 2026 (ISCY V23.7.30 Release Candidate vorbereitet / Rust 0.3.22)
+Version: Arbeitsstand Juli 2026 (ISCY V23.7.31 Development / Rust 0.3.22)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -901,6 +901,73 @@ Der Bereich hilft, einen Hinweis nachvollziehbar zu bewerten, ohne ihn
 automatisch zu einem meldepflichtigen Vorfall oder zu einer technischen
 Gegenmassnahme zu machen.
 
+### 5.20 Software Approval und Exception Policy
+
+Zweck:
+Fuer ein konkretes vorhandenes Softwareobjekt nachvollziehbar festhalten, ob
+es freigegeben, eingeschraenkt oder untersagt ist und ob eine befristete
+Ausnahme wirksam ist.
+
+Policies koennen exakt auf ein tenantgebundenes Produkt, Asset, eine
+kanonische Produktkomponente oder eine bereits importierte SBOM-Komponente
+zeigen. Freier Text, unscharfe Herstellernamen, Wildcards, Regex,
+Versionsausdruecke und neue PURL-/CPE-Heuristiken sind keine technische
+Match-Grundlage.
+
+Die effektiven Zustaende bedeuten:
+
+- `APPROVED`: Eine aktuell wirksame Policy gibt das exakte Ziel ausdruecklich
+  frei und keine staerkere Restriktion gilt.
+- `RESTRICTED`: Mindestens eine einschraenkende Policy bleibt wirksam.
+- `PROHIBITED`: Mindestens eine untersagende Policy bleibt wirksam.
+- `EXCEPTION_ACTIVE`: Jede wirksame restriktive Policy ist durch ihre eigene
+  genehmigte und noch gueltige Ausnahme abgedeckt. Das ist keine normale
+  Freigabe.
+- `UNMANAGED`: Fuer das Ziel gibt es keine aktuell wirksame Policy.
+- `REVIEW_REQUIRED`: Die Bewertung ist unvollstaendig oder inkonsistent und
+  darf nicht als Freigabe verstanden werden.
+
+Ohne wirksame Ausnahme gewinnt immer die restriktivste passende Entscheidung:
+`PROHIBITED` vor `RESTRICTED` vor `APPROVED`. Eine Ausnahme wirkt
+ausschliesslich fuer ihre referenzierte Policy und ihr exaktes Ziel. Sie
+veraendert weder die Policy noch CVE-, VEX-, Risk-Acceptance- oder manuelle
+Triage-Daten.
+
+Ausnahmen durchlaufen `DRAFT`, `PENDING_REVIEW` und danach `APPROVED` oder
+`REJECTED`; genehmigte Ausnahmen koennen `REVOKED` oder `EXPIRED` werden. Jede
+Ausnahme braucht ein zukuenftiges Ablaufdatum. Der Server prueft Start und
+Ablauf in UTC bei jeder aktuellen Bewertung. Deshalb bleibt eine abgelaufene
+Ausnahme auch ohne Scheduler unwirksam. Antragsteller duerfen ihre eigene
+Ausnahme niemals genehmigen oder ablehnen.
+
+Rollen:
+
+- `SECURITY_ADMIN` und `COMPLIANCE_MANAGER`: tenantlokale Gesamtbearbeitung
+- `SOC_ANALYST`: lesen, passiv bewerten und Ausnahme beantragen
+- `AUDITOR`: Policies und Audit lesen
+- Admin, Staff und Superuser: bestehende administrative Semantik
+- direkte und gruppenbasierte Permissions bleiben moeglich; Self-Approval ist
+  trotzdem gesperrt
+
+Die Webansicht liegt unter `/software-policies/`. Die API umfasst
+`/api/v1/software-policies*` und
+`/api/v1/software-policy-exceptions*`. Revisionen verhindern verlorene
+Updates; PostgreSQL-Locks, SQLite-Schreibserialisierung, Tenant-Foreign-Keys
+und atomare Audittransaktionen sichern parallele Entscheidungen.
+
+Die Auswertung bleibt passiv. Sie installiert, blockiert, deinstalliert oder
+isoliert keine Software, sendet keinen Agentenbefehl und erzeugt weder
+Incident, Evidence, Security Observation, VEX noch Risk Acceptance.
+
+Keine Policy bedeutet nicht freigegeben. Keine bekannte Schwachstelle
+bedeutet ebenfalls nicht freigegeben. Eine Policy-Freigabe ist kein Nachweis,
+dass Software frei von Schwachstellen ist.
+
+Technische Details stehen in
+`docs/SOFTWARE_APPROVAL_EXCEPTION_POLICY.md`; die verbindliche Praezedenz- und
+Architekturentscheidung steht in
+`docs/ADR_SOFTWARE_APPROVAL_EXCEPTION_POLICY.md`.
+
 ## 6. Typische Arbeitsablaeufe
 
 ### 6.1 Erstaufbau eines ISMS
@@ -938,6 +1005,9 @@ Gegenmassnahme zu machen.
 4. VEX-Status fuer Schwachstellen dokumentieren: betroffen, nicht betroffen, behoben oder in Untersuchung
 5. Komponenten-Matches ueber CPE oder PURL kontrollieren
 6. CVE-Asset-Korrelationen vorschlagen lassen
+7. fuer exakte Produkte, Assets oder Komponenten Software-Policies pflegen
+8. `UNMANAGED` und `REVIEW_REQUIRED` fachlich pruefen
+9. befristete Ausnahmen getrennt beantragen und unabhaengig entscheiden
 7. Korrelationen fachlich akzeptieren oder ablehnen
 8. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen
 9. CVE-Risiko-Review-Queue abarbeiten
@@ -1873,8 +1943,8 @@ unterschiedliche Instanzen geschrieben, gelesen und verifiziert. Danach wird
 Failover in beide Richtungen sowie ein paralleler Migrationsstart geprueft.
 Lokaler Dateispeicher und SQLite werden nicht als HA-faehig dargestellt.
 
-`make visual-regression` vergleicht 40 bewusst versionierte Playwright-
-Baselines fuer 19 zentrale Seiten bei Desktop- und kleinem Laptop-Viewport.
+`make visual-regression` vergleicht 42 bewusst versionierte Playwright-
+Baselines fuer 21 zentrale Seiten bei Desktop- und kleinem Laptop-Viewport.
 Neben Pixelabweichungen prueft die Suite leere Hauptbereiche, 500-Seiten,
 horizontalen Ueberlauf, abgeschnittene Tabellenueberschriften und sichtbare
 Secrets. CI aktualisiert Baselines nie automatisch.
@@ -1901,7 +1971,7 @@ Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
 Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
 und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust
 1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem
-Bootstrap, 44 Migrationen, Restart, Migrationsrennen und einem logischen
+Bootstrap, 45 Migrationen, Restart, Migrationsrennen und einem logischen
 Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der
 PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder
 ein In-place-Upgrade noch ein automatisiertes `pg_upgrade` oder einen
@@ -1915,7 +1985,7 @@ Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-
 Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder
 internen Store-Details.
 
-Die RC-Metadatenpruefung bestaetigt 44 fortlaufende Migrationen, 40 visuelle
+Die RC-Metadatenpruefung bestaetigt 45 fortlaufende Migrationen, 42 visuelle
 Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen
 wertredigierten Sensitive-Data-Scan. `release/release-manifest.json` nutzt
 `git:HEAD` als reproduzierbaren Quellmarker; die lokale Artefakterzeugung loest
@@ -2031,6 +2101,16 @@ Risk Acceptance, Kommentare und Compensating Controls bleiben erhalten.
 `/cves/` und die Software-Hygiene-API zeigen Lifecycle, Datenalter und den
 sicher begrenzten Laufstatus, ohne interne Lease-, Actor- oder globale
 Checkpointdetails an Tenantrollen offenzulegen.
+
+Migration `0045_rust_software_approval_exception_policy` ergaenzt exakte
+tenantgebundene Policies, befristete Exceptions, persistierte passive
+Bewertungen und begrenzte Auditereignisse. `PROHIBITED` und `RESTRICTED`
+gewinnen deterministisch vor `APPROVED`; eine Ausnahme deckt nur ihre eigene
+Policy ab. `UNMANAGED` und `REVIEW_REQUIRED` bleiben fail-closed sichtbar.
+Self-Approval, fremde Tenantziele, veraltete Revisionen und unbefristete
+Ausnahmen werden serverseitig abgewiesen. Die Funktion aendert keine
+Software, Finding-Triage, VEX-, Risk-Acceptance-, Incident-, Evidence-,
+Security-Observation- oder Agentdaten.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 
