@@ -21,7 +21,7 @@ Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
   kompatibilitaetsgeprueft
 - Migrationen: 45, fortlaufend `0001` bis `0045`
 - Visual Regression: 42 Baselines
-- Rust-Vollsuite auf dem aktuellen Entwicklungsstand: 375 Tests bestanden; der
+- Rust-Vollsuite auf dem aktuellen Entwicklungsstand: 376 Tests bestanden; der
   bestehende isolierte MinIO-Test bleibt im normalen Cargo-Lauf bewusst
   ignoriert und wird im separaten Object-Storage-Integrationsjob ausgefuehrt
 - Lizenz: `AGPL-3.0-only`
@@ -72,7 +72,7 @@ lueckenlos, eindeutig und aufsteigend sein.
 
 | Bereich | Status | Nachweis oder Einschränkung |
 | --- | --- | --- |
-| Rust/Axum Backend und Weboberfläche | implementiert und geprüft | Locked Build, Clippy und 375 Rust-/HTTP-Tests sind auf dem aktuellen Entwicklungsstand gruen. |
+| Rust/Axum Backend und Weboberfläche | implementiert und geprüft | Locked Build, Clippy und 376 Rust-/HTTP-Tests sind auf dem aktuellen Entwicklungsstand gruen. |
 | SQLite | geprüft mit dokumentierter Einschränkung | Bootstrap, Restart und Restore; kein Mehrinstanz-/HA-Pfad. |
 | PostgreSQL 16 | Candidate-Prüfung erforderlich | Standardpfad; Leerdatenbank, Bestand, Dump/Restore und Migrations-Race muessen im Candidate-Gate gruen sein. |
 | PostgreSQL 18.4 | Candidate-Prüfung erforderlich | Zusatzgate fuer frischen Bootstrap, Restart, 45 Migrationen und logischen 16-nach-18-Forward-Restore; kein Produktionsstandard. |

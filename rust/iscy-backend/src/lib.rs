@@ -47875,13 +47875,20 @@ mod tests {
     use super::{
         agent_installation_command, alertmanager_hmac_message, alertmanager_hmac_secret_matches,
         evidence_disposition_preview_from_item, evidence_object_storage_bucket_valid,
-        has_vulnerability_intelligence_permission, hex_encode_bytes, is_agent_payload_error,
-        normalize_cve_id, powershell_quote, shell_quote, simple_pdf_document,
-        AlertmanagerHmacSha256,
+        has_software_policy_permission, has_vulnerability_intelligence_permission,
+        hex_encode_bytes, is_agent_payload_error, normalize_cve_id, powershell_quote, shell_quote,
+        simple_pdf_document, AlertmanagerHmacSha256,
     };
     use crate::evidence_artifact_storage::FilesystemEvidenceArtifactStorage;
     use crate::evidence_store::EvidenceIntegrityItem;
     use crate::request_context::AuthenticatedTenantContext;
+    use crate::software_policy_store::{
+        PERMISSION_ACTIVATE_SOFTWARE_POLICY, PERMISSION_ADD_SOFTWARE_POLICY,
+        PERMISSION_CHANGE_SOFTWARE_POLICY, PERMISSION_EVALUATE_SOFTWARE_POLICY,
+        PERMISSION_REQUEST_SOFTWARE_EXCEPTION, PERMISSION_REVIEW_SOFTWARE_EXCEPTION,
+        PERMISSION_REVOKE_SOFTWARE_EXCEPTION, PERMISSION_VIEW_SOFTWARE_POLICY,
+        PERMISSION_VIEW_SOFTWARE_POLICY_AUDIT,
+    };
     use crate::vulnerability_intelligence::{
         PERMISSION_REVIEW_SOFTWARE_HYGIENE, PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE,
         PERMISSION_VIEW_VULNERABILITY_INTELLIGENCE,
@@ -47948,6 +47955,81 @@ mod tests {
         assert!(has_vulnerability_intelligence_permission(
             &vulnerability_context(&[], &[], true),
             PERMISSION_SYNC_VULNERABILITY_INTELLIGENCE
+        ));
+    }
+
+    #[test]
+    fn software_policy_permissions_enforce_role_and_direct_permission_matrix() {
+        let all_permissions = [
+            PERMISSION_VIEW_SOFTWARE_POLICY,
+            PERMISSION_ADD_SOFTWARE_POLICY,
+            PERMISSION_CHANGE_SOFTWARE_POLICY,
+            PERMISSION_ACTIVATE_SOFTWARE_POLICY,
+            PERMISSION_EVALUATE_SOFTWARE_POLICY,
+            PERMISSION_VIEW_SOFTWARE_POLICY_AUDIT,
+            PERMISSION_REQUEST_SOFTWARE_EXCEPTION,
+            PERMISSION_REVIEW_SOFTWARE_EXCEPTION,
+            PERMISSION_REVOKE_SOFTWARE_EXCEPTION,
+        ];
+        for role in ["ADMIN", "SECURITY_ADMIN", "COMPLIANCE_MANAGER"] {
+            let context = vulnerability_context(&[role], &[], false);
+            for permission in all_permissions {
+                assert!(has_software_policy_permission(&context, permission));
+            }
+        }
+
+        let analyst = vulnerability_context(&["SOC_ANALYST"], &[], false);
+        for permission in [
+            PERMISSION_VIEW_SOFTWARE_POLICY,
+            PERMISSION_EVALUATE_SOFTWARE_POLICY,
+            PERMISSION_REQUEST_SOFTWARE_EXCEPTION,
+        ] {
+            assert!(has_software_policy_permission(&analyst, permission));
+        }
+        for permission in [
+            PERMISSION_ADD_SOFTWARE_POLICY,
+            PERMISSION_CHANGE_SOFTWARE_POLICY,
+            PERMISSION_ACTIVATE_SOFTWARE_POLICY,
+            PERMISSION_VIEW_SOFTWARE_POLICY_AUDIT,
+            PERMISSION_REVIEW_SOFTWARE_EXCEPTION,
+            PERMISSION_REVOKE_SOFTWARE_EXCEPTION,
+        ] {
+            assert!(!has_software_policy_permission(&analyst, permission));
+        }
+
+        let auditor = vulnerability_context(&["AUDITOR"], &[], false);
+        assert!(has_software_policy_permission(
+            &auditor,
+            PERMISSION_VIEW_SOFTWARE_POLICY
+        ));
+        assert!(has_software_policy_permission(
+            &auditor,
+            PERMISSION_VIEW_SOFTWARE_POLICY_AUDIT
+        ));
+        for permission in [
+            PERMISSION_ADD_SOFTWARE_POLICY,
+            PERMISSION_CHANGE_SOFTWARE_POLICY,
+            PERMISSION_ACTIVATE_SOFTWARE_POLICY,
+            PERMISSION_EVALUATE_SOFTWARE_POLICY,
+            PERMISSION_REQUEST_SOFTWARE_EXCEPTION,
+            PERMISSION_REVIEW_SOFTWARE_EXCEPTION,
+            PERMISSION_REVOKE_SOFTWARE_EXCEPTION,
+        ] {
+            assert!(!has_software_policy_permission(&auditor, permission));
+        }
+
+        let direct = vulnerability_context(
+            &["CONTRIBUTOR"],
+            &[PERMISSION_REVIEW_SOFTWARE_EXCEPTION],
+            false,
+        );
+        assert!(has_software_policy_permission(
+            &direct,
+            PERMISSION_REVIEW_SOFTWARE_EXCEPTION
+        ));
+        assert!(!has_software_policy_permission(
+            &direct,
+            PERMISSION_ACTIVATE_SOFTWARE_POLICY
         ));
     }
 
