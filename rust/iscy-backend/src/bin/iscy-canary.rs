@@ -212,8 +212,9 @@ fn cmd_trend(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn database_url() -> String {
-    env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:///db.sqlite3".to_string())
+fn database_url() -> anyhow::Result<String> {
+    Ok(iscy_backend::hardening::secret_value("DATABASE_URL")?
+        .unwrap_or_else(|| "sqlite:///db.sqlite3".to_string()))
 }
 
 fn parse_import_args(args: &[String]) -> anyhow::Result<Vec<String>> {
@@ -254,7 +255,7 @@ fn parse_sync_args(args: &[String]) -> anyhow::Result<usize> {
 
 async fn cmd_import(args: &[String]) -> anyhow::Result<()> {
     let cves = parse_import_args(args)?;
-    let store = CveStore::connect(&database_url()).await?;
+    let store = CveStore::connect(&database_url()?).await?;
     let transport = OfficialVulnerabilityFeedTransport::from_environment()?;
     let mut imported = 0_usize;
     for cve in cves {
@@ -268,7 +269,7 @@ async fn cmd_import(args: &[String]) -> anyhow::Result<()> {
 
 async fn cmd_sync(args: &[String]) -> anyhow::Result<()> {
     let max_records = parse_sync_args(args)?;
-    let store = CveStore::connect(&database_url()).await?;
+    let store = CveStore::connect(&database_url()?).await?;
     let transport = OfficialVulnerabilityFeedTransport::from_environment()?;
     let result = run_feed_sync(
         &store,

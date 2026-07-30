@@ -144,9 +144,16 @@ pub struct SecretResolver {
 
 impl SecretResolver {
     pub fn from_environment() -> Self {
-        let roots = std::env::var_os("ISCY_EVIDENCE_SECRET_ROOTS")
-            .map(|value| std::env::split_paths(&value).collect())
-            .unwrap_or_default();
+        let mut roots = vec![PathBuf::from("/run/secrets")];
+        roots.extend(
+            std::env::var_os("ISCY_EVIDENCE_SECRET_ROOTS")
+                .map(|value| {
+                    std::env::split_paths(&value)
+                        .filter(|path| path.is_absolute())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default(),
+        );
         Self {
             allowed_file_roots: roots,
         }
@@ -164,7 +171,7 @@ impl SecretResolver {
             return Err(S3RuntimeError::SecretReferenceMissing);
         }
         if let Some(name) = reference.strip_prefix("env:") {
-            return resolve_env_secret(name);
+            return self.resolve_env_reference(name);
         }
         if let Some(path) = reference.strip_prefix("file:") {
             return self.resolve_file_secret(Path::new(path));
@@ -178,15 +185,52 @@ impl SecretResolver {
         Err(S3RuntimeError::SecretReferenceInvalid)
     }
 
+    fn resolve_env_reference(&self, name: &str) -> Result<SecretValue, S3RuntimeError> {
+        if !valid_env_name(name) {
+            return Err(S3RuntimeError::SecretReferenceInvalid);
+        }
+        if let Some(base_name) = name.strip_suffix("_FILE") {
+            if !valid_env_name(base_name) {
+                return Err(S3RuntimeError::SecretReferenceInvalid);
+            }
+            if std::env::var_os(base_name).is_some() && std::env::var_os(name).is_some() {
+                return Err(S3RuntimeError::SecretReferenceInvalid);
+            }
+            let path = std::env::var_os(name).ok_or(S3RuntimeError::SecretReferenceMissing)?;
+            return self.resolve_file_secret(&PathBuf::from(path));
+        }
+
+        let file_name = format!("{name}_FILE");
+        let direct = std::env::var_os(name);
+        let file = std::env::var_os(&file_name);
+        if direct.is_some() && file.is_some() {
+            return Err(S3RuntimeError::SecretReferenceInvalid);
+        }
+        if let Some(path) = file {
+            return self.resolve_file_secret(&PathBuf::from(path));
+        }
+        resolve_env_secret(name)
+    }
+
     fn resolve_file_secret(&self, path: &Path) -> Result<SecretValue, S3RuntimeError> {
         if !path.is_absolute() || self.allowed_file_roots.is_empty() {
             return Err(S3RuntimeError::SecretFileOutsideAllowedRoot);
+        }
+        let initial_metadata =
+            fs::symlink_metadata(path).map_err(|_| S3RuntimeError::SecretResolutionFailed)?;
+        if initial_metadata.file_type().is_symlink() {
+            return Err(S3RuntimeError::SecretFileSymlinkEscape);
         }
         let canonical_path = path
             .canonicalize()
             .map_err(|_| S3RuntimeError::SecretResolutionFailed)?;
         let mut within_root = false;
         for root in &self.allowed_file_roots {
+            let root_metadata = match fs::symlink_metadata(root) {
+                Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => metadata,
+                _ => continue,
+            };
+            let _ = root_metadata;
             let canonical_root = root
                 .canonicalize()
                 .map_err(|_| S3RuntimeError::SecretResolutionFailed)?;
@@ -952,6 +996,34 @@ mod tests {
     }
 
     #[test]
+    fn env_file_secret_resolution_rejects_direct_file_conflicts() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let root = temp_root("env-file");
+        let path = root.join("access-key");
+        fs::write(&path, b"TestOnly-file-backed-value\r\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let resolver = SecretResolver::with_allowed_file_roots(vec![root.clone()]);
+        std::env::set_var("ISCY_TEST_S3_ACCESS_KEY_FILE", &path);
+
+        let resolved = resolver.resolve("env:ISCY_TEST_S3_ACCESS_KEY").unwrap();
+        assert_eq!(resolved.as_str().unwrap().len(), 26);
+        assert!(resolver.resolve("env:ISCY_TEST_S3_ACCESS_KEY_FILE").is_ok());
+
+        std::env::set_var("ISCY_TEST_S3_ACCESS_KEY", "TestOnly-direct-value");
+        assert_eq!(
+            resolver.resolve("env:ISCY_TEST_S3_ACCESS_KEY").unwrap_err(),
+            S3RuntimeError::SecretReferenceInvalid
+        );
+        std::env::remove_var("ISCY_TEST_S3_ACCESS_KEY");
+        std::env::remove_var("ISCY_TEST_S3_ACCESS_KEY_FILE");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn file_secret_resolution_enforces_root_symlink_and_permissions() {
         let root = temp_root("allowed");
         let outside = temp_root("outside");
@@ -1011,8 +1083,8 @@ mod tests {
             amz_date: "20130524T000000Z",
             date: "20130524",
             region: "us-east-1",
-            access_key: "AKIAIOSFODNN7EXAMPLE",
-            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            access_key: "AKIAIOSFODNN7EXAMPLE", // gitleaks:allow
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", // gitleaks:allow
             session_token: None,
             payload_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         })

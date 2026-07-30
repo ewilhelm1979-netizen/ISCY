@@ -1,4 +1,13 @@
-use std::{env, fs, net::SocketAddr, str::FromStr};
+use std::{
+    env,
+    ffi::OsString,
+    fmt,
+    fs::{self, File},
+    io::Read,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use anyhow::{bail, Context};
 use axum::{
@@ -25,6 +34,8 @@ use crate::{cve_store::normalize_database_url, db_admin::DbAdminAction};
 
 const DEMO_PASSWORD_HASH: &str =
     "pbkdf2_sha256$720000$iscy-demo-salt$dHYZBIWxS3abL+0r4Rp7w3kbLXLSAFUrGq/HaPlAVrY=";
+const MAX_SECRET_BYTES: u64 = 16 * 1024;
+const DEFAULT_SECRET_ROOT: &str = "/run/secrets";
 
 const IDENTITY_HEADERS: &[&str] = &[
     "x-iscy-tenant-id",
@@ -203,16 +214,161 @@ pub async fn run_production_preflight(
 }
 
 pub fn secret_value(name: &str) -> anyhow::Result<Option<String>> {
-    if let Some(value) = env_value(name) {
-        return Ok(Some(value));
-    }
     let file_name = format!("{name}_FILE");
-    let Some(path) = env_value(&file_name) else {
+    let direct = env::var_os(name);
+    let file = env::var_os(&file_name);
+    if direct.is_none() && file.is_none() {
         return Ok(None);
-    };
-    let value = fs::read_to_string(&path)
-        .with_context(|| format!("{file_name} konnte nicht gelesen werden"))?;
-    Ok(Some(value.trim().to_string()).filter(|value| !value.is_empty()))
+    }
+    let roots = configured_secret_roots()?;
+    secret_value_from_sources(name, direct, file, &roots).map(Some)
+}
+
+#[derive(Debug)]
+struct SecretInputError {
+    variable: String,
+    class: &'static str,
+}
+
+impl fmt::Display for SecretInputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}: {}", self.variable, self.class)
+    }
+}
+
+impl std::error::Error for SecretInputError {}
+
+fn secret_input_error(variable: &str, class: &'static str) -> anyhow::Error {
+    SecretInputError {
+        variable: variable.to_string(),
+        class,
+    }
+    .into()
+}
+
+fn configured_secret_roots() -> anyhow::Result<Vec<PathBuf>> {
+    let mut roots = vec![PathBuf::from(DEFAULT_SECRET_ROOT)];
+    if let Some(configured) = env::var_os("ISCY_SECRET_ROOTS") {
+        for root in env::split_paths(&configured) {
+            if !root.is_absolute() {
+                return Err(secret_input_error(
+                    "ISCY_SECRET_ROOTS",
+                    "relative_root_forbidden",
+                ));
+            }
+            roots.push(root);
+        }
+    }
+    Ok(roots)
+}
+
+fn secret_value_from_sources(
+    name: &str,
+    direct: Option<OsString>,
+    file: Option<OsString>,
+    allowed_roots: &[PathBuf],
+) -> anyhow::Result<String> {
+    if direct.is_some() && file.is_some() {
+        return Err(secret_input_error(name, "ambiguous_source"));
+    }
+    if let Some(value) = direct {
+        let value = value
+            .into_string()
+            .map_err(|_| secret_input_error(name, "invalid_encoding"))?;
+        if value.is_empty() {
+            return Err(secret_input_error(name, "empty_value"));
+        }
+        return Ok(value);
+    }
+
+    let path = PathBuf::from(file.ok_or_else(|| secret_input_error(name, "missing_source"))?);
+    read_secret_file(name, &path, allowed_roots)
+}
+
+fn read_secret_file(name: &str, path: &Path, allowed_roots: &[PathBuf]) -> anyhow::Result<String> {
+    if !path.is_absolute() || allowed_roots.is_empty() {
+        return Err(secret_input_error(name, "outside_allowed_root"));
+    }
+    let initial_metadata =
+        fs::symlink_metadata(path).map_err(|_| secret_input_error(name, "file_missing"))?;
+    if initial_metadata.file_type().is_symlink() {
+        return Err(secret_input_error(name, "symlink_forbidden"));
+    }
+    if !initial_metadata.is_file() {
+        return Err(secret_input_error(name, "not_regular_file"));
+    }
+
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|_| secret_input_error(name, "file_unresolvable"))?;
+    let mut within_allowed_root = false;
+    for root in allowed_roots {
+        if !root.is_absolute() {
+            continue;
+        }
+        let Ok(root_metadata) = fs::symlink_metadata(root) else {
+            continue;
+        };
+        if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+            continue;
+        }
+        let Ok(canonical_root) = root.canonicalize() else {
+            continue;
+        };
+        if canonical_path.starts_with(canonical_root) {
+            within_allowed_root = true;
+            break;
+        }
+    }
+    if !within_allowed_root {
+        return Err(secret_input_error(name, "outside_allowed_root"));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if initial_metadata.permissions().mode() & 0o077 != 0 {
+            return Err(secret_input_error(name, "insecure_permissions"));
+        }
+    }
+    if initial_metadata.len() == 0 {
+        return Err(secret_input_error(name, "empty_value"));
+    }
+    if initial_metadata.len() > MAX_SECRET_BYTES {
+        return Err(secret_input_error(name, "file_too_large"));
+    }
+
+    let file = File::open(path).map_err(|_| secret_input_error(name, "file_unreadable"))?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|_| secret_input_error(name, "file_unreadable"))?;
+    if !opened_metadata.is_file() {
+        return Err(secret_input_error(name, "not_regular_file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if initial_metadata.dev() != opened_metadata.dev()
+            || initial_metadata.ino() != opened_metadata.ino()
+        {
+            return Err(secret_input_error(name, "file_changed_during_read"));
+        }
+    }
+
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    file.take(MAX_SECRET_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| secret_input_error(name, "file_unreadable"))?;
+    if bytes.len() as u64 > MAX_SECRET_BYTES {
+        return Err(secret_input_error(name, "file_too_large"));
+    }
+    while matches!(bytes.last(), Some(b'\r' | b'\n')) {
+        bytes.pop();
+    }
+    if bytes.is_empty() {
+        return Err(secret_input_error(name, "empty_value"));
+    }
+    String::from_utf8(bytes).map_err(|_| secret_input_error(name, "invalid_encoding"))
 }
 
 pub fn identity_headers_trusted(config: &CommunitySecurityConfig, headers: &HeaderMap) -> bool {
@@ -399,16 +555,168 @@ async fn demo_credentials_present(database_url: &str) -> anyhow::Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::{
+        ffi::OsString,
+        fs,
+        net::SocketAddr,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    #[cfg(unix)]
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
     use axum::http::{HeaderMap, HeaderValue};
 
     use crate::db_admin::DbAdminAction;
 
     use super::{
-        assert_db_admin_action_allowed, identity_headers_trusted, run_production_preflight,
-        AppMode, CommunitySecurityConfig,
+        assert_db_admin_action_allowed, ensure_strong_secret, identity_headers_trusted,
+        run_production_preflight, secret_value_from_sources, AppMode, CommunitySecurityConfig,
+        MAX_SECRET_BYTES,
     };
+
+    static SECRET_TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    fn isolated_secret_root() -> PathBuf {
+        let sequence = SECRET_TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "iscy-secret-input-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        root
+    }
+
+    #[cfg(unix)]
+    fn secure_file(path: &std::path::Path, bytes: &[u8]) {
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_accepts_secure_regular_file_and_only_trims_crlf() {
+        let root = isolated_secret_root();
+        let path = root.join("value");
+        secure_file(&path, b"TestOnly-value-with-spaces  \r\n");
+
+        let resolved = secret_value_from_sources(
+            "ISCY_TEST_TOKEN",
+            None,
+            Some(path.clone().into_os_string()),
+            std::slice::from_ref(&root),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, "TestOnly-value-with-spaces  ");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_rejects_missing_symlink_and_outside_root() {
+        let root = isolated_secret_root();
+        let outside = isolated_secret_root();
+        let missing = root.join("missing");
+        let target = outside.join("target");
+        let link = root.join("link");
+        secure_file(&target, b"TestOnly-outside-value");
+        symlink(&target, &link).unwrap();
+
+        let missing_error = secret_value_from_sources(
+            "ISCY_TEST_TOKEN",
+            None,
+            Some(missing.into_os_string()),
+            std::slice::from_ref(&root),
+        )
+        .unwrap_err();
+        assert_eq!(missing_error.to_string(), "ISCY_TEST_TOKEN: file_missing");
+
+        let symlink_error = secret_value_from_sources(
+            "ISCY_TEST_TOKEN",
+            None,
+            Some(link.into_os_string()),
+            std::slice::from_ref(&root),
+        )
+        .unwrap_err();
+        assert_eq!(
+            symlink_error.to_string(),
+            "ISCY_TEST_TOKEN: symlink_forbidden"
+        );
+
+        let outside_error = secret_value_from_sources(
+            "ISCY_TEST_TOKEN",
+            None,
+            Some(target.into_os_string()),
+            std::slice::from_ref(&root),
+        )
+        .unwrap_err();
+        assert_eq!(
+            outside_error.to_string(),
+            "ISCY_TEST_TOKEN: outside_allowed_root"
+        );
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn secret_file_rejects_open_permissions_oversize_and_empty_content() {
+        let root = isolated_secret_root();
+        let open_path = root.join("open");
+        let large_path = root.join("large");
+        let empty_path = root.join("empty");
+        secure_file(&open_path, b"TestOnly-open-value");
+        fs::set_permissions(&open_path, fs::Permissions::from_mode(0o640)).unwrap();
+        secure_file(&large_path, &vec![b'x'; MAX_SECRET_BYTES as usize + 1]);
+        secure_file(&empty_path, b"\r\n");
+
+        for (path, expected_class) in [
+            (open_path, "insecure_permissions"),
+            (large_path, "file_too_large"),
+            (empty_path, "empty_value"),
+        ] {
+            let error = secret_value_from_sources(
+                "ISCY_TEST_TOKEN",
+                None,
+                Some(path.into_os_string()),
+                std::slice::from_ref(&root),
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("ISCY_TEST_TOKEN: {expected_class}")
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn secret_source_conflict_fails_closed_without_disclosing_values() {
+        let root = isolated_secret_root();
+        let error = secret_value_from_sources(
+            "ISCY_TEST_TOKEN",
+            Some(OsString::from("TestOnly-direct-value")),
+            Some(OsString::from("/run/secrets/test-token")),
+            std::slice::from_ref(&root),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "ISCY_TEST_TOKEN: ambiguous_source");
+        assert!(!error.to_string().contains("TestOnly-direct-value"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn production_secret_validation_rejects_placeholders() {
+        let error =
+            ensure_strong_secret("ISCY_TEST_TOKEN", "change-me-before-production").unwrap_err();
+        assert!(error.to_string().contains("ISCY_TEST_TOKEN"));
+        assert!(!error.to_string().contains("change-me-before-production"));
+    }
 
     #[test]
     fn production_config_does_not_trust_identity_headers_by_default() {

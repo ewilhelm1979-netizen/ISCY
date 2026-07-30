@@ -10,11 +10,25 @@ RUST_BACKEND_MANIFEST=rust/iscy-backend/Cargo.toml
 
 local-bootstrap: rust-init
 
-local-check: rust-test
+secrets:
+	bash scripts/run-gitleaks.sh dir ISCY
+
+secrets-history:
+	bash scripts/run-gitleaks.sh history ISCY
+
+secrets-test:
+	bash scripts/test-gitleaks.sh
+
+check: secrets
+	cargo fmt --manifest-path $(RUST_BACKEND_MANIFEST) -- --check
+	cargo clippy --locked --manifest-path $(RUST_BACKEND_MANIFEST) --all-targets -- -D warnings
+	cargo test --locked --manifest-path $(RUST_BACKEND_MANIFEST)
+
+local-check: check
 
 local-test: rust-test
 
-team-test: rust-test rust-smoke rust-restore-smoke
+team-test: check rust-smoke rust-restore-smoke
 
 docker-check:
 	$(COMPOSE_DEV) config >/dev/null

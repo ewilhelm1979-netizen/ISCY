@@ -18102,7 +18102,7 @@ async fn rust_db_admin_bootstraps_initial_admin_without_demo_seed() {
             tenant_name: "Production Tenant".to_string(),
             tenant_slug: "production-tenant".to_string(),
             username: "prod-admin".to_string(),
-            password: "SichererZugang2026Alpha!".to_string(),
+            password: "SichererZugang2026Alpha!".to_string(), // gitleaks:allow
             email: "prod-admin@example.local".to_string(),
             first_name: "Prod".to_string(),
             last_name: "Admin".to_string(),
@@ -18123,7 +18123,7 @@ async fn rust_db_admin_bootstraps_initial_admin_without_demo_seed() {
             tenant_name: "Production Tenant".to_string(),
             tenant_slug: "production-tenant".to_string(),
             username: "prod-admin".to_string(),
-            password: "NochEinZugang2026Beta!".to_string(),
+            password: "NochEinZugang2026Beta!".to_string(), // gitleaks:allow
             email: "prod-admin@example.local".to_string(),
             first_name: "Prod".to_string(),
             last_name: "Admin".to_string(),

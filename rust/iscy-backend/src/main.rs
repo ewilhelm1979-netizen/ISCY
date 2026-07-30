@@ -24,7 +24,8 @@ use iscy_backend::{
     db_admin::{bootstrap_initial_admin, run_db_admin_action, DbAdminAction, InitialAdminConfig},
     evidence_store::EvidenceStore,
     hardening::{
-        assert_db_admin_action_allowed, run_production_preflight, CommunitySecurityConfig,
+        assert_db_admin_action_allowed, run_production_preflight, secret_value,
+        CommunitySecurityConfig,
     },
     import_store::ImportStore,
     incident_store::IncidentStore,
@@ -56,22 +57,22 @@ async fn main() -> anyhow::Result<()> {
     if let Some(command) = std::env::args().nth(1) {
         match command.as_str() {
             "migrate" => {
-                run_database_admin(DbAdminAction::Migrate).await?;
+                run_database_admin(DbAdminAction::Migrate, &security_config).await?;
                 return Ok(());
             }
             "seed-demo" => {
                 assert_db_admin_action_allowed(&security_config, DbAdminAction::SeedDemo)?;
-                run_database_admin(DbAdminAction::SeedDemo).await?;
+                run_database_admin(DbAdminAction::SeedDemo, &security_config).await?;
                 return Ok(());
             }
             "init-demo" => {
                 assert_db_admin_action_allowed(&security_config, DbAdminAction::InitDemo)?;
-                run_database_admin(DbAdminAction::InitDemo).await?;
+                run_database_admin(DbAdminAction::InitDemo, &security_config).await?;
                 return Ok(());
             }
             "init-admin" => {
-                run_database_admin(DbAdminAction::Migrate).await?;
-                run_initial_admin().await?;
+                run_database_admin(DbAdminAction::Migrate, &security_config).await?;
+                run_initial_admin(&security_config).await?;
                 return Ok(());
             }
             "help" | "--help" | "-h" => {
@@ -87,9 +88,7 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = std::env::var("RUST_BACKEND_BIND")
         .unwrap_or_else(|_| "127.0.0.1:9000".to_string())
         .parse()?;
-    let database_url = std::env::var("DATABASE_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
+    let database_url = secret_value("DATABASE_URL")?;
     run_production_preflight(&security_config, &addr, database_url.as_deref()).await?;
     let (
         cve_store,
@@ -452,11 +451,11 @@ fn shutdown_timeout() -> Duration {
     Duration::from_secs(seconds)
 }
 
-async fn run_database_admin(action: DbAdminAction) -> anyhow::Result<()> {
-    let database_url = std::env::var("DATABASE_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "sqlite:///db.sqlite3".to_string());
+async fn run_database_admin(
+    action: DbAdminAction,
+    security_config: &CommunitySecurityConfig,
+) -> anyhow::Result<()> {
+    let database_url = database_url_or_development_default(security_config)?;
     let outcome = run_db_admin_action(&database_url, action).await?;
     println!(
         "ISCY Rust DB admin completed: kind={}, migrations_applied={}, demo_seeded={}",
@@ -486,17 +485,11 @@ fn evidence_media_root_from_env() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("media"))
 }
 
-async fn run_initial_admin() -> anyhow::Result<()> {
-    let database_url = std::env::var("DATABASE_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "sqlite:///db.sqlite3".to_string());
-    let password = iscy_backend::hardening::secret_value("ISCY_INITIAL_ADMIN_PASSWORD")?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "ISCY_INITIAL_ADMIN_PASSWORD oder ISCY_INITIAL_ADMIN_PASSWORD_FILE fehlt."
-            )
-        })?;
+async fn run_initial_admin(security_config: &CommunitySecurityConfig) -> anyhow::Result<()> {
+    let database_url = database_url_or_development_default(security_config)?;
+    let password = secret_value("ISCY_INITIAL_ADMIN_PASSWORD")?.ok_or_else(|| {
+        anyhow::anyhow!("ISCY_INITIAL_ADMIN_PASSWORD oder ISCY_INITIAL_ADMIN_PASSWORD_FILE fehlt.")
+    })?;
     let config = InitialAdminConfig {
         tenant_name: env_or("ISCY_INITIAL_ADMIN_TENANT_NAME", "ISCY Production Tenant"),
         tenant_slug: env_or("ISCY_INITIAL_ADMIN_TENANT_SLUG", "iscy-production"),
@@ -516,6 +509,18 @@ async fn run_initial_admin() -> anyhow::Result<()> {
         outcome.created
     );
     Ok(())
+}
+
+fn database_url_or_development_default(
+    security_config: &CommunitySecurityConfig,
+) -> anyhow::Result<String> {
+    if let Some(database_url) = secret_value("DATABASE_URL")? {
+        return Ok(database_url);
+    }
+    if security_config.app_mode.is_production() {
+        anyhow::bail!("DATABASE_URL: missing_source");
+    }
+    Ok("sqlite:///db.sqlite3".to_string())
 }
 
 fn env_or(name: &str, fallback: &str) -> String {

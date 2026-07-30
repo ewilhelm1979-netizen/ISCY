@@ -6,8 +6,8 @@ MC_IMAGE="docker.io/minio/mc:RELEASE.2025-04-16T18-13-26Z"
 CONTAINER_NAME="iscy-minio-integration-${RANDOM}-$$"
 PORT="${ISCY_TEST_S3_PORT:-19090}"
 BUCKET="iscy-integration-${RANDOM}-$$"
-ACCESS_KEY="iscy_test_access"
-SECRET_KEY="iscy_test_secret_only_123456789"
+ACCESS_KEY="iscy_test_access" # gitleaks:allow
+SECRET_KEY="iscy_test_secret_only_123456789" # gitleaks:allow
 
 cleanup() {
   docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
