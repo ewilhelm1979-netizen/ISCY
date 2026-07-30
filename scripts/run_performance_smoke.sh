@@ -151,7 +151,6 @@ database_connection_errors="$(awk -F '\t' '$3 == "503" {count++} END {print coun
 groups=(health read review write object_storage)
 budgets=(500 1000 2500 2000 2500)
 category_files=()
-budget_failed=0
 for index in "${!groups[@]}"; do
   group="${groups[$index]}"
   budget="${budgets[$index]}"
@@ -167,7 +166,6 @@ for index in "${!groups[@]}"; do
   passed=true
   if [[ "$error_count" -ne 0 ]] || awk -v actual="$p95" -v limit="$budget" 'BEGIN {exit !(actual > limit)}'; then
     passed=false
-    budget_failed=1
   fi
   category_file="$TMP_DIR/category-$group.json"
   jq --null-input \

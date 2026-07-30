@@ -42,6 +42,8 @@ if grep -En 'pull_request_target|auto-merge|mergePullRequest|markPullRequestRead
   echo 'CODEX_AUTOMATION_CHECK prohibited_workflow_capability_detected' >&2
   exit 1
 fi
+# The single quotes intentionally match the literal GitHub expression.
+# shellcheck disable=SC2016
 sha_checkout_count="$(grep -Fc 'ref: ${{ inputs.commit_sha }}' \
   .github/workflows/iscy-codex-reusable.yml)"
 if [[ "$sha_checkout_count" != '3' ]]; then
