@@ -1,12 +1,27 @@
 services:
   db:
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set for production}
+      POSTGRES_PASSWORD: !reset null
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - ${ISCY_SECRETS_DIR:?set ISCY_SECRETS_DIR}:/run/secrets:ro
 
   app:
     environment:
       RUST_BACKEND_BIND: "0.0.0.0:9000"
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set for production}
+      DATABASE_URL: !reset null
+      DATABASE_URL_FILE: /run/secrets/database_url
+      NVD_API_KEY: !reset null
+      NVD_API_KEY_FILE: /run/secrets/nvd_api_key
+      ISCY_INITIAL_ADMIN_PASSWORD_FILE: /run/secrets/iscy_initial_admin_password
+      ISCY_ALERTMANAGER_TOKEN_FILE: /run/secrets/iscy_alertmanager_token
+      ISCY_ALERTMANAGER_HMAC_SECRET_FILE: /run/secrets/iscy_alertmanager_hmac_secret
+      ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE: /run/secrets/iscy_alertmanager_hmac_previous_secret
+      ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE: /run/secrets/iscy_s3_access_key
+      ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE: /run/secrets/iscy_s3_secret_key
+      ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN_FILE: /run/secrets/iscy_s3_session_token
+      ISCY_SECRET_ROOTS: /run/secrets
+      ISCY_EVIDENCE_SECRET_ROOTS: /run/secrets
       ISCY_APP_MODE: "production"
       ISCY_TRUST_PROXY_IDENTITY_HEADERS: "0"
       ISCY_TRUSTED_PROXY_CONFIGURED: "1"

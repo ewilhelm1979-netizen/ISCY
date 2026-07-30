@@ -34,6 +34,69 @@ require_value() {
   printf '%s' "$value"
 }
 
+resolve_secret_value() {
+  local key="$1" required="${2:-required}"
+  local direct file_ref relative host_file byte_count value
+  direct="$(env_value "$key")"
+  file_ref="$(env_value "${key}_FILE")"
+
+  if [[ -n "$direct" && -n "$file_ref" ]]; then
+    err "$key: source_conflict"
+    exit 1
+  fi
+  if [[ -n "$direct" ]]; then
+    printf '%s' "$direct"
+    return 0
+  fi
+  if [[ -z "$file_ref" ]]; then
+    if [[ "$required" == "required" ]]; then
+      err "$key: missing_source"
+      exit 1
+    fi
+    return 0
+  fi
+  if [[ "$file_ref" != /run/secrets/* ]]; then
+    err "$key: outside_allowed_root"
+    exit 1
+  fi
+  relative="${file_ref#/run/secrets/}"
+  if [[ -z "$relative" || "$relative" == /* || "$relative" == *".."* ]]; then
+    err "$key: invalid_file_reference"
+    exit 1
+  fi
+  host_file="$secrets_dir/$relative"
+  if [[ -L "$host_file" ]]; then
+    err "$key: symlink_forbidden"
+    exit 1
+  fi
+  if [[ ! -f "$host_file" ]]; then
+    err "$key: file_missing"
+    exit 1
+  fi
+  if find "$host_file" -prune -perm /077 -print -quit | grep -q .; then
+    err "$key: insecure_permissions"
+    exit 1
+  fi
+  byte_count="$(wc -c <"$host_file")"
+  if (( byte_count == 0 )); then
+    err "$key: empty_value"
+    exit 1
+  fi
+  if (( byte_count > 16384 )); then
+    err "$key: file_too_large"
+    exit 1
+  fi
+  value="$(<"$host_file")"
+  while [[ "$value" == *$'\r' ]]; do
+    value="${value%$'\r'}"
+  done
+  if [[ -z "$value" ]]; then
+    err "$key: empty_value"
+    exit 1
+  fi
+  printf '%s' "$value"
+}
+
 reject_placeholder() {
   local key="$1" value="$2" lower
   lower="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
@@ -47,7 +110,7 @@ require_exact() {
   local key="$1" expected="$2" actual
   actual="$(env_value "$key")"
   if [[ "$actual" != "$expected" ]]; then
-    err "$key muss '$expected' sein, ist aber '${actual:-<leer>}'."
+    err "$key: unexpected_value"
     exit 1
   fi
 }
@@ -63,38 +126,31 @@ if [[ "$(env_value ISCY_HSTS_ENABLED)" == "1" && "$(env_value ISCY_HTTPS_CONFIRM
   exit 1
 fi
 
-database_url="$(require_value DATABASE_URL)"
-postgres_password="$(require_value POSTGRES_PASSWORD)"
-reject_placeholder DATABASE_URL "$database_url"
-reject_placeholder POSTGRES_PASSWORD "$postgres_password"
-
 secrets_dir="$(env_value ISCY_SECRETS_DIR)"
 secrets_dir="${secrets_dir:-./.runtime/secrets}"
-alert_token="$(env_value ISCY_ALERTMANAGER_TOKEN)"
-alert_token_file="$(env_value ISCY_ALERTMANAGER_TOKEN_FILE)"
+database_url="$(resolve_secret_value DATABASE_URL)"
+postgres_password="$(resolve_secret_value POSTGRES_PASSWORD)"
+alert_token="$(resolve_secret_value ISCY_ALERTMANAGER_TOKEN)"
+reject_placeholder DATABASE_URL "$database_url"
+reject_placeholder POSTGRES_PASSWORD "$postgres_password"
+reject_placeholder ISCY_ALERTMANAGER_TOKEN "$alert_token"
 
-if [[ -n "$alert_token" ]]; then
-  reject_placeholder ISCY_ALERTMANAGER_TOKEN "$alert_token"
-  if (( ${#alert_token} < 24 )); then
-    err "ISCY_ALERTMANAGER_TOKEN muss mindestens 24 Zeichen lang sein."
-    exit 1
-  fi
-else
-  if [[ -z "$alert_token_file" ]]; then
-    err "ISCY_ALERTMANAGER_TOKEN oder ISCY_ALERTMANAGER_TOKEN_FILE fehlt."
-    exit 1
-  fi
-  host_token_file="$secrets_dir/$(basename "$alert_token_file")"
-  if [[ ! -r "$host_token_file" ]]; then
-    err "Alertmanager-Token-Datei fehlt oder ist nicht lesbar: $host_token_file"
-    exit 1
-  fi
-  token_length="$(tr -d '\r\n' < "$host_token_file" | wc -c)"
-  if (( token_length < 24 )); then
-    err "Die Alertmanager-Token-Datei muss mindestens 24 Zeichen enthalten."
-    exit 1
-  fi
+if (( ${#alert_token} < 24 )); then
+  err "ISCY_ALERTMANAGER_TOKEN: value_too_short"
+  exit 1
 fi
+
+for optional_key in \
+  NVD_API_KEY \
+  ISCY_INITIAL_ADMIN_PASSWORD \
+  ISCY_ALERTMANAGER_HMAC_SECRET \
+  ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY \
+  ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY; do
+  optional_value="$(resolve_secret_value "$optional_key" optional)"
+  if [[ -n "$optional_value" ]]; then
+    reject_placeholder "$optional_key" "$optional_value"
+  fi
+done
 
 if [[ -d "$secrets_dir" ]] && find "$secrets_dir" -maxdepth 1 -type f -perm /077 -print -quit | grep -q .; then
   err "Mindestens eine Datei in $secrets_dir ist fuer Gruppe oder andere Benutzer lesbar."
