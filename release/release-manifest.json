@@ -14,8 +14,8 @@
     "nix_development_path": "1.95.0"
   },
   "cargo_package_version": "0.3.22",
-  "cargo_lock_sha256": "f5bb49559a438e3cd388141fee38734cb4ced0a3c25882b49b169c8b209e711f",
-  "flake_lock_sha256": "9f9358302aa0ef8400983fe1bd54786ff94fc9560f36f37708aba1713ec6d680",
+  "cargo_lock_sha256": "8eb8f44778e56a91b95e72f4e45a585b208d1fc08c5077349515ef453d295070",
+  "flake_lock_sha256": "fe8a0e63b0f4c0d7bc5d7992f204a343030d856a824ac1351e4ae54aea70e713",
   "handbook_sha256": "f5354d1040786b8e0da3d19e60d7b56befdb6c320f241ea11b0ae3049ee14712",
   "migration_count": 45,
   "platform_versions": {
@@ -79,7 +79,7 @@
   "provenance_status": "prepared_unsigned",
   "signature_status": "unsigned",
   "sbom_status": "generated_cyclonedx_1.5",
-  "sbom_sha256": "f6a882163cfa6b15cbba58666ebce7c4a1fa167b2b6eca17f96aee371324dd24",
+  "sbom_sha256": "d8e9614a3eb4c9c556dbea30820586553b96f479cb22680450d7da38b9f261ac",
   "vex_status": "not_generated_no_release_vulnerability_assertion",
   "known_limitations_reference": "docs/RELEASE_CANDIDATE_CHECKLIST.md#bekannte-betriebsgrenzen"
 }
