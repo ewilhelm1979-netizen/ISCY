@@ -228,6 +228,8 @@ jobs:
           persist-credentials: false
       - name: Validate effective compose configurations
         run: |
+          install -d -m 0700 "$RUNNER_TEMP/iscy-compose-secrets"
+          export ISCY_SECRETS_DIR="$RUNNER_TEMP/iscy-compose-secrets"
           cp .env.example .env
           docker compose config
           docker compose --env-file .env -f docker-compose.yml -f docker-compose.llm.yml config
