@@ -904,6 +904,30 @@ fn non_empty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{display_name, hex_encode, roles_from_codes, verify_django_pbkdf2_sha256_password};
+    use base64::{
+        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+        Engine as _,
+    };
+
+    #[test]
+    fn base64_engines_keep_standard_url_safe_and_invalid_input_behavior() {
+        let bytes = [0xfb, 0xef, 0xff];
+
+        assert_eq!(STANDARD.encode(bytes), "++//");
+        assert_eq!(
+            STANDARD.decode("++//").expect("valid standard base64"),
+            bytes
+        );
+        assert_eq!(URL_SAFE_NO_PAD.encode(bytes), "--__");
+        assert_eq!(
+            URL_SAFE_NO_PAD
+                .decode("--__")
+                .expect("valid URL-safe base64"),
+            bytes
+        );
+        assert!(STANDARD.decode("not base64!").is_err());
+        assert!(URL_SAFE_NO_PAD.decode("++//").is_err());
+    }
 
     #[test]
     fn hex_encode_writes_lowercase_hex() {
