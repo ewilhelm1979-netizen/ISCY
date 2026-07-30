@@ -85,6 +85,7 @@ if [[ "${ISCY_SKIP_RELEASE_REGRESSION_TESTS:-false}" != 'true' ]]; then
     ./tests/release/test_release_lifecycle.sh
     ./tests/release/test_release_sbom_lifecycle.sh
     ./tests/release/test_pg18_release_environment_isolation.sh
+    ./tests/release/test_update_release_dependency_metadata.sh
 fi
 
 jq -e '
