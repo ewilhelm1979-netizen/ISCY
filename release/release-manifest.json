@@ -36,8 +36,9 @@
     "s3_compatible"
   ],
   "test_suite_summary": {
-    "required_dependency_job_count": 10,
+    "required_dependency_job_count": 11,
     "required_dependency_jobs": [
+      "secret-scan",
       "rust-backend-tests",
       "rust-msrv-1-88",
       "rust-bootstrap-smoke",
