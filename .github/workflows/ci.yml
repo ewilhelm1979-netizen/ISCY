@@ -9,11 +9,28 @@ permissions:
   contents: read
 
 jobs:
+  secret-scan:
+    name: secret-scan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+      - name: Run redacted secret scan
+        run: nix develop --command make secrets
+
   rust-backend-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-30
         with:
           toolchain: 1.97.0
           components: rustfmt, clippy
@@ -27,7 +44,7 @@ jobs:
         run: |
           cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml
       - name: Install verified Rust supply-chain tools
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
         with:
           tool: cargo-audit,cargo-deny
           fallback: none
@@ -42,8 +59,10 @@ jobs:
     name: rust-msrv-1.88
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-30
         with:
           toolchain: 1.88.0
       - name: Check Rust 1.88 MSRV compatibility
@@ -54,8 +73,10 @@ jobs:
   rust-bootstrap-smoke:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-30
         with:
           toolchain: 1.97.0
       - name: Run Rust DB/bootstrap HTTP smoke
@@ -66,8 +87,10 @@ jobs:
   nix-rust-smoke:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
@@ -131,8 +154,10 @@ jobs:
   object-storage-integration:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 2026-07-30
         with:
           toolchain: 1.97.0
       - name: Run isolated S3-compatible runtime lifecycle
@@ -143,7 +168,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Run bounded PostgreSQL and MinIO performance smoke
         run: |
           make performance-smoke
@@ -160,7 +187,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Run two-instance failover and migration-race test
         run: |
           make ha-integration
@@ -172,8 +201,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
@@ -192,7 +223,9 @@ jobs:
   docker-config:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Validate effective compose configurations
         run: |
           cp .env.example .env
@@ -212,7 +245,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Build and verify portable release binary twice
         run: |
           make release-binary-gate
@@ -245,6 +280,7 @@ jobs:
   release-candidate-check:
     if: always()
     needs:
+      - secret-scan
       - rust-backend-tests
       - rust-msrv-1-88
       - rust-bootstrap-smoke
@@ -265,7 +301,9 @@ jobs:
             echo "Release-Candidate-Aggregation fehlgeschlagen: mindestens ein Pflichtjob war nicht erfolgreich."
             exit 1
           fi
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Validate release-candidate metadata
         run: |
           make release-candidate-metadata-check

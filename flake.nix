@@ -113,6 +113,7 @@
 
         devShells.default = pkgs.mkShell {
           packages = [
+            pkgs.actionlint
             pkgs.git
             pkgs.pkg-config
             pkgs.cmake
@@ -120,6 +121,7 @@
             pkgs.clang
             pkgs.gcc14
             pkgs.gnumake
+            pkgs.gitleaks
             pkgs.curl
             pkgs.jq
             pkgs.rustc
@@ -135,6 +137,7 @@
             pkgs.openblas
             pkgs.libpq
             pkgs.sqlite
+            pkgs.shellcheck
           ]
           ++ visualTestPackages;
 

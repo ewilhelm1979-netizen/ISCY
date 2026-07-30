@@ -1,0 +1,82 @@
+title = "ISCY gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "assigned-sensitive-variable"
+description = "Sensitive variable assigned a literal value"
+regex = '''(?i)(?:\b|_)(?:api_?key|apikey|access_?key|secret_?key|client_?secret|db_?pass(?:word)?|database_?password|postgres_?password|auth_?token|bearer_?token|private_?key|password|passwd|pwd|token)\s*[:=]\s*["']([^"'$%<{\r\n][^"'\r\n]{3,})["']'''
+secretGroup = 1
+keywords = ["api", "key", "secret", "pass", "pwd", "token"]
+
+  [[rules.allowlists]]
+  description = "Known non-production demo login, only in explicit demo, smoke, and documentation files"
+  condition = "AND"
+  regexTarget = "secret"
+  regexes = ['''^Admin123!$''']
+  paths = [
+    '''(^|/)\.github/workflows/ci\.yml$''',
+    '''(^|/)Makefile$''',
+    '''(^|/)README\.md$''',
+    '''(^|/)docs/ISCY_Handbuch\.md$''',
+    '''(^|/)docs/ISCY_Handbuch\.pdf$''',
+    '''(^|/)rust/iscy-backend/tests/http_tests\.rs$''',
+    '''(^|/)scripts/run_ha_integration\.sh$''',
+    '''(^|/)scripts/run_performance_smoke\.sh$''',
+    '''(^|/)scripts/run_postgresql_18_compatibility\.sh$''',
+    '''(^|/)tests/visual/specs/iscy-visual\.spec\.js$''',
+  ]
+
+  [[rules.allowlists]]
+  description = "Documented placeholder in the Secret Hygiene example only"
+  condition = "AND"
+  regexTarget = "secret"
+  regexes = ['''^YOUR_API_KEY_HERE$''']
+  paths = ['''(^|/)SECURITY\.md$''']
+
+  [[rules.allowlists]]
+  description = "Explicit unsafe Nix placeholder in the Secret Hygiene warning only"
+  condition = "AND"
+  regexTarget = "secret"
+  regexes = ['''^echtes-secret$''']
+  paths = ['''(^|/)SECURITY\.md$''']
+
+  [[rules.allowlists]]
+  description = "Synthetic scanner self-test value in its dedicated temporary path only"
+  condition = "AND"
+  regexTarget = "secret"
+  regexes = ['''^TestOnly-NotARealSecret$''']
+  paths = ['''(^|/)tests/gitleaks/allowed-db-password\.env$''']
+
+  [[rules.allowlists]]
+  description = "Synthetic GitHub token in the Codex API shell test only"
+  condition = "AND"
+  regexTarget = "line"
+  regexes = ['''^\s*if PATH=.*\bGH_TOKEN='[^']+'\s*\\$''']
+  paths = ['''(^|/)tests/automation/test_iscy_codex_api\.sh$''']
+
+  [[rules.allowlists]]
+  description = "Synthetic OpenAI keys in the Codex runtime shell test only"
+  condition = "AND"
+  regexTarget = "line"
+  regexes = ['''^\s*OPENAI_API_KEY='[^']+'\s*\\$''']
+  paths = ['''(^|/)tests/automation/test_iscy_codex_runtime\.sh$''']
+
+[[rules]]
+id = "credentialed-connection-string"
+description = "Connection string containing inline credentials"
+regex = '''(?i)(?:database_?url|connection_?string)\s*[:=]\s*["']([^"'\r\n]*://[^"'\r\n]*:[^"'\r\n]*@[^"'\r\n]+)["']'''
+secretGroup = 1
+keywords = ["database", "connection"]
+
+[[allowlists]]
+description = "Exclude generated and automation runtime metadata"
+paths = [
+  '''(^|/)\.codex/runtime/''',
+  '''(^|/)\.direnv/''',
+  '''(^|/)artifacts/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)rust/iscy-backend/target/''',
+  '''(^|/)target/''',
+]
