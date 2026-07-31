@@ -108,6 +108,27 @@ async function assertSafeUsablePage(page) {
   expect(clippedHeadings).toBe(0);
 }
 
+async function assertUnconfiguredEvidenceStorage(page) {
+  const storagePanel = page.locator("section.panel").filter({
+    has: page.getByRole("heading", {
+      name: "Storage-Backend-Status",
+      exact: true,
+    }),
+  });
+  const localStorageRow = storagePanel
+    .locator("table")
+    .first()
+    .locator("tbody tr")
+    .filter({ hasText: "local_filesystem" });
+  await expect(localStorageRow.locator("td")).toHaveText([
+    "local_filesystem",
+    "aktiv",
+    "nicht konfiguriert",
+    "storage_not_configured",
+    "storage_not_configured",
+  ]);
+}
+
 test.describe("ISCY visuelle Regression", () => {
   for (const [name, route, requiresLogin] of pages) {
     test(name, async ({ page }, testInfo) => {
@@ -117,6 +138,9 @@ test.describe("ISCY visuelle Regression", () => {
       await page.goto(route, { waitUntil: "domcontentloaded" });
       await stabilize(page);
       await assertSafeUsablePage(page);
+      if (route === "/evidence/integrity/") {
+        await assertUnconfiguredEvidenceStorage(page);
+      }
       if (
         process.env.ISCY_TEST_VISUAL_FORCE_DIFF === "1" &&
         name === "login" &&

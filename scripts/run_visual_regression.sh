@@ -17,6 +17,11 @@ fail() {
     exit 1
 }
 
+assert_media_root_absent() {
+    local failure_category="$1"
+    [[ ! -e "$media_root" && ! -L "$media_root" ]] || fail "$failure_category"
+}
+
 cleanup() {
     local exit_code=$?
     trap - EXIT ERR INT TERM HUP
@@ -110,7 +115,6 @@ playwright_output_root="$runtime_root/playwright-output"
 for private_directory in \
     "$runtime_root" \
     "$database_root" \
-    "$media_root" \
     "$backend_log_root" \
     "$browser_tmp_root" \
     "$xdg_cache_root" \
@@ -118,6 +122,19 @@ for private_directory in \
     "$playwright_output_root"; do
     install -d -m 0700 "$private_directory"
 done
+
+runtime_root_real="$(realpath -e -- "$runtime_root")" || fail runtime_root_resolution
+[[ "$runtime_root_real" == "$runtime_root" \
+    && -d "$runtime_root" && ! -L "$runtime_root" ]] \
+    || fail runtime_root_not_canonical
+[[ "$(id -u)" == "$(stat -c '%u' -- "$runtime_root")" ]] \
+    || fail runtime_root_owner
+[[ "$(stat -c '%a' -- "$runtime_root")" == '700' ]] \
+    || fail runtime_root_permissions
+[[ "$media_root" == "$runtime_root_real/media" \
+    && "$(dirname -- "$media_root")" == "$runtime_root_real" ]] \
+    || fail media_root_boundary
+assert_media_root_absent media_root_preexisting
 
 case "${ISCY_TEST_VISUAL_FORCE_DIFF:-0}" in
     0 | 1) ;;
@@ -162,6 +179,7 @@ export ISCY_EXPECTED_COMMIT_SHA="${ISCY_EXPECTED_COMMIT_SHA:-$(git -C "$ROOT_DIR
 
 cargo run --locked --manifest-path "$ROOT_DIR/rust/iscy-backend/Cargo.toml" \
     --bin iscy-backend -- init-demo >/dev/null
+assert_media_root_absent media_root_created_by_init
 cargo run --locked --manifest-path "$ROOT_DIR/rust/iscy-backend/Cargo.toml" \
     --bin iscy-backend >"$log_file" 2>&1 &
 backend_pid=$!
@@ -177,6 +195,7 @@ for _ in $(seq 1 60); do
     sleep 1
 done
 ((backend_ready == 1)) || fail backend_timeout
+assert_media_root_absent media_root_created_by_backend
 
 playwright_args=(--config "$ROOT_DIR/tests/visual/playwright.config.js")
 if [[ "${ISCY_UPDATE_VISUAL_BASELINES:-0}" == '1' ]]; then
