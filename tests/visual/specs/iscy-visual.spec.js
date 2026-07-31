@@ -1,5 +1,34 @@
 const { expect, test } = require("@playwright/test");
 
+let blockedExternalRequests = 0;
+
+test.beforeEach(async ({ context }) => {
+  blockedExternalRequests = 0;
+  await context.route("**/*", async (route) => {
+    let requestOrigin = "";
+    try {
+      requestOrigin = new URL(route.request().url()).origin;
+    } catch {
+      blockedExternalRequests += 1;
+      await route.abort("blockedbyclient");
+      return;
+    }
+    if (requestOrigin === "http://127.0.0.1:19200") {
+      await route.continue();
+      return;
+    }
+    blockedExternalRequests += 1;
+    await route.abort("blockedbyclient");
+  });
+});
+
+test.afterEach(() => {
+  expect(
+    blockedExternalRequests,
+    "VISUAL_NETWORK_ERROR[external_request_blocked]",
+  ).toBe(0);
+});
+
 const pages = [
   ["login", "/login/", false],
   ["dashboard-betriebsuebersicht", "/dashboard/", true],
@@ -81,13 +110,22 @@ async function assertSafeUsablePage(page) {
 
 test.describe("ISCY visuelle Regression", () => {
   for (const [name, route, requiresLogin] of pages) {
-    test(name, async ({ page }) => {
+    test(name, async ({ page }, testInfo) => {
       if (requiresLogin) {
         await authenticate(page);
       }
       await page.goto(route, { waitUntil: "domcontentloaded" });
       await stabilize(page);
       await assertSafeUsablePage(page);
+      if (
+        process.env.ISCY_TEST_VISUAL_FORCE_DIFF === "1" &&
+        name === "login" &&
+        testInfo.project.name === "desktop-1440"
+      ) {
+        await page.addStyleTag({
+          content: "body { outline: 12px solid rgb(255, 0, 255) !important; }",
+        });
+      }
       await expect(page).toHaveScreenshot(`${name}.png`, {
         fullPage: true,
       });
