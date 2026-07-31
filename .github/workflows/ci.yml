@@ -171,17 +171,75 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+      - name: Create private performance artifact roots
+        id: performance_artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          workspace="$(mktemp -d "$RUNNER_TEMP/iscy-performance-artifacts.XXXXXX")"
+          install -d -m 0700 "$workspace/raw"
+          {
+            printf 'workspace=%s\n' "$workspace"
+            printf 'raw=%s\n' "$workspace/raw"
+            printf 'staging=%s\n' "$workspace/staging"
+          } >>"$GITHUB_OUTPUT"
       - name: Run bounded PostgreSQL and MinIO performance smoke
+        id: performance_test
+        env:
+          ISCY_PERFORMANCE_RAW_ROOT: ${{ steps.performance_artifacts.outputs.raw }}
         run: |
           make performance-smoke
+      - name: Sanitize performance artifact
+        id: performance_hygiene
+        if: >-
+          ${{ always() &&
+              (github.event_name == 'push' ||
+               (github.event_name == 'pull_request' &&
+                github.event.pull_request.head.repo.full_name == github.repository)) }}
+        env:
+          ARTIFACT_RAW_ROOT: ${{ steps.performance_artifacts.outputs.raw }}
+          ARTIFACT_STAGING_ROOT: ${{ steps.performance_artifacts.outputs.staging }}
+          ARTIFACT_TEST_STATUS: ${{ steps.performance_test.outcome }}
+          ARTIFACT_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          ./scripts/prepare_ci_artifacts.sh \
+            --type performance \
+            --raw-root "$ARTIFACT_RAW_ROOT" \
+            --output-root "$ARTIFACT_STAGING_ROOT" \
+            --test-status "$ARTIFACT_TEST_STATUS" \
+            --expected-commit "$ARTIFACT_COMMIT_SHA"
+          test -f "$ARTIFACT_STAGING_ROOT/artifact-manifest.json"
+          printf 'ready=true\n' >>"$GITHUB_OUTPUT"
       - name: Upload performance report
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: >-
+          ${{ always() &&
+              (github.event_name == 'push' ||
+               (github.event_name == 'pull_request' &&
+                github.event.pull_request.head.repo.full_name == github.repository)) &&
+              steps.performance_hygiene.outcome == 'success' &&
+              steps.performance_hygiene.outputs.ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: performance-smoke-report
-          path: artifacts/performance/
-          if-no-files-found: warn
-          retention-days: 14
+          name: performance-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.performance_artifacts.outputs.staging }}
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 7
+      - name: Remove performance artifact roots
+        if: always()
+        env:
+          ARTIFACT_WORKSPACE: ${{ steps.performance_artifacts.outputs.workspace }}
+        run: |
+          set -euo pipefail
+          case "$ARTIFACT_WORKSPACE" in
+            "$RUNNER_TEMP"/iscy-performance-artifacts.*) ;;
+            *) echo 'CI_ARTIFACT_ERROR[cleanup_boundary]' >&2; exit 1 ;;
+          esac
+          if test -d "$ARTIFACT_WORKSPACE" && ! test -L "$ARTIFACT_WORKSPACE"; then
+            rm -rf -- "$ARTIFACT_WORKSPACE"
+          fi
+          test ! -e "$ARTIFACT_WORKSPACE"
 
   ha-integration:
     runs-on: ubuntu-24.04
@@ -208,17 +266,77 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Create private visual artifact roots
+        id: visual_artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          workspace="$(mktemp -d "$RUNNER_TEMP/iscy-visual-artifacts.XXXXXX")"
+          install -d -m 0700 "$workspace/raw"
+          {
+            printf 'workspace=%s\n' "$workspace"
+            printf 'raw=%s\n' "$workspace/raw"
+            printf 'staging=%s\n' "$workspace/staging"
+          } >>"$GITHUB_OUTPUT"
       - name: Run pinned Playwright visual regression
+        id: visual_test
+        env:
+          ISCY_VISUAL_WORKSPACE_ROOT: ${{ steps.visual_artifacts.outputs.workspace }}
+          ISCY_VISUAL_RAW_ROOT: ${{ steps.visual_artifacts.outputs.raw }}
+          ISCY_EXPECTED_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           nix develop --command make visual-regression
+      - name: Sanitize visual artifact
+        id: visual_hygiene
+        if: >-
+          ${{ always() &&
+              (github.event_name == 'push' ||
+               (github.event_name == 'pull_request' &&
+                github.event.pull_request.head.repo.full_name == github.repository)) }}
+        env:
+          ARTIFACT_RAW_ROOT: ${{ steps.visual_artifacts.outputs.raw }}
+          ARTIFACT_STAGING_ROOT: ${{ steps.visual_artifacts.outputs.staging }}
+          ARTIFACT_TEST_STATUS: ${{ steps.visual_test.outcome }}
+          ARTIFACT_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          ./scripts/prepare_ci_artifacts.sh \
+            --type visual \
+            --raw-root "$ARTIFACT_RAW_ROOT" \
+            --output-root "$ARTIFACT_STAGING_ROOT" \
+            --test-status "$ARTIFACT_TEST_STATUS" \
+            --expected-commit "$ARTIFACT_COMMIT_SHA"
+          test -f "$ARTIFACT_STAGING_ROOT/artifact-manifest.json"
+          printf 'ready=true\n' >>"$GITHUB_OUTPUT"
       - name: Upload visual differences
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: >-
+          ${{ always() &&
+              (github.event_name == 'push' ||
+               (github.event_name == 'pull_request' &&
+                github.event.pull_request.head.repo.full_name == github.repository)) &&
+              steps.visual_hygiene.outcome == 'success' &&
+              steps.visual_hygiene.outputs.ready == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: visual-regression-artifacts
-          path: artifacts/visual/
-          if-no-files-found: warn
-          retention-days: 14
+          name: visual-regression-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.visual_artifacts.outputs.staging }}
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 7
+      - name: Remove visual artifact roots
+        if: always()
+        env:
+          ARTIFACT_WORKSPACE: ${{ steps.visual_artifacts.outputs.workspace }}
+        run: |
+          set -euo pipefail
+          case "$ARTIFACT_WORKSPACE" in
+            "$RUNNER_TEMP"/iscy-visual-artifacts.*) ;;
+            *) echo 'CI_ARTIFACT_ERROR[cleanup_boundary]' >&2; exit 1 ;;
+          esac
+          if test -d "$ARTIFACT_WORKSPACE" && ! test -L "$ARTIFACT_WORKSPACE"; then
+            rm -rf -- "$ARTIFACT_WORKSPACE"
+          fi
+          test ! -e "$ARTIFACT_WORKSPACE"
 
   docker-config:
     runs-on: ubuntu-24.04

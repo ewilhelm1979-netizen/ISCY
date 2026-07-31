@@ -1,9 +1,14 @@
 const path = require("path");
 const { defineConfig } = require("@playwright/test");
 
+const outputRoot = process.env.ISCY_PLAYWRIGHT_OUTPUT_ROOT;
+if (!outputRoot) {
+  throw new Error("VISUAL_CONFIG_ERROR[playwright_output_root_missing]");
+}
+
 module.exports = defineConfig({
   testDir: path.join(__dirname, "specs"),
-  outputDir: process.env.ISCY_VISUAL_ARTIFACT_DIR || path.join(__dirname, "artifacts"),
+  outputDir: outputRoot,
   snapshotPathTemplate: path.join(
     __dirname,
     "baselines",
@@ -24,23 +29,19 @@ module.exports = defineConfig({
   retries: 0,
   reporter: [
     ["line"],
-    [
-      "json",
-      {
-        outputFile:
-          process.env.ISCY_VISUAL_REPORT ||
-          path.join(__dirname, "artifacts", "visual-report.json"),
-      },
-    ],
+    [path.join(__dirname, "synthetic-summary-reporter.js")],
   ],
   use: {
-    baseURL: process.env.ISCY_VISUAL_BASE_URL || "http://127.0.0.1:19200",
+    baseURL: process.env.ISCY_VISUAL_BASE_URL,
     locale: "de-DE",
     timezoneId: "Europe/Berlin",
     colorScheme: "light",
     reducedMotion: "reduce",
-    screenshot: "only-on-failure",
-    trace: "retain-on-failure",
+    screenshot: "off",
+    trace: "off",
+    video: "off",
+    acceptDownloads: false,
+    serviceWorkers: "block",
   },
   projects: [
     {

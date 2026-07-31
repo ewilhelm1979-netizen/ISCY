@@ -1,22 +1,72 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+export LC_ALL=C
+umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STACK="$ROOT_DIR/scripts/resilience_stack.sh"
-TMP_DIR="$(mktemp -d)"
-REPORT_DIR="${ISCY_PERFORMANCE_REPORT_DIR:-$ROOT_DIR/artifacts/performance}"
+performance_temp_parent="${RUNNER_TEMP:-${XDG_RUNTIME_DIR:-/tmp}}"
+[[ -d "$performance_temp_parent" && ! -L "$performance_temp_parent" ]] || {
+  echo 'PERFORMANCE_RUN_ERROR[temp_parent_type]' >&2
+  exit 1
+}
+performance_temp_parent="$(realpath -e -- "$performance_temp_parent")"
+owns_raw_root=0
+if [[ -n "${ISCY_PERFORMANCE_RAW_ROOT:-}" ]]; then
+  REPORT_DIR="$ISCY_PERFORMANCE_RAW_ROOT"
+  [[ "$REPORT_DIR" == "$performance_temp_parent"/* \
+    && -d "$REPORT_DIR" && ! -L "$REPORT_DIR" \
+    && "$(realpath -e -- "$REPORT_DIR")" == "$REPORT_DIR" \
+    && "$(stat -c '%a' -- "$REPORT_DIR")" == '700' \
+    && "$(id -u)" == "$(stat -c '%u' -- "$REPORT_DIR")" ]] || {
+    echo 'PERFORMANCE_RUN_ERROR[raw_root_boundary]' >&2
+    exit 1
+  }
+  [[ -z "$(find -P "$REPORT_DIR" -mindepth 1 -print -quit)" ]] || {
+    echo 'PERFORMANCE_RUN_ERROR[raw_root_not_empty]' >&2
+    exit 1
+  }
+else
+  REPORT_DIR="$(mktemp -d "$performance_temp_parent/iscy-performance-raw.XXXXXX")"
+  chmod 700 "$REPORT_DIR"
+  owns_raw_root=1
+fi
+TMP_DIR="$(mktemp -d "$performance_temp_parent/iscy-performance-runtime.XXXXXX")"
+chmod 700 "$TMP_DIR"
 REPORT_JSON="$REPORT_DIR/performance-smoke.json"
-REPORT_MD="$REPORT_DIR/performance-smoke.md"
 RESULTS="$TMP_DIR/results.tsv"
 export ISCY_RESILIENCE_PROJECT="iscy-perf-$RANDOM-$$"
 
 cleanup() {
+  local exit_code=$?
+  trap - EXIT ERR INT TERM HUP
+  set +e
   "$STACK" down >/dev/null 2>&1 || true
-  rm -rf "$TMP_DIR"
+  if [[ "$TMP_DIR" == "$performance_temp_parent"/iscy-performance-runtime.* \
+    && -d "$TMP_DIR" && ! -L "$TMP_DIR" ]]; then
+    rm -rf -- "$TMP_DIR"
+  fi
+  if ((owns_raw_root == 1)) \
+    && [[ "$REPORT_DIR" == "$performance_temp_parent"/iscy-performance-raw.* \
+      && -d "$REPORT_DIR" && ! -L "$REPORT_DIR" ]]; then
+    rm -rf -- "$REPORT_DIR"
+  fi
+  exit "$exit_code"
 }
-trap cleanup EXIT INT TERM
 
-mkdir -p "$REPORT_DIR"
+on_error() {
+  local exit_code=$?
+  trap - ERR
+  exit "$exit_code"
+}
+
+trap cleanup EXIT
+trap on_error ERR
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
 : >"$RESULTS"
 BASE_URL="http://127.0.0.1:19100"
 COOKIE="$TMP_DIR/session.cookies"
@@ -189,19 +239,8 @@ jq --slurp \
   --argjson database_connection_errors "$database_connection_errors" \
   '{schema_version:1,generated_at:$generated_at,environment:$environment,concurrency:$concurrency,total_requests:$total_requests,duration_ms:$duration_ms,throughput_per_second:$throughput_per_second,timeout_count:$timeout_count,database_connection_errors:$database_connection_errors,categories:.,contains_personal_data:false,contains_secrets:false}' \
   "${category_files[@]}" >"$REPORT_JSON"
-{
-  echo '# ISCY Performance-Smoke'
-  echo
-  echo "- Testdauer: ${duration_ms} ms"
-  echo "- Durchsatz: ${throughput_per_second} Requests/s"
-  echo "- Timeouts: ${timeout_count}"
-  echo "- DB-/Service-Unavailable-Antworten: ${database_connection_errors}"
-  echo
-  echo '| Kategorie | Requests | Fehler | p50 ms | p95 ms | p99 ms | Budget |'
-  echo '|---|---:|---:|---:|---:|---:|---:|'
-  jq --raw-output '.categories[] | "| \(.name) | \(.requests) | \(.errors) | \(.p50_ms) | \(.p95_ms) | \(.p99_ms) | \(.p95_budget_ms) |"' "$REPORT_JSON"
-} >"$REPORT_MD"
+chmod 600 "$REPORT_JSON"
 
 "$ROOT_DIR/scripts/check_performance_report.sh" "$REPORT_JSON"
 
-echo "ISCY Performance-Smoke OK: $REPORT_JSON"
+printf 'ISCY Performance-Smoke OK\n'
