@@ -16,16 +16,29 @@ expected_commit='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 workspace_counter=0
 passed=0
 skipped=0
+active_test_pid=''
+validator_exit_code=0
 
 die() {
     printf 'ARTIFACT_HYGIENE_TEST_ERROR[%s]\n' "$1" >&2
     exit 1
 }
 
+terminate_active_test_process() {
+    local process_pid="$active_test_pid"
+    [[ -n "$process_pid" ]] || return 0
+    active_test_pid=''
+    if kill -0 "$process_pid" >/dev/null 2>&1; then
+        kill -TERM "$process_pid" >/dev/null 2>&1 || true
+    fi
+    wait "$process_pid" 2>/dev/null || true
+}
+
 cleanup() {
     local exit_code=$?
     trap - EXIT INT TERM HUP
     set +e
+    terminate_active_test_process
     if [[ "$test_root" == "$test_parent"/iscy-artifact-hygiene-test.* \
         && -d "$test_root" && ! -L "$test_root" ]]; then
         rm -rf -- "$test_root"
@@ -139,6 +152,20 @@ run_validator() {
         --output-root "$current_staging" \
         --test-status "$status" \
         --expected-commit "$expected_commit"
+}
+
+wait_for_active_validator() {
+    local process_pid="$1"
+    [[ "$active_test_pid" == "$process_pid" ]] || die validator_pid_mismatch
+    if wait "$process_pid"; then
+        validator_exit_code=0
+    else
+        validator_exit_code=$?
+    fi
+    active_test_pid=''
+    if kill -0 "$process_pid" >/dev/null 2>&1; then
+        die validator_process_not_reaped
+    fi
 }
 
 assert_no_validator_temps() {
@@ -336,7 +363,7 @@ for marker_case in private-key github-token authorization cookie database-url \
         authorization) marker='Authorization: Bearer synthetic-value' ;;
         cookie) marker='Set-Cookie: synthetic=value' ;;
         database-url) marker='postgresql://synthetic.invalid/db' ;;
-        absolute-path) marker='/home/synthetic/path' ;;
+        absolute-path) marker='/home/''synthetic/path' ;;
         external-url) marker='https://invalid.example/path' ;;
         email-address) marker='synthetic@example.invalid' ;;
     esac
@@ -436,8 +463,14 @@ new_workspace staging-symlink-after-publish
 write_performance_fixture "$current_raw"
 output_file="$current_workspace/validator-output.txt"
 ISCY_TEST_CI_ARTIFACT_FAIL_AT=wait_after_publish \
-    run_validator performance success >"$output_file" 2>&1 &
-validator_pid=$!
+    "$validator" \
+        --type performance \
+        --raw-root "$current_raw" \
+        --output-root "$current_staging" \
+        --test-status success \
+        --expected-commit "$expected_commit" >"$output_file" 2>&1 &
+active_test_pid=$!
+validator_pid="$active_test_pid"
 for _ in $(seq 1 500); do
     [[ -e "$current_workspace/.ci-artifact-test-ready" ]] && break
     kill -0 "$validator_pid" >/dev/null 2>&1 || break
@@ -447,10 +480,8 @@ done
     || die staging_symlink_sync
 ln -s performance-smoke.json "$current_staging/unexpected.json"
 : >"$current_workspace/.ci-artifact-test-continue"
-set +e
-wait "$validator_pid"
-exit_code=$?
-set -e
+wait_for_active_validator "$validator_pid"
+exit_code="$validator_exit_code"
 ((exit_code != 0)) || die staging_symlink_accepted
 assert_failure_state "$output_file"
 passed=$((passed + 1))
@@ -459,8 +490,14 @@ new_workspace signal-after-publish
 write_performance_fixture "$current_raw"
 output_file="$current_workspace/validator-output.txt"
 ISCY_TEST_CI_ARTIFACT_FAIL_AT=wait_after_publish \
-    run_validator performance success >"$output_file" 2>&1 &
-validator_pid=$!
+    "$validator" \
+        --type performance \
+        --raw-root "$current_raw" \
+        --output-root "$current_staging" \
+        --test-status success \
+        --expected-commit "$expected_commit" >"$output_file" 2>&1 &
+active_test_pid=$!
+validator_pid="$active_test_pid"
 for _ in $(seq 1 500); do
     [[ -e "$current_workspace/.ci-artifact-test-ready" ]] && break
     kill -0 "$validator_pid" >/dev/null 2>&1 || break
@@ -469,10 +506,8 @@ done
 [[ -e "$current_workspace/.ci-artifact-test-ready" ]] \
     || die signal_after_publish_sync
 kill -TERM "$validator_pid"
-set +e
-wait "$validator_pid"
-exit_code=$?
-set -e
+wait_for_active_validator "$validator_pid"
+exit_code="$validator_exit_code"
 ((exit_code != 0)) || die signal_after_publish_accepted
 assert_failure_state "$output_file"
 passed=$((passed + 1))
@@ -508,8 +543,14 @@ new_workspace source-change
 write_performance_fixture "$current_raw"
 output_file="$current_workspace/validator-output.txt"
 ISCY_TEST_CI_ARTIFACT_FAIL_AT=wait_after_validation \
-    run_validator performance success >"$output_file" 2>&1 &
-validator_pid=$!
+    "$validator" \
+        --type performance \
+        --raw-root "$current_raw" \
+        --output-root "$current_staging" \
+        --test-status success \
+        --expected-commit "$expected_commit" >"$output_file" 2>&1 &
+active_test_pid=$!
+validator_pid="$active_test_pid"
 for _ in $(seq 1 500); do
     [[ -e "$current_workspace/.ci-artifact-test-ready" ]] && break
     kill -0 "$validator_pid" >/dev/null 2>&1 || break
@@ -518,10 +559,8 @@ done
 [[ -e "$current_workspace/.ci-artifact-test-ready" ]] || die source_change_sync
 printf ' ' >>"$current_raw/performance-smoke.json"
 : >"$current_workspace/.ci-artifact-test-continue"
-set +e
-wait "$validator_pid"
-exit_code=$?
-set -e
+wait_for_active_validator "$validator_pid"
+exit_code="$validator_exit_code"
 ((exit_code != 0)) || die source_change_accepted
 assert_failure_state "$output_file"
 passed=$((passed + 1))
