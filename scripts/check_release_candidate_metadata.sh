@@ -17,11 +17,11 @@ notes_path="${ISCY_RELEASE_NOTES_PATH:-docs/RELEASE_NOTES_DRAFT.md}"
 manifest_path="${ISCY_RELEASE_MANIFEST_PATH:-release/release-manifest.json}"
 sbom_path="${ISCY_RELEASE_SBOM_PATH:-release/iscy-backend.cdx.json}"
 checksums_path="${ISCY_RELEASE_CHECKSUMS_PATH:-release/SHA256SUMS}"
-snapshot_path="${ISCY_PUBLISHED_SNAPSHOT_PATH:-release/published/V23.7.31.json}"
+snapshot_path="${ISCY_PUBLISHED_SNAPSHOT_PATH:-release/published/V23.7.32.json}"
 db_admin_path="${ISCY_DB_ADMIN_PATH:-rust/iscy-backend/src/db_admin.rs}"
-published_version='V23.7.31'
-published_commit='c595795296633ce4152aa0e817b063ee88c7028a'
-development_version='V23.7.32'
+published_version='V23.7.32'
+published_commit='76fa7384bf25e8eaab87f98377cb1db10d4432da'
+development_version='V23.7.33'
 
 [[ -f "$notes_path" ]] || fail documentation 'Release Notes fehlen.'
 [[ -f docs/RELEASE_CANDIDATE_CHECKLIST.md ]] || fail documentation 'Release-Checkliste fehlt.'
@@ -29,7 +29,7 @@ development_version='V23.7.32'
 [[ -f "$manifest_path" ]] || fail manifest 'Release-Manifest fehlt.'
 [[ -f "$checksums_path" ]] || fail checksum 'Release-Checksummen fehlen.'
 [[ -f "$sbom_path" ]] || fail sbom 'CycloneDX-SBOM fehlt.'
-[[ -f "$snapshot_path" ]] || fail published_snapshot 'V23.7.31-Published-Snapshot fehlt.'
+[[ -f "$snapshot_path" ]] || fail published_snapshot 'V23.7.32-Published-Snapshot fehlt.'
 [[ -f "$db_admin_path" ]] || fail migration 'Migrationsquelle fehlt.'
 
 release_status="$(jq -er '.release_status | select(type == "string")' "$manifest_path")" \
@@ -71,7 +71,7 @@ esac
 
 candidate_tag_ref="refs/tags/$development_version"
 if git show-ref --verify --quiet "$candidate_tag_ref"; then
-    fail candidate_tag 'V23.7.32-Tag darf im unveroeffentlichten Lifecycle nicht existieren.'
+    fail candidate_tag 'V23.7.33-Tag darf im unveroeffentlichten Lifecycle nicht existieren.'
 fi
 
 ISCY_RELEASE_MANIFEST_PATH="$manifest_path" \
@@ -149,10 +149,10 @@ jq -e \
     --arg commit "$published_commit" \
     '.schema_version == 2 and
     .tag_name == $version and
-    .release_name == "ISCY V23.7.31" and
-    .release_id == 358600823 and
+    .release_name == "ISCY V23.7.32" and
+    .release_id == 363588955 and
     .target_commit == $commit and
-    .published_at == "2026-07-23T10:18:29Z" and
+    .published_at == "2026-08-01T17:53:32Z" and
     .draft == false and
     .prerelease == false and
     .latest_at_snapshot == true and
@@ -166,65 +166,65 @@ jq -e \
     .asset_count == 6 and
     .assets == [
       {
-        "asset_id": 487050335,
+        "asset_id": 498119837,
         "name": "iscy-backend",
-        "size_bytes": 35530608,
-        "sha256": "620bdc35edfc6582654edcb5bc66077332de5d19c863cf3040a8867aa9dba078",
+        "size_bytes": 35587944,
+        "sha256": "214ee385e6af57af86e5730dd0a0808ea3fa739ce27858c29c819fde6f21c71d",
         "content_type": "application/octet-stream",
-        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.31/iscy-backend"
+        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.32/iscy-backend"
       },
       {
-        "asset_id": 487050333,
+        "asset_id": 498119839,
         "name": "iscy-backend.cdx.json",
-        "size_bytes": 299091,
-        "sha256": "f6a882163cfa6b15cbba58666ebce7c4a1fa167b2b6eca17f96aee371324dd24",
+        "size_bytes": 300074,
+        "sha256": "3b7b605713ab32d070c4c45820cd8a1dd6afe47c9f2e77b4703f735f7dab167b",
         "content_type": "application/json",
-        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.31/iscy-backend.cdx.json"
+        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.32/iscy-backend.cdx.json"
       },
       {
-        "asset_id": 487050336,
+        "asset_id": 498119840,
         "name": "ISCY_Handbuch.pdf",
-        "size_bytes": 147657,
-        "sha256": "f5354d1040786b8e0da3d19e60d7b56befdb6c320f241ea11b0ae3049ee14712",
+        "size_bytes": 151729,
+        "sha256": "3b0ae9b4bfabfc41f3d9051f57475794fb27e504187c25a18655859bb20a1076",
         "content_type": "application/pdf",
-        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.31/ISCY_Handbuch.pdf"
+        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.32/ISCY_Handbuch.pdf"
       },
       {
-        "asset_id": 487050359,
+        "asset_id": 498119843,
         "name": "release-manifest.json",
-        "size_bytes": 3060,
-        "sha256": "613ec8465475504bb347555225f2ca7aedc05c127046a795eb8e3ccca7f54452",
+        "size_bytes": 3081,
+        "sha256": "faf51618f4260c07648685de5bc025d59e2fbf17deedb5a96fa5cc92f4a13d04",
         "content_type": "application/json",
-        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.31/release-manifest.json"
+        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.32/release-manifest.json"
       },
       {
-        "asset_id": 487050338,
+        "asset_id": 498119841,
         "name": "RELEASE_NOTES.md",
-        "size_bytes": 8106,
-        "sha256": "4a98629fa027e83a56ca074013cc3c0459451e108f3441b5d612d6afaf3f8068",
+        "size_bytes": 8434,
+        "sha256": "a9b90641b2e511cb1b91eaecfc5830e658e193d5d15cd1792e390ca00c9292ac",
         "content_type": "text/markdown; charset=utf-8",
-        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.31/RELEASE_NOTES.md"
+        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.32/RELEASE_NOTES.md"
       },
       {
-        "asset_id": 487050334,
+        "asset_id": 498119854,
         "name": "SHA256SUMS",
         "size_bytes": 422,
-        "sha256": "f0cfd4fc27abbb1f55c7c34d1587aefaf84c3b64c9549742698afeb993f7fe08",
+        "sha256": "e1393c30377ce370a254bb65bed61e755d89f5ee59b5741f984ad22fa1eee64d",
         "content_type": "application/octet-stream",
-        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.31/SHA256SUMS"
+        "download_url": "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.32/SHA256SUMS"
       }
     ]' "$snapshot_path" >/dev/null \
-    || fail published_snapshot 'V23.7.31-Published-Snapshot ist ungueltig.'
+    || fail published_snapshot 'V23.7.32-Published-Snapshot ist ungueltig.'
 if grep -aEq '/home/|/nix/store/|/github/workspace/|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----' "$snapshot_path"; then
     fail published_snapshot 'Published-Snapshot enthaelt lokale Pfade oder sensitive Marker.'
 fi
 published_tag_ref="refs/tags/$published_version"
 git show-ref --verify --quiet "$published_tag_ref" \
-    || fail published_tag 'V23.7.31-Tag fehlt im Pruefkontext.'
+    || fail published_tag 'V23.7.32-Tag fehlt im Pruefkontext.'
 actual_tag_commit="$(git rev-list -n 1 "$published_tag_ref")" \
-    || fail published_tag 'V23.7.31-Tagziel konnte nicht aufgeloest werden.'
+    || fail published_tag 'V23.7.32-Tagziel konnte nicht aufgeloest werden.'
 [[ "$actual_tag_commit" == "$published_commit" ]] \
-    || fail published_tag 'V23.7.31-Tag zeigt nicht auf den veroeffentlichten Commit.'
+    || fail published_tag 'V23.7.32-Tag zeigt nicht auf den veroeffentlichten Commit.'
 
 declare -A tracked_hashes=(
     [cargo_lock_sha256]='rust/iscy-backend/Cargo.lock'

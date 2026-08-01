@@ -5,11 +5,11 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 source_manifest='release/release-manifest.json'
-published_snapshot='release/published/V23.7.31.json'
-published_snapshot_sha256='f480b2d3a19e687e0c1ae6831a9c7f44531f879e07fa2b524d5b0e40423743af'
-published_version='V23.7.31'
-published_commit='c595795296633ce4152aa0e817b063ee88c7028a'
-candidate_version='V23.7.32'
+published_snapshot='release/published/V23.7.32.json'
+published_snapshot_sha256='f69045f33a7eff8630d22c219d59a6002dd074378974452ff566e19a9ff2b900'
+published_version='V23.7.32'
+published_commit='76fa7384bf25e8eaab87f98377cb1db10d4432da'
+development_version='V23.7.33'
 artifact_guard='./scripts/prepare_release_candidate_artifacts.sh'
 tmp_dir="$(mktemp -d)"
 output_dir="artifacts/release-lifecycle-test-$$"
@@ -26,32 +26,32 @@ source_artifact_status="$(jq -r '.release_artifact.reproducibility_status' "$sou
 source_binary_sha="$(jq -r '.release_artifact.binary_sha256' "$source_manifest")"
 source_commit_marker="$(jq -r '.source_commit' "$source_manifest")"
 source_date_epoch="$(jq -r '.source_date_epoch' "$source_manifest")"
-[[ "$source_status" == 'prepared_not_published' \
-    && "$source_version" == "$candidate_version" \
+[[ "$source_status" == 'development_unreleased' \
+    && "$source_version" == "$development_version" \
     && "$source_base_commit" == "$published_commit" \
     && "$source_commit_marker" == 'git:HEAD' \
     && "$source_date_epoch" == 'null' \
-    && "$source_test_status" == 'validated_by_release_candidate_check_and_ci' \
-    && "$source_artifact_status" == 'required_two_build_sha256' \
+    && "$source_test_status" == 'development_validation_required' \
+    && "$source_artifact_status" == 'not_prepared' \
     && "$source_binary_sha" == 'null' ]] || {
-    echo 'RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest bereitet V23.7.32 nicht repositorykonform und publikationsneutral vor.' >&2
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest oeffnet V23.7.33 nicht fail-closed als Development.' >&2
     exit 1
 }
-if git show-ref --verify --quiet "refs/tags/$candidate_version"; then
-    echo 'RELEASE_LIFECYCLE_TEST_ERROR[candidate_tag]: V23.7.32 ist im vorbereiteten Zustand bereits getaggt.' >&2
+if git show-ref --verify --quiet "refs/tags/$development_version"; then
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[candidate_tag]: V23.7.33 ist im Development-Zustand bereits getaggt.' >&2
     exit 1
 fi
 [[ "$(sha256sum "$published_snapshot" | cut -d ' ' -f 1)" == "$published_snapshot_sha256" ]] || {
-    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_snapshot]: V23.7.31-Snapshot wurde veraendert.' >&2
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_snapshot]: V23.7.32-Snapshot wurde veraendert.' >&2
     exit 1
 }
 [[ "$(jq -r '.target_commit' "$published_snapshot")" == "$published_commit" ]] || {
-    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_tag]: V23.7.31-Tagziel wurde im Snapshot verschoben.' >&2
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_tag]: V23.7.32-Tagziel wurde im Snapshot verschoben.' >&2
     exit 1
 }
 if git show-ref --verify --quiet "refs/tags/$published_version"; then
     [[ "$(git rev-list -n 1 "refs/tags/$published_version")" == "$published_commit" ]] || {
-        echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_tag]: Lokaler V23.7.31-Tag wurde verschoben.' >&2
+        echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_tag]: Lokaler V23.7.32-Tag wurde verschoben.' >&2
         exit 1
     }
 fi
@@ -117,7 +117,7 @@ published_candidate_output="$(
 published_candidate_status=$?
 set -e
 [[ "$published_candidate_status" -ne 0 ]] || {
-    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_version]: V23.7.31 konnte erneut vorbereitet werden.' >&2
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_version]: V23.7.32 konnte erneut vorbereitet werden.' >&2
     exit 1
 }
 [[ "$published_candidate_output" == *'RC_ARTIFACT_ERROR[published_version]'* ]] || {

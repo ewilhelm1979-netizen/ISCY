@@ -6,6 +6,20 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Release lifecycle
+
+- dokumentiert die Veroeffentlichung von `V23.7.32` mit Release-ID
+  `363588955`, Tagziel
+  `76fa7384bf25e8eaab87f98377cb1db10d4432da` und sechs kontrolliert
+  heruntergeladenen, per SHA-256 verifizierten Assets im unveraenderlichen
+  Published-Snapshot `release/published/V23.7.32.json`
+- beginnt den Entwicklungszyklus fuer `V23.7.33` auf Basis des unveraenderten,
+  veroeffentlichten Stable Release `V23.7.32` und setzt den Root-Lifecycle auf
+  `development_unreleased`
+- setzt Release-Artefakt- und Teststatus fail-closed auf erneute Development-
+  und Release-Validierung zurueck; in diesem Zustand kann kein Release-Bundle
+  fuer `V23.7.33` oder eine bereits veroeffentlichte Version erzeugt werden
+
 ## V23.7.32 - 2026-08-01
 
 ### Security and operations maintenance

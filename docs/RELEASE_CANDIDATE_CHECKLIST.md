@@ -1,28 +1,27 @@
-# ISCY Release-Candidate-Checkliste V23.7.32
+# ISCY Development- und Release-Candidate-Checkliste
 
-Diese Checkliste dokumentiert die reproduzierbare, publikationsneutrale
-Vorbereitung von `V23.7.32`. Sie ist ein technischer und fachlicher
-Review-Nachweis, keine Freigabe, Zertifizierung, Rechtsberatung oder
-automatische Veroeffentlichung.
+Diese Checkliste beschreibt den kontrollierten Development-Zyklus fuer
+`V23.7.33` und die davon getrennte spaetere Release-Candidate-Vorbereitung.
+Sie ist ein technischer und fachlicher Review-Nachweis, keine Freigabe,
+Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
 
 ## Verifizierter Ausgangsstand
 
 - Repository: `ewilhelm1979-netizen/ISCY`
-- Branch: `release/v23.7.32`
-- Synchronisationszeit: `2026-08-01T14:21:27Z`
-- Start-Commit: `fcbf0a8add68a6656311598820303f3e994b895d`
-- Merge-Base mit `main`: `fcbf0a8add68a6656311598820303f3e994b895d`
-- `main` und `origin/main`: Divergenz `0/0` beim Branchstart
-- veroeffentlichter Vorgaenger: `V23.7.31`
-- Tagziel des Vorgaengers:
-  `c595795296633ce4152aa0e817b063ee88c7028a`
-- GitHub Release-ID des Vorgaengers: `358600823`
+- Branch: `chore/post-release-v23.7.32`
+- veroeffentlichte Basis: `V23.7.32`
+- Basis-Commit und Tagziel:
+  `76fa7384bf25e8eaab87f98377cb1db10d4432da`
+- GitHub Release-ID der Basis: `363588955`
+- Veroeffentlichungszeitpunkt: `2026-08-01T17:53:32Z`
+- GitHub-Status am Snapshot: Latest, nicht Draft, nicht Prerelease,
+  `immutable=false`
 - unveraenderlicher Metadaten-Snapshot:
-  `release/published/V23.7.31.json`
+  `release/published/V23.7.32.json`
 - SHA-256 des Snapshots:
-  `f480b2d3a19e687e0c1ae6831a9c7f44531f879e07fa2b524d5b0e40423743af`
-- Zielversion: `V23.7.32`
-- Root-Lifecycle: `prepared_not_published`
+  `f69045f33a7eff8630d22c219d59a6002dd074378974452ff566e19a9ff2b900`
+- Development-Zielversion: `V23.7.33`
+- Root-Lifecycle: `development_unreleased`
 - Root-Quellmarker: `git:HEAD`; `source_date_epoch` und `binary_sha256`
   bleiben im getrackten Manifest `null`
 - internes Rust-Paket: `0.3.22`
@@ -30,30 +29,23 @@ automatische Veroeffentlichung.
 - Migrationen: 45, fortlaufend `0001` bis `0045`
 - Visual Regression: 42 unveraenderte Baselines
 
-PR `#97` wurde als Merge-Commit `fcbf0a8add68a6656311598820303f3e994b895d`
-auf `main` verifiziert. Der lokale Tag `V23.7.31` zeigt exakt auf den
-dokumentierten Basiscommit. Ein fehlender oder abweichender Vorgaenger-Tag
-sowie ein unerwartet vorhandener `V23.7.32`-Tag brechen die Metadatenpruefung
-fail-closed ab.
+PR `#98` wurde als Merge-Commit `76fa7384bf25e8eaab87f98377cb1db10d4432da`
+auf `main` verifiziert. Der lokale Tag `V23.7.32` zeigt exakt auf diesen
+Commit. Ein fehlender oder abweichender Basis-Tag sowie ein unerwartet
+vorhandener `V23.7.33`-Tag brechen die Metadatenpruefung fail-closed ab.
 
-## Tatsächlicher Scope seit V23.7.31
+## Veröffentlichungs- und Lifecycle-Scope
 
-Der Diff vom Vorgaenger-Tag bis zum Branchstart enthaelt vier abgeschlossene
-Wartungsbloecke:
+`V23.7.32` wurde aus dem Merge-Commit reproduziert, lokal vollstaendig
+validiert und mit genau sechs kontrolliert heruntergeladenen Assets
+rueckverifiziert. Der Published-Snapshot bindet die tatsaechlichen GitHub-
+Metadaten und SHA-256-Werte. Er ist Metadaten-Evidence und keine
+kryptografische Attestation.
 
-1. PR `#94`: Secret-Hygiene und file-basierte Produktionssecrets.
-2. PR `#95`: kontrollierter Rust-Dependency- und nixpkgs-Refresh mit
-   regenerierter SBOM und transaktionalen Release-Metadaten.
-3. PR `#96`: fail-closed Aufbereitung synthetischer Performance-/Visual-CI-
-   Artefakte und Pin von `actions/upload-artifact` auf `7.0.1`.
-4. PR `#97`: Published-Snapshot-/Lifecycle-Infrastruktur sowie verpflichtender
-   Tag-Fetch und fail-closed Tagzielpruefung im Aggregationsjob.
-
-Dieser Release-PR veraendert keine Produktfunktion, API, Migration,
-Visual-Baseline, direkte Runtime-Dependency, Containerbasis oder aktive
-Response-Funktion. Die einzige zusaetzliche Lockfile-Aenderung hebt
-`event-listener` im vorhandenen SQLx-Graph auf die fehlerbereinigte
-Patch-Version `5.4.2`; der Funktionsumfang bleibt eingefroren.
+Dieser Post-Release-PR veraendert keine Produktfunktion, API, Migration,
+Visual-Baseline, Dependency, Containerbasis, Workflow oder Release-Artefakt.
+Er dokumentiert ausschliesslich die Veroeffentlichung und oeffnet den
+fail-closed Development-Lifecycle fuer `V23.7.33`.
 
 ## Toolchain- und Dependency-Inventar
 
@@ -182,6 +174,12 @@ lokalen Pflichtpfad.
 
 ## Deterministische Release-Artefakte
 
+Im aktuellen Status `development_unreleased` bricht
+`make release-candidate-artifacts` fail-closed ab und erzeugt kein Bundle.
+Teststatus und Reproduzierbarkeitsstatus werden nicht aus `V23.7.32`
+uebernommen. Erst ein separater Release-Prep-PR darf den Root-Status auf
+`prepared_not_published` setzen und die folgenden Nachweise neu erbringen.
+
 Die CycloneDX-1.5-SBOM wird zweimal getrennt erzeugt. Der Generator entfernt
 die zufaellige Serialnummer, setzt den Timestamp auf die Zeit des
 Vorgaenger-Basiscommits und normalisiert den lokalen Root-Pfad zum stabilen
@@ -199,7 +197,8 @@ die erwarteten vier Laufzeitbibliotheken sowie SQLite-Startup, Health und
 Graceful Shutdown in einem sauberen Debian-Bookworm-Slim-Container ohne Nix,
 Rust, Cargo oder Compiler.
 
-Nur nach diesen Gates erzeugt `make release-candidate-artifacts` lokal unter
+Nur im spaeteren Status `prepared_not_published` und nach diesen Gates erzeugt
+`make release-candidate-artifacts` lokal unter
 `artifacts/release-candidate/` exakt:
 
 1. `iscy-backend`
@@ -242,8 +241,8 @@ und `binary_sha256: null`. Das Bundle bleibt ignored, lokal und unsigniert.
 - [ ] Erst danach darf separat ueber Ready-for-review und Merge entschieden
   werden.
 
-Diese Candidate-Vorbereitung erzeugt keinen Tag, kein GitHub Release, keinen
-Asset-Upload, keine produktive Signatur, keine Attestation und keine
-VEX-Aussage. `V23.7.31`, sein Release, seine sechs Assets und der
-Published-Snapshot bleiben unveraendert. Publikation und Asset-Upload sind
-einer getrennten Phase 3 vorbehalten.
+Das Oeffnen dieses Development-Zyklus erzeugt keinen neuen Tag, kein neues
+GitHub Release, kein Asset, keine produktive Signatur, keine Attestation und
+keine VEX-Aussage. `V23.7.32`, sein Release, seine sechs Assets und der
+Published-Snapshot bleiben unveraendert. Eine spaetere Release-Vorbereitung
+und Publikation erfordern getrennte menschliche Entscheidungen.

@@ -39,8 +39,8 @@ case "$release_status" in
             "Die Development-Zielversion $proposed_version fehlt."
         require_phrase release_status 'Status: Development / Unreleased.' \
             'Die eindeutige Development-/Unreleased-Kennzeichnung fehlt.'
-        require_phrase predecessor "Basis: ${backtick}V23.7.31${backtick}" \
-            'Die veroeffentlichte Basis V23.7.31 fehlt.'
+        require_phrase predecessor "Basis: ${backtick}V23.7.32${backtick}" \
+            'Die veroeffentlichte Basis V23.7.32 fehlt.'
         require_phrase unpublished 'Dieser Entwicklungsstand wurde noch nicht veroeffentlicht.' \
             'Die Abgrenzung zur Veroeffentlichung fehlt.'
         require_phrase no_tag 'noch keinen Tag' \
@@ -69,8 +69,8 @@ case "$release_status" in
             "Die Zielversion $proposed_version fehlt."
         require_phrase release_status 'Status: Stabiler Release.' \
             'Der publikationsneutrale Stable-Release-Status fehlt.'
-        require_phrase predecessor "Vorgänger: ${backtick}V23.7.31${backtick}" \
-            'Der veroeffentlichte Vorgaenger V23.7.31 fehlt.'
+        require_phrase predecessor "Vorgänger: ${backtick}V23.7.32${backtick}" \
+            'Der veroeffentlichte Vorgaenger V23.7.32 fehlt.'
         require_phrase nginx 'nginx:1.31-alpine' \
             'Die nginx-1.31-Maintenance fehlt.'
         require_phrase rust_toolchain "Rust ${backtick}1.97.0${backtick}" \
