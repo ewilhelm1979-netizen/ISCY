@@ -1,9 +1,9 @@
 {
   "schema_version": 2,
-  "proposed_version": "V23.7.31",
-  "release_status": "prepared_not_published",
+  "proposed_version": "V23.7.32",
+  "release_status": "development_unreleased",
   "source_commit": "git:HEAD",
-  "source_base_commit": "1c07af4e7cd196076220479d394242a3df589714",
+  "source_base_commit": "c595795296633ce4152aa0e817b063ee88c7028a",
   "source_date_epoch": null,
   "reproducible_build_marker": "source_date_epoch_from_git_commit",
   "rust_version": {
@@ -58,7 +58,7 @@
       "rust"
     ],
     "visual_baselines": 42,
-    "status": "validated_by_release_candidate_check_and_ci"
+    "status": "development_validation_required"
   },
   "release_artifact": {
     "type": "linux-x86_64-glibc",
@@ -73,7 +73,7 @@
     ],
     "rpath_status": "absent",
     "path_remapping": "container_build_roots_only",
-    "reproducibility_status": "required_two_build_sha256",
+    "reproducibility_status": "not_prepared",
     "binary_sha256": null
   },
   "provenance_status": "prepared_unsigned",

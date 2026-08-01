@@ -5,10 +5,12 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 source_manifest='release/release-manifest.json'
-source_snapshot='release/published/V23.7.30.json'
+source_snapshot='release/published/V23.7.31.json'
 source_db_admin='rust/iscy-backend/src/db_admin.rs'
 source_notes='docs/RELEASE_NOTES_DRAFT.md'
 guard='./scripts/check_release_candidate_metadata.sh'
+published_version='V23.7.31'
+published_commit='c595795296633ce4152aa0e817b063ee88c7028a'
 tmp_dir="$(mktemp -d)"
 cleanup() {
     rm -rf "$tmp_dir"
@@ -64,9 +66,50 @@ mutate_snapshot() {
     printf '%s\n' "$candidate"
 }
 
+run_tag_fixture_guard() {
+    (
+        cd "$tag_fixture"
+        ISCY_SKIP_RELEASE_REGRESSION_TESTS=true \
+            ./scripts/check_release_candidate_metadata.sh
+    )
+}
+
+expect_tag_fixture_rejected() {
+    local label="$1"
+    local output
+
+    if output="$(run_tag_fixture_guard 2>&1)"; then
+        printf 'RELEASE_METADATA_TEST_ERROR[%s]: Ungueltiger Tagkontext wurde akzeptiert.\n' "$label" >&2
+        exit 1
+    fi
+    [[ "$output" == *'RC_METADATA_ERROR[published_tag]'* ]] || {
+        printf 'RELEASE_METADATA_TEST_ERROR[%s]: Unerwartete Fehlerklasse.\n' "$label" >&2
+        exit 1
+    }
+}
+
 run_guard "$source_manifest" >/dev/null
 
-candidate="$(mutate_manifest wrong_development_version '.proposed_version = "V23.7.32"')"
+tag_fixture="$tmp_dir/tag-fixture"
+git init --quiet --initial-branch=fixture "$tag_fixture"
+git -C "$tag_fixture" fetch --quiet --no-tags "$repo_root" HEAD
+git -C "$tag_fixture" checkout --quiet --detach FETCH_HEAD
+git -C "$tag_fixture" tag "$published_version" "$published_commit"
+cp -- "$guard" "$tag_fixture/scripts/check_release_candidate_metadata.sh"
+run_tag_fixture_guard >/dev/null
+
+git -C "$tag_fixture" tag --delete "$published_version" >/dev/null
+expect_tag_fixture_rejected missing_published_tag
+
+wrong_tag_commit="$(git -C "$tag_fixture" rev-parse HEAD)"
+[[ "$wrong_tag_commit" != "$published_commit" ]] || {
+    echo 'RELEASE_METADATA_TEST_ERROR[tag_fixture]: Falscher Tag-Commit ist nicht vom Published-Commit getrennt.' >&2
+    exit 1
+}
+git -C "$tag_fixture" tag "$published_version" "$wrong_tag_commit"
+expect_tag_fixture_rejected wrong_published_tag_target
+
+candidate="$(mutate_manifest wrong_development_version '.proposed_version = "V23.7.33"')"
 expect_rejected wrong_development_version "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" manifest
 
 candidate="$(mutate_manifest development_stable_claim '
@@ -108,6 +151,21 @@ expect_rejected duplicate_asset_name "$source_manifest" "$snapshot" "$source_db_
 snapshot="$(mutate_snapshot truncated_digest '.assets[0].sha256 = "2f4d649c"')"
 expect_rejected truncated_digest "$source_manifest" "$snapshot" "$source_db_admin" "$source_notes" published_snapshot
 
+snapshot="$(mutate_snapshot changed_valid_digest '.assets[0].sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"')"
+expect_rejected changed_valid_digest "$source_manifest" "$snapshot" "$source_db_admin" "$source_notes" published_snapshot
+
+snapshot="$(mutate_snapshot changed_asset_size '.assets[0].size_bytes += 1')"
+expect_rejected changed_asset_size "$source_manifest" "$snapshot" "$source_db_admin" "$source_notes" published_snapshot
+
+snapshot="$(mutate_snapshot changed_content_type '.assets[0].content_type = "application/x-elf"')"
+expect_rejected changed_content_type "$source_manifest" "$snapshot" "$source_db_admin" "$source_notes" published_snapshot
+
+snapshot="$(mutate_snapshot changed_download_url '.assets[0].download_url = "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.31/replacement"')"
+expect_rejected changed_download_url "$source_manifest" "$snapshot" "$source_db_admin" "$source_notes" published_snapshot
+
+snapshot="$(mutate_snapshot removed_evidence_notice 'del(.evidence_notice)')"
+expect_rejected removed_evidence_notice "$source_manifest" "$snapshot" "$source_db_admin" "$source_notes" published_snapshot
+
 candidate_manifest="$(mutate_manifest prepared_mode '
     .release_status = "prepared_not_published"
     | .test_suite_summary.status = "validated_by_release_candidate_check_and_ci"
@@ -115,9 +173,9 @@ candidate_manifest="$(mutate_manifest prepared_mode '
 ')"
 candidate_notes="$tmp_dir/candidate-notes.md"
 cat >"$candidate_notes" <<'EOF'
-# ISCY V23.7.31 - Release Notes
+# ISCY V23.7.32 - Release Notes
 Status: Stabiler Release.
-Vorgänger: `V23.7.30`.
+Vorgänger: `V23.7.31`.
 nginx:1.31-alpine, Rust `1.97.0`, MSRV bleibt Rust `1.88.0`, nixos-26.05.
 PostgreSQL 16 bleibt der Standard; PostgreSQL 18.4 ist zusaetzlich geprueft.
 Der NIS2-Relevanz-Wizard erzeugt eine Applicability-Begruendung im NIS2- und

@@ -29,6 +29,21 @@ case "$release_status" in
         exit 1
         ;;
 esac
+proposed_version="$(jq -er '.proposed_version | select(type == "string")' "$manifest_path")" || {
+    echo 'RC_ARTIFACT_ERROR[manifest]: Zielversion fehlt oder ist ungueltig.' >&2
+    exit 1
+}
+for published_snapshot in release/published/*.json; do
+    [[ -e "$published_snapshot" ]] || continue
+    published_version="$(jq -er '.tag_name | select(type == "string")' "$published_snapshot")" || {
+        echo 'RC_ARTIFACT_ERROR[published_snapshot]: Published-Snapshot ist ungueltig.' >&2
+        exit 1
+    }
+    if [[ "$published_version" == "$proposed_version" ]]; then
+        echo 'RC_ARTIFACT_ERROR[published_version]: Bereits veroeffentlichte Version darf nicht erneut vorbereitet oder ueberschrieben werden.' >&2
+        exit 1
+    fi
+done
 if [[ "${1:-}" == '--check-status' ]]; then
     exit 0
 fi
@@ -36,7 +51,6 @@ fi
     echo 'RC_ARTIFACT_ERROR[arguments]: Nicht unterstuetztes Argument.' >&2
     exit 1
 }
-proposed_version="$(jq -er '.proposed_version | select(type == "string")' "$manifest_path")"
 migration_count="$(jq -er '.migration_count | select(type == "number")' "$manifest_path")"
 
 case "$output_dir" in

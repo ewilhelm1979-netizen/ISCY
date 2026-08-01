@@ -5,8 +5,11 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 source_manifest='release/release-manifest.json'
-published_snapshot='release/published/V23.7.30.json'
-published_snapshot_sha256='eec9e24ecdd6ea9cae4c0095a1ed367fa8d83de5b49e1f0f263338071033a517'
+published_snapshot='release/published/V23.7.31.json'
+published_snapshot_sha256='f480b2d3a19e687e0c1ae6831a9c7f44531f879e07fa2b524d5b0e40423743af'
+published_version='V23.7.31'
+published_commit='c595795296633ce4152aa0e817b063ee88c7028a'
+development_version='V23.7.32'
 artifact_guard='./scripts/prepare_release_candidate_artifacts.sh'
 tmp_dir="$(mktemp -d)"
 output_dir="artifacts/release-lifecycle-test-$$"
@@ -15,14 +18,35 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[[ "$(jq -r '.release_status' "$source_manifest")" == 'prepared_not_published' ]] || {
-    echo 'RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest ist nicht prepared_not_published.' >&2
+source_status="$(jq -r '.release_status' "$source_manifest")"
+source_version="$(jq -r '.proposed_version' "$source_manifest")"
+source_base_commit="$(jq -r '.source_base_commit' "$source_manifest")"
+source_test_status="$(jq -r '.test_suite_summary.status' "$source_manifest")"
+source_artifact_status="$(jq -r '.release_artifact.reproducibility_status' "$source_manifest")"
+source_binary_sha="$(jq -r '.release_artifact.binary_sha256' "$source_manifest")"
+[[ "$source_status" == 'development_unreleased' \
+    && "$source_version" == "$development_version" \
+    && "$source_base_commit" == "$published_commit" \
+    && "$source_test_status" == 'development_validation_required' \
+    && "$source_artifact_status" == 'not_prepared' \
+    && "$source_binary_sha" == 'null' ]] || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest oeffnet V23.7.32 nicht fail-closed als Development.' >&2
     exit 1
 }
 [[ "$(sha256sum "$published_snapshot" | cut -d ' ' -f 1)" == "$published_snapshot_sha256" ]] || {
-    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_snapshot]: V23.7.30-Snapshot wurde veraendert.' >&2
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_snapshot]: V23.7.31-Snapshot wurde veraendert.' >&2
     exit 1
 }
+[[ "$(jq -r '.target_commit' "$published_snapshot")" == "$published_commit" ]] || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_tag]: V23.7.31-Tagziel wurde im Snapshot verschoben.' >&2
+    exit 1
+}
+if git show-ref --verify --quiet "refs/tags/$published_version"; then
+    [[ "$(git rev-list -n 1 "refs/tags/$published_version")" == "$published_commit" ]] || {
+        echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_tag]: Lokaler V23.7.31-Tag wurde verschoben.' >&2
+        exit 1
+    }
+fi
 grep -Fq '.release_status = "stable_release_prepared"' "$artifact_guard" || {
     echo 'RELEASE_LIFECYCLE_TEST_ERROR[bundle_status]: Bundle-Manifest-Status ist nicht stabil abgesichert.' >&2
     exit 1
@@ -69,6 +93,33 @@ jq '
 ' "$source_manifest" >"$candidate_manifest"
 ISCY_RELEASE_MANIFEST_PATH="$candidate_manifest" \
     "$artifact_guard" --check-status
+
+published_candidate_manifest="$tmp_dir/published-candidate-manifest.json"
+jq --arg version "$published_version" '
+    .proposed_version = $version
+    | .release_status = "prepared_not_published"
+    | .test_suite_summary.status = "validated_by_release_candidate_check_and_ci"
+    | .release_artifact.reproducibility_status = "required_two_build_sha256"
+' "$source_manifest" >"$published_candidate_manifest"
+set +e
+published_candidate_output="$(
+    ISCY_RELEASE_MANIFEST_PATH="$published_candidate_manifest" \
+        "$artifact_guard" --check-status 2>&1
+)"
+published_candidate_status=$?
+set -e
+[[ "$published_candidate_status" -ne 0 ]] || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_version]: V23.7.31 konnte erneut vorbereitet werden.' >&2
+    exit 1
+}
+[[ "$published_candidate_output" == *'RC_ARTIFACT_ERROR[published_version]'* ]] || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_version]: Erwartete Fehlerklasse fehlt.' >&2
+    exit 1
+}
+[[ ! -e "$output_dir" ]] || {
+    echo 'RELEASE_LIFECYCLE_TEST_ERROR[published_version]: Published-Version hat ein Bundle angelegt.' >&2
+    exit 1
+}
 
 unsupported_manifest="$tmp_dir/unsupported-manifest.json"
 jq '.release_status = "stable_release_prepared"' "$source_manifest" >"$unsupported_manifest"
