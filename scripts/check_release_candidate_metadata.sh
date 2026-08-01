@@ -214,11 +214,12 @@ if grep -aEq '/home/|/nix/store/|/github/workspace/|gh[pousr]_[A-Za-z0-9_]{20,}|
     fail published_snapshot 'Published-Snapshot enthaelt lokale Pfade oder sensitive Marker.'
 fi
 published_tag_ref="refs/tags/$published_version"
-if git show-ref --verify --quiet "$published_tag_ref"; then
-    actual_tag_commit="$(git rev-list -n 1 "$published_tag_ref")"
-    [[ "$actual_tag_commit" == "$published_commit" ]] \
-        || fail published_tag 'V23.7.31-Tag zeigt nicht auf den veroeffentlichten Commit.'
-fi
+git show-ref --verify --quiet "$published_tag_ref" \
+    || fail published_tag 'V23.7.31-Tag fehlt im Pruefkontext.'
+actual_tag_commit="$(git rev-list -n 1 "$published_tag_ref")" \
+    || fail published_tag 'V23.7.31-Tagziel konnte nicht aufgeloest werden.'
+[[ "$actual_tag_commit" == "$published_commit" ]] \
+    || fail published_tag 'V23.7.31-Tag zeigt nicht auf den veroeffentlichten Commit.'
 
 declare -A tracked_hashes=(
     [cargo_lock_sha256]='rust/iscy-backend/Cargo.lock'

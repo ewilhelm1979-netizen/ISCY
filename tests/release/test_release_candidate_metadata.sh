@@ -9,6 +9,8 @@ source_snapshot='release/published/V23.7.31.json'
 source_db_admin='rust/iscy-backend/src/db_admin.rs'
 source_notes='docs/RELEASE_NOTES_DRAFT.md'
 guard='./scripts/check_release_candidate_metadata.sh'
+published_version='V23.7.31'
+published_commit='c595795296633ce4152aa0e817b063ee88c7028a'
 tmp_dir="$(mktemp -d)"
 cleanup() {
     rm -rf "$tmp_dir"
@@ -64,7 +66,48 @@ mutate_snapshot() {
     printf '%s\n' "$candidate"
 }
 
+run_tag_fixture_guard() {
+    (
+        cd "$tag_fixture"
+        ISCY_SKIP_RELEASE_REGRESSION_TESTS=true \
+            ./scripts/check_release_candidate_metadata.sh
+    )
+}
+
+expect_tag_fixture_rejected() {
+    local label="$1"
+    local output
+
+    if output="$(run_tag_fixture_guard 2>&1)"; then
+        printf 'RELEASE_METADATA_TEST_ERROR[%s]: Ungueltiger Tagkontext wurde akzeptiert.\n' "$label" >&2
+        exit 1
+    fi
+    [[ "$output" == *'RC_METADATA_ERROR[published_tag]'* ]] || {
+        printf 'RELEASE_METADATA_TEST_ERROR[%s]: Unerwartete Fehlerklasse.\n' "$label" >&2
+        exit 1
+    }
+}
+
 run_guard "$source_manifest" >/dev/null
+
+tag_fixture="$tmp_dir/tag-fixture"
+git init --quiet --initial-branch=fixture "$tag_fixture"
+git -C "$tag_fixture" fetch --quiet --no-tags "$repo_root" HEAD
+git -C "$tag_fixture" checkout --quiet --detach FETCH_HEAD
+git -C "$tag_fixture" tag "$published_version" "$published_commit"
+cp -- "$guard" "$tag_fixture/scripts/check_release_candidate_metadata.sh"
+run_tag_fixture_guard >/dev/null
+
+git -C "$tag_fixture" tag --delete "$published_version" >/dev/null
+expect_tag_fixture_rejected missing_published_tag
+
+wrong_tag_commit="$(git -C "$tag_fixture" rev-parse HEAD)"
+[[ "$wrong_tag_commit" != "$published_commit" ]] || {
+    echo 'RELEASE_METADATA_TEST_ERROR[tag_fixture]: Falscher Tag-Commit ist nicht vom Published-Commit getrennt.' >&2
+    exit 1
+}
+git -C "$tag_fixture" tag "$published_version" "$wrong_tag_commit"
+expect_tag_fixture_rejected wrong_published_tag_target
 
 candidate="$(mutate_manifest wrong_development_version '.proposed_version = "V23.7.33"')"
 expect_rejected wrong_development_version "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" manifest
