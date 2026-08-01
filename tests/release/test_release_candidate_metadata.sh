@@ -74,6 +74,21 @@ run_tag_fixture_guard() {
     )
 }
 
+expect_tag_fixture_category() {
+    local label="$1"
+    local category="$2"
+    local output
+
+    if output="$(run_tag_fixture_guard 2>&1)"; then
+        printf 'RELEASE_METADATA_TEST_ERROR[%s]: Ungueltiger Tagkontext wurde akzeptiert.\n' "$label" >&2
+        exit 1
+    fi
+    [[ "$output" == *"RC_METADATA_ERROR[$category]"* ]] || {
+        printf 'RELEASE_METADATA_TEST_ERROR[%s]: Unerwartete Fehlerklasse.\n' "$label" >&2
+        exit 1
+    }
+}
+
 expect_tag_fixture_rejected() {
     local label="$1"
     local output
@@ -109,15 +124,19 @@ wrong_tag_commit="$(git -C "$tag_fixture" rev-parse HEAD)"
 git -C "$tag_fixture" tag "$published_version" "$wrong_tag_commit"
 expect_tag_fixture_rejected wrong_published_tag_target
 
-candidate="$(mutate_manifest wrong_development_version '.proposed_version = "V23.7.33"')"
-expect_rejected wrong_development_version "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" manifest
+git -C "$tag_fixture" tag --delete "$published_version" >/dev/null
+git -C "$tag_fixture" tag "$published_version" "$published_commit"
+git -C "$tag_fixture" tag 'V23.7.32' "$wrong_tag_commit"
+expect_tag_fixture_category existing_candidate_tag candidate_tag
 
-candidate="$(mutate_manifest development_stable_claim '
-    .test_suite_summary.status = "validated_by_release_candidate_check_and_ci"
-    | .release_artifact.reproducibility_status = "verified_two_build_sha256"
+candidate="$(mutate_manifest wrong_candidate_version '.proposed_version = "V23.7.33"')"
+expect_rejected wrong_candidate_version "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" manifest
+
+candidate="$(mutate_manifest root_binary_claim '
+    .release_artifact.reproducibility_status = "verified_two_build_sha256"
     | .release_artifact.binary_sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 ')"
-expect_rejected development_stable_claim "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" manifest
+expect_rejected root_binary_claim "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" manifest
 
 candidate="$(mutate_manifest migration_count_low '.migration_count = 44')"
 expect_rejected migration_count_low "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" migration_count
