@@ -10,7 +10,11 @@ trap 'rm -rf -- "$audit_tmp"' EXIT INT TERM
 config="$repo_root/.gitleaks.toml"
 report="$audit_tmp/report.json"
 
-if [[ -f "$repo_root/.git/HEAD" ]]; then
+git_top_level="$(git -C "$repo_root" rev-parse --show-toplevel 2>/dev/null || true)"
+git_directory="$(git -C "$repo_root" rev-parse --absolute-git-dir 2>/dev/null || true)"
+if [[ -n "$git_top_level" \
+  && "$(realpath -e -- "$git_top_level" 2>/dev/null || true)" == "$repo_root" \
+  && -d "$git_directory" && ! -L "$git_directory" ]]; then
   git_command=(git -C "$repo_root")
 elif [[ -f "$repo_root/.hs100-git/HEAD" ]]; then
   export GIT_DIR="$repo_root/.hs100-git"

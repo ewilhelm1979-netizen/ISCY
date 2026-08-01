@@ -69,6 +69,11 @@ case "$release_status" in
         ;;
 esac
 
+candidate_tag_ref="refs/tags/$development_version"
+if git show-ref --verify --quiet "$candidate_tag_ref"; then
+    fail candidate_tag 'V23.7.32-Tag darf im unveroeffentlichten Lifecycle nicht existieren.'
+fi
+
 ISCY_RELEASE_MANIFEST_PATH="$manifest_path" \
     ./scripts/check_release_notes_completeness.sh "$notes_path"
 generated_notes_path='artifacts/release-candidate/RELEASE_NOTES.md'

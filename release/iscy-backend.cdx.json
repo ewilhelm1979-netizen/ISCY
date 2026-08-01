@@ -3,7 +3,7 @@
   "specVersion": "1.5",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-07-22T12:09:50Z",
+    "timestamp": "2026-07-23T09:38:54Z",
     "tools": [
       {
         "vendor": "CycloneDX",
@@ -990,33 +990,6 @@
     },
     {
       "type": "library",
-      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#concurrent-queue@2.5.0",
-      "author": "Stjepan Glavina <stjepang@gmail.com>, Taiki Endo <te316e89@gmail.com>, John Nunley <dev@notgull.net>",
-      "name": "concurrent-queue",
-      "version": "2.5.0",
-      "description": "Concurrent multi-producer multi-consumer queue",
-      "scope": "required",
-      "hashes": [
-        {
-          "alg": "SHA-256",
-          "content": "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
-        }
-      ],
-      "licenses": [
-        {
-          "expression": "Apache-2.0 OR MIT"
-        }
-      ],
-      "purl": "pkg:cargo/concurrent-queue@2.5.0",
-      "externalReferences": [
-        {
-          "type": "vcs",
-          "url": "https://github.com/smol-rs/concurrent-queue"
-        }
-      ]
-    },
-    {
-      "type": "library",
       "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#const-oid@0.9.6",
       "author": "RustCrypto Developers",
       "name": "const-oid",
@@ -1533,16 +1506,16 @@
     },
     {
       "type": "library",
-      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#event-listener@5.4.1",
+      "bom-ref": "registry+https://github.com/rust-lang/crates.io-index#event-listener@5.4.2",
       "author": "Stjepan Glavina <stjepang@gmail.com>, John Nunley <dev@notgull.net>",
       "name": "event-listener",
-      "version": "5.4.1",
+      "version": "5.4.2",
       "description": "Notify async tasks or threads",
       "scope": "required",
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "e13b66accf52311f30a0db42147dadea9850cb48cd070028831ae5f5d4b856ab"
+          "content": "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
         }
       ],
       "licenses": [
@@ -1550,7 +1523,7 @@
           "expression": "Apache-2.0 OR MIT"
         }
       ],
-      "purl": "pkg:cargo/event-listener@5.4.1",
+      "purl": "pkg:cargo/event-listener@5.4.2",
       "externalReferences": [
         {
           "type": "vcs",
@@ -7719,12 +7692,6 @@
       ]
     },
     {
-      "ref": "registry+https://github.com/rust-lang/crates.io-index#concurrent-queue@2.5.0",
-      "dependsOn": [
-        "registry+https://github.com/rust-lang/crates.io-index#crossbeam-utils@0.8.21"
-      ]
-    },
-    {
       "ref": "registry+https://github.com/rust-lang/crates.io-index#const-oid@0.9.6"
     },
     {
@@ -7814,9 +7781,8 @@
       ]
     },
     {
-      "ref": "registry+https://github.com/rust-lang/crates.io-index#event-listener@5.4.1",
+      "ref": "registry+https://github.com/rust-lang/crates.io-index#event-listener@5.4.2",
       "dependsOn": [
-        "registry+https://github.com/rust-lang/crates.io-index#concurrent-queue@2.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#parking@2.2.1",
         "registry+https://github.com/rust-lang/crates.io-index#pin-project-lite@0.2.17"
       ]
@@ -8682,7 +8648,7 @@
         "registry+https://github.com/rust-lang/crates.io-index#crc@3.4.0",
         "registry+https://github.com/rust-lang/crates.io-index#crossbeam-queue@0.3.12",
         "registry+https://github.com/rust-lang/crates.io-index#either@1.15.0",
-        "registry+https://github.com/rust-lang/crates.io-index#event-listener@5.4.1",
+        "registry+https://github.com/rust-lang/crates.io-index#event-listener@5.4.2",
         "registry+https://github.com/rust-lang/crates.io-index#futures-core@0.3.32",
         "registry+https://github.com/rust-lang/crates.io-index#futures-intrusive@0.5.0",
         "registry+https://github.com/rust-lang/crates.io-index#futures-io@0.3.32",

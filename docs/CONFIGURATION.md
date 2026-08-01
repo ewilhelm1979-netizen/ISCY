@@ -7,7 +7,7 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 | Variable | Zweck | Erforderlich | Sicherer Standard | Gueltige Werte | Sicherheitsauswirkung | Secret-Datei |
 | --- | --- | --- | --- | --- | --- | --- |
 | `ISCY_APP_MODE` | Betriebsmodus | Production: ja | `development` | `development`, `demo`, `production` | Steuert Preflight, Cookie- und Header-Grenzen | nein |
-| `DATABASE_URL` | Datenbankverbindung | Production: ja | keine | `sqlite:*`, `postgres://*`, `postgresql://*` | Beispielwerte werden in Production abgewiesen | nein |
+| `DATABASE_URL` | Datenbankverbindung | Production: ja | keine | `sqlite:*`, `postgres://*`, `postgresql://*` | Beispielwerte werden in Production abgewiesen | ja, `DATABASE_URL_FILE` |
 | `RUST_BACKEND_BIND` | Bind-Adresse | nein | `127.0.0.1:9000` | Socket-Adresse | `0.0.0.0` verlangt in Production einen bestaetigten Reverse Proxy | nein |
 | `ISCY_MEDIA_ROOT` | Evidence-/Upload-Speicher | nein | `media` | Pfad | Muss durch Betreiber gesichert, gesichert und wiederherstellbar sein | nein |
 | `ISCY_TRUST_PROXY_IDENTITY_HEADERS` | Akzeptiert `x-iscy-*` Identity-Header | nein | Production: `0` | `0/1`, `true/false` | Nur aktivieren, wenn ein vertrauenswuerdiger Proxy eingehende gleichnamige Client-Header entfernt | nein |
@@ -37,28 +37,53 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 
 ## Secret-Dateien
 
-Fuer Container, NixOS und systemd koennen `*_FILE`-Varianten auf gemountete Secret-Dateien zeigen. Der direkte Env-Wert hat Vorrang, danach wird die Datei gelesen. Secrets duerfen nicht ins Repository, in Logs, Metriken oder Supportpakete geschrieben werden.
+Fuer Container, NixOS und systemd koennen `*_FILE`-Varianten auf gemountete
+Secret-Dateien zeigen. Direkter Env-Wert und zugehoerige `*_FILE`-Quelle sind
+gegenseitig ausgeschlossen; sind beide gesetzt, bricht ISCY mit der sicheren
+Fehlerklasse `ambiguous_source` ab. Dateien muessen absolut, regulaer,
+symlinkfrei, hoechstens 16 KiB gross und ohne Group-/Other-Rechte sein. Nur
+abschliessende CR-/LF-Bytes werden entfernt. Der Default-Root ist
+`/run/secrets`; weitere absolute Wurzeln muessen explizit ueber
+`ISCY_SECRET_ROOTS` beziehungsweise fuer S3-Referenzen ueber
+`ISCY_EVIDENCE_SECRET_ROOTS` freigegeben werden.
+
+Unterstuetzt sind `DATABASE_URL_FILE`, `NVD_API_KEY_FILE`,
+`ISCY_INITIAL_ADMIN_PASSWORD_FILE`, `ISCY_ALERTMANAGER_TOKEN_FILE`,
+`ISCY_ALERTMANAGER_HMAC_SECRET_FILE`,
+`ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE`,
+`ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE`,
+`ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE` und
+`ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN_FILE`. Das offizielle
+PostgreSQL-Image verwendet getrennt `POSTGRES_PASSWORD_FILE`. Secrets duerfen
+nicht ins Repository, in Logs, Metriken, Nix-Strings oder Supportpakete
+geschrieben werden.
 
 ## Production-Minimum
 
 ```bash
 ISCY_APP_MODE=production
-DATABASE_URL=postgresql://isms:<strong-password>@db:5432/isms
+ISCY_SECRETS_DIR=./.runtime/secrets
+DATABASE_URL_FILE=/run/secrets/database_url
+POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
 RUST_BACKEND_BIND=0.0.0.0:9000
 ISCY_TRUSTED_PROXY_CONFIGURED=1
 ISCY_TRUST_PROXY_IDENTITY_HEADERS=0
 ISCY_SECURE_COOKIES=1
 ISCY_HTTPS_CONFIRMED=1
 ISCY_HSTS_ENABLED=1
-ISCY_ALERTMANAGER_TOKEN_FILE=/run/secrets/iscy-alertmanager-token
-ISCY_ALERTMANAGER_HMAC_SECRET_FILE=/run/secrets/iscy-alertmanager-hmac
+ISCY_ALERTMANAGER_TOKEN_FILE=/run/secrets/iscy_alertmanager_token
+ISCY_ALERTMANAGER_HMAC_SECRET_FILE=/run/secrets/iscy_alertmanager_hmac_secret
 ISCY_AGENT_NOTIFICATION_INTERVAL_SECONDS=300
 ISCY_SHUTDOWN_TIMEOUT_SECONDS=30
 ISCY_NOTIFICATION_ALLOW_HTTP=0
 ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS=soc-webhook.example.org
 ISCY_AGENT_NOTIFICATION_SECRET=<strong-channel-secret>
-ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy-initial-admin-password
-NVD_API_KEY_FILE=/run/secrets/iscy-nvd-api-key
+ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy_initial_admin_password
+NVD_API_KEY_FILE=/run/secrets/nvd_api_key
+ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE=/run/secrets/iscy_s3_access_key
+ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE=/run/secrets/iscy_s3_secret_key
+ISCY_SECRET_ROOTS=/run/secrets
+ISCY_EVIDENCE_SECRET_ROOTS=/run/secrets
 ISCY_VULNERABILITY_SYNC_INTERVAL_SECONDS=7200
 ```
 
@@ -80,8 +105,8 @@ Sync-Lauf meldet einen begrenzten Fehlerstatus.
 Produktive Systeme sollten mit Migrationen und einem eigenen Initial-Admin starten:
 
 ```bash
-DATABASE_URL=postgresql://isms:<strong-password>@db:5432/isms \
-ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy-initial-admin-password \
+DATABASE_URL_FILE=/run/secrets/database_url \
+ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy_initial_admin_password \
 nix run .#iscy-backend -- init-admin
 ```
 

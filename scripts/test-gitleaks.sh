@@ -98,4 +98,23 @@ mkdir -p "$unexpected_placeholder"
 printf 'API_KEY = "%s"\n' "$placeholder" >"$unexpected_placeholder/example.md"
 expect_finding "$unexpected_placeholder" "$placeholder"
 
+worktree_source="$audit_tmp/worktree-source"
+worktree_checkout="$audit_tmp/worktree-checkout"
+mkdir -p "$worktree_source/scripts"
+cp -- "$repo_root/.gitleaks.toml" "$worktree_source/.gitleaks.toml"
+cp -- "$repo_root/scripts/run-gitleaks.sh" "$worktree_source/scripts/run-gitleaks.sh"
+printf 'synthetic clean worktree fixture\n' >"$worktree_source/fixture.txt"
+git init --quiet --initial-branch=fixture "$worktree_source"
+git -C "$worktree_source" add .gitleaks.toml scripts/run-gitleaks.sh fixture.txt
+git -C "$worktree_source" \
+  -c user.name='ISCY Gitleaks Test' \
+  -c user.email='gitleaks-test@example.invalid' \
+  commit --quiet -m 'test: add clean worktree fixture'
+git -C "$worktree_source" worktree add --quiet -b fixture-worktree "$worktree_checkout"
+worktree_output="$(bash "$worktree_checkout/scripts/run-gitleaks.sh" dir fixture-worktree)"
+[[ "$worktree_output" == *'dir-Scan: sauber'* ]] || {
+  printf 'Gitleaks runner rejected a valid Git worktree\n' >&2
+  exit 1
+}
+
 printf 'Gitleaks policy tests passed with redacted output.\n'

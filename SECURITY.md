@@ -124,3 +124,11 @@ includes the current-tree scan, and CI blocks new findings. `.gitignore`
 reduces accidental additions but is not a security control and does not protect
 tracked content. Optional pre-commit integration may invoke `make secrets`;
 installation is manual and CI remains mandatory.
+
+Performance- und Visual-CI-Artefakte werden vor jedem Upload aus privaten
+Raw-Roots in ein getrenntes, allowlist-basiertes Staging ueberfuehrt. Nur
+synthetische Aggregatmetriken, minimierte synthetische Visual-Ergebnisse,
+validierte Diff-PNGs und ein SHA-256-Manifest sind erlaubt. Rohscreenshots,
+Traces, Browserprofile, Cookies, Storage-State, Logs, Datenbanken, `.env`,
+Zertifikate und Schluessel sind ausgeschlossen. Das Threat Model und die
+Restrisiken stehen in `docs/security/ci-artifact-hygiene.md`.
