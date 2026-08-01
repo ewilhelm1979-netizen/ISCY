@@ -1,12 +1,26 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Juli 2026 (ISCY V23.7.31 Release Candidate vorbereitet / Rust 0.3.22)
+Version: Arbeitsstand August 2026 (ISCY V23.7.32 Release vorbereitet / Rust 0.3.22)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
 ISCY ist eine selbst gehostete, lokale und datenschutzbewusste Open-Source-Plattform unter `AGPL-3.0-only`. Die Rust-/Axum-Anwendung wird aktiv entwickelt und befindet sich in einer fruehen Community-Adoptionsphase; Schnittstellen, Datenmodelle und Betriebsverfahren koennen sich weiterentwickeln.
 
 ISCY wurde in dieser Codebasis mit Unterstuetzung von OpenAI Codex entwickelt, nach Rust migriert und technisch/fachlich plausibilisiert. Die fachliche Ausrichtung wurde mit offiziellen EU-Quellen zu NIS2, der NIS2-Durchfuehrungsverordnung (EU) 2024/2690, DORA, Cyber Resilience Act und EU AI Act sowie mit gaengigen ISMS-, Product-Security-, CVE-/SBOM-/CSAF-, Evidence- und Incident-Response-Praktiken abgeglichen. Das ist keine unabhaengige fachliche Pruefung, externe Zertifizierung oder Rechtsberatung. Regulatorische Unterstuetzung muss fuer Organisation, Rechtsraum und Einsatzkontext eigenstaendig bewertet werden.
+
+## Inhalt
+
+1. Was ISCY ist
+2. Grundprinzipien in einfacher Sprache
+3. Wie man ISCY fachlich lesen sollte
+4. Navigation und Funktionsbereiche
+5. Fachliche Erklaerung aller Hauptfunktionen
+6. Typische Arbeitsablaeufe
+7. Was die wichtigsten Begriffe bedeuten
+8. Was ISCY ausdruecklich nicht ersetzt
+9. Empfehlungen fuer die Einfuehrung
+10. Strategische Weiterentwicklung
+11. Git-Bezug dieses Handbuchs
 
 ## 1. Was ISCY ist
 
@@ -1093,9 +1107,19 @@ DATABASE_URL=sqlite:///db.sqlite3 RUST_BACKEND_BIND=127.0.0.1:9000 nix run .#isc
 Produktive Erstinitialisierung erfolgt ohne Demo-Seed. Dafuer wird ein eigenes Passwort aus einer Secret-Datei gelesen und ein initialer Admin angelegt:
 
 ```bash
-ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy-initial-admin-password \
+ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy_initial_admin_password \
 nix run .#iscy-backend -- init-admin
 ```
+
+Fuer Production unterstuetzt ISCY file-basierte Quellen fuer Datenbank, NVD,
+initialen Admin, Alertmanager und S3-kompatiblen Evidence Storage. Ein direkter
+Wert und seine `*_FILE`-Quelle duerfen nie gleichzeitig gesetzt sein. Die
+Dateien muessen regulaer, symlinkfrei, hoechstens 16 KiB gross und ohne
+Group-/Other-Rechte sein. Standardmaessig werden nur Dateien unter
+`/run/secrets` akzeptiert; Production Compose bindet das konfigurierte
+Secret-Verzeichnis dort read-only ein. Fehlermeldungen nennen keine
+Secretwerte oder credential-haltigen URLs. Vollstaendige Regeln und
+Rotationshinweise stehen in `SECURITY.md` und `docs/CONFIGURATION.md`.
 
 Maschinenlesbarer Betriebsstatus fuer lokale Pruefung, Monitoring und Agenten:
 
@@ -1937,6 +1961,16 @@ S3-Lifecycle. Der JSON-/Markdown-Bericht enthaelt p50, p95, p99, Maximum und
 Fehlerrate. Die grosszuegigen Grenzen sind CI-Regressionsbudgets und keine
 Produktions-SLOs.
 
+In CI liegen Performance- und Visual-Rohdaten in privaten `0700`-
+Wegwerfverzeichnissen. Vor einem Upload erzeugt ein fail-closed Sanitizer ein
+getrenntes, allowlist-basiertes Staging mit SHA-256-Manifest. Performance-
+Artefakte enthalten nur synthetische Aggregatmetriken; Visual-Artefakte nur
+eine minimierte synthetische Zusammenfassung und gegebenenfalls validierte
+Diff-PNGs. Traces, Videos, Rohscreenshots, Browserprofile, Cookies,
+Storage-State, Logs, Datenbanken, `.env`-Dateien, Zertifikate und Schluessel
+sind nicht uploadfaehig. Fremde Pull-Request-Repositories und jede
+fehlgeschlagene Sanitization blockieren den Upload.
+
 `make ha-integration` prueft zwei identische Backends mit gemeinsamem
 PostgreSQL 16 und MinIO hinter nginx 1.31. Daten und Evidence werden ueber
 unterschiedliche Instanzen geschrieben, gelesen und verifiziert. Danach wird
@@ -1957,16 +1991,31 @@ Skalierbarkeit, SLA-Erfuellung, Zertifizierung oder Rechtskonformitaet.
 
 ### 6.18 Finales Hardening und Release-Vorbereitung
 
-`V23.7.30` bleibt der unveraenderte veroeffentlichte Stable-/Latest-Stand.
-`V23.7.31` ist repositorykonform als `prepared_not_published` vorbereitet.
-Dieser Status erzeugt weder einen Tag noch ein GitHub Release oder einen
-Upload. Freigabe und Publikation bleiben getrennte menschliche Entscheidungen.
+`V23.7.31` bleibt der unveraenderte veroeffentlichte Vorgaenger mit Tagziel
+`c595795296633ce4152aa0e817b063ee88c7028a`. Sein Metadaten- und
+Asset-Snapshot liegt unter `release/published/V23.7.31.json`. `V23.7.32` ist
+repositorykonform als `prepared_not_published` vorbereitet. Dieser Status
+erzeugt weder einen Tag noch ein GitHub Release oder einen Upload. Freigabe und
+Publikation bleiben getrennte menschliche Entscheidungen.
+
+V23.7.32 ist ein Security-, Supply-Chain- und Maintenance-Release ohne neue
+Produktfunktion, Migration, Visual-Baseline oder aktive Response-Funktion.
+Enthalten sind file-basierte Produktionssecrets mit fail-closed
+Dateigrenzen, ein redigierter Secret-Scan, kontrollierte Rust-/nixpkgs-
+Aktualisierungen einschliesslich `event-listener 5.4.2` gegen
+`RUSTSEC-2026-0221` und minimierte, synthetische CI-Testartefakte. Die
+Lifecycle-Infrastruktur verifiziert den Vorgaenger-Tag in CI fail-closed und
+lehnt einen unerwartet bereits vorhandenen V23.7.32-Tag ab.
+
 Die vorhandenen Pflichtpruefungen laufen in `make release-candidate-check`
-zusammen. GitHub-CI
-behaelt die getrennten Rust-, Nix-, MinIO-, Performance-, HA-, Visual- und
-Docker-Jobs und aggregiert deren Ergebnis erst am Ende. Lokal erzeugte
-Candidate-Artefakte bleiben unter `artifacts/release-candidate/`, sind
-unsigniert und werden weder committed noch hochgeladen.
+zusammen. Der GitHub-Aggregationsjob verlangt elf getrennte Jobs fuer
+Secret-Scan, Rust, MSRV, Bootstrap, Nix, MinIO, Performance,
+HA/PostgreSQL 18, Visual, Compose und portables Binary. Der Codex-
+Automationstest ist ein zusaetzlicher separater CI-Nachweis; zusammen mit der
+Aggregation sind damit dreizehn CI-Jobs zu pruefen. CodeQL prueft Actions,
+JavaScript/TypeScript und Rust separat. Lokal erzeugte Candidate-Artefakte
+bleiben unter `artifacts/release-candidate/`, sind unsigniert, ignored und
+werden weder committed noch hochgeladen.
 
 Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
 Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
@@ -1986,11 +2035,23 @@ Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-
 Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder
 internen Store-Details.
 
+Die nach V23.7.31 gemergte Secret-Haertung erweitert diese Grenze: Production
+nutzt file-basierte Quellen unter `/run/secrets`, direkte Werte und
+`*_FILE`-Quellen sind gegenseitig ausgeschlossen und unsichere Dateitypen,
+Rechte, Groessen oder Wurzeln werden abgelehnt. Gitleaks scannt den aktuellen
+Repository-Baum als Pflichtjob; der History-Scan bleibt eine getrennte
+menschliche Wartungsentscheidung. Der Runner akzeptiert auch separate
+Git-Worktrees nur nach fail-closed Aufloesung ihrer Git-Metadaten. Werte und
+Treffer werden nicht in Fehlerausgaben wiedergegeben.
+
 Die RC-Metadatenpruefung bestaetigt 45 fortlaufende Migrationen, 42 visuelle
 Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen
-wertredigierten Sensitive-Data-Scan. `release/release-manifest.json` nutzt
-`git:HEAD` als reproduzierbaren Quellmarker; die lokale Artefakterzeugung loest
-ihn auf den konkreten Commit und dessen `SOURCE_DATE_EPOCH` auf.
+wertredigierten Sensitive-Data-Scan. Sie verlangt lokal den exakten
+V23.7.31-Tag und weist ihn dem dokumentierten Commit zu. Das Root-Manifest
+`release/release-manifest.json` nutzt `git:HEAD` als reproduzierbaren
+Quellmarker und behaelt `source_date_epoch` sowie `binary_sha256` auf `null`;
+die lokale Artefakterzeugung loest Commit, Commit-Epoch und den verifizierten
+Binary-SHA erst im Bundle auf.
 
 Eine reproduzierbare CycloneDX-1.5-SBOM wird mit dem durch `flake.lock`
 gepinnten reinen Build-Werkzeug `cargo-cyclonedx` vorbereitet. Zufalls-Serial,
@@ -2004,13 +2065,13 @@ Rechtsbewertung und Behoerdenmeldung bleiben ausdruecklich ausserhalb dieses
 Release. Die vollstaendige Matrix und alle Betriebsgrenzen stehen
 in `docs/RELEASE_CANDIDATE_CHECKLIST.md`.
 
-Der Funktionsumfang von `V23.7.31` ist fuer die Candidate-Pruefung
-eingefroren. Enthalten sind Native Threat Intelligence und Security
+Der Funktionsumfang von `V23.7.32` ist fuer die Candidate-Pruefung eingefroren.
+Die aus V23.7.31 vorhandenen Bereiche Native Threat Intelligence, Security
 Observations, Continuous Vulnerability Intelligence sowie tenantgebundene
-Software Approval and Exception Policies. Alle drei Bereiche bleiben passiv:
-Sie erzeugen keine aktive Reaktion, ueberschreiben keine manuelle Triage und
-installieren, blockieren oder deinstallieren keine Software. Eine Exception
-ist weder VEX noch Risk Acceptance. Fehlende Policies oder fehlende bekannte
+Software Approval and Exception Policies bleiben passiv: Sie erzeugen keine
+aktive Reaktion, ueberschreiben keine manuelle Triage und installieren,
+blockieren oder deinstallieren keine Software. Eine Exception ist weder VEX
+noch Risk Acceptance. Fehlende Policies oder fehlende bekannte
 Schwachstellen ergeben niemals automatisch `APPROVED`.
 
 Der owner-kontrollierte ISCY Codex PR-Orchestrator bietet fuer autorisierte

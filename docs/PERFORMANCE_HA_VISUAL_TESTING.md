@@ -1,6 +1,6 @@
 # Performance-, HA- und Visual-Regression-Tests
 
-Stand: ISCY V23.7.31 Release Candidate / Rust 0.3.22
+Stand: ISCY V23.7.32 Release Candidate / Rust 0.3.22
 
 Diese Tests erkennen grobe Betriebs- und UI-Regressionen vor einem spaeteren
 Release Candidate. Sie sind keine SLA-Zusage, kein Produktionslasttest und kein
@@ -49,10 +49,13 @@ Maximal vier Requests laufen parallel. Gemessen werden Health/Readiness,
 typische Leseansichten, Regulatory-Preview, ein kleiner idempotenter
 Roadmap-Write sowie S3-Upload, GET und Restore-/Hash-Pruefung.
 
-Der Bericht unter `artifacts/performance/` enthaelt JSON und Markdown mit
-Request-Anzahl, Testdauer, Durchsatz, Timeouts, DB-/Service-Unavailable-Antworten,
-Erfolgen, Fehlern, p50, p95, p99, Maximum und Budgetstatus.
-Maschinenspezifische Messwerte werden nicht in der Produktdatenbank gespeichert.
+Lokal enthaelt der Bericht unter `artifacts/performance/` JSON und Markdown mit
+Request-Anzahl, Testdauer, Durchsatz, Timeouts, DB-/Service-Unavailable-
+Antworten, Erfolgen, Fehlern, p50, p95, p99, Maximum und Budgetstatus. In CI
+schreibt der Test nur das synthetische JSON in einen privaten `0700`-Raw-Root;
+erst der zentrale Sanitizer erzeugt daraus JSON, Markdown und ein gehashtes
+Manifest in einem getrennten Upload-Staging. Maschinenspezifische Messwerte
+werden nicht in der Produktdatenbank gespeichert.
 
 | Kategorie | p95-CI-Grenze |
 | --- | ---: |
@@ -143,8 +146,11 @@ nix develop --command make visual-baselines
 nix develop --command make visual-regression
 ```
 
-Bei Abweichungen enthaelt das CI-Artefakt aktuelle Aufnahme, Baseline,
-Diff-Bild, Trace und JSON-Report.
+Bei Abweichungen enthaelt das CI-Artefakt nur die minimierte synthetische
+Zusammenfassung, ein gehashtes Artefaktmanifest und streng validierte
+synthetische Diff-PNGs. Aktuelle Aufnahme, Baseline, Trace, Video,
+Roh-Screenshot, Browserprofil, Cookies und Storage-State sind nicht
+uploadfaehig.
 
 ## CI und Grenzen
 
@@ -152,6 +158,15 @@ Die Jobs `performance-smoke`, `ha-integration` und `visual-regression` sind von
 den bestehenden Rust-, Nix-, MinIO-, Compose-, Docker- und Supply-Chain-Checks
 getrennt. Alle Jobs haben harte Zeitlimits und bereinigen ihre Wegwerfcontainer
 und Testdaten.
+
+Performance- und Visual-Rohdaten liegen in privaten temporaeren Verzeichnissen
+unter `RUNNER_TEMP`. Ein fail-closed Sanitizer prueft kanonische Pfade,
+Eigentum, Modi, regulaere Dateiarten, Symlink-/Hardlinkfreiheit, feste
+Allowlists, Schema, Medienart, Anzahl, Groesse, synthetische Provenance,
+Sensitive-Data-Marker und SHA-256-Inventar. Nur das atomar erzeugte Staging
+wird mit dem commitgepinnten `actions/upload-artifact 7.0.1` fuer sieben Tage
+hochgeladen. Uploads aus fremden Pull-Request-Repositories oder nach
+fehlgeschlagener Sanitization sind blockiert.
 
 Der Job `release-candidate-check` aggregiert die bestehenden Pflichtjobs. Er
 fuehrt die teuren Topologien nicht erneut aus, sondern scheitert, sobald ein

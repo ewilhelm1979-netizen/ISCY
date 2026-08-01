@@ -6,6 +6,45 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+## V23.7.32 - 2026-08-01
+
+### Security and operations maintenance
+
+- haertet Produktionssecrets mit gegenseitig ausschliessenden direkten und
+  file-basierten Quellen, sicheren Secret-Dateigrenzen, read-only Mounts unter
+  `/run/secrets` und wertfreier Fehlerausgabe; neue Produktfunktionen oder
+  Migrationen entstehen dadurch nicht
+- ergaenzt einen redigierenden Gitleaks-Pflichtjob fuer den aktuellen
+  Repository-Stand und dokumentiert den getrennten manuellen History-Scan;
+  der Runner validiert dabei auch regulaere Git-Worktrees fail-closed
+- begrenzt Visual- und Performance-CI-Artefakte fail-closed auf private
+  temporaere Rohdaten, allowlist-validierte synthetische Zusammenfassungen,
+  optionale synthetische Diff-PNGs und ein gehashtes Artefaktmanifest
+- aktualisiert den gepinnten `actions/upload-artifact`-Stand auf `7.0.1`,
+  verkuerzt die Aufbewahrung der minimierten Testartefakte auf sieben Tage und
+  blockiert Uploads aus fremden Pull-Request-Repositories
+
+### Supply chain and release integrity
+
+- aktualisiert die direkte `base64`-Abhaengigkeit kontrolliert auf `0.23.0`
+  sowie die Lockfile-Aufloesungen fuer `anyhow`, `serde`, `serde_json` und
+  `tokio`, ohne Git-Dependency, neue Lizenzfreigabe oder MSRV-Anhebung
+- aktualisiert die transitive SQLx-Aufloesung `event-listener` von `5.4.1` auf
+  `5.4.2` und entfernt dadurch `RUSTSEC-2026-0221` ohne neue Advisory-Ausnahme;
+  das nicht mehr benoetigte `concurrent-queue` entfaellt aus dem Lockfile
+- aktualisiert den gepinnten `nixos-26.05`-Input auf Commit
+  `21ea275a7c46aef9d4d6ddc962e6d562e9d94183`; Produkt-Builder Rust `1.97.0`,
+  MSRV und portabler Builder Rust `1.88` bleiben unveraendert
+- verifiziert den veroeffentlichten `V23.7.31`-Tag in der CI fail-closed gegen
+  `c595795296633ce4152aa0e817b063ee88c7028a` und lehnt fehlende oder
+  abweichende Tagziele eindeutig ab
+- bereitet `V23.7.32` als `prepared_not_published` mit publikationsneutralen
+  Notes, reproduzierbarer CycloneDX-SBOM, deterministischem Handbuch,
+  zweifachem Binary-Build und lokalem unsigniertem Sechs-Dateien-Bundle vor;
+  Tag, GitHub Release, Upload und Signierung bleiben getrennt
+
+## V23.7.31 - 2026-07-23
+
 ### Software Approval and Exception Policy - Phase 2
 
 - adds migration `0045_rust_software_approval_exception_policy` with tenant-scoped policies, mandatory-expiry exceptions, persisted evaluations and bounded audit events for exact existing product, asset, component and imported SBOM-component targets
@@ -50,13 +89,6 @@ The project uses release tags for immutable release points. Changes under **Unre
   `c595795296633ce4152aa0e817b063ee88c7028a` und sechs kontrolliert
   heruntergeladenen, per SHA-256 verifizierten Assets im unveraenderlichen
   Published-Snapshot `release/published/V23.7.31.json`
-- beginnt den Entwicklungszyklus fuer `V23.7.32` auf Basis des unveraenderten,
-  veroeffentlichten Stable Release `V23.7.31` und setzt den Root-Lifecycle auf
-  `development_unreleased`
-- setzt Release-Artefakt- und Teststatus fail-closed auf erneute Development-
-  und Release-Validierung zurueck; in diesem Zustand kann kein Release-Bundle
-  fuer `V23.7.32` oder eine bereits veroeffentlichte Version erzeugt werden
-
 ## V23.7.30 - 2026-07-22
 
 ### Automation

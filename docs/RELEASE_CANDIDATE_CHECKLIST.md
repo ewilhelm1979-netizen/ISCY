@@ -1,180 +1,148 @@
-# ISCY Development- und Release-Candidate-Checkliste
+# ISCY Release-Candidate-Checkliste V23.7.32
 
-Diese Checkliste beschreibt den kontrollierten Development-Zyklus fuer
-`V23.7.32` und die davon getrennte spaetere Release-Candidate-Vorbereitung.
-Sie ist ein technischer und fachlicher Review-Nachweis, keine Freigabe,
-Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
+Diese Checkliste dokumentiert die reproduzierbare, publikationsneutrale
+Vorbereitung von `V23.7.32`. Sie ist ein technischer und fachlicher
+Review-Nachweis, keine Freigabe, Zertifizierung, Rechtsberatung oder
+automatische Veroeffentlichung.
 
-## Verifizierter Lifecycle-Ausgangsstand
+## Verifizierter Ausgangsstand
 
-- Basis: veroeffentlichtes Stable Release `V23.7.31`
-- Basis-Commit und Tagziel: `c595795296633ce4152aa0e817b063ee88c7028a`
-- Release-ID: `358600823`
-- Published-Snapshot: `release/published/V23.7.31.json`
-- Development-Zielversion: `V23.7.32`
-- Root-Status: `development_unreleased`
-- Internes Rust-Paket: `0.3.22`
-- Rust-Haupttoolchain: `1.97.0`
-- MSRV und portabler Release-Builder: Rust `1.88`
-- Nix: `nixos-26.05`, Nix-Rust `1.95.0`
-- Datenbank: PostgreSQL 16 bleibt Standard; PostgreSQL 18.4 ist
-  kompatibilitaetsgeprueft
-- Migrationen: 45, fortlaufend `0001` bis `0045`
-- Visual Regression: 42 Baselines
-- Teststatus: erneute Development- und Release-Validierung erforderlich; aus
-  `V23.7.31` werden keine Testergebnisse fuer `V23.7.32` uebernommen
+- Repository: `ewilhelm1979-netizen/ISCY`
+- Branch: `release/v23.7.32`
+- Synchronisationszeit: `2026-08-01T14:21:27Z`
+- Start-Commit: `fcbf0a8add68a6656311598820303f3e994b895d`
+- Merge-Base mit `main`: `fcbf0a8add68a6656311598820303f3e994b895d`
+- `main` und `origin/main`: Divergenz `0/0` beim Branchstart
+- veroeffentlichter Vorgaenger: `V23.7.31`
+- Tagziel des Vorgaengers:
+  `c595795296633ce4152aa0e817b063ee88c7028a`
+- GitHub Release-ID des Vorgaengers: `358600823`
+- unveraenderlicher Metadaten-Snapshot:
+  `release/published/V23.7.31.json`
+- SHA-256 des Snapshots:
+  `f480b2d3a19e687e0c1ae6831a9c7f44531f879e07fa2b524d5b0e40423743af`
+- Zielversion: `V23.7.32`
+- Root-Lifecycle: `prepared_not_published`
+- Root-Quellmarker: `git:HEAD`; `source_date_epoch` und `binary_sha256`
+  bleiben im getrackten Manifest `null`
+- internes Rust-Paket: `0.3.22`
 - Lizenz: `AGPL-3.0-only`
+- Migrationen: 45, fortlaufend `0001` bis `0045`
+- Visual Regression: 42 unveraenderte Baselines
 
-`V23.7.31`, sein Tag, seine Release-ID und seine sechs Assets bleiben
-unveraenderlich. Der Snapshot dokumentiert ausschliesslich bereits
-veroeffentlichte Metadaten und verifizierte Asset-Hashes. Er ist keine
-Signatur, kryptografische Attestation oder Vulnerability-Aussage.
+PR `#97` wurde als Merge-Commit `fcbf0a8add68a6656311598820303f3e994b895d`
+auf `main` verifiziert. Der lokale Tag `V23.7.31` zeigt exakt auf den
+dokumentierten Basiscommit. Ein fehlender oder abweichender Vorgaenger-Tag
+sowie ein unerwartet vorhandener `V23.7.32`-Tag brechen die Metadatenpruefung
+fail-closed ab.
 
-## Lifecycle-Modi
+## Tatsächlicher Scope seit V23.7.31
 
-`development_unreleased` ist der normale Root-Status fuer Feature-PRs. Der
-vollstaendige technische Pruefpfad bleibt verpflichtend, erzeugt aber kein
-Release-Bundle. Ein Aufruf von `make release-candidate-artifacts` bricht in
-diesem Modus fail-closed mit `RC_ARTIFACT_ERROR[release_status]` ab. Ein
-erfolgreiches Vollgate endet mit `DEV_CHECK_OK`.
+Der Diff vom Vorgaenger-Tag bis zum Branchstart enthaelt vier abgeschlossene
+Wartungsbloecke:
 
-In diesem Lifecycle-PR bleibt die auf `main` vorhandene getrackte SBOM
-byteidentisch und wird per SHA-256 sowie CycloneDX-Struktur validiert. Eine
-neue Release-SBOM wird erst im separaten Release-Prep-PR im Status
-`prepared_not_published` erzeugt; dieser Development-Uebergang erzeugt weder
-Bundle noch neue Release-SBOM.
+1. PR `#94`: Secret-Hygiene und file-basierte Produktionssecrets.
+2. PR `#95`: kontrollierter Rust-Dependency- und nixpkgs-Refresh mit
+   regenerierter SBOM und transaktionalen Release-Metadaten.
+3. PR `#96`: fail-closed Aufbereitung synthetischer Performance-/Visual-CI-
+   Artefakte und Pin von `actions/upload-artifact` auf `7.0.1`.
+4. PR `#97`: Published-Snapshot-/Lifecycle-Infrastruktur sowie verpflichtender
+   Tag-Fetch und fail-closed Tagzielpruefung im Aggregationsjob.
 
-`prepared_not_published` wird erst in einem separaten Release-Prep-PR gesetzt.
-Dieser Modus verlangt vollstaendige Candidate Notes und erlaubt nach dem
-Binary-Gate die lokale, unsignierte Bundle-Erzeugung. Bereits in
-`release/published/` dokumentierte Versionen werden dabei fail-closed
-abgewiesen. Eine automatische
-Umwandlung aus dem Development-Modus, ein Tag oder eine GitHub-
-Veroeffentlichung findet nicht statt. Das Candidate-Vollgate endet mit
-`RC_CHECK_OK`.
+Dieser Release-PR veraendert keine Produktfunktion, API, Migration,
+Visual-Baseline, direkte Runtime-Dependency, Containerbasis oder aktive
+Response-Funktion. Die einzige zusaetzliche Lockfile-Aenderung hebt
+`event-listener` im vorhandenen SQLx-Graph auf die fehlerbereinigte
+Patch-Version `5.4.2`; der Funktionsumfang bleibt eingefroren.
 
-Beide Modi lesen ihren Status ausschliesslich aus dem validierten Root-
-Manifest. Migrationenzahl und Visual-Baselines werden gegen die dort
-dokumentierten Integerwerte geprueft; Migrations-IDs muessen ab `0001`
-lueckenlos, eindeutig und aufsteigend sein.
+## Toolchain- und Dependency-Inventar
 
-## Geerbte Plattformgrenzen
+| Bereich | Verifizierter Stand | Grenze |
+| --- | --- | --- |
+| Rust-Paket | `iscy-backend 0.3.22`, Edition 2021 | keine Versionsanhebung |
+| MSRV | Rust `1.88.0` | eigener Locked-Check |
+| Produkt-Build/Test/Clippy | Rust `1.97.0` | getrennt von MSRV und Nix |
+| portabler Builder | digest-gepinntes Rust `1.88` Bookworm | zwei cachefreie Builds |
+| Nix-Entwicklung | Rust `1.95.0` aus `nixos-26.05` | nur Build-/Testpfad |
+| nixpkgs | `21ea275a7c46aef9d4d6ddc962e6d562e9d94183` | Lockfile und NarHash verbindlich |
+| direkte Aenderung | `base64 0.23.0`, nur Feature `std` | Default-Features deaktiviert |
+| aktualisierte Aufloesungen | `anyhow 1.0.104`, `serde 1.0.229`, `serde_json 1.0.151`, `tokio 1.53.1` | Lockfile verbindlich |
+| Security-Patch im SQLx-Graph | `event-listener 5.4.2`; `concurrent-queue` entfaellt | behebt `RUSTSEC-2026-0221` ohne Ignore-Regel |
+| Makro-Aufloesung | `serde_derive` ueber `syn 3.0.3`; `syn 2.0.117` bleibt parallel | keine globale Major-Erzwingung |
+| transitive base64-Nutzer | `base64 0.22.1` ueber `hyper-util`, `reqwest`, SQLx | keine erzwungene Transitiv-Umschreibung |
+| native/build | `libsqlite3-sys 0.30.1`, `cc 1.2.60`, `pkg-config`, `vcpkg` | unveraendert; Rustls statt OpenSSL |
+| Quellen | crates.io-Registry-Index, keine direkte Git-Dependency | `cargo deny` blockiert unbekannte Quellen |
+| Lizenzen | bestehende Allowlist in `deny.toml` | keine neue Ausnahme |
 
-Die folgenden Plattform- und Produktangaben beschreiben den veroeffentlichten
-Basisstand und den aktuellen Repository-Scope. Sie sind keine uebernommenen
-Testergebnisse fuer `V23.7.32`; alle Gates in der Readiness-Matrix muessen im
-separaten Release-PR neu nachgewiesen werden.
+Die einzige Advisory-Ausnahme bleibt `RUSTSEC-2023-0071`. `rsa` liegt nur im
+Lockfile-Pfad der deaktivierten optionalen `sqlx-mysql`-Funktion und ist fuer
+kein ISCY-Target erreichbar. Der Gate-Aufruf darf keine weitere Ignore-ID
+enthalten. Die beim ersten Candidate-Audit erkannte informative Unsoundness
+`RUSTSEC-2026-0221` ist mit `event-listener 5.4.2` behoben und wird nicht
+ignoriert. Die Ausnahme ist keine Aussage ueber Schwachstellenfreiheit.
 
-- nginx `1.31-alpine` in Stage, Production und HA-Testtopologie
-- Rust `1.97.0` fuer Build, Test, Clippy und Produktcontainer bei unveraenderter
-  MSRV `1.88`
-- nixpkgs `nixos-26.05` mit Nix-Rust `1.95.0`
-- PostgreSQL-18.4-Kompatibilitaetsgate und logischer Forward-Restore 16 nach 18
-- PostgreSQL 16 weiterhin als Standard mit unveraendertem Volumeziel
-- Release-Manifest-Schema 2 trennt Produkt-, MSRV-, portablen Release- und
-  Nix-Toolchainpfad sowie zehn CI-Pflichtabhaengigkeiten, Aggregationsjob und
-  drei CodeQL-Sprachpruefungen
+## Secret- und Production-Grenzen
+
+- Production nutzt file-basierte Quellen fuer Datenbank, PostgreSQL,
+  initialen Admin, NVD, Alertmanager und S3-kompatiblen Evidence Storage.
+- Direkter Wert und korrespondierende `*_FILE`-Quelle sind gegenseitig
+  ausgeschlossen; Konflikt oder unsichere Datei fuehren zum Abbruch.
+- Secret-Dateien muessen regulaer, symlinkfrei, maximal 16 KiB gross und ohne
+  Group-/Other-Rechte sein. `/run/secrets` ist die Default-Wurzel.
+- Production Compose bindet `ISCY_SECRETS_DIR` read-only nach `/run/secrets`.
+- Logs und sichere Fehlerklassen duerfen keine Werte, credential-haltigen URLs,
+  Tokens, Object Keys oder lokalen Secret-Pfade ausgeben.
+- `make secrets` ist Teil von `make check`; `make secrets-history` bleibt ein
+  bewusst manueller Wartungsschritt. Der redigierende Runner akzeptiert
+  normale Checkouts und separate Git-Worktrees nur nach fail-closed
+  Aufloesung ihrer Git-Metadaten.
+
+## CI-Artefakt-Hygiene
+
+- Rohdaten liegen ausschliesslich in einem privaten `0700`-Wegwerfroot unter
+  `RUNNER_TEMP`; das Upload-Staging ist getrennt und wird atomar erzeugt.
+- Der Sanitizer validiert kanonische Pfade, Eigentum, Modi, Dateiarten,
+  Symlink-/Hardlinkfreiheit, Anzahl, Gesamtgroesse, Schemas, Medienarten,
+  SHA-256-Inventar und Sensitive-Data-Marker.
+- Performance-Staging besteht exakt aus `performance-smoke.json`,
+  `performance-smoke.md` und `artifact-manifest.json`.
+- Visual-Staging besteht aus `visual-summary.json`, Manifest und nur bei
+  synthetisch belegter Abweichung aus streng validierten `*-diff.png`-Dateien.
+- Traces, Videos, Rohscreenshots, Browserprofile, Cookies, Storage-State,
+  Datenbanken, `.env`, Logs, Zertifikate und Schluessel sind nicht uploadfaehig.
+- Fremde Pull-Request-Head-Repositories, fehlgeschlagene Sanitization oder
+  unvollstaendige Staging-Daten blockieren den Upload.
+- `actions/upload-artifact` ist commitgepinnt auf
+  `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` (`7.0.1`), versteckte Dateien
+  sind ausgeschlossen, fehlende Dateien sind Fehler, Retention ist sieben
+  Tage.
 
 ## Release-Readiness-Matrix
 
-| Bereich | Status | Nachweis oder Einschränkung |
+| Bereich | Kandidatennachweis | Betriebs- oder Aussagegrenze |
 | --- | --- | --- |
-| Rust/Axum Backend und Weboberfläche | implementiert und geprüft | Locked Build, Clippy und 376 Rust-/HTTP-Tests sind auf dem aktuellen Entwicklungsstand gruen. |
-| SQLite | geprüft mit dokumentierter Einschränkung | Bootstrap, Restart und Restore; kein Mehrinstanz-/HA-Pfad. |
-| PostgreSQL 16 | Candidate-Prüfung erforderlich | Standardpfad; Leerdatenbank, Bestand, Dump/Restore und Migrations-Race muessen im Candidate-Gate gruen sein. |
-| PostgreSQL 18.4 | Candidate-Prüfung erforderlich | Zusatzgate fuer frischen Bootstrap, Restart, 45 Migrationen und logischen 16-nach-18-Forward-Restore; kein Produktionsstandard. |
-| Lokale Evidence-Speicherung | geprüft mit dokumentierter Einschränkung | Authentifiziert und canonical-path-geprueft; nicht HA-faehig. |
-| S3-kompatibler Evidence Storage | Candidate-Prüfung erforderlich | MinIO-Lifecycle und HA-Cross-Instance-Pfad muessen gruen sein; keine produktiven Cloud-Credentials. |
-| Evidence Worker und Disposition | Candidate-Prüfung erforderlich | Atomare Claims, Legal Hold, Approval, Tombstone und Wiederanlauf werden im Gate geprueft. |
-| Notifications | geprüft mit dokumentierter Einschränkung | Claim/Deduplizierung und sichere Webhooks; kein externer Queue-Cluster. |
-| Supplier/Product Security | implementiert und geprüft | Tenant-, Rollen- und Evidence-Grenzen besitzen Negativtests. |
-| Native Threat Intelligence und Security Observations | implementiert und geprüft | Tenantgebundene Indicators, begrenzte Observations, manuelle Links, Rollen und transaktionale Auditspur; keine aktive Reaktion oder automatische Incident-/Evidence-Erzeugung. |
-| Continuous Vulnerability Intelligence | implementiert und geprüft | Feste offizielle Quellen, Provenance, Datenalter, konservative Korrelation und fail-closed unvollstaendige Laeufe; manuelle Triage, VEX und Risk Acceptance bleiben erhalten. |
-| Software Approval und Exceptions | implementiert und geprüft | Exakte Tenantziele, restriktive Praezedenz, Pflichtablauf, Self-Approval-Schutz, Revisionen und passive Side-Effect-Grenze. |
-| Regulatory und Management Reviews | implementiert und geprüft | Snapshots und Exporte bleiben eingefroren; keine Rechts- oder Compliance-Entscheidung. |
-| AI Governance | implementiert und geprüft | Links und Gap-Tasks sind tenantgebunden und idempotent. |
-| Agent Rollout 2.0 Phase 1 | implementiert und geprüft | Feste Ringe, Preflight/Postflight, menschliche Promotion, Pause, Abbruch und operatorgefuehrter Rollback. |
-| Agent Rollout 2.0 Phase 2 | implementiert und geprüft | Kanonische unveraenderliche Manifeste, SHA-256, passive Handoffs sowie transaktionale Result-Importe mit Replay-/Konfliktschutz. |
-| Externe Agent-Verteilung und Remote-Ausführung | bewusst nicht unterstützt | Keine Paketuebertragung, Deployment-Provider-Anbindung, Agent-Befehle, MDM/RMM/EDR oder C2. |
-| Agent-Artefakte und Provenance | geprüft mit dokumentierter Einschränkung | SHA-256 und Statusmetadaten; produktive Signierung fehlt. |
-| Agent PKI / CSR / mTLS | geprüft mit dokumentierter Einschränkung | Metadata-only; keine CA-Ausstellung oder privaten Schluessel. |
-| Produktive Code-Signierung und CA-Ausstellung | bewusst nicht unterstützt | Signatur bleibt `unsigned`, Provenance `prepared_unsigned`. |
-| Codex PR-Orchestrator | geprüft mit dokumentierter Einschränkung | Guards, Status und Automationstests sind vorhanden; Modellaufrufe brauchen separat finanzierten API-Zugang, produktives Auto-Fix-E2E ist ohne Credits nicht belegt. |
-| Liveness, Readiness und Shutdown | Candidate-Prüfung erforderlich | Graceful-Shutdown-Smoke und sichere Fehlerklassen muessen gruen sein. |
-| Performance-Smoke | Candidate-Prüfung erforderlich | CI-Budget, keine Produktions-SLO. |
-| Zwei-Instanzen-/Failover-Test | Candidate-Prüfung erforderlich | Zwei App-Instanzen; PostgreSQL, MinIO und nginx bleiben im Test Einzelinstanzen. |
-| Visual Regression | Candidate-Prüfung erforderlich | 42/42 Baselines, keine automatische Baseline-Aktualisierung. |
-| Docker/Compose und hardened Build | Candidate-Prüfung erforderlich | Non-root, Cap-Drop/no-new-privileges und alle Compose-Varianten. |
-| Dependency-/Supply-Chain-Prüfung | Candidate-Prüfung erforderlich | cargo audit, cargo deny, SBOM und CI muessen gruen sein. |
+| Rust/Axum Backend | Locked Format/Clippy/Test, MSRV und Rust-Smokes | keine neue Produktfunktion |
+| SQLite | Bootstrap, Restart und Restore | Single-Instance, kein HA-Backend |
+| PostgreSQL 16 | Standardpfad, Restore-Drill, Performance und HA | Datenbank bleibt in der Topologie Einzelinstanz |
+| PostgreSQL 18.4 | isolierter Fresh-/Restart-/Migrations-/Forward-Restore-Pfad | kein Standard, kein In-place-Upgrade, kein Rueckwaertsrestore |
+| lokaler Evidence Storage | Auth-, Pfad- und Restore-Tests | nicht HA-faehig |
+| S3-kompatibler Evidence Storage | isolierter MinIO-Lifecycle und Cross-Instance-Read | keine produktiven Cloud-Credentials |
+| Graceful Shutdown | SIGINT/SIGTERM, Readiness-Abfall, sauberer Exit | begrenzter Timeout, kein Orchestrator-SLA |
+| Performance | synthetische Budgetpruefung mit maximal vier parallelen Requests | CI-Regressionsbudget, keine Produktions-SLO |
+| Zwei-Instanzen/Failover | zwei Backends hinter nginx mit gemeinsamem PostgreSQL/MinIO | keine Multi-Region- oder Infrastruktur-HA |
+| Visual Regression | 42/42 versionierte Baselines in zwei Viewports | keine automatische Baseline-Aktualisierung |
+| Docker/Compose | alle Varianten plus hardened Docker-Build | keine neue Runtime-Basis |
+| Supply Chain | Locked Build, Audit, Deny, doppelte SBOM, Checksums | keine Signatur-, VEX- oder Schwachstellenfreiheitsaussage |
+| Release Binary | Rust 1.88, zwei byteidentische Builds, ELF-/RPATH-/Pfad-/Runtime-Pruefung | x86_64 glibc, kein universelles Linux-Binary |
+| GitHub-CI | elf Aggregationsabhaengigkeiten, separater Codex-Testjob und Aggregation | teure Topologien werden nicht doppelt ausgefuehrt |
+| CodeQL | Actions, JavaScript/TypeScript und Rust | separater Pflichtnachweis am finalen Head |
 
-`Candidate-Prüfung erforderlich` bedeutet, dass die Funktion implementiert ist, der
-konkrete Release-Nachweis aber erst mit der vollstaendigen lokalen beziehungsweise
-GitHub-CI-Ausfuehrung abgeschlossen wird.
+## Reproduzierbarer lokaler Prüfpfad
 
-## Security-Hardening-Befunde
-
-Behoben:
-
-- Kritisch: Außerhalb Development konnte ein Request mit `tenant_id` und
-  `user_id` ohne Passwort eine Session erzeugen. Demo und Production lehnen
-  diesen Kompatibilitaetspfad jetzt generisch ab.
-- Hoch: Demo vertraute Identitaetsheader standardmaessig. Nicht-Development-
-  Modi verlangen jetzt sowohl explizites Header-Trust als auch eine
-  konfigurierte Trusted-Proxy-Grenze.
-- Mittel: Zwei Session-Lesepfade konnten interne Store-/SQL-Details in einer
-  HTTP-500-Antwort ausgeben. Die Antworten sind jetzt stabil redigiert.
-- Hoch: Der PostgreSQL-Restore-Drill konnte eine credential-haltige Source-URL
-  protokollieren und unterschied Source/Restore nicht explizit. URLs werden
-  nicht mehr ausgegeben; identische Ziele brechen vor dem Restore ab.
-- Mittel: Lokale Rust-Build- und RC-Testartefakte waren nicht vollstaendig aus
-  dem Docker-Buildkontext ausgeschlossen. `.dockerignore` schliesst diese
-  reproduzierbaren Caches und lokalen Runtime-Verzeichnisse jetzt explizit aus.
-
-Bestätigte Grenzen:
-
-- Session-Cookies sind `HttpOnly`, `SameSite=Lax`, acht Stunden begrenzt und in
-  Production `Secure`; Logout widerruft serverseitig und laesst das Cookie
-  ablaufen.
-- Login-Fehler sind generisch und werden tenant-/userbezogen begrenzt. Ein
-  externer IP-/Geo-Schutz bleibt Reverse-Proxy-/WAF-Aufgabe.
-- Fehlende CORS-Freigaben bedeuten Same-Origin-Betrieb; es gibt keine
-  permissive Wildcard-CORS-Konfiguration.
-- Evidence-Downloads und S3-Laufzeitoperationen bleiben authentifiziert,
-  tenant-, rollen- und objektgebunden sowie `private/no-store`.
-- Der Release-Diff von `V23.7.30` bis zum Candidate-Ausgangscommit wurde auf
-  Cross-Tenant-IDOR, Privilege Escalation, Self-Approval, manipulierte IDs,
-  Mass Assignment, XSS, SQL-/Command-Injection, SSRF, Race-/Replay-Zustaende,
-  Revisionen, Rollback/Audit und unvollstaendige externe Daten geprueft. Es
-  bleibt kein offener Critical-, High- oder releaseblockierender
-  Medium-Befund.
-
-Nach Release zeitnah prüfen:
-
-- Server-seitige Session-Token werden derzeit in der Sessiontabelle als
-  zufaellige kurzlebige Tokens statt als Einweg-Hash gespeichert. Eine
-  Umstellung benoetigt eine explizite Kompatibilitaets- und Logout-Entscheidung.
-- Aeltere API-Bereiche sollen schrittweise auf dieselbe zentral getestete
-  Fehlerklassifizierung wie Agent-, Evidence- und neue Governance-Stores
-  vereinheitlicht werden.
-
-## Supply Chain
-
-- `Cargo.lock` ist verbindlich; direkte Git-Dependencies wurden nicht gefunden.
-- Die Advisory-Ausnahme `RUSTSEC-2023-0071` bleibt nur fuer den deaktivierten
-  optionalen `sqlx-mysql`-Lockfile-Pfad dokumentiert. `rsa` ist fuer kein
-  ISCY-Target erreichbar.
-- Die Monitoring-Compose-Beispiele verwenden noch konfigurierbare `latest`-
-  Defaults. Vor produktiver Nutzung muessen Betreiber Images pinnen; ein
-  separates, einzeln getestetes Pinning ist nach dem RC erforderlich.
-- Mehrere Actions und Containerbasen sind major-/tag-, aber nicht commit-/
-  digest-gepinnt. Dies bleibt ein transparenter separater Hardening-Punkt.
-- Die abgeschlossenen Maintenance-Bloecke fuer nginx, Rust, nixpkgs und die
-  PostgreSQL-18-Kompatibilitaet sind Bestandteil von `V23.7.29`. PostgreSQL 18
-  wird dadurch nicht zum Produktionsstandard.
-
-## Reproduzierbarer Prüfpfad
-
-Vollstaendig, ohne Veroeffentlichung:
+Der Nix-Dev-Shell-Pfad stellt Rust, Clients, Audit-/Deny-/CycloneDX-Werkzeuge,
+Actionlint, ShellCheck und Gitleaks bereit. `make release-candidate-check`
+verlangt einen erreichbaren Docker-Daemon und zwei getrennte, wegwerfbare
+PostgreSQL-Datenbanken:
 
 ```bash
 nix develop
@@ -183,90 +151,99 @@ export ISCY_POSTGRES_RESTORE_DRILL_RESTORE_URL=postgresql://iscy@127.0.0.1:5432/
 make release-candidate-check
 ```
 
-Mit dem Root-Status `development_unreleased` erzeugt dieser Aufruf kein
-Verzeichnis `artifacts/release-candidate/`. Der Uebergang zu
-`prepared_not_published` erfolgt ausschliesslich in einer separaten,
-menschlich geprueften Release-Vorbereitung.
+Die Einzelgates bleiben separat nachvollziehbar:
 
-Der gepinnte Nix-Dev-Shell stellt die benoetigten Clients und Pruefwerkzeuge
-bereit. Der Aufruf verlangt absichtlich einen erreichbaren lokalen Docker-
-Daemon und zwei explizite Wegwerf-PostgreSQL-Datenbanken. Fehlende
-Voraussetzungen brechen mit einer sicheren Fehlerklasse ab. Die GitHub-CI fuehrt die teuren Docker-, MinIO-,
-Performance-, HA-, Visual- und hardened-Build-Pruefungen in bestehenden Jobs
-aus; `release-candidate-check` aggregiert deren Ergebnis und validiert danach
-Manifest, Checksums, Migrationen, Baselines, Referenzen und Sensitive-Data-
-Scan, ohne die Pipeline doppelt auszufuehren. Der HA-Job enthaelt zusaetzlich
-das PostgreSQL-18.4-Kompatibilitaets- und Forward-Restore-Gate.
+- [ ] `nix develop --command make secrets`
+- [ ] `nix develop --command make artifact-hygiene-test`
+- [ ] `nix develop --command make check`
+- [ ] `nix develop --command make docker-check`
+- [ ] `nix develop --command make rust-smoke`
+- [ ] `nix develop --command make rust-restore-smoke`
+- [ ] `nix develop --command make graceful-shutdown-smoke`
+- [ ] `nix develop --command make object-storage-integration`
+- [ ] `nix develop --command make performance-smoke`
+- [ ] `nix develop --command make ha-integration`
+- [ ] `nix develop --command make postgresql-18-compatibility`
+- [ ] `nix develop --command make visual-regression`
+- [ ] `nix develop --command make release-binary-gate`
+- [ ] `nix develop --command make release-candidate-metadata-check`
+- [ ] `nix develop --command make release-candidate-check`
+- [ ] `cargo audit` mit ausschliesslich `RUSTSEC-2023-0071`
+- [ ] `cargo deny check advisories licenses sources`
+- [ ] `nix flake check`
+- [ ] Actionlint, ShellCheck, Checksums und `git diff --check`
+- [ ] zwei byteidentische Handbuch-PDF-Builds mit Text-, Metadaten- und
+  visueller Seitenpruefung
 
-Der portable Binary-Pfad kann separat mit `make release-binary-gate` geprueft
-werden. Er baut das Backend zweimal cachefrei im digest-gepinnten
-Rust-1.88-Bookworm-Builder, verlangt identische SHA-256-Werte und prueft das
-Ergebnis in einem sauberen Debian-Bookworm-Slim-Runtime-Container. Das Ziel ist
-`linux-x86_64-glibc`; der Systeminterpreter muss regulaer sein, RPATH/RUNPATH
-muessen fehlen und lokale Home-, Worktree-, Runner- sowie Nix-Store-Pfade sind
-verboten. Als dynamische Laufzeitbibliotheken werden `libgcc_s.so.1`,
-`libm.so.6`, `libc.so.6` und `ld-linux-x86-64.so.2` erwartet.
+Ein lokal fehlender Daemon, Port, Client oder eine nicht erreichbare
+Wegwerf-Datenbank ist ein Blocker und darf nicht als erfolgreicher Test
+dokumentiert werden. CI-Ergebnisse ersetzen keinen bewusst fehlgeschlagenen
+lokalen Pflichtpfad.
 
-## Lokale Candidate-Artefakte
+## Deterministische Release-Artefakte
 
-Nur im validierten Status `prepared_not_published` erzeugt
-`make release-candidate-artifacts` ausschließlich unter
-`artifacts/release-candidate/`:
+Die CycloneDX-1.5-SBOM wird zweimal getrennt erzeugt. Der Generator entfernt
+die zufaellige Serialnummer, setzt den Timestamp auf die Zeit des
+Vorgaenger-Basiscommits und normalisiert den lokalen Root-Pfad zum stabilen
+Cargo-PURL. Beide Bytesaetze muessen identisch sein.
 
-- portables `linux-x86_64-glibc` Rust-Backend-Binary
-- Handbuch-PDF
-- Release Notes
-- reproduzierbare CycloneDX-1.5-SBOM
-- auf den aktuellen Commit aufgeloestes Release-Manifest
-- SHA-256-Pruefsummen
+Das Handbuch-PDF wird zweimal aus `docs/ISCY_Handbuch.md` gebaut. Neben dem
+Bytevergleich werden Seitenauswahl, extrahierter Text und gerenderte Seiten
+fuer Titel, Inhaltsstruktur, Secret-Haertung, CI-Artefakt-Hygiene,
+Release-Grenzen und Dokumentende geprueft.
 
-Diese Artefakte sind unsigniert und werden weder hochgeladen noch
-veroeffentlicht. Das Binary wird aus einem neutralen Containerpfad mit
-deaktiviertem inkrementellem Build und Release-Debuginfo sowie aktiviertem
-Symbol-Strip erzeugt. Zwei getrennte Builds, Binary-Hygiene, Loader-/`ldd`-
-Pruefung, SQLite-Startup, Health und Graceful Shutdown sind Pflicht. Der
-Runtime-Test enthaelt weder Nix noch Rust, Cargo oder einen Compiler. Das
-glibc-Binary ist fuer kompatible x86_64-Laufzeiten bestimmt und nicht als
-universelles Linux-Artefakt zu verstehen. `cargo-cyclonedx` stammt als reines Build-Werkzeug aus dem
-durch `flake.lock` gepinnten Nixpkgs-Stand. Der Generator entfernt die zufaellige
-Serialnummer, setzt den Timestamp auf den Basis-Commit und ersetzt den lokalen
-Root-Pfad durch einen stabilen Cargo-PURL. Zwei aufeinanderfolgende Laeufe
-muessen in getrennten temporaeren Verzeichnissen byteidentisch sein, bevor die
-SBOM uebernommen wird. Die SBOM ist ein Abhaengigkeitsinventar, keine
-Signatur, VEX-Entscheidung oder Sicherheitsfreigabe. Ein Release-VEX wird
-bewusst nicht erzeugt, weil fuer diesen Release keine separate, fachlich
-freigegebene Vulnerability-Assertion vorliegt.
+Das portable Binary wird zweimal cachefrei im digest-gepinnten
+Rust-1.88-Bookworm-Builder gebaut. Pflicht sind identische SHA-256-Werte,
+regulaerer ELF-Interpreter, fehlendes RPATH/RUNPATH, keine lokalen Buildpfade,
+die erwarteten vier Laufzeitbibliotheken sowie SQLite-Startup, Health und
+Graceful Shutdown in einem sauberen Debian-Bookworm-Slim-Container ohne Nix,
+Rust, Cargo oder Compiler.
 
-## Bekannte Betriebsgrenzen
+Nur nach diesen Gates erzeugt `make release-candidate-artifacts` lokal unter
+`artifacts/release-candidate/` exakt:
 
-- PostgreSQL und MinIO bleiben ohne Betreiber-Cluster Single Points of Failure.
-- Keine Multi-Region-HA und keine automatische horizontale Skalierung.
-- SQLite und `local_filesystem` sind keine Mehrinstanz-/HA-Pfade.
-- Keine EOL-/EOS-Integration, keine erweiterten PURL-/CPE-Regeln und keine
-  zusaetzlichen externen Feeds in diesem Candidate.
-- Keine aktive Reaktion, automatische Softwareblockierung oder Deinstallation.
-- Keine automatische VEX-Aussage, Risk Acceptance, Incident- oder
-  Evidence-Erzeugung durch die drei neuen Bereiche.
+1. `iscy-backend`
+2. `iscy-backend.cdx.json`
+3. `ISCY_Handbuch.pdf`
+4. `release-manifest.json`
+5. `RELEASE_NOTES.md`
+6. `SHA256SUMS`
+
+Das Bundle-Manifest loest `git:HEAD` auf den konkreten Commit und dessen
+`SOURCE_DATE_EPOCH` auf und uebernimmt den verifizierten Binary-SHA. Das
+getrackte Root-Manifest behaelt dagegen `git:HEAD`, `source_date_epoch: null`
+und `binary_sha256: null`. Das Bundle bleibt ignored, lokal und unsigniert.
+
+## Bekannte Betriebs- und Sicherheitsgrenzen
+
+- PostgreSQL, MinIO und nginx bleiben ohne Betreiber-Cluster Single Points of
+  Failure; keine Multi-Region-HA oder automatische horizontale Skalierung.
+- SQLite und `local_filesystem` sind keine Mehrinstanzpfade.
+- Keine Cloud-native Secret-Manager-Anbindung oder automatische Credential-
+  Discovery; Betreiber muessen Mount, Rotation, Backup und Recovery planen.
+- Keine aktive Reaktion, automatische Softwareblockierung/-deinstallation,
+  automatische VEX-Aussage, Risk Acceptance, Incident- oder Evidence-
+  Erzeugung durch die passiven Governance-Bereiche.
 - Keine produktive CA-/PKI-Provider-Anbindung oder Agent-Paketsignierung.
-- Keine Cloud-native Secret-Manager-Anbindung.
-- Performance-CI-Budgets sind keine Produktions-SLOs.
-- Keine automatische Zertifizierung, Rechtsbewertung oder Behoerdenmeldung.
+- Monitoring-Compose-Defaults mit `latest` bleiben vor produktiver Nutzung
+  separat zu pinnen; diese Release-Vorbereitung erweitert den Scope nicht.
+- Performance-Ergebnisse sind keine SLA-/SLO-Zusage. Der HA-Test belegt keine
+  HA der verwendeten Infrastrukturkomponenten.
+- Keine automatische Zertifizierung, Rechtsbewertung, Konformitaetsentscheidung
+  oder Behoerdenmeldung.
 
-## Freigabekriterien
+## Menschliche Freigabegrenzen
 
-- [ ] Alle lokalen, in der Umgebung ausführbaren Pflichtprüfungen sind grün.
-- [ ] SQLite leer/restartbar und PostgreSQL leer/Bestand/Restore/Race sind grün.
-- [ ] PostgreSQL 18.4 und der logische Forward-Restore 16 nach 18 sind gruen.
-- [ ] MinIO-Lifecycle, Performance, HA und Visual Regression 42/42 sind grün.
-- [ ] Binary-Hygiene, sauberer Runtime-Container und zwei byteidentische
-  portable Builds sind gruen.
-- [ ] Manifest, Checksums, Handbuch und Release Notes sind konsistent.
-- [ ] GitHub-CI einschließlich Aggregation ist vollständig grün.
-- [ ] CodeQL Default Setup fuer Rust, Actions und JavaScript/TypeScript ist gruen.
-- [ ] Menschliche Security- und Betriebsreview ist erfolgt.
-- [ ] Erst danach darf separat über Ready-for-review, Merge, Tag und Release
-  entschieden werden.
+- [ ] Vollstaendige GitHub-CI am finalen Head ist gruen.
+- [ ] CodeQL fuer Actions, JavaScript/TypeScript und Rust ist gruen.
+- [ ] Fachliche, sicherheitstechnische und betriebliche Review ist erfolgt.
+- [ ] Rollback-/Restore-Annahmen und Produktions-Secret-Betrieb sind fuer die
+  Zielumgebung menschlich bewertet.
+- [ ] Erst danach darf separat ueber Ready-for-review und Merge entschieden
+  werden.
 
-Das Oeffnen dieses Development-Zyklus erstellt keinen neuen Tag, kein neues
-GitHub Release, kein Asset, keine produktive Signatur und keine oeffentliche
-Veroeffentlichung. Der veroeffentlichte Snapshot `V23.7.31` bleibt immutable.
+Diese Candidate-Vorbereitung erzeugt keinen Tag, kein GitHub Release, keinen
+Asset-Upload, keine produktive Signatur, keine Attestation und keine
+VEX-Aussage. `V23.7.31`, sein Release, seine sechs Assets und der
+Published-Snapshot bleiben unveraendert. Publikation und Asset-Upload sind
+einer getrennten Phase 3 vorbehalten.

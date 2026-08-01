@@ -6,8 +6,10 @@ ISCY Community startet in Production nur, wenn die wichtigsten Sicherheitsannahm
 
 `ISCY_APP_MODE=production` aktiviert den Production-Preflight. Der Start wird abgebrochen, wenn:
 
-- `DATABASE_URL` fehlt oder ein nicht unterstuetztes Schema nutzt,
-- `DATABASE_URL` Beispielwerte wie `change-me` enthaelt,
+- `DATABASE_URL` beziehungsweise `DATABASE_URL_FILE` fehlt, beide Quellen
+  gleichzeitig gesetzt sind oder die aufgeloeste URL ein nicht
+  unterstuetztes Schema nutzt,
+- die aufgeloeste Datenbank-URL Beispielwerte wie `change-me` enthaelt,
 - `RUST_BACKEND_BIND` oeffentlich lauscht und kein Trusted Proxy bestaetigt ist,
 - Identity-Header vertraut werden sollen, aber kein Trusted Proxy bestaetigt ist,
 - `ISCY_SECURE_COOKIES` deaktiviert ist,
@@ -16,14 +18,32 @@ ISCY Community startet in Production nur, wenn die wichtigsten Sicherheitsannahm
 - bekannte Demo-Zugangsdaten noch aktiv sind,
 - Demo-Seeding im Production-Modus gestartet wird.
 
+## File-basierte Produktionssecrets
+
+Production Compose entfernt direkte Datenbank-, PostgreSQL-, NVD-, Admin-,
+Alertmanager- und S3-Credential-Werte und bindet `ISCY_SECRETS_DIR` read-only
+unter `/run/secrets` ein. Direkte Werte und korrespondierende `*_FILE`-Quellen
+sind gegenseitig ausgeschlossen. Secret-Dateien muessen absolut, regulaer,
+symlinkfrei, maximal 16 KiB gross und ohne Group-/Other-Rechte sein.
+Standardmaessig ist nur `/run/secrets` erlaubt; weitere Wurzeln verlangen eine
+explizite `ISCY_SECRET_ROOTS`- beziehungsweise
+`ISCY_EVIDENCE_SECRET_ROOTS`-Konfiguration. Fehler nennen nur Variablennamen
+und sichere Fehlerklassen, niemals Werte oder credential-haltige URLs.
+
+Vor einem Produktionsstart muessen Betreiber die benoetigten Dateien mit
+Modus `0400` oder `0600` anlegen, Eigentum und Mount pruefen, Rotation und
+Recovery dokumentieren und `nix develop --command make secrets` ausfuehren.
+Echte Secrets duerfen nicht als Nix-Strings konfiguriert werden, weil sie sonst
+in den Nix Store gelangen koennen.
+
 ## Initialer Admin
 
 Produktive Erstinitialisierung erfolgt ohne Demo-Seed:
 
 ```bash
 ISCY_APP_MODE=production \
-DATABASE_URL=postgresql://isms:<strong-password>@db:5432/isms \
-ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy-initial-admin-password \
+DATABASE_URL_FILE=/run/secrets/database_url \
+ISCY_INITIAL_ADMIN_PASSWORD_FILE=/run/secrets/iscy_initial_admin_password \
 nix run .#iscy-backend -- init-admin
 ```
 
@@ -47,7 +67,7 @@ ausgegeben.
 Zusätzlich zum Bearer-Token kann der Operations-Webhook HMAC-Signaturen erzwingen:
 
 ```text
-ISCY_ALERTMANAGER_HMAC_SECRET_FILE=/run/secrets/iscy-alertmanager-hmac
+ISCY_ALERTMANAGER_HMAC_SECRET_FILE=/run/secrets/iscy_alertmanager_hmac_secret
 ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS=300
 ```
 
@@ -155,16 +175,18 @@ Zugangsdaten werden nur ueber explizite Referenzen konfiguriert:
 ```text
 env:ISCY_EVIDENCE_S3_ACCESS_KEY
 env:ISCY_EVIDENCE_S3_SECRET_KEY
-file:/run/secrets/iscy/s3-access-key
-file:/run/secrets/iscy/s3-secret-key
+file:/run/secrets/iscy_s3_access_key
+file:/run/secrets/iscy_s3_secret_key
 ```
 
 Fuer `file:` muessen erlaubte, read-only gemountete Wurzeln gesetzt werden,
-zum Beispiel `ISCY_EVIDENCE_SECRET_ROOTS=/run/secrets/iscy`. Secret-Dateien
-duerfen keine fuer Gruppe/Andere schreibbaren Unix-Rechte besitzen und maximal
-16 KiB gross sein und keine Lese-/Schreib-/Ausfuehrungsrechte fuer Gruppe oder
-Andere besitzen. Werte werden pro Operation aufgeloest, nicht persistiert und
-nicht protokolliert.
+zum Beispiel `ISCY_EVIDENCE_SECRET_ROOTS=/run/secrets`. Secret-Dateien duerfen
+maximal 16 KiB gross sein und keine Lese-/Schreib-/Ausfuehrungsrechte fuer
+Gruppe oder Andere besitzen. Werte werden pro Operation aufgeloest, nicht
+persistiert und nicht protokolliert. Alternativ verwendet Production Compose
+die expliziten Variablen `ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE`,
+`ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE` und optional
+`ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN_FILE`.
 
 `ISCY_EVIDENCE_ALLOW_LOCAL_TEST_ENDPOINT=true` ist ausschliesslich fuer den
 Development-Modus und lokales MinIO vorgesehen. In Production bleibt die
@@ -217,24 +239,29 @@ Locked Release-Build fail-closed. Die deklarierte MSRV bleibt Rust `1.88.0`
 und wird in der verpflichtenden CI-Aggregation durch `cargo check --all-targets`
 sowie `cargo test --no-run` mit Rust 1.88 abgesichert.
 
-Der portable Release-Builder bleibt fuer den veroeffentlichten Stand bewusst
-auf dem bestehenden digest-gepinnten Rust-1.88-Bookworm-Image. Die Nix-
-Toolchain stammt weiterhin aus dem unveraenderten nixpkgs-26.05-Flake. Dieser
-Wartungsschritt aendert weder Cargo-Abhaengigkeiten noch Produktfunktionalitaet
-und veroeffentlicht kein Container- oder Release-Artefakt. Die Entscheidung
-ueber eine spaetere Release-Builder-Aktualisierung bleibt auch in der
-Release-Vorbereitung fuer `V23.7.31` bewusst getrennt; der portable Builder
-bleibt fuer diesen Stand auf Rust 1.88.
+Der portable Release-Builder bleibt bewusst auf dem bestehenden
+digest-gepinnten Rust-1.88-Bookworm-Image. Die Nix-Toolchain stammt aus dem auf
+Commit `21ea275a7c46aef9d4d6ddc962e6d562e9d94183` gepinnten
+`nixos-26.05`-Flake und liefert Rust `1.95.0`. V23.7.32 aktualisiert
+kontrolliert die direkte `base64`-Abhaengigkeit und einzelne Lockfile-
+Aufloesungen. Dazu gehoert `event-listener 5.4.2`, das
+`RUSTSEC-2026-0221` im vorhandenen SQLx-Graph ohne neue Ignore-Regel behebt.
+Die Pflege hebt weder Paketversion noch MSRV an und fuegt keine Git-Dependency
+oder neue Lizenzfreigabe hinzu.
 
 ## Release-Candidate-Prüfung
 
 `make release-candidate-check` fasst die lokale Pflichtmatrix zusammen und
 veroeffentlicht keine Artefakte. Der Aufruf bricht bei fehlenden Werkzeugen,
 fehlenden Wegwerf-PostgreSQL-URLs oder einem Testfehler ab. Die GitHub-CI nutzt
-weiterhin getrennte zeitbegrenzte Jobs fuer Rust, Nix, MinIO, Performance, HA,
-Visual Regression, Docker und das portable Linux-Binary. Der abschliessende Aggregationsjob prueft deren
-Erfolg sowie Manifest, Checksums, 45 Migrationen, 42 Baselines,
-Dokumentationsreferenzen und den wertredigierten Sensitive-Data-Scan.
+weiterhin elf zeitbegrenzte Aggregationsabhaengigkeiten fuer Secret-Scan,
+Rust, MSRV, Bootstrap, Nix, MinIO, Performance, HA/PostgreSQL 18, Visual
+Regression, Docker und das portable Linux-Binary. Codex-Automation ist ein
+zusaetzlicher separater CI-Nachweis. Der abschliessende Aggregationsjob prueft
+den Erfolg seiner Abhaengigkeiten sowie Manifest, Checksums, 45 Migrationen,
+42 Baselines, Dokumentationsreferenzen, den wertredigierten Sensitive-Data-
+Scan und den exakten V23.7.31-Tag. CodeQL fuer Actions,
+JavaScript/TypeScript und Rust bleibt ein separater Pflichtnachweis.
 
 `make release-binary-gate` erzeugt das Release-Binary zweimal cachefrei in
 einem digest-gepinnten Rust-1.88-Bookworm-Builder unter `/usr/src/iscy`.
