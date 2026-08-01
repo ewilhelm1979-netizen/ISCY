@@ -23,14 +23,14 @@ jq '
 
 development_notes="$tmp_dir/development-notes.md"
 cat >"$development_notes" <<'EOF'
-# ISCY V23.7.32 - Development Notes
+# ISCY V23.7.33 - Development Notes
 
 Status: Development / Unreleased.
 
-Basis: `V23.7.31`.
+Basis: `V23.7.32`.
 
 Dieser Entwicklungsstand wurde noch nicht veroeffentlicht. Es gibt noch keinen
-Tag und noch kein GitHub Release fuer V23.7.32. Aenderungen werden bis zur
+Tag und noch kein GitHub Release fuer V23.7.33. Aenderungen werden bis zur
 Release-Vorbereitung unter Unreleased dokumentiert.
 EOF
 
@@ -43,11 +43,11 @@ jq '
 
 candidate_notes="$tmp_dir/candidate-notes.md"
 cat >"$candidate_notes" <<'EOF'
-# ISCY V23.7.32 - Release Notes
+# ISCY V23.7.33 - Release Notes
 
 Status: Stabiler Release.
 
-Vorgänger: `V23.7.31`.
+Vorgänger: `V23.7.32`.
 
 nginx:1.31-alpine, Rust `1.97.0`, MSRV bleibt Rust `1.88.0` und nixos-26.05
 bleiben die geprueften Plattformgrenzen. PostgreSQL 16 bleibt der Standard;
@@ -92,7 +92,7 @@ ISCY_RELEASE_MANIFEST_PATH="$development_manifest" "$guard" "$development_notes"
 ISCY_RELEASE_MANIFEST_PATH="$source_manifest" "$guard" "$source_notes" >/dev/null
 
 wrong_development_version="$tmp_dir/wrong-development-version.md"
-sed 's/ISCY V23\.7\.32/ISCY V23.7.33/' "$development_notes" >"$wrong_development_version"
+sed 's/ISCY V23\.7\.33/ISCY V23.7.34/' "$development_notes" >"$wrong_development_version"
 expect_rejected wrong_development_version "$development_manifest" "$wrong_development_version" target_version
 
 development_published="$tmp_dir/development-published.md"
