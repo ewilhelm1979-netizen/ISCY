@@ -45,6 +45,17 @@ The project uses release tags for immutable release points. Changes under **Unre
   CycloneDX-SBOM und lokalem unsigniertem Artefaktvertrag vor; Feature Freeze
   gilt, und Tag, GitHub Release sowie Upload bleiben einem getrennten Auftrag
   vorbehalten
+- dokumentiert die anschliessende Veroeffentlichung von `V23.7.31` mit
+  Release-ID `358600823`, Tagziel
+  `c595795296633ce4152aa0e817b063ee88c7028a` und sechs kontrolliert
+  heruntergeladenen, per SHA-256 verifizierten Assets im unveraenderlichen
+  Published-Snapshot `release/published/V23.7.31.json`
+- beginnt den Entwicklungszyklus fuer `V23.7.32` auf Basis des unveraenderten,
+  veroeffentlichten Stable Release `V23.7.31` und setzt den Root-Lifecycle auf
+  `development_unreleased`
+- setzt Release-Artefakt- und Teststatus fail-closed auf erneute Development-
+  und Release-Validierung zurueck; in diesem Zustand kann kein Release-Bundle
+  fuer `V23.7.32` oder eine bereits veroeffentlichte Version erzeugt werden
 
 ## V23.7.30 - 2026-07-22
 
