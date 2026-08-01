@@ -122,7 +122,7 @@ run_tag_fixture_guard >/dev/null
 git -C "$tag_fixture" tag --delete "$published_version" >/dev/null
 expect_tag_fixture_rejected missing_published_tag
 
-wrong_tag_commit="$(git -C "$tag_fixture" rev-parse HEAD^1)"
+wrong_tag_commit="$(git -C "$tag_fixture" rev-parse "${published_commit}^1")"
 [[ "$wrong_tag_commit" != "$published_commit" ]] || {
     echo 'RELEASE_METADATA_TEST_ERROR[tag_fixture]: Falscher Tag-Commit ist nicht vom Published-Commit getrennt.' >&2
     exit 1
