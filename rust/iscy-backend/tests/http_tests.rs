@@ -12251,8 +12251,8 @@ async fn evidence_object_storage_client_is_tenant_scoped_and_secret_safe() {
                         "region":"eu-central-1",
                         "bucket_name":"iscy-fixture",
                         "key_prefix":"iscy",
-                        "access_key_secret_ref":"env:ISCY_FIXTURE_ACCESS_KEY_FILE",
-                        "secret_key_secret_ref":"env:ISCY_FIXTURE_SECRET_KEY_FILE",
+                        "access_key_secret_ref":"env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE",
+                        "secret_key_secret_ref":"env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE",
                         "allowed_endpoint_policy":"production_https_public"
                     }"#,
                 ))
@@ -12438,7 +12438,7 @@ async fn evidence_s3_runtime_routes_enforce_auth_roles_tenants_and_production_po
         ) VALUES (
             1, 'minio-local', 's3_compatible', 'Lokaler Test', 'ready',
             'http://127.0.0.1:19090', 'us-east-1', 'iscy-test', 'runtime',
-            'env:ISCY_TEST_ACCESS_KEY', 'env:ISCY_TEST_SECRET_KEY', 1,
+            'env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY', 'env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY', 1,
             'local_dev_only'
         )
         "#,
@@ -12502,7 +12502,7 @@ async fn evidence_s3_runtime_routes_enforce_auth_roles_tenants_and_production_po
         .await
         .unwrap();
     let body_text = String::from_utf8(body.to_vec()).unwrap();
-    assert!(!body_text.contains("ISCY_TEST_SECRET_KEY"));
+    assert!(!body_text.contains("ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY"));
     assert!(!body_text.contains("127.0.0.1"));
 
     let production_local = app

@@ -868,7 +868,7 @@ mod tests {
             .unwrap();
         run_sqlite_migrations(&pool).await.unwrap();
         seed_sqlite_demo(&pool).await.unwrap();
-        sqlx::query("INSERT INTO evidence_storage_backend_config (tenant_id,backend_id,backend_type,display_name,status,endpoint_reference,region,bucket_name,key_prefix,access_key_secret_ref,secret_key_secret_ref,allow_path_style,allowed_endpoint_policy) VALUES (1,'minio-test','s3_compatible','MinIO Test','ready','http://127.0.0.1:9000','us-east-1','iscy-test','iscy','env:ISCY_TEST_ACCESS','env:ISCY_TEST_SECRET',1,'local_dev_only')")
+        sqlx::query("INSERT INTO evidence_storage_backend_config (tenant_id,backend_id,backend_type,display_name,status,endpoint_reference,region,bucket_name,key_prefix,access_key_secret_ref,secret_key_secret_ref,allow_path_style,allowed_endpoint_policy) VALUES (1,'minio-test','s3_compatible','MinIO Test','ready','http://127.0.0.1:9000','us-east-1','iscy-test','iscy','env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY','env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY',1,'local_dev_only')")
             .execute(&pool).await.unwrap();
         let store = EvidenceStore::from_sqlite_pool(pool.clone());
         let runtime = store
