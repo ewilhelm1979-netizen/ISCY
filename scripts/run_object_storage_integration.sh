@@ -35,8 +35,9 @@ docker run --rm --network host \
 
 export ISCY_TEST_S3_ENDPOINT="http://127.0.0.1:${PORT}"
 export ISCY_TEST_S3_BUCKET="$BUCKET"
-export ISCY_TEST_S3_ACCESS_KEY="$ACCESS_KEY"
-export ISCY_TEST_S3_SECRET_KEY="$SECRET_KEY"
+export ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY="$ACCESS_KEY"
+export ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY="$SECRET_KEY"
+export MINIO_TEST_SECRET_KEY="$SECRET_KEY"
 cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml \
   --test s3_runtime_integration -- --ignored --nocapture
 

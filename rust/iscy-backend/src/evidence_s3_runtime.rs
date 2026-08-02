@@ -1,7 +1,7 @@
 use crate::evidence_object_storage::{
     full_sha256, normalize_key_prefix, validate_bucket_name, validate_endpoint_reference,
-    validate_resolved_ip, EvidenceStorageBackendConfig, ObjectStorageValidationError,
-    BACKEND_S3_COMPATIBLE,
+    validate_resolved_ip, validate_secret_reference, EvidenceStorageBackendConfig,
+    ObjectStorageValidationError, BACKEND_S3_COMPATIBLE,
 };
 use chrono::Utc;
 use hmac::{Hmac, Mac};
@@ -132,6 +132,7 @@ impl From<ObjectStorageValidationError> for S3RuntimeError {
             ObjectStorageValidationError::BlockedMetadataService => Self::BlockedMetadataService,
             ObjectStorageValidationError::DnsResolutionFailed => Self::DnsResolutionFailed,
             ObjectStorageValidationError::EndpointPolicyViolation => Self::EndpointPolicyViolation,
+            ObjectStorageValidationError::InvalidSecretReference => Self::SecretReferenceInvalid,
             _ => Self::InvalidObjectKey,
         }
     }
@@ -341,6 +342,20 @@ impl S3RuntimeConfig {
             } else {
                 "production_https_public"
             },
+        )?;
+        // Revalidate persisted values at the outbound boundary. This protects
+        // installations containing legacy or directly inserted backend rows.
+        validate_secret_reference(
+            &backend.access_key_secret_ref,
+            "ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY",
+        )?;
+        validate_secret_reference(
+            &backend.secret_key_secret_ref,
+            "ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY",
+        )?;
+        validate_secret_reference(
+            &backend.session_token_secret_ref,
+            "ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN",
         )?;
         Ok(Self {
             endpoint: backend.endpoint_reference.clone(),

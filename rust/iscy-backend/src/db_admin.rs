@@ -10522,8 +10522,8 @@ mod tests {
             ) VALUES (
                 108, 's3-fixture', 's3_compatible', 'Fixture Object Storage',
                 'ready_for_test', 'https://objects.example.test', 'eu-central-1',
-                'iscy-fixture', 'iscy', 'env:ISCY_FIXTURE_ACCESS_KEY_FILE',
-                'env:ISCY_FIXTURE_SECRET_KEY_FILE', 'production_https_public'
+                'iscy-fixture', 'iscy', 'env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE',
+                'env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE', 'production_https_public'
             )
             "#,
         )
@@ -10536,7 +10536,7 @@ mod tests {
                 tenant_id, backend_id, secret_reference, secret_ref_type,
                 presence_status, redacted_display_name
             ) VALUES (
-                108, 's3-fixture', 'env:ISCY_FIXTURE_ACCESS_KEY_FILE',
+                108, 's3-fixture', 'env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE',
                 'access_key', 'reference_present', 'env:...fixture'
             )
             "#,
@@ -10644,8 +10644,8 @@ mod tests {
             ) VALUES (
                 109, 's3-runtime', 's3_compatible', 'Runtime Fixture',
                 'ready', 'https://objects.example.test', 'eu-central-1',
-                'iscy-runtime', 'iscy', 'env:ISCY_TEST_ACCESS',
-                'env:ISCY_TEST_SECRET', 'production_https_public'
+                'iscy-runtime', 'iscy', 'env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY',
+                'env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY', 'production_https_public'
             )
             "#,
         )

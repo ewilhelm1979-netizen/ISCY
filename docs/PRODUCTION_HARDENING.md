@@ -173,18 +173,19 @@ oder EC2-/ECS-Metadata-Credentials.
 Zugangsdaten werden nur ueber explizite Referenzen konfiguriert:
 
 ```text
-env:ISCY_EVIDENCE_S3_ACCESS_KEY
-env:ISCY_EVIDENCE_S3_SECRET_KEY
-file:/run/secrets/iscy_s3_access_key
-file:/run/secrets/iscy_s3_secret_key
+env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY
+env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY
+env:ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN
 ```
 
-Fuer `file:` muessen erlaubte, read-only gemountete Wurzeln gesetzt werden,
-zum Beispiel `ISCY_EVIDENCE_SECRET_ROOTS=/run/secrets`. Secret-Dateien duerfen
-maximal 16 KiB gross sein und keine Lese-/Schreib-/Ausfuehrungsrechte fuer
-Gruppe oder Andere besitzen. Werte werden pro Operation aufgeloest, nicht
-persistiert und nicht protokolliert. Alternativ verwendet Production Compose
-die expliziten Variablen `ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE`,
+Jedes Credential-Feld ist auf seine zugehoerige dedizierte Variable und deren
+`_FILE`-Variante begrenzt. Direkte `file:`-Referenzen und andere
+Prozessvariablen sind nicht zulaessig, damit eine Backend-Konfiguration keine
+fachfremden Runtime-Secrets aufloesen kann. Secret-Dateien duerfen maximal
+16 KiB gross sein und keine Lese-/Schreib-/Ausfuehrungsrechte fuer Gruppe oder
+Andere besitzen. Werte werden pro Operation aufgeloest, nicht persistiert und
+nicht protokolliert. Production Compose verwendet die expliziten Variablen
+`ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE`,
 `ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE` und optional
 `ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN_FILE`.
 
