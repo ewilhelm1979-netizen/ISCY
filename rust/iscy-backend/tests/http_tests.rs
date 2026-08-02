@@ -12251,8 +12251,8 @@ async fn evidence_object_storage_client_is_tenant_scoped_and_secret_safe() {
                         "region":"eu-central-1",
                         "bucket_name":"iscy-fixture",
                         "key_prefix":"iscy",
-                        "access_key_secret_ref":"env:ISCY_FIXTURE_ACCESS_KEY_FILE",
-                        "secret_key_secret_ref":"env:ISCY_FIXTURE_SECRET_KEY_FILE",
+                        "access_key_secret_ref":"env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE",
+                        "secret_key_secret_ref":"env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE",
                         "allowed_endpoint_policy":"production_https_public"
                     }"#,
                 ))

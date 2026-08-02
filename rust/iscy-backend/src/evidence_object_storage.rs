@@ -345,9 +345,20 @@ pub fn validate_secret_reference(reference: &str) -> Result<String, ObjectStorag
     if reference.is_empty() {
         return Ok(String::new());
     }
-    let has_allowed_prefix = ["env:", "file:", "vault:", "secret:", "external:"]
-        .iter()
-        .any(|prefix| reference.starts_with(prefix));
+    // Backend configuration is tenant-controlled. Keep it confined to the
+    // dedicated evidence object-storage credential namespace so it cannot be
+    // used to resolve unrelated process or mounted production secrets.
+    let allowed_environment_reference = reference
+        .strip_prefix("env:")
+        .map(|name| name.strip_suffix("_FILE").unwrap_or(name))
+        .is_some_and(|name| {
+            matches!(
+                name,
+                "ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY"
+                    | "ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY"
+                    | "ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN"
+            )
+        });
     let looks_like_value = reference.contains('\n')
         || reference.contains('\r')
         || reference.contains('=')
@@ -355,7 +366,7 @@ pub fn validate_secret_reference(reference: &str) -> Result<String, ObjectStorag
         || reference.to_ascii_uppercase().contains("BEGIN ")
         || reference.to_ascii_uppercase().starts_with("AKIA")
         || reference.len() > 160;
-    if !has_allowed_prefix || looks_like_value {
+    if !allowed_environment_reference || looks_like_value {
         return Err(ObjectStorageValidationError::InvalidSecretReference);
     }
     Ok(reference.to_string())
@@ -738,9 +749,25 @@ mod tests {
                 .safe_error_class(),
             "invalid_reference"
         );
-        let reference = validate_secret_reference("env:ISCY_OBJECT_ACCESS_KEY_FILE").unwrap();
-        assert_eq!(reference, "env:ISCY_OBJECT_ACCESS_KEY_FILE");
+        let reference =
+            validate_secret_reference("env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE").unwrap();
+        assert_eq!(
+            reference,
+            "env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE"
+        );
         assert!(redacted_secret_display(&reference).starts_with("env:..."));
+        for reference in [
+            "env:DATABASE_URL",
+            "env:ISCY_ALERTMANAGER_TOKEN",
+            "file:/run/secrets/database_url",
+        ] {
+            assert_eq!(
+                validate_secret_reference(reference)
+                    .unwrap_err()
+                    .safe_error_class(),
+                "invalid_reference"
+            );
+        }
     }
 
     #[test]
