@@ -14,8 +14,8 @@ async fn minio_put_head_get_drill_and_controlled_delete_lifecycle() {
             region: "us-east-1".to_string(),
             bucket,
             key_prefix: "integration".to_string(),
-            access_key_secret_ref: "env:ISCY_TEST_S3_ACCESS_KEY".to_string(),
-            secret_key_secret_ref: "env:ISCY_TEST_S3_SECRET_KEY".to_string(),
+            access_key_secret_ref: "env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY".to_string(),
+            secret_key_secret_ref: "env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY".to_string(),
             session_token_secret_ref: String::new(),
             allow_path_style: true,
             allow_local_test_endpoint: true,
@@ -56,15 +56,18 @@ async fn minio_put_head_get_drill_and_controlled_delete_lifecycle() {
         S3RuntimeError::ObjectMissing
     );
 
-    std::env::set_var("ISCY_TEST_S3_WRONG_SECRET", "wrong-test-secret");
+    std::env::set_var(
+        "ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY",
+        "wrong-test-secret",
+    );
     let denied = S3RuntimeClient::new(
         S3RuntimeConfig {
             endpoint: std::env::var("ISCY_TEST_S3_ENDPOINT").unwrap(),
             region: "us-east-1".to_string(),
             bucket: std::env::var("ISCY_TEST_S3_BUCKET").unwrap(),
             key_prefix: "integration".to_string(),
-            access_key_secret_ref: "env:ISCY_TEST_S3_ACCESS_KEY".to_string(),
-            secret_key_secret_ref: "env:ISCY_TEST_S3_WRONG_SECRET".to_string(),
+            access_key_secret_ref: "env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY".to_string(),
+            secret_key_secret_ref: "env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY".to_string(),
             session_token_secret_ref: String::new(),
             allow_path_style: true,
             allow_local_test_endpoint: true,
@@ -77,6 +80,10 @@ async fn minio_put_head_get_drill_and_controlled_delete_lifecycle() {
     .await
     .unwrap_err();
     assert_eq!(denied, S3RuntimeError::AccessDenied);
+    std::env::set_var(
+        "ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY",
+        std::env::var("MINIO_TEST_SECRET_KEY").expect("original test secret"),
+    );
 
     let deleted = client.delete(&key).await.unwrap();
     assert!(deleted.completed);

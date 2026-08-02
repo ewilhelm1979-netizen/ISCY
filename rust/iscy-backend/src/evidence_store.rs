@@ -708,12 +708,18 @@ fn normalize_storage_backend_payload(
         validate_bucket_name(payload.bucket_name.as_deref().unwrap_or(""))?
     };
     let key_prefix = normalize_key_prefix(payload.key_prefix.as_deref())?;
-    let access_key_secret_ref =
-        validate_secret_reference(payload.access_key_secret_ref.as_deref().unwrap_or(""))?;
-    let secret_key_secret_ref =
-        validate_secret_reference(payload.secret_key_secret_ref.as_deref().unwrap_or(""))?;
-    let session_token_secret_ref =
-        validate_secret_reference(payload.session_token_secret_ref.as_deref().unwrap_or(""))?;
+    let access_key_secret_ref = validate_secret_reference(
+        payload.access_key_secret_ref.as_deref().unwrap_or(""),
+        "ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY",
+    )?;
+    let secret_key_secret_ref = validate_secret_reference(
+        payload.secret_key_secret_ref.as_deref().unwrap_or(""),
+        "ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY",
+    )?;
+    let session_token_secret_ref = validate_secret_reference(
+        payload.session_token_secret_ref.as_deref().unwrap_or(""),
+        "ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN",
+    )?;
     let tls_required = payload.tls_required.unwrap_or(true);
     let allow_path_style = payload.allow_path_style.unwrap_or(false);
     let allowed_endpoint_policy =
