@@ -190,7 +190,57 @@ pub struct AppState {
     pub database_url: Option<String>,
     pub security_config: CommunitySecurityConfig,
     runtime_status: RuntimeStatus,
+    readiness_check: ReadinessCheck,
     login_rate_limits: Arc<Mutex<HashMap<String, LoginRateLimitEntry>>>,
+}
+
+const READINESS_CACHE_TTL: Duration = Duration::from_secs(5);
+const READINESS_DATABASE_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Clone, Default)]
+struct ReadinessCheck {
+    cached: Arc<tokio::sync::Mutex<Option<CachedReadiness>>>,
+}
+
+#[derive(Clone)]
+struct CachedReadiness {
+    checked_at: Instant,
+    result: Result<db_admin::DbMigrationStatus, ReadinessCheckError>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ReadinessCheckError {
+    DatabaseUnavailable,
+}
+
+impl ReadinessCheck {
+    async fn migration_status<F, Fut>(
+        &self,
+        check: F,
+    ) -> Result<db_admin::DbMigrationStatus, ReadinessCheckError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<db_admin::DbMigrationStatus>>,
+    {
+        // Holding this mutex through the bounded check provides single-flight behavior: a
+        // public readiness burst can create at most one database connection per application.
+        let mut cached = self.cached.lock().await;
+        if let Some(entry) = cached.as_ref() {
+            if entry.checked_at.elapsed() < READINESS_CACHE_TTL {
+                return entry.result.clone();
+            }
+        }
+
+        let result = match tokio::time::timeout(READINESS_DATABASE_TIMEOUT, check()).await {
+            Ok(Ok(status)) => Ok(status),
+            Ok(Err(_)) | Err(_) => Err(ReadinessCheckError::DatabaseUnavailable),
+        };
+        *cached = Some(CachedReadiness {
+            checked_at: Instant::now(),
+            result: result.clone(),
+        });
+        result
+    }
 }
 
 #[derive(Clone)]
@@ -262,6 +312,7 @@ impl AppState {
             database_url: None,
             security_config: CommunitySecurityConfig::default(),
             runtime_status: RuntimeStatus::default(),
+            readiness_check: ReadinessCheck::default(),
             login_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -304,6 +355,7 @@ impl AppState {
             database_url: None,
             security_config: CommunitySecurityConfig::default(),
             runtime_status: RuntimeStatus::default(),
+            readiness_check: ReadinessCheck::default(),
             login_rate_limits: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -3343,7 +3395,11 @@ async fn health_ready(State(state): State<AppState>) -> Response {
         )
             .into_response();
     };
-    let migration_status = match db_admin::migration_status(database_url).await {
+    let migration_status = match state
+        .readiness_check
+        .migration_status(|| db_admin::migration_status(database_url))
+        .await
+    {
         Ok(status) => status,
         Err(_) => {
             return (
@@ -47877,8 +47933,46 @@ mod tests {
         evidence_disposition_preview_from_item, evidence_object_storage_bucket_valid,
         has_software_policy_permission, has_vulnerability_intelligence_permission,
         hex_encode_bytes, is_agent_payload_error, normalize_cve_id, powershell_quote, shell_quote,
-        simple_pdf_document, AlertmanagerHmacSha256,
+        simple_pdf_document, AlertmanagerHmacSha256, ReadinessCheck,
     };
+
+    #[tokio::test]
+    async fn readiness_database_check_is_cached_and_single_flight() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let readiness = ReadinessCheck::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..16 {
+            let readiness = readiness.clone();
+            let calls = Arc::clone(&calls);
+            tasks.push(tokio::spawn(async move {
+                readiness
+                    .migration_status(|| async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        tokio::task::yield_now().await;
+                        Ok(crate::db_admin::DbMigrationStatus {
+                            database_kind: "test",
+                            applied_count: 1,
+                            expected_count: 1,
+                            latest_applied_version: Some("001".to_string()),
+                            latest_applied_at: None,
+                            expected_latest_version: Some("001"),
+                        })
+                    })
+                    .await
+                    .unwrap()
+            }));
+        }
+
+        for task in tasks {
+            assert_eq!(task.await.unwrap().applied_count, 1);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
     use crate::evidence_artifact_storage::FilesystemEvidenceArtifactStorage;
     use crate::evidence_store::EvidenceIntegrityItem;
     use crate::request_context::AuthenticatedTenantContext;
