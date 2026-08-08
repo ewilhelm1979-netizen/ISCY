@@ -688,9 +688,7 @@ fn validate_channel_payload(
     if payload.auth_type == "NONE" {
         payload.secret_env_name.clear();
     } else if !notification_secret_env_name_allowed(&payload.secret_env_name) {
-        bail!(
-            "Notification-Secret muss ISCY_AGENT_NOTIFICATION_SECRET referenzieren"
-        );
+        bail!("Notification-Secret muss ISCY_AGENT_NOTIFICATION_SECRET referenzieren");
     }
     if !(1..=10_080).contains(&payload.cooldown_minutes) {
         bail!("Notification-Cooldown muss zwischen 1 und 10080 Minuten liegen");
@@ -751,11 +749,7 @@ fn notification_production_mode_from_environment() -> bool {
     let app_mode = env::var("ISCY_APP_MODE").ok();
     let iscy_env = env::var("ISCY_ENV").ok();
     let app_env = env::var("APP_ENV").ok();
-    notification_production_mode(
-        app_mode.as_deref(),
-        iscy_env.as_deref(),
-        app_env.as_deref(),
-    )
+    notification_production_mode(app_mode.as_deref(), iscy_env.as_deref(), app_env.as_deref())
 }
 
 fn notification_production_mode(
@@ -1035,25 +1029,24 @@ async fn deliver_webhook(
             )
         }
     };
-    let secret = if channel.auth_type == "NONE" {
-        None
-    } else {
-        match notification_secret_from_environment(&channel.secret_env_name) {
-            Ok(Some(secret)) => Some(secret),
-            Ok(None) => {
-                return failed_attempt(
-                    "SECRET_UNAVAILABLE",
-                    "Konfigurierte Secret-Referenz ist nicht verfuegbar",
-                )
-            }
-            Err(NotificationSecretReferenceError::Disallowed) => {
-                return failed_attempt(
+    let secret =
+        if channel.auth_type == "NONE" {
+            None
+        } else {
+            match notification_secret_from_environment(&channel.secret_env_name) {
+                Ok(Some(secret)) => Some(secret),
+                Ok(None) => {
+                    return failed_attempt(
+                        "SECRET_UNAVAILABLE",
+                        "Konfigurierte Secret-Referenz ist nicht verfuegbar",
+                    )
+                }
+                Err(NotificationSecretReferenceError::Disallowed) => return failed_attempt(
                     "SECRET_REFERENCE_REJECTED",
                     "Konfigurierte Secret-Referenz wurde durch die Sicherheitsrichtlinie abgelehnt",
-                )
+                ),
             }
-        }
-    };
+        };
 
     const MAX_ATTEMPTS: usize = 3;
     for attempt in 0..MAX_ATTEMPTS {
@@ -2557,11 +2550,7 @@ mod tests {
     #[test]
     fn notification_production_aliases_enable_host_allowlist_policy() {
         assert!(notification_production_mode(None, Some("prod"), None));
-        assert!(notification_production_mode(
-            None,
-            None,
-            Some("production")
-        ));
+        assert!(notification_production_mode(None, None, Some("production")));
         assert!(!notification_production_mode(
             Some("development"),
             Some("production"),
