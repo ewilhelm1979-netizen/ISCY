@@ -217,6 +217,7 @@ pub struct AppState {
     runtime_status: RuntimeStatus,
     readiness_check: ReadinessCheck,
     login_rate_limits: Arc<Mutex<HashMap<String, LoginRateLimitEntry>>>,
+    login_password_verification_gate: LoginPasswordVerificationGate,
 }
 
 const READINESS_CACHE_TTL: Duration = Duration::from_secs(5);
@@ -231,6 +232,29 @@ struct ReadinessCheck {
 struct CachedReadiness {
     checked_at: Instant,
     result: Result<db_admin::DbMigrationStatus, ReadinessCheckError>,
+}
+
+#[derive(Clone)]
+struct LoginPasswordVerificationGate {
+    semaphore: Arc<tokio::sync::Semaphore>,
+}
+
+impl LoginPasswordVerificationGate {
+    fn new(max_concurrent: usize) -> Self {
+        Self {
+            semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent)),
+        }
+    }
+
+    fn try_acquire(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.semaphore).try_acquire_owned().ok()
+    }
+}
+
+impl Default for LoginPasswordVerificationGate {
+    fn default() -> Self {
+        Self::new(LOGIN_PASSWORD_VERIFICATION_MAX_CONCURRENCY)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -340,6 +364,7 @@ impl AppState {
             runtime_status: RuntimeStatus::default(),
             readiness_check: ReadinessCheck::default(),
             login_rate_limits: Arc::new(Mutex::new(HashMap::new())),
+            login_password_verification_gate: LoginPasswordVerificationGate::default(),
         }
     }
 
@@ -384,6 +409,7 @@ impl AppState {
             runtime_status: RuntimeStatus::default(),
             readiness_check: ReadinessCheck::default(),
             login_rate_limits: Arc::new(Mutex::new(HashMap::new())),
+            login_password_verification_gate: LoginPasswordVerificationGate::default(),
         }
     }
 
@@ -6640,6 +6666,9 @@ const LOGIN_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(15 * 60);
 const LOGIN_RATE_LIMIT_BLOCK: Duration = Duration::from_secs(15 * 60);
 const LOGIN_RATE_LIMIT_MAX_ENTRIES: usize = 4_096;
 const LOGIN_IDENTIFIER_MAX_CHARS: usize = 254;
+const LOGIN_PASSWORD_MAX_BYTES: usize = 1_024;
+const LOGIN_PASSWORD_VERIFICATION_MAX_CONCURRENCY: usize = 2;
+const LOGIN_REQUEST_BODY_MAX_BYTES: usize = 4 * 1_024;
 
 fn login_identifier_supported(username: &str) -> bool {
     let username = username.trim();
@@ -6649,6 +6678,10 @@ fn login_identifier_supported(username: &str) -> bool {
             .take(LOGIN_IDENTIFIER_MAX_CHARS + 1)
             .count()
             <= LOGIN_IDENTIFIER_MAX_CHARS
+}
+
+fn login_password_supported(password: &str) -> bool {
+    !password.is_empty() && password.len() <= LOGIN_PASSWORD_MAX_BYTES
 }
 
 fn login_rate_limit_key(tenant_id: Option<i64>, username: &str) -> String {
@@ -6811,6 +6844,20 @@ fn login_rate_limited_response(remaining: Duration) -> Response {
         .into_response()
 }
 
+fn login_verification_busy_response() -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "login_verification_busy",
+            message: "Zu viele parallele Login-Pruefungen. Bitte spaeter erneut versuchen."
+                .to_string(),
+        }),
+    )
+        .into_response()
+}
+
 async fn context_whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(token) = session_token_from_headers(&headers) {
         if let Some(store) = state.auth_store.as_ref() {
@@ -6958,10 +7005,28 @@ async fn auth_session_create(
                 )
                     .into_response();
             }
+            if !login_password_supported(password) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: "invalid_login_payload",
+                        message: format!(
+                            "Login-Passwort muss 1 bis {LOGIN_PASSWORD_MAX_BYTES} Byte umfassen."
+                        ),
+                    }),
+                )
+                    .into_response();
+            }
             let key = login_rate_limit_key(tenant_id, username);
             if let Some(remaining) = login_rate_limit_remaining_block(&state, &key).await {
                 return login_rate_limited_response(remaining);
             }
+            let Some(_verification_permit) = state.login_password_verification_gate.try_acquire()
+            else {
+                return login_verification_busy_response();
+            };
             login_context = Some((key, tenant_id, username.to_string()));
             store
                 .create_session_for_login(tenant_id, username, password)
@@ -19032,6 +19097,17 @@ async fn web_login_submit(
         )
         .into_response();
     }
+    if !login_password_supported(&form.password) {
+        return web_page(
+            "Login",
+            "/login/",
+            None,
+            &format!(
+                r#"<section class="panel form-panel error"><h1>Login</h1><p>Passwort muss 1 bis {LOGIN_PASSWORD_MAX_BYTES} Byte umfassen.</p></section>"#,
+            ),
+        )
+        .into_response();
+    }
     let login_key = login_rate_limit_key(form.tenant_id, &form.username);
     if let Some(remaining) = login_rate_limit_remaining_block(&state, &login_key).await {
         return web_page(
@@ -19045,6 +19121,15 @@ async fn web_login_submit(
         )
         .into_response();
     }
+    let Some(_verification_permit) = state.login_password_verification_gate.try_acquire() else {
+        return web_page(
+            "Login",
+            "/login/",
+            None,
+            r#"<section class="panel form-panel error"><h1>Login</h1><p>Zu viele parallele Login-Pruefungen. Bitte spaeter erneut versuchen.</p></section>"#,
+        )
+        .into_response();
+    };
     match store
         .create_session_for_login(form.tenant_id, &form.username, &form.password)
         .await
@@ -46730,7 +46815,9 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/context/tenant", get(context_tenant))
         .route(
             "/api/v1/auth/sessions",
-            post(auth_session_create).get(auth_session_current),
+            post(auth_session_create)
+                .get(auth_session_current)
+                .layer(DefaultBodyLimit::max(LOGIN_REQUEST_BODY_MAX_BYTES)),
         )
         .route("/api/v1/auth/session", get(auth_session_current))
         .route("/api/v1/auth/logout", post(auth_logout))
@@ -47585,7 +47672,12 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/requirements", get(requirement_library))
         .route("/", get(web_index))
-        .route("/login/", get(web_login).post(web_login_submit))
+        .route(
+            "/login/",
+            get(web_login)
+                .post(web_login_submit)
+                .layer(DefaultBodyLimit::max(LOGIN_REQUEST_BODY_MAX_BYTES)),
+        )
         .route("/navigator/", get(web_navigator))
         .route("/dashboard/", get(web_dashboard))
         .route("/status/", get(web_status))
@@ -48107,10 +48199,12 @@ mod tests {
         has_software_policy_permission, has_vulnerability_intelligence_permission,
         hex_encode_bytes, is_agent_payload_error, login_identifier_supported, login_rate_limit_key,
         login_rate_limit_record_failure_memory_with_limit,
-        login_rate_limit_remaining_block_memory_with_limit, normalize_cve_id,
-        persist_alertmanager_alerts, powershell_quote, prune_login_rate_limit_entries, shell_quote,
-        simple_pdf_document, AlertmanagerHmacSha256, AlertmanagerPersistenceContextError,
-        AlertmanagerServicePrincipal, AppState, ReadinessCheck, LOGIN_IDENTIFIER_MAX_CHARS,
+        login_rate_limit_remaining_block_memory_with_limit, login_password_supported,
+        normalize_cve_id, persist_alertmanager_alerts, powershell_quote,
+        prune_login_rate_limit_entries, shell_quote, simple_pdf_document,
+        AlertmanagerHmacSha256, AlertmanagerPersistenceContextError,
+        AlertmanagerServicePrincipal, AppState, LoginPasswordVerificationGate, ReadinessCheck,
+        LOGIN_IDENTIFIER_MAX_CHARS, LOGIN_PASSWORD_MAX_BYTES,
     };
 
     #[tokio::test]
@@ -48165,6 +48259,20 @@ mod tests {
         assert_eq!(key.len(), "login:".len() + 64);
         assert_eq!(key, login_rate_limit_key(Some(7), &maximum_identifier));
         assert_ne!(key, login_rate_limit_key(Some(8), &maximum_identifier));
+    }
+
+    #[test]
+    fn login_passwords_and_verification_concurrency_are_bounded() {
+        assert!(login_password_supported("password"));
+        assert!(login_password_supported(&"a".repeat(LOGIN_PASSWORD_MAX_BYTES)));
+        assert!(!login_password_supported(""));
+        assert!(!login_password_supported(&"a".repeat(LOGIN_PASSWORD_MAX_BYTES + 1)));
+
+        let gate = LoginPasswordVerificationGate::new(1);
+        let permit = gate.try_acquire().unwrap();
+        assert!(gate.try_acquire().is_none());
+        drop(permit);
+        assert!(gate.try_acquire().is_some());
     }
 
     #[test]

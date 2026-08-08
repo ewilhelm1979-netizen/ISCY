@@ -110,10 +110,20 @@ impl AuthStore {
         else {
             return Ok(None);
         };
-        if !verify_django_pbkdf2_sha256_password(password, &candidate.password_hash) {
+        let AuthLoginCandidate {
+            user,
+            password_hash,
+        } = candidate;
+        let password = password.to_string();
+        let password_matches = tokio::task::spawn_blocking(move || {
+            verify_django_pbkdf2_sha256_password(&password, &password_hash)
+        })
+        .await
+        .context("Rust-Passwortpruefung konnte nicht ausgefuehrt werden")?;
+        if !password_matches {
             return Ok(None);
         }
-        self.insert_session_for_user(candidate.user).await.map(Some)
+        self.insert_session_for_user(user).await.map(Some)
     }
 
     async fn insert_session_for_user(&self, user: AuthUser) -> anyhow::Result<AuthSession> {
@@ -780,17 +790,17 @@ fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32, output_len:
     let mut output = vec![0_u8; output_len];
     let mut block_index = 1_u32;
     let mut offset = 0_usize;
+    let base_mac = HmacSha256::new_from_slice(password).expect("HMAC accepts any key length");
 
     while offset < output_len {
-        let mut mac = HmacSha256::new_from_slice(password).expect("HMAC accepts any key length");
+        let mut mac = base_mac.clone();
         mac.update(salt);
         mac.update(&block_index.to_be_bytes());
         let mut u = mac.finalize().into_bytes().to_vec();
         let mut block = u.clone();
 
         for _ in 1..iterations {
-            let mut mac =
-                HmacSha256::new_from_slice(password).expect("HMAC accepts any key length");
+            let mut mac = base_mac.clone();
             mac.update(&u);
             u = mac.finalize().into_bytes().to_vec();
             for (left, right) in block.iter_mut().zip(u.iter()) {
@@ -903,7 +913,10 @@ fn non_empty(value: String) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_name, hex_encode, roles_from_codes, verify_django_pbkdf2_sha256_password};
+    use super::{
+        display_name, hex_encode, pbkdf2_hmac_sha256, roles_from_codes,
+        verify_django_pbkdf2_sha256_password,
+    };
     use base64::{
         engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
         Engine as _,
@@ -965,5 +978,18 @@ mod tests {
             "password",
             "argon2$1$salt$hash"
         ));
+    }
+
+    #[test]
+    fn pbkdf2_long_password_matches_independent_sha256_vector() {
+        let password = "p".repeat(200);
+        let expected = STANDARD
+            .decode("fmD4TM8kv2n9dqHtyPFdxKFybijFVCxmlnWs+0B8eio=")
+            .unwrap();
+
+        assert_eq!(
+            pbkdf2_hmac_sha256(password.as_bytes(), b"long-salt", 2, 32),
+            expected
+        );
     }
 }
