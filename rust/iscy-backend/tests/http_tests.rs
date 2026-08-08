@@ -1,4 +1,4 @@
-Y™Áäx-ÆÈ‹j◊ù¢Îi∫⁄+äßj[hëÈ‹¢ÈÌﬂ^8Áù¥˜n8o+^≤â¢∂◊ùuse axum::{
+use axum::{
     body::{to_bytes, Body},
     http::{header::SET_COOKIE, Request, StatusCode},
     routing::post,
@@ -8112,7 +8112,9281 @@ async fn ai_governance_gap_task_generation_is_explicit_tenant_bound_and_idempote
         "SELECT COUNT(*) FROM ai_governance_system_roadmap_task WHERE tenant_id = 42 AND system_id = 4200",
     )
     .fetch_one(&pool)
-    .Îmy⁄⁄$z{-ÆÈ‹j◊ù.collect::<Vec<_>>();
+    .await
+    .unwrap();
+    assert_eq!(link_count, 1);
+
+    let foreign_phase = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ai-governance/systems/4200/gap-tasks")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"requirement_key":"monitoring","phase_id":4303}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_phase.status(), StatusCode::BAD_REQUEST);
+
+    let read_only = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ai-governance/systems/4200/gap-tasks")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(
+                    r#"{"requirement_key":"monitoring","phase_id":4203}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read_only.status(), StatusCode::FORBIDDEN);
+
+    let non_gap = app_router_with_state(
+        AppState::default()
+            .with_ai_governance_store(Some(AiGovernanceStore::from_sqlite_pool(pool.clone()))),
+    )
+    .oneshot(
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/ai-governance/systems/4200/gap-tasks")
+            .header("content-type", "application/json")
+            .header("x-iscy-tenant-id", "42")
+            .header("x-iscy-user-id", "7")
+            .header("x-iscy-roles", "ADMIN")
+            .body(Body::from(
+                r#"{"requirement_key":"classification","phase_id":4203}"#,
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(non_gap.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn ai_governance_gap_task_parallel_calls_create_one_task_and_link() {
+    let root = test_media_root("ai-gap-task-concurrency");
+    let db_path = root.join("gap-task.sqlite3");
+    fs::File::create(&db_path).unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&format!("sqlite:///{}", db_path.display()))
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    seed_ai_governance_link_fixtures(&pool).await;
+    let store = AiGovernanceStore::from_sqlite_pool(pool.clone());
+
+    let (first, second) = tokio::join!(
+        store.create_task_from_gap(42, 4200, "risk_management", 4203, 7),
+        store.create_task_from_gap(42, 4200, "risk_management", 4203, 7),
+    );
+    let first = first.unwrap().unwrap();
+    let second = second.unwrap().unwrap();
+    assert_eq!(usize::from(first.created) + usize::from(second.created), 1);
+    assert_eq!(first.task.id, second.task.id);
+
+    let task_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM roadmap_roadmaptask WHERE origin_key = 'AI-GOV:42:4200:risk_management'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let link_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM ai_governance_system_roadmap_task WHERE tenant_id = 42 AND system_id = 4200",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(task_count, 1);
+    assert_eq!(link_count, 1);
+}
+
+#[tokio::test]
+async fn change_store_validates_payload_and_isolates_tenants() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    seed_ai_governance_link_fixtures(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_change_store(Some(ChangeStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    for payload in [
+        r#"{"title":"Bad type","change_type":"UNSUPPORTED"}"#,
+        r#"{"title":"Bad status","status":"UNKNOWN"}"#,
+        r#"{"title":"Bad date","planned_at":"tomorrow"}"#,
+        r#"{"title":"Foreign owner","owner_id":4300}"#,
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/changes")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::from(payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{payload}");
+    }
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/changes")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(
+                    r#"{"title":"Valid change","change_type":"NORMAL","status":"IN_REVIEW","planned_at":"2026-07-01","implemented_at":"2026-07-01T10:00:00Z"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::CREATED);
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/changes")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["changes"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["changes"][0]["title"], "Valid change");
+
+    let foreign_detail = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/changes/4306")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_detail.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn product_security_overview_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/overview")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn product_security_overview_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/overview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn product_security_overview_returns_tenant_products_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/overview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["matrix"]["cra"]["applicable"], true);
+    assert_eq!(payload["matrix"]["ai_act"]["applicable"], true);
+    assert_eq!(payload["posture"]["products"], 1);
+    assert_eq!(payload["posture"]["active_releases"], 1);
+    assert_eq!(payload["posture"]["open_vulnerabilities"], 2);
+    assert_eq!(payload["posture"]["critical_open_vulnerabilities"], 1);
+    assert_eq!(payload["products"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["products"][0]["name"], "Sensor Gateway");
+    assert_eq!(payload["products"][0]["family_name"], "Gateways");
+    assert_eq!(payload["products"][0]["release_count"], 2);
+    assert_eq!(payload["products"][0]["component_count"], 1);
+    assert_eq!(payload["products"][0]["sbom_component_count"], 1);
+    assert_eq!(payload["products"][0]["csaf_advisory_count"], 1);
+    assert_eq!(payload["products"][0]["threat_model_count"], 1);
+    assert_eq!(payload["products"][0]["tara_count"], 1);
+    assert_eq!(payload["products"][0]["vulnerability_count"], 3);
+    assert_eq!(payload["products"][0]["cve_count"], 1);
+    assert_eq!(payload["products"][0]["psirt_case_count"], 1);
+    assert_eq!(payload["snapshots"][0]["product_name"], "Sensor Gateway");
+    assert_eq!(payload["snapshots"][0]["cra_readiness_percent"], 72);
+    assert_eq!(payload["snapshots"][0]["critical_vulnerability_count"], 1);
+    assert_eq!(payload["trend_dashboard"]["coverage"]["component_count"], 1);
+    assert_eq!(
+        payload["trend_dashboard"]["coverage"]["sbom_coverage_percent"],
+        100
+    );
+    assert_eq!(
+        payload["trend_dashboard"]["signals"][0]["label"],
+        "SBOM Coverage"
+    );
+    assert_eq!(
+        payload["trend_dashboard"]["snapshot_points"][0]["product_name"],
+        "Sensor Gateway"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/trends")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["trends"]["coverage"]["products_with_csaf"], 1);
+    assert_eq!(
+        payload["trends"]["signals"][1]["key"],
+        "open_vulnerabilities"
+    );
+}
+
+#[tokio::test]
+async fn product_security_detail_returns_product_tree_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/products/100")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["product"]["name"], "Sensor Gateway");
+    assert_eq!(payload["releases"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["releases"][0]["status_label"], "Aktiv");
+    assert_eq!(payload["components"][0]["name"], "Gateway Firmware");
+    assert_eq!(payload["components"][0]["supplier_name"], "Secure Supplier");
+    assert_eq!(payload["components"][0]["has_sbom"], true);
+    assert_eq!(
+        payload["components"][0]["cpe23_uri"],
+        "cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*"
+    );
+    assert_eq!(
+        payload["components"][0]["package_url"],
+        "pkg:generic/iscy/sensor-gateway-firmware@1.0.3"
+    );
+    assert_eq!(payload["components"][0]["sbom_format"], "CycloneDX");
+    assert_eq!(
+        payload["components"][0]["sbom_document_url"],
+        "file://evidence/sbom/sensor-gateway-1.0.3.cdx.json"
+    );
+    assert_eq!(payload["threat_models"][0]["name"], "Gateway Threat Model");
+    assert_eq!(payload["threat_models"][0]["scenario_count"], 1);
+    assert_eq!(payload["threat_scenarios"], 1);
+    assert_eq!(
+        payload["taras"][0]["scenario_title"],
+        "Unsigned firmware update"
+    );
+    assert_eq!(payload["vulnerabilities"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        payload["vulnerabilities"][0]["component_name"],
+        "Gateway Firmware"
+    );
+    assert_eq!(
+        payload["vulnerabilities"][0]["cpe23_uri"],
+        "cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*"
+    );
+    assert_eq!(payload["vulnerabilities"][0]["advisory_ids"][0], "ADV-1");
+    assert_eq!(payload["vulnerabilities"][0]["vex_status"], "AFFECTED");
+    assert_eq!(
+        payload["vulnerabilities"][0]["vex_justification"],
+        "Affected in 1.0.3; fixed in 1.0.4."
+    );
+    assert_eq!(payload["vulnerabilities"][0]["fixed_version"], "1.0.4");
+    assert_eq!(payload["ai_systems"][0]["name"], "Gateway Assistant");
+    assert_eq!(payload["psirt_cases"][0]["case_id"], "PSIRT-1");
+    assert_eq!(payload["advisories"][0]["advisory_id"], "ADV-1");
+    assert_eq!(
+        payload["advisories"][0]["csaf_document_id"],
+        "ISCY-2026-ADV-1"
+    );
+    assert_eq!(payload["advisories"][0]["cve_list"][0], "CVE-2026-0001");
+    assert_eq!(
+        payload["advisories"][0]["product_status"]["fixed"][0],
+        "sensor-gateway-firmware-1.0.4"
+    );
+    assert_eq!(payload["snapshot"]["cra_readiness_percent"], 72);
+    assert_eq!(payload["roadmap"]["title"], "Gateway Roadmap");
+    assert_eq!(payload["roadmap_tasks"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        payload["roadmap_tasks"][1]["related_vulnerability_title"],
+        "Critical firmware exposure"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/products/100/cra-readiness")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["product_id"], 100);
+    assert_eq!(payload["product_name"], "Sensor Gateway");
+    assert!(payload["readiness_percent"].as_i64().unwrap() >= 70);
+    assert!(payload["dimensions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|dimension| dimension["key"] == "vex"));
+}
+
+#[tokio::test]
+async fn product_security_detail_blocks_foreign_tenant_product() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/products/101")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "product_not_found");
+}
+
+#[tokio::test]
+async fn product_security_evidence_packages_version_review_export_and_tenant_scope() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/evidence-packages")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "product_id":1100,
+                        "release_id":1200,
+                        "package_type":"RELEASE",
+                        "title":"Release 1.0 Decision Package"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(create.status(), StatusCode::CREATED);
+    let body = to_bytes(create.into_body(), usize::MAX).await.unwrap();
+    let created: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let package_id = created["package"]["id"].as_i64().unwrap();
+    assert_eq!(created["package"]["version_number"], 1);
+    assert!(created["package"]["blocker_count"].as_i64().unwrap() > 0);
+    assert!(created["items"].as_array().unwrap().len() >= 4);
+
+    let foreign = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/product-security/evidence-packages/{package_id}"
+                ))
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+
+    let unconditional = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/product-security/evidence-packages/{package_id}"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"status":"APPROVED","decision":"APPROVED","review_notes":"Reviewed"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unconditional.status(), StatusCode::BAD_REQUEST);
+
+    let conditional = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/product-security/evidence-packages/{package_id}"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"status":"APPROVED","decision":"CONDITIONAL","review_notes":"Freigabe nur mit dokumentierter Remediation der offenen Blocker."}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(conditional.status(), StatusCode::OK);
+    let body = to_bytes(conditional.into_body(), usize::MAX).await.unwrap();
+    let reviewed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(reviewed["package"]["status"], "APPROVED");
+    assert_eq!(reviewed["package"]["decision"], "CONDITIONAL");
+
+    let refresh = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/product-security/evidence-packages/{package_id}/refresh"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(refresh.status(), StatusCode::CREATED);
+    let body = to_bytes(refresh.into_body(), usize::MAX).await.unwrap();
+    let refreshed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let refreshed_id = refreshed["package"]["id"].as_i64().unwrap();
+    assert_ne!(refreshed_id, package_id);
+    assert_eq!(refreshed["package"]["version_number"], 2);
+    assert_eq!(refreshed["package"]["supersedes_id"], package_id);
+
+    for (format, content_type) in [
+        ("markdown", "text/markdown"),
+        ("html", "text/html"),
+        ("pdf", "application/pdf"),
+        ("json", "application/json"),
+    ] {
+        let export = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/product-security/evidence-packages/{refreshed_id}/export/{format}"
+                    ))
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(export.status(), StatusCode::OK);
+        assert!(export
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with(content_type));
+    }
+
+    let page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/product-security/evidence-packages/?tenant_id=1&user_id=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = to_bytes(page.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Product-Security Evidence-Pakete"));
+    assert!(html.contains("Release 1.0 Decision Package"));
+    assert!(html.contains("Evidence-Paket erzeugen"));
+
+    let read_only_create = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/evidence-packages")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(
+                    r#"{"product_id":1100,"release_id":1200,"package_type":"RELEASE"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(read_only_create.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn product_security_roadmap_returns_task_data_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/products/100/roadmap")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["product"]["name"], "Sensor Gateway");
+    assert_eq!(payload["roadmap"]["title"], "Gateway Roadmap");
+    assert_eq!(payload["tasks"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["tasks"][0]["phase"], "GOVERNANCE");
+    assert_eq!(payload["tasks"][0]["phase_label"], "Governance");
+    assert_eq!(
+        payload["tasks"][1]["title"],
+        "Remediate critical firmware exposure"
+    );
+    assert_eq!(payload["snapshot"]["psirt_readiness_percent"], 55);
+}
+
+#[tokio::test]
+async fn product_security_roadmap_task_update_updates_tenant_task() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/product-security/roadmap-tasks/901")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{
+                        "status": "DONE",
+                        "priority": "MEDIUM",
+                        "owner_role": "Product Security Office",
+                        "due_in_days": 7,
+                        "dependency_text": "Reviewed in planning"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["product_id"], 100);
+    assert_eq!(payload["roadmap_id"], 900);
+    assert_eq!(payload["task"]["id"], 901);
+    assert_eq!(payload["task"]["status"], "DONE");
+    assert_eq!(payload["task"]["status_label"], "Erledigt");
+    assert_eq!(payload["task"]["priority"], "MEDIUM");
+    assert_eq!(payload["task"]["owner_role"], "Product Security Office");
+    assert_eq!(payload["task"]["due_in_days"], 7);
+    assert_eq!(payload["task"]["dependency_text"], "Reviewed in planning");
+
+    let row = sqlx::query(
+        r#"
+        SELECT status, priority, owner_role, due_in_days, dependency_text
+        FROM product_security_productsecurityroadmaptask
+        WHERE id = 901
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("status"), "DONE");
+    assert_eq!(row.get::<String, _>("priority"), "MEDIUM");
+    assert_eq!(
+        row.get::<String, _>("owner_role"),
+        "Product Security Office"
+    );
+    assert_eq!(row.get::<i64, _>("due_in_days"), 7);
+    assert_eq!(
+        row.get::<String, _>("dependency_text"),
+        "Reviewed in planning"
+    );
+}
+
+#[tokio::test]
+async fn product_security_roadmap_task_update_blocks_foreign_tenant_task() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/product-security/roadmap-tasks/901")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "99")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(r#"{"status":"DONE"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["error_code"],
+        "product_security_roadmap_task_not_found"
+    );
+}
+
+#[tokio::test]
+async fn product_security_vulnerability_update_updates_tenant_vulnerability() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/product-security/vulnerabilities/500")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{
+                        "severity": "MEDIUM",
+                        "status": "MITIGATED",
+                        "remediation_due": "2026-06-15",
+                        "summary": "Mitigated via firmware patch",
+                        "vex_status": "FIXED",
+                        "vex_justification": "Firmware patch 1.0.4 removes the affected updater path.",
+                        "fixed_version": "1.0.4"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["product_id"], 100);
+    assert_eq!(payload["vulnerability"]["id"], 500);
+    assert_eq!(payload["vulnerability"]["severity"], "MEDIUM");
+    assert_eq!(payload["vulnerability"]["severity_label"], "Mittel");
+    assert_eq!(payload["vulnerability"]["status"], "MITIGATED");
+    assert_eq!(payload["vulnerability"]["status_label"], "Mitigiert");
+    assert_eq!(payload["vulnerability"]["remediation_due"], "2026-06-15");
+    assert_eq!(
+        payload["vulnerability"]["summary"],
+        "Mitigated via firmware patch"
+    );
+    assert_eq!(payload["vulnerability"]["vex_status"], "FIXED");
+    assert_eq!(payload["vulnerability"]["vex_status_label"], "Behoben");
+    assert_eq!(
+        payload["vulnerability"]["vex_justification"],
+        "Firmware patch 1.0.4 removes the affected updater path."
+    );
+    assert_eq!(payload["vulnerability"]["fixed_version"], "1.0.4");
+    assert!(payload["vulnerability"]["vex_updated_at"].is_string());
+
+    let row = sqlx::query(
+        r#"
+        SELECT severity, status, remediation_due, summary, vex_status, vex_justification, fixed_version, vex_updated_at
+        FROM product_security_vulnerability
+        WHERE id = 500
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.get::<String, _>("severity"), "MEDIUM");
+    assert_eq!(row.get::<String, _>("status"), "MITIGATED");
+    assert_eq!(
+        row.get::<Option<String>, _>("remediation_due").as_deref(),
+        Some("2026-06-15")
+    );
+    assert_eq!(
+        row.get::<String, _>("summary"),
+        "Mitigated via firmware patch"
+    );
+    assert_eq!(row.get::<String, _>("vex_status"), "FIXED");
+    assert_eq!(
+        row.get::<String, _>("vex_justification"),
+        "Firmware patch 1.0.4 removes the affected updater path."
+    );
+    assert_eq!(row.get::<String, _>("fixed_version"), "1.0.4");
+    assert!(row.get::<Option<String>, _>("vex_updated_at").is_some());
+}
+
+#[tokio::test]
+async fn product_security_vulnerability_update_blocks_foreign_tenant_vulnerability() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/product-security/vulnerabilities/500")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "99")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(r#"{"status":"FIXED"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["error_code"],
+        "product_security_vulnerability_not_found"
+    );
+}
+
+#[tokio::test]
+async fn product_security_imports_csaf_sbom_and_suggests_cve_asset_correlations() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::with_stores(None, Some(TenantStore::from_sqlite_pool(pool.clone())))
+            .with_product_security_store(Some(ProductSecurityStore::from_sqlite_pool(pool.clone())))
+            .with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let csaf_payload = serde_json::json!({
+        "product_id": 100,
+        "file_name": "iscy-2026-import.json",
+        "document": {
+            "document": {
+                "title": "ISCY Import Advisory",
+                "category": "csaf_security_advisory",
+                "csaf_version": "2.0",
+                "publisher": {
+                    "category": "vendor",
+                    "name": "ISCY",
+                    "namespace": "https://iscy.local/security"
+                },
+                "tracking": {
+                    "current_release_date": "2026-06-14T08:00:00Z",
+                    "id": "ISCY-2026-ADV-IMPORT",
+                    "initial_release_date": "2026-06-14T08:00:00Z",
+                    "status": "final",
+                    "version": "1.0.0",
+                    "revision_history": [{
+                        "date": "2026-06-14T08:00:00Z",
+                        "number": "1",
+                        "summary": "Initial advisory"
+                    }]
+                }
+            },
+            "vulnerabilities": [{
+                "cve": "CVE-2026-0001",
+                "product_status": {
+                    "known_affected": ["sensor-gateway-firmware-1.0.3"]
+                }
+            }]
+        }
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/import/csaf")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(csaf_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["artifact_type"], "CSAF");
+    assert_eq!(payload["validation_status"], "VALID");
+    assert_eq!(payload["cve_count"], 1);
+    let advisory_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_securityadvisory WHERE tenant_id = 42 AND csaf_document_id = 'ISCY-2026-ADV-IMPORT'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(advisory_count, 1);
+
+    let sbom_payload = serde_json::json!({
+        "product_id": 100,
+        "file_name": "sensor-gateway-1.0.3.cdx.json",
+        "document": {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "serialNumber": "urn:uuid:123e4567-e89b-12d3-a456-426614174000",
+            "components": [{
+                "type": "firmware",
+                "name": "Gateway Firmware",
+                "version": "1.0.3",
+                "purl": "pkg:generic/iscy/sensor-gateway-firmware@1.0.3",
+                "cpe": "cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*",
+                "supplier": {"name": "Secure Supplier"}
+            }]
+        }
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/import/sbom")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(sbom_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["artifact_type"], "SBOM");
+    let sbom_artifact_id = payload["artifact_id"].as_i64().unwrap();
+    assert_eq!(payload["component_count"], 1);
+    assert_eq!(payload["matched_component_count"], 1);
+    let matched_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_importcomponent WHERE tenant_id = 42 AND component_id = 250 AND match_status = 'MATCHED'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(matched_count, 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/product-security/imports/{sbom_artifact_id}"
+                ))
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["artifact"]["file_name"],
+        "sensor-gateway-1.0.3.cdx.json"
+    );
+    assert_eq!(payload["components"][0]["name"], "Gateway Firmware");
+    assert_eq!(payload["components"][0]["match_status"], "MATCHED");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/product-security/imports/{sbom_artifact_id}?tenant_id=42&user_id=1"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Komponenten-Matches"));
+    assert!(html.contains("Gateway Firmware"));
+    assert!(html.contains("Evidence verknuepfen"));
+
+    let sbom_payload_next = serde_json::json!({
+        "product_id": 100,
+        "file_name": "sensor-gateway-1.0.4.cdx.json",
+        "document": {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.6",
+            "serialNumber": "urn:uuid:223e4567-e89b-12d3-a456-426614174000",
+            "components": [
+                {
+                    "type": "firmware",
+                    "name": "Gateway Firmware",
+                    "version": "1.0.4",
+                    "purl": "pkg:generic/iscy/sensor-gateway-firmware@1.0.4",
+                    "cpe": "cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.4:*:*:*:*:*:*:*",
+                    "supplier": {"name": "Secure Supplier"}
+                },
+                {
+                    "type": "application",
+                    "name": "Gateway Web UI",
+                    "version": "2.0.0",
+                    "purl": "pkg:npm/iscy/gateway-web-ui@2.0.0",
+                    "supplier": {"name": "Secure Supplier"}
+                }
+            ]
+        }
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/import/sbom")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(sbom_payload_next.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let next_sbom_artifact_id = payload["artifact_id"].as_i64().unwrap();
+    assert_eq!(payload["component_count"], 2);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/product-security/sbom-diff?base_artifact_id={sbom_artifact_id}&target_artifact_id={next_sbom_artifact_id}"
+                ))
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["summary"]["changed"], 1);
+    assert_eq!(payload["summary"]["added"], 1);
+    assert!(payload["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(
+            |component| component["status"] == "CHANGED" && component["name"] == "Gateway Firmware"
+        ));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/product-security/sbom-diff?base_artifact_id={sbom_artifact_id}&target_artifact_id={next_sbom_artifact_id}&tenant_id=42&user_id=1"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("SBOM-Diff"));
+    assert!(html.contains("Gateway Firmware"));
+    assert!(html.contains("Geaendert"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/cve-correlations")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["created_suggestions"].as_i64().unwrap() >= 2);
+    assert!(payload["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["asset_id"] == 700 && item["match_type"] == "CPE"));
+    let correlation_id = payload["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["asset_id"] == 700 && item["match_type"] == "CPE")
+        .and_then(|item| item["id"].as_i64())
+        .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/api/v1/product-security/cve-correlations/{correlation_id}"
+                ))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(
+                    r#"{"status":"ACCEPTED","rationale":"Reviewed in PSIRT triage"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["correlation"]["status"], "ACCEPTED");
+
+    let generated_risk_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM risks_risk WHERE tenant_id = 42 AND title LIKE 'CVE-2026-0001%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let generated_task_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_productsecurityroadmaptask WHERE tenant_id = 42 AND title LIKE 'CVE-2026-0001 behandeln%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(generated_task_count, 1);
+
+    let treatment_plan: String =
+        sqlx::query_scalar("SELECT treatment_plan FROM risks_risk WHERE id = ?1")
+            .bind(generated_risk_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(treatment_plan.contains("Evidence-Key: PRODUCT-SECURITY:CVE:CVE-2026-0001"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/risks/?tenant_id=42&user_id=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("CVE-2026-0001"));
+    assert!(
+        html.contains("linked_requirement=PRODUCT-SECURITY%3ACVE%3ACVE-2026-0001%3ACORRELATION%3A")
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/risks/{generated_risk_id}/review"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(
+                    r#"{"action":"accept_risk","review_notes":"Residual risk accepted by PSIRT."}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["risk"]["status"], "ACCEPTED");
+    assert_eq!(payload["risk"]["accepted_by_id"], 1);
+    assert!(payload["risk"]["treatment_plan"]
+        .as_str()
+        .unwrap()
+        .contains("Residual risk accepted by PSIRT."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/cve-correlations/generate-work")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["accepted_correlations"].as_i64().unwrap(), 1);
+    assert_eq!(payload["existing_risks"].as_i64().unwrap(), 1);
+    assert_eq!(payload["existing_roadmap_tasks"].as_i64().unwrap(), 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/imports/export.json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert!(payload["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["file_name"] == "iscy-2026-import.json"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/imports/export.csv")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let csv = String::from_utf8(body.to_vec()).unwrap();
+    assert!(csv.contains("artifact_type"));
+    assert!(csv.contains("iscy-2026-import.json"));
+    assert!(csv.contains("sensor-gateway-1.0.3.cdx.json"));
+}
+
+#[tokio::test]
+async fn product_security_imports_keep_schema_validation_errors_in_history() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app =
+        app_router_with_state(AppState::default().with_product_security_store(Some(
+            ProductSecurityStore::from_sqlite_pool(pool.clone()),
+        )));
+
+    let invalid_csaf_payload = serde_json::json!({
+        "product_id": 100,
+        "file_name": "invalid-csaf.json",
+        "document": {
+            "document": {
+                "title": "Broken CSAF",
+                "tracking": {"id": "BROKEN", "status": "final"}
+            },
+            "vulnerabilities": [{
+                "cve": "not-a-cve",
+                "product_status": {}
+            }]
+        }
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-security/import/csaf")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "1")
+                .body(Body::from(invalid_csaf_payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["validation_status"], "INVALID");
+    assert!(payload["validation_errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item.as_str().unwrap_or("").contains("csaf_version")));
+    let invalid_artifacts: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_importartifact WHERE tenant_id = 42 AND file_name = 'invalid-csaf.json' AND validation_status = 'INVALID'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(invalid_artifacts, 1);
+    let advisory_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_securityadvisory WHERE tenant_id = 42 AND csaf_document_id = 'BROKEN'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(advisory_count, 0);
+}
+
+#[tokio::test]
+async fn risk_register_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/risks")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn risk_register_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/risks")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn risk_register_returns_tenant_risks_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/risks")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["risks"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["risks"][0]["title"], "Credential Phishing");
+    assert_eq!(payload["risks"][0]["score"], 20);
+    assert_eq!(payload["risks"][0]["risk_level"], "CRITICAL");
+    assert_eq!(payload["risks"][0]["risk_level_label"], "Kritisch");
+    assert_eq!(payload["risks"][0]["category_name"], "Cyber Risk");
+    assert_eq!(payload["risks"][0]["process_name"], "Incident Intake");
+    assert_eq!(payload["risks"][0]["asset_name"], "Customer Portal");
+    assert_eq!(payload["risks"][0]["owner_display"], "Ada Lovelace");
+    assert_eq!(payload["risks"][1]["title"], "Supplier Delay");
+}
+
+#[tokio::test]
+async fn risk_detail_returns_risk_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/risks/10")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["risk"]["id"], 10);
+    assert_eq!(payload["risk"]["tenant_id"], 42);
+    assert_eq!(payload["risk"]["title"], "Credential Phishing");
+    assert_eq!(
+        payload["risk"]["description"],
+        "Credential theft can disrupt SOC operations"
+    );
+    assert_eq!(payload["risk"]["impact_label"], "5 ‚Äì Kritisch");
+    assert_eq!(payload["risk"]["likelihood_label"], "4 ‚Äì Wahrscheinlich");
+    assert_eq!(payload["risk"]["residual_score"], 6);
+    assert_eq!(payload["risk"]["treatment_strategy_label"], "Mindern");
+    assert_eq!(payload["risk"]["review_date"], "2026-05-01");
+}
+
+#[tokio::test]
+async fn risk_detail_blocks_foreign_tenant_risk() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/risks/12")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "risk_not_found");
+}
+
+#[tokio::test]
+async fn risk_create_rejects_read_only_auditor_role() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/risks")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"title":"Blocked"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "insufficient_role");
+}
+
+#[tokio::test]
+async fn risk_create_persists_tenant_risk() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/risks")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{
+                        "category_id": 1,
+                        "process_id": 1,
+                        "asset_id": 1,
+                        "owner_id": 7,
+                        "title": "Rust Created Risk",
+                        "description": "Created through the Rust risk API",
+                        "threat": "Credential stuffing",
+                        "vulnerability": "Weak account lockout",
+                        "impact": 4,
+                        "likelihood": 3,
+                        "residual_impact": 2,
+                        "residual_likelihood": 2,
+                        "status": "ANALYZING",
+                        "treatment_strategy": "MITIGATE",
+                        "treatment_plan": "Harden login controls",
+                        "treatment_due_date": "2026-06-01",
+                        "review_date": "2026-06-15"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["risk"]["tenant_id"], 42);
+    assert_eq!(payload["risk"]["title"], "Rust Created Risk");
+    assert_eq!(payload["risk"]["score"], 12);
+    assert_eq!(payload["risk"]["risk_level"], "HIGH");
+    assert_eq!(payload["risk"]["category_name"], "Cyber Risk");
+    assert_eq!(payload["risk"]["owner_display"], "Ada Lovelace");
+    assert_eq!(payload["risk"]["treatment_due_date"], "2026-06-01");
+
+    let stored_title: String =
+        sqlx::query_scalar("SELECT title FROM risks_risk WHERE tenant_id = 42 AND title = ?")
+            .bind("Rust Created Risk")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_title, "Rust Created Risk");
+}
+
+#[tokio::test]
+async fn risk_update_updates_tenant_risk() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/risks/10")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{
+                        "category_id": null,
+                        "title": "Credential Phishing Updated",
+                        "impact": 2,
+                        "status": "CLOSED",
+                        "residual_impact": null,
+                        "review_date": null
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["risk"]["id"], 10);
+    assert_eq!(payload["risk"]["title"], "Credential Phishing Updated");
+    assert_eq!(payload["risk"]["category_id"], serde_json::Value::Null);
+    assert_eq!(payload["risk"]["impact"], 2);
+    assert_eq!(payload["risk"]["score"], 8);
+    assert_eq!(payload["risk"]["status"], "CLOSED");
+    assert_eq!(payload["risk"]["residual_impact"], serde_json::Value::Null);
+    assert_eq!(payload["risk"]["review_date"], serde_json::Value::Null);
+
+    let stored_status: String = sqlx::query_scalar("SELECT status FROM risks_risk WHERE id = 10")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(stored_status, "CLOSED");
+}
+
+#[tokio::test]
+async fn risk_update_blocks_foreign_tenant_risk() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/risks/12")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(r#"{"title": "Should not cross tenant"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "risk_not_found");
+}
+
+#[tokio::test]
+async fn incident_register_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn incident_register_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn incident_register_returns_tenant_incidents_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["incidents"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        payload["incidents"][0]["title"],
+        "Credential phishing campaign"
+    );
+    assert_eq!(payload["incidents"][0]["severity"], "HIGH");
+    assert_eq!(payload["incidents"][0]["status"], "CONFIRMED");
+    assert_eq!(payload["incidents"][0]["nis2_reportable"], true);
+    assert_eq!(
+        payload["incidents"][0]["nis2_significance_status"],
+        "SIGNIFICANT"
+    );
+    assert_eq!(
+        payload["incidents"][0]["related_risk_title"],
+        "Credential Phishing"
+    );
+    assert_eq!(
+        payload["incidents"][0]["related_asset_name"],
+        "Customer Portal"
+    );
+    assert_eq!(
+        payload["incidents"][0]["related_process_name"],
+        "Incident Intake"
+    );
+    assert_eq!(payload["incidents"][0]["reporter_display"], "Ada Lovelace");
+    assert_eq!(payload["incidents"][0]["owner_display"], "grace");
+    assert_eq!(payload["incidents"][0]["early_warning_state"], "SENT");
+    assert_eq!(payload["incidents"][0]["notification_state"], "OVERDUE");
+}
+
+#[tokio::test]
+async fn incident_create_persists_nis2_deadlines_and_links() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "title":"NIS2 reportable outage",
+                        "summary":"Customer portal outage",
+                        "severity":"CRITICAL",
+                        "status":"CONFIRMED",
+                        "owner_id":7,
+                        "reporter_id":7,
+                        "related_risk_id":10,
+                        "related_asset_id":1,
+                        "related_process_id":1,
+                        "detected_at":"2026-06-08T10:00:00Z",
+                        "nis2_reportable":true,
+                        "stakeholder_summary":"Potential service impact"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["incident"]["title"], "NIS2 reportable outage");
+    assert_eq!(payload["incident"]["severity"], "CRITICAL");
+    assert_eq!(payload["incident"]["nis2_reportable"], true);
+    assert_eq!(
+        payload["incident"]["nis2_significance_status"],
+        "SIGNIFICANT"
+    );
+    assert_eq!(
+        payload["incident"]["related_risk_title"],
+        "Credential Phishing"
+    );
+    assert_eq!(
+        payload["incident"]["early_warning_due_at"],
+        "2026-06-09T10:00:00+00:00"
+    );
+    assert_eq!(
+        payload["incident"]["notification_due_at"],
+        "2026-06-11T10:00:00+00:00"
+    );
+    assert_eq!(
+        payload["incident"]["final_report_due_at"],
+        "2026-07-08T10:00:00+00:00"
+    );
+    assert_eq!(payload["events"][0]["event_type"], "CREATED");
+    assert_eq!(payload["events"][0]["actor_display"], "Ada Lovelace");
+    assert!(payload["events"][0]["summary"]
+        .as_str()
+        .unwrap()
+        .contains("NIS2 reportable outage"));
+}
+
+#[tokio::test]
+async fn incident_create_not_significant_keeps_nis2_deadlines_inactive() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "title":"Security incident without NIS2 significance",
+                        "summary":"Contained alert without material impact",
+                        "severity":"MEDIUM",
+                        "status":"TRIAGE",
+                        "detected_at":"2026-06-08T10:00:00Z",
+                        "nis2_significance_status":"NOT_SIGNIFICANT",
+                        "nis2_significance_criteria":"No severe service disruption, no material financial loss, no considerable third-party damage.",
+                        "nis2_significance_justification":"SOC triage found no significant operational impact; continue monitoring.",
+                        "stakeholder_summary":"No external notification required based on current evidence."
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["incident"]["title"],
+        "Security incident without NIS2 significance"
+    );
+    assert_eq!(
+        payload["incident"]["nis2_significance_status"],
+        "NOT_SIGNIFICANT"
+    );
+    assert_eq!(payload["incident"]["nis2_reportable"], false);
+    assert_eq!(payload["incident"]["review_state"], "IN_REVIEW");
+    assert!(payload["incident"]["review_notes"]
+        .as_str()
+        .unwrap()
+        .contains("fachliche Review/Freigabe erforderlich"));
+    assert!(payload["incident"]["early_warning_due_at"].is_null());
+    assert!(payload["incident"]["notification_due_at"].is_null());
+    assert!(payload["incident"]["final_report_due_at"].is_null());
+}
+
+#[tokio::test]
+async fn incident_create_rejects_read_only_role() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"title":"Blocked incident"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "insufficient_role");
+}
+
+#[tokio::test]
+async fn incident_runbook_templates_are_tenant_scoped() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_incident_runbook_template_table(&pool).await;
+    insert_incident_runbook_template_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/runbook-templates")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["templates"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["templates"][0]["slug"], "general-response");
+    assert_eq!(payload["templates"][0]["incident_type_label"], "Allgemein");
+    assert_eq!(payload["templates"][1]["slug"], "phishing-response");
+    assert_eq!(payload["templates"][1]["severity_label"], "Hoch");
+    assert!(payload["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|template| template["tenant_id"] == 42));
+}
+
+#[tokio::test]
+async fn rust_web_incident_runbook_templates_crud_from_forms() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_incident_runbook_template_table(&pool).await;
+    insert_incident_runbook_template_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/runbook-templates/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Runbook-Templates"));
+    assert!(html.contains("Phishing Response"));
+    assert!(html.contains("Neue Vorlage"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/incidents/runbook-templates/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "slug=tabletop-response&title=Tabletop+Response&incident_type=GENERAL&severity=MEDIUM&sort_order=40&is_active=1&description=Uebung+und+Kommunikation&body=1.+Lage+erfassen%0A2.+Entscheidung+dokumentieren",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let template_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM incidents_runbooktemplate WHERE tenant_id = 42 AND slug = 'tabletop-response'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/incidents/runbook-templates/{template_id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "action=update&slug=tabletop-response&title=Tabletop+Response+Updated&incident_type=SUPPLIER&severity=HIGH&sort_order=45&is_active=1&description=Aktualisierte+Uebung&body=1.+Scope%0A2.+Kommunikation",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let updated: (String, String, String, i64, bool) = sqlx::query_as(
+        "SELECT title, incident_type, severity, sort_order, is_active FROM incidents_runbooktemplate WHERE id = ?",
+    )
+    .bind(template_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(updated.0, "Tabletop Response Updated");
+    assert_eq!(updated.1, "SUPPLIER");
+    assert_eq!(updated.2, "HIGH");
+    assert_eq!(updated.3, 45);
+    assert!(updated.4);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/incidents/runbook-templates/{template_id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from("action=deactivate"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let is_active: bool =
+        sqlx::query_scalar("SELECT is_active FROM incidents_runbooktemplate WHERE id = ?")
+            .bind(template_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!is_active);
+}
+
+#[tokio::test]
+async fn incident_detail_blocks_foreign_tenant_incident() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/2")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "incident_not_found");
+}
+
+#[tokio::test]
+async fn incident_writes_and_exports_block_foreign_tenant_incident() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    insert_incident_event_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let update = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/incidents/2")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"status":"RESOLVED"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(update.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "incident_not_found");
+
+    for path in [
+        "/api/v1/incidents/2/nis2-export",
+        "/api/v1/incidents/2/nis2-export.html",
+        "/api/v1/incidents/2/nis2-export.pdf",
+        "/api/v1/incidents/2/dora-export",
+        "/api/v1/incidents/2/dora-export.html",
+        "/api/v1/incidents/2/dora-export.pdf",
+        "/api/v1/incidents/2/dsgvo-export",
+        "/api/v1/incidents/2/dsgvo-export.html",
+        "/api/v1/incidents/2/dsgvo-export.pdf",
+        "/api/v1/incidents/2/timeline.csv",
+        "/api/v1/incidents/2/timeline.json",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "path: {path}");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error_code"], "incident_not_found", "path: {path}");
+    }
+
+    let foreign_status: String =
+        sqlx::query_scalar("SELECT status FROM incidents_incident WHERE id = 2")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(foreign_status, "TRIAGE");
+}
+
+#[tokio::test]
+async fn incident_update_updates_status_and_sent_marker() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/incidents/1")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "status":"CONTAINED",
+                        "notification_sent_at":"2026-04-22T18:00:00Z",
+                        "authority_reference":"BSI-CASE-2"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["incident"]["status"], "CONTAINED");
+    assert_eq!(payload["incident"]["notification_state"], "SENT");
+    assert_eq!(payload["incident"]["authority_reference"], "BSI-CASE-2");
+    assert_eq!(payload["events"][0]["event_type"], "STATUS_CHANGED");
+    assert_eq!(payload["events"][0]["from_status"], "CONFIRMED");
+    assert_eq!(payload["events"][0]["to_status"], "CONTAINED");
+    let event_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM incidents_incidentevent WHERE incident_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(event_count, 1);
+}
+
+#[tokio::test]
+async fn incident_update_to_not_significant_requests_review() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/incidents/1")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "nis2_significance_status":"NOT_SIGNIFICANT",
+                        "nis2_significance_criteria":"No material service disruption after containment.",
+                        "nis2_significance_justification":"SOC and process owner classify the case as security incident, not significant incident."
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["incident"]["nis2_significance_status"],
+        "NOT_SIGNIFICANT"
+    );
+    assert_eq!(payload["incident"]["nis2_reportable"], false);
+    assert_eq!(payload["incident"]["review_state"], "IN_REVIEW");
+    assert!(payload["incident"]["early_warning_due_at"].is_null());
+    assert!(payload["incident"]["notification_due_at"].is_null());
+    assert!(payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["event_type"] == "TIMELINE_NOTE"));
+    assert!(payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["event_type"] == "INCIDENT_REVIEW_UPDATED"));
+}
+
+#[tokio::test]
+async fn incident_timeline_note_create_appends_manual_event() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents/1/timeline-notes")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "summary":"Containment decision",
+                        "detail":"SOC und Prozess-Owner haben die Eindaemmung fuer 18:00 Uhr bestaetigt."
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["event"]["event_type"], "TIMELINE_NOTE");
+    assert_eq!(payload["event"]["event_type_label"], "Notiz");
+    assert_eq!(payload["event"]["summary"], "Containment decision");
+    assert_eq!(payload["event"]["actor_display"], "Ada Lovelace");
+    assert!(payload["event"]["detail"]
+        .as_str()
+        .unwrap()
+        .contains("Eindaemmung"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents/1/timeline-notes")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"detail":"   "}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_timeline_note");
+}
+
+#[tokio::test]
+async fn incident_nis2_export_returns_markdown_package() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_fixture(&pool).await;
+    insert_incident_event_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/nis2-export")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/markdown"));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(markdown.contains("# ISCY NIS2-Meldepaket"));
+    assert!(markdown.contains("Credential phishing campaign"));
+    assert!(markdown.contains("Phishing"));
+    assert!(markdown.contains("Eindaemmung durchfuehren"));
+    assert!(markdown.contains("24h-Fruehwarnung"));
+    assert!(markdown.contains("BSI-CASE-1"));
+    assert!(markdown.contains("## Regulatorische Entscheidungsmatrix"));
+    assert!(markdown.contains("| DORA | Fachlich pruefen |"));
+    assert!(markdown.contains("| DSGVO | Fachlich pruefen |"));
+    assert!(markdown.contains("## Audit-Timeline"));
+    assert!(markdown.contains("Statuswechsel"));
+    assert!(markdown.contains("SOC hat die Fallakte fuer das Meldepaket bestaetigt."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/nis2-export.html")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/html"));
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("ISCY NIS2-Meldepaket"));
+    assert!(html.contains("Regulatorische Entscheidungsmatrix"));
+    assert!(html.contains("Runbook"));
+    assert!(html.contains("Audit-Timeline"));
+    assert!(html.contains("Status von Triage auf Bestaetigt geaendert."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/nis2-export.pdf")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "application/pdf"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(body.starts_with(b"%PDF-1.4"));
+    let pdf = String::from_utf8_lossy(&body);
+    assert!(pdf.contains("Regulatorische Entscheidungsmatrix"));
+    assert!(pdf.contains("Audit-Timeline"));
+    assert!(pdf.contains("Statuswechsel"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/dora-export")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let dora_markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(dora_markdown.contains("# ISCY DORA-IKT-Vorfallpaket"));
+    assert!(dora_markdown.contains("Schwerwiegender IKT-bezogener Vorfall"));
+    assert!(dora_markdown.contains("Fachlich pruefen"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/dsgvo-export.html")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let dsgvo_html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(dsgvo_html.contains("DSGVO-Datenschutzvorfallpaket"));
+    assert!(dsgvo_html.contains("Verletzung personenbezogener Daten"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/incidents/1/dora-export.pdf")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(body.starts_with(b"%PDF-1.4"));
+    assert!(String::from_utf8_lossy(&body).contains("DORA-IKT-Vorfallpaket"));
+}
+
+#[tokio::test]
+async fn evidence_overview_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn evidence_overview_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn evidence_overview_returns_tenant_evidence_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["session_id"], serde_json::Value::Null);
+    assert_eq!(payload["evidence_items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        payload["evidence_items"][0]["title"],
+        "MFA Rollout Screenshot"
+    );
+    assert_eq!(payload["evidence_items"][0]["status_label"], "Freigegeben");
+    assert_eq!(
+        payload["evidence_items"][0]["owner_display"],
+        "Ada Lovelace"
+    );
+    assert_eq!(
+        payload["evidence_items"][0]["requirement_framework"],
+        "ISO27001"
+    );
+    assert_eq!(payload["evidence_items"][0]["mapping_program_name"], "ISCY");
+    assert_eq!(payload["evidence_items"][0]["incident_id"], 1);
+    assert_eq!(
+        payload["evidence_items"][0]["incident_title"],
+        "Credential phishing campaign"
+    );
+    assert_eq!(payload["evidence_needs"].as_array().unwrap().len(), 3);
+    assert_eq!(payload["need_summary"]["open"], 1);
+    assert_eq!(payload["need_summary"]["partial"], 1);
+    assert_eq!(payload["need_summary"]["covered"], 1);
+}
+
+#[tokio::test]
+async fn evidence_overview_filters_by_session() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence?session_id=100")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["session_id"], 100);
+    assert_eq!(payload["evidence_items"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["evidence_items"][0]["session_id"], 100);
+    assert_eq!(payload["evidence_needs"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["need_summary"]["open"], 1);
+    assert_eq!(payload["need_summary"]["partial"], 0);
+    assert_eq!(payload["need_summary"]["covered"], 1);
+}
+
+#[tokio::test]
+async fn evidence_quality_reports_maturity_and_issue_queue() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET valid_until = '2020-12-31',
+            retention_until = '2021-12-31',
+            retention_reason = 'Historischer Incident-Nachweis'
+        WHERE id = 11
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/quality")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["quality"]["summary"]["total_items"], 2);
+    assert_eq!(payload["quality"]["summary"]["approved_items"], 1);
+    assert_eq!(payload["quality"]["summary"]["open_needs"], 1);
+    assert_eq!(payload["quality"]["summary"]["items_with_hash"], 1);
+    assert_eq!(payload["quality"]["summary"]["expired_items"], 1);
+    assert_eq!(payload["quality"]["summary"]["retention_defined_items"], 2);
+    assert_eq!(payload["quality"]["summary"]["retention_due_items"], 1);
+    assert_eq!(payload["quality"]["items"][0]["quality_level"], "reif");
+    assert_eq!(
+        payload["quality"]["items"][0]["sensitivity"],
+        "CONFIDENTIAL"
+    );
+    assert_eq!(payload["quality"]["items"][0]["valid_until"], "2027-12-31");
+    assert_eq!(payload["quality"]["items"][1]["title"], "Incident Playbook");
+    assert!(payload["quality"]["items"][1]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| issue == "Datei oder Artefaktreferenz fehlt."));
+    assert!(payload["quality"]["items"][1]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|issue| {
+            issue
+            == "Aufbewahrungsfrist ist erreicht; Legal Hold oder kontrollierte Disposition pruefen."
+        }));
+    assert!(payload["quality"]["needs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|need| need["quality_level"] == "offen"));
+}
+
+#[tokio::test]
+async fn evidence_need_sync_creates_and_updates_session_needs() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    sqlx::query(
+        r#"
+        INSERT INTO requirements_app_requirement (
+            id,
+            framework,
+            code,
+            title,
+            description,
+            is_active,
+            evidence_required,
+            evidence_guidance,
+            evidence_examples,
+            sector_package,
+            legal_reference,
+            mapping_version_id,
+            primary_source_id
+        )
+        VALUES (
+            3,
+            'NIS2',
+            '21.3',
+            'Digital Supplier Controls',
+            'Manage digital supplier controls',
+            1,
+            1,
+            '',
+            'Supplier contracts and review records',
+            'DIGITAL',
+            'NIS2 Art. 21',
+            1,
+            NULL
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/sessions/100/needs/sync")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{"covered_threshold":2,"partial_threshold":1}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["session_id"], 100);
+    assert_eq!(payload["created"], 1);
+    assert_eq!(payload["updated"], 2);
+    assert_eq!(payload["need_summary"]["open"], 1);
+    assert_eq!(payload["need_summary"]["partial"], 2);
+    assert_eq!(payload["need_summary"]["covered"], 0);
+
+    let updated: (String, i64) = sqlx::query_as(
+        r#"
+        SELECT status, covered_count
+        FROM evidence_requirementevidenceneed
+        WHERE tenant_id = 42 AND session_id = 100 AND requirement_id = 1
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(updated.0, "PARTIAL");
+    assert_eq!(updated.1, 1);
+
+    let created_status: String = sqlx::query_scalar(
+        r#"
+        SELECT status
+        FROM evidence_requirementevidenceneed
+        WHERE tenant_id = 42 AND session_id = 100 AND requirement_id = 3
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(created_status, "OPEN");
+}
+
+#[tokio::test]
+async fn evidence_need_sync_blocks_foreign_tenant_session() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/sessions/102/needs/sync")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    r#"{"covered_threshold":2,"partial_threshold":1}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "evidence_session_not_found");
+}
+
+#[tokio::test]
+async fn evidence_upload_creates_item_writes_file_and_syncs_needs() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let media_root = test_media_root("api-evidence-upload");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+    let boundary = "iscy-evidence-upload-boundary";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("title", "Uploaded Rust Evidence"),
+            ("description", "Uploaded from Rust API"),
+            ("session_id", "100"),
+            ("requirement_id", "2"),
+            ("incident_id", "1"),
+            ("status", "SUBMITTED"),
+            ("sensitivity", "CONFIDENTIAL"),
+            ("valid_until", "2027-06-30"),
+            ("retention_until", "2030-06-30"),
+            ("retention_reason", "NIS2 audit evidence"),
+        ],
+        Some((
+            "file",
+            "evidence.txt",
+            "text/plain",
+            b"rust evidence file\n",
+        )),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/uploads")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["item"]["title"], "Uploaded Rust Evidence");
+    assert_eq!(payload["item"]["owner_id"], 7);
+    assert_eq!(payload["item"]["incident_id"], 1);
+    assert_eq!(payload["item"]["version_number"], 1);
+    assert_eq!(payload["item"]["sensitivity"], "CONFIDENTIAL");
+    assert_eq!(payload["item"]["valid_until"], "2027-06-30");
+    assert_eq!(payload["item"]["retention_until"], "2030-06-30");
+    assert_eq!(
+        payload["item"]["file_sha256"],
+        format!("{:x}", Sha256::digest(b"rust evidence file\n"))
+    );
+    assert_eq!(
+        payload["item"]["incident_title"],
+        "Credential phishing campaign"
+    );
+    assert_eq!(payload["item"]["linked_requirement"], "NIS2 21.2");
+    assert_eq!(payload["need_sync"]["session_id"], 100);
+    let relative_file = payload["item"]["file_name"].as_str().unwrap();
+    assert!(relative_file.starts_with("evidence/"));
+    assert!(media_root.join(relative_file).exists());
+
+    let evidence_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM evidence_evidenceitem WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(evidence_count, 3);
+    let synced: (String, i64) = sqlx::query_as(
+        r#"
+        SELECT status, covered_count
+        FROM evidence_requirementevidenceneed
+        WHERE tenant_id = 42 AND session_id = 100 AND requirement_id = 2
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(synced.0, "COVERED");
+    assert_eq!(synced.1, 2);
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn evidence_upload_creates_tenant_scoped_version_chain() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let media_root = test_media_root("evidence-version-chain");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    let upload_version = |boundary: &'static str| {
+        let body = multipart_body(
+            boundary,
+            &[
+                ("title", "MFA Rollout Screenshot"),
+                ("supersedes_id", "10"),
+                ("status", "SUBMITTED"),
+                ("sensitivity", "RESTRICTED"),
+                ("valid_until", "2028-12-31"),
+                ("retention_until", "2031-12-31"),
+                ("retention_reason", "Audit history"),
+            ],
+            Some((
+                "file",
+                "mfa-v2.txt",
+                "text/plain",
+                b"mfa evidence version two\n",
+            )),
+        );
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/evidence/uploads")
+            .header("x-iscy-tenant-id", "42")
+            .header("x-iscy-user-id", "7")
+            .header("x-iscy-roles", "ADMIN")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .unwrap()
+    };
+
+    let response = app
+        .clone()
+        .oneshot(upload_version("evidence-version-two"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["item"]["version_number"], 2);
+    assert_eq!(payload["item"]["supersedes_id"], 10);
+    assert_eq!(payload["item"]["sensitivity"], "RESTRICTED");
+    assert_eq!(
+        payload["item"]["file_sha256"],
+        format!("{:x}", Sha256::digest(b"mfa evidence version two\n"))
+    );
+
+    let duplicate = app
+        .oneshot(upload_version("evidence-duplicate-successor"))
+        .await
+        .unwrap();
+    assert_eq!(duplicate.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(duplicate.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_evidence_upload");
+    assert_eq!(regular_file_count(&media_root), 1);
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn evidence_upload_rejects_invalid_lifecycle_and_removes_staged_files() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let media_root = test_media_root("invalid-evidence-lifecycle");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    for (boundary, sensitivity, valid_until, retention_until) in [
+        (
+            "invalid-sensitivity-boundary",
+            "TOP_SECRET",
+            "2028-12-31",
+            "2030-12-31",
+        ),
+        (
+            "invalid-retention-boundary",
+            "INTERNAL",
+            "2030-12-31",
+            "2028-12-31",
+        ),
+        (
+            "invalid-date-boundary",
+            "INTERNAL",
+            "31.12.2028",
+            "2030-12-31",
+        ),
+    ] {
+        let body = multipart_body(
+            boundary,
+            &[
+                ("title", "Invalid Lifecycle Evidence"),
+                ("status", "SUBMITTED"),
+                ("sensitivity", sensitivity),
+                ("valid_until", valid_until),
+                ("retention_until", retention_until),
+            ],
+            Some((
+                "file",
+                "invalid-lifecycle.txt",
+                "text/plain",
+                b"must be removed\n",
+            )),
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/evidence/uploads")
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "ADMIN")
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["error_code"], "invalid_evidence_upload");
+    }
+
+    assert_eq!(regular_file_count(&media_root), 0);
+    let evidence_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evidence_evidenceitem")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(evidence_count, 3);
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn evidence_upload_rejects_foreign_tenant_links_and_removes_staged_files() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let media_root = test_media_root("foreign-evidence-upload");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    for (boundary, session_id, incident_id, supersedes_id) in [
+        ("foreign-session-boundary", "102", "1", ""),
+        ("foreign-incident-boundary", "100", "2", ""),
+        ("foreign-version-boundary", "100", "1", "12"),
+    ] {
+        let body = multipart_body(
+            boundary,
+            &[
+                ("title", "Rejected Foreign Evidence"),
+                ("session_id", session_id),
+                ("incident_id", incident_id),
+                ("supersedes_id", supersedes_id),
+                ("status", "SUBMITTED"),
+            ],
+            Some((
+                "file",
+                "foreign-link.txt",
+                "text/plain",
+                b"must not survive validation\n",
+            )),
+        );
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/evidence/uploads")
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "ADMIN")
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(status, StatusCode::BAD_REQUEST, "payload: {payload}");
+        assert_eq!(payload["error_code"], "invalid_evidence_upload");
+    }
+
+    let evidence_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evidence_evidenceitem")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(evidence_count, 3);
+    assert_eq!(regular_file_count(&media_root), 0);
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn evidence_integrity_legal_hold_and_disposition_are_tenant_scoped_and_metadata_only() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let media_root = test_media_root("evidence-integrity-disposition");
+    let evidence_dir = media_root.join("evidence/integrity");
+    fs::create_dir_all(&evidence_dir).unwrap();
+    fs::write(evidence_dir.join("valid.txt"), b"trusted evidence\n").unwrap();
+    fs::write(evidence_dir.join("changed.txt"), b"changed evidence\n").unwrap();
+    fs::write(evidence_dir.join("dispose.txt"), b"dispose evidence\n").unwrap();
+    let valid_hash = format!("{:x}", Sha256::digest(b"trusted evidence\n"));
+    let dispose_hash = format!("{:x}", Sha256::digest(b"dispose evidence\n"));
+    let stale_hash = "0".repeat(64);
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (
+            id, tenant_id, title, description, linked_requirement, file,
+            file_sha256, status, owner_id, valid_until, retention_until,
+            retention_reason
+        ) VALUES
+            (900, 1, 'Valid integrity evidence', 'Expected hash matches', 'NIS2 21', 'evidence/integrity/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
+            (901, 1, 'Mismatch integrity evidence', 'Expected hash is stale', 'NIS2 21', 'evidence/integrity/changed.txt', ?2, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
+            (902, 1, 'Missing artifact evidence', 'File is missing', 'NIS2 21', 'evidence/integrity/missing.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
+            (903, 2, 'Foreign tenant evidence', 'Foreign tenant', 'NIS2 21', 'evidence/integrity/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test'),
+            (904, 1, 'Disposable integrity evidence', 'Approved controlled disposition target', 'DSGVO 17', 'evidence/integrity/dispose.txt', ?3, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Retention test')
+        "#,
+    )
+    .bind(&valid_hash)
+    .bind(&stale_hash)
+    .bind(&dispose_hash)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/integrity")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert!(
+        payload["integrity"]["summary"]["total_items"]
+            .as_i64()
+            .unwrap()
+            >= 4
+    );
+
+    let backends = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage/backends")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(backends.status(), StatusCode::OK);
+    let body = to_bytes(backends.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert!(payload["backends"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|backend| backend["backend_type"] == "local_filesystem"));
+    assert!(payload["backends"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|backend| backend["backend_type"] == "s3_compatible"));
+
+    let worker_status = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/integrity/worker")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(worker_status.status(), StatusCode::OK);
+    let body = to_bytes(worker_status.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["worker"]["configured_backend"], "local_filesystem");
+
+    let readonly_worker = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/integrity/worker/run")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"dry_run":true,"batch_size":2}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly_worker.status(), StatusCode::FORBIDDEN);
+
+    let worker_run = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/integrity/worker/run")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"dry_run":true,"batch_size":2,"max_runtime_seconds":5}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(worker_run.status(), StatusCode::OK);
+    let body = to_bytes(worker_run.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["run"]["dry_run"], true);
+
+    let readonly_check = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/integrity-check")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly_check.status(), StatusCode::FORBIDDEN);
+
+    for (evidence_id, expected_status, expected_mismatch) in [
+        (900, "valid", false),
+        (901, "mismatch", true),
+        (902, "missing_artifact", false),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/evidence/{evidence_id}/integrity-check"))
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["item"]["integrity_status"], expected_status);
+        assert_eq!(payload["item"]["integrity_mismatch"], expected_mismatch);
+    }
+
+    let foreign_check = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/integrity-check")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_check.status(), StatusCode::NOT_FOUND);
+
+    let denied_execute = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/904/disposition/execute")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied_execute.status(), StatusCode::BAD_REQUEST);
+    assert!(media_root.join("evidence/integrity/dispose.txt").exists());
+
+    let foreign_execute = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/904/disposition/execute")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_execute.status(), StatusCode::NOT_FOUND);
+    assert!(media_root.join("evidence/integrity/dispose.txt").exists());
+
+    let approval = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/904/disposition/approve")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"decision":"Kontrollierte Aussonderung freigegeben","reason":"Retention abgelaufen und keine Aufbewahrungssperre aktiv","retention_due_at":"2026-01-01","disposition_due_at":"2026-02-01"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(approval.status(), StatusCode::OK);
+    let body = to_bytes(approval.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["item"]["disposition_status"],
+        "approved_for_disposition"
+    );
+
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/904/disposition/preview")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.status(), StatusCode::OK);
+    let body = to_bytes(preview.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(payload["preview"]["eligible"], true);
+    assert_eq!(payload["preview"]["storage_backend"], "local_filesystem");
+
+    let execute = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/904/disposition/execute")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(execute.status(), StatusCode::OK);
+    let body = to_bytes(execute.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["disposition"]["deleted"], true);
+    assert_eq!(
+        payload["item"]["disposition_status"],
+        "disposition_executed"
+    );
+    assert!(!media_root.join("evidence/integrity/dispose.txt").exists());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/legal-hold")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"reason":"Regulatory investigation","review_note":"Hold until review"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["item"]["legal_hold_status"], "active");
+    assert_eq!(payload["item"]["legal_hold_blocks_disposition"], true);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/disposition")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"disposition_status":"approved_for_disposition","retention_due_at":"2026-01-01","disposition_due_at":"2026-02-01","decision":"metadata-only approval","reason":"Retention due"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["item"]["disposition_status"],
+        "blocked_by_legal_hold"
+    );
+    assert!(media_root.join("evidence/integrity/valid.txt").exists());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/legal-hold/release")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"release_reason":"Review completed"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/900/disposition")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"disposition_status":"disposition_completed_metadata_only","retention_due_at":"2026-01-01","disposition_due_at":"2026-02-01","decision":"metadata-only completion","reason":"Disposition decision documented without physical deletion"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["item"]["disposition_status"],
+        "disposition_completed_metadata_only"
+    );
+    assert!(media_root.join("evidence/integrity/valid.txt").exists());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/900/integrity-events")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    let events = payload["events"].as_array().unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event["event_type"] == "integrity_hash_valid"));
+    assert!(events
+        .iter()
+        .any(|event| event["event_type"] == "legal_hold_set"));
+    assert!(events
+        .iter()
+        .any(|event| event["event_type"] == "disposition_decision_recorded"));
+    assert!(events.iter().all(|event| event.get("file").is_none()));
+
+    let disposition_events = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/904/disposition/events")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(disposition_events.status(), StatusCode::OK);
+    let body = to_bytes(disposition_events.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    assert!(!body_text.contains("dispose.txt"));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    let event_types = payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["event_type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"disposition_execution_denied"));
+    assert!(event_types.contains(&"disposition_approved"));
+    assert!(event_types.contains(&"disposition_executed"));
+
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn evidence_storage_drill_uses_local_backend_and_keeps_tenant_boundaries() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let media_root = test_media_root("evidence-storage-drill");
+    let evidence_dir = media_root.join("evidence/storage");
+    fs::create_dir_all(&evidence_dir).unwrap();
+    fs::write(
+        evidence_dir.join("valid.txt"),
+        b"trusted storage evidence\n",
+    )
+    .unwrap();
+    fs::write(
+        evidence_dir.join("changed.txt"),
+        b"changed storage evidence\n",
+    )
+    .unwrap();
+    fs::write(evidence_dir.join("empty.txt"), b"").unwrap();
+    let valid_hash = format!("{:x}", Sha256::digest(b"trusted storage evidence\n"));
+    let stale_hash = "1".repeat(64);
+    let empty_hash = format!("{:x}", Sha256::digest(b""));
+    let absolute_path = media_root.join("evidence/storage/valid.txt");
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (
+            id, tenant_id, title, description, linked_requirement, file,
+            file_sha256, status, owner_id, valid_until, retention_until,
+            retention_reason
+        ) VALUES
+            (920, 1, 'Storage valid evidence', 'Expected hash matches', 'NIS2 21', 'evidence/storage/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (921, 1, 'Storage mismatch evidence', 'Expected hash is stale', 'NIS2 21', 'evidence/storage/changed.txt', ?2, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (922, 1, 'Storage missing evidence', 'File is missing', 'NIS2 21', 'evidence/storage/missing.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (923, 1, 'Storage missing hash evidence', 'No expected hash', 'NIS2 21', 'evidence/storage/valid.txt', '', 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (924, 1, 'Storage empty evidence', 'Empty but valid file', 'NIS2 21', 'evidence/storage/empty.txt', ?3, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (925, 2, 'Foreign storage evidence', 'Foreign tenant', 'NIS2 21', 'evidence/storage/valid.txt', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test'),
+            (926, 1, 'Unsafe absolute storage evidence', 'Absolute path must not resolve', 'NIS2 21', ?4, ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Storage drill test')
+        "#,
+    )
+    .bind(&valid_hash)
+    .bind(&stale_hash)
+    .bind(&empty_hash)
+    .bind(absolute_path.display().to_string())
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(
+        payload["storage"]["items"][0]["storage_backend"],
+        "local_filesystem"
+    );
+    assert!(
+        payload["storage"]["summary"]["artifact_references"]
+            .as_i64()
+            .unwrap()
+            >= 6
+    );
+
+    let readonly = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/920/storage-drill")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly.status(), StatusCode::FORBIDDEN);
+
+    let foreign = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/925/storage")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign.status(), StatusCode::NOT_FOUND);
+
+    for (evidence_id, expected_status, expected_error, expected_match) in [
+        (920, "valid", "", true),
+        (921, "mismatch", "hash_mismatch", false),
+        (922, "missing_artifact", "artifact_missing", false),
+        (923, "check_failed", "expected_hash_missing", false),
+        (924, "valid", "", true),
+        (926, "missing_artifact", "artifact_reference_unsafe", false),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/v1/evidence/{evidence_id}/storage-drill"))
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .header("x-iscy-roles", "ADMIN")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!body_text.contains(&media_root.display().to_string()));
+        let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+        assert_eq!(payload["drill"]["status"], expected_status);
+        assert_eq!(payload["drill"]["safe_error_class"], expected_error);
+        assert_eq!(payload["drill"]["hash_matches"], expected_match);
+    }
+
+    let batch = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/storage-drills")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"evidence_ids":[920,921,925],"limit":50}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(batch.status(), StatusCode::OK);
+    let body = to_bytes(batch.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["checked"], 2);
+
+    let events = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/920/storage-events")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(events.status(), StatusCode::OK);
+    let body = to_bytes(events.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains(&media_root.display().to_string()));
+    assert!(!body_text.contains("valid.txt"));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    let event_types = payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["event_type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"storage_drill_started"));
+    assert!(event_types.contains(&"storage_artifact_found"));
+    assert!(event_types.contains(&"storage_hash_valid"));
+    assert!(event_types.contains(&"storage_drill_completed"));
+    assert!(media_root.join("evidence/storage/valid.txt").exists());
+    assert!(media_root.join("evidence/storage/changed.txt").exists());
+    assert!(media_root.join("evidence/storage/empty.txt").exists());
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn evidence_object_storage_client_is_tenant_scoped_and_secret_safe() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_evidenceitem (
+            id, tenant_id, title, description, linked_requirement, file,
+            file_sha256, status, owner_id, valid_until, retention_until,
+            retention_reason
+        ) VALUES
+            (930, 1, 'Object storage evidence', 'S3-compatible metadata fixture', 'NIS2 21', '', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Object storage test'),
+            (931, 2, 'Foreign object storage evidence', 'Foreign tenant', 'NIS2 21', '', ?1, 'APPROVED', 1, '2027-12-31', '2026-01-01', 'Object storage test')
+        "#,
+    )
+    .bind("c".repeat(64))
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool))),
+    );
+
+    let readonly = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/storage/backends")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"backend_type":"s3_compatible","display_name":"Read only"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly.status(), StatusCode::FORBIDDEN);
+
+    let bad_endpoint = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/storage/backends")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"backend_id":"s3-fixture","backend_type":"s3_compatible","display_name":"Unsafe endpoint","endpoint_reference":"https://access:secret@objects.example.test","region":"eu-central-1","bucket_name":"iscy-fixture","key_prefix":"iscy"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_endpoint.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(bad_endpoint.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "endpoint_contains_credentials");
+
+    let backend = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/storage/backends")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{
+                        "backend_id":"s3-fixture",
+                        "backend_type":"s3_compatible",
+                        "display_name":"S3 Fixture",
+                        "status":"validation_required",
+                        "endpoint_reference":"https://objects.example.test",
+                        "region":"eu-central-1",
+                        "bucket_name":"iscy-fixture",
+                        "key_prefix":"iscy",
+                        "access_key_secret_ref":"env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE",
+                        "secret_key_secret_ref":"env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE",
+                        "allowed_endpoint_policy":"production_https_public"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(backend.status(), StatusCode::OK);
+    let body = to_bytes(backend.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("AKIA"));
+    assert!(!body_text.contains("BEGIN "));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(payload["backend"]["backend_id"], "s3-fixture");
+    assert_eq!(payload["backend"]["backend_type"], "s3_compatible");
+
+    let validation = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/storage/backends/s3-fixture/validate")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(validation.status(), StatusCode::OK);
+    let body = to_bytes(validation.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("AKIA"));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(payload["backend"]["status"], "ready_for_test");
+    assert_eq!(payload["secret_refs"].as_array().unwrap().len(), 3);
+
+    let wrong_tenant_key = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/930/storage/attach-object")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"backend_id":"s3-fixture","object_key":"iscy/tenants/2/evidence/930/artifacts/report.pdf","expected_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","contract_status":"present","contract_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_tenant_key.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(wrong_tenant_key.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "object_reference_tenant_mismatch");
+
+    let foreign_evidence = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/931/storage/attach-object")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"backend_id":"s3-fixture","object_key":"iscy/tenants/1/evidence/931/artifacts/report.pdf","expected_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","contract_status":"present","contract_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_evidence.status(), StatusCode::NOT_FOUND);
+
+    let attach = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/930/storage/attach-object")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"backend_id":"s3-fixture","object_key":"iscy/tenants/1/evidence/930/artifacts/report.pdf","expected_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","contract_status":"present","contract_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","contract_size_bytes":128}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(attach.status(), StatusCode::OK);
+    let body = to_bytes(attach.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("tenants/1/evidence/930"));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    assert_eq!(
+        payload["reference"]["object_reference_status"],
+        "ready_for_test"
+    );
+    assert_eq!(
+        payload["reference"]["object_key_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+
+    let drill = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/evidence/930/storage/verify-object")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(drill.status(), StatusCode::OK);
+    let body = to_bytes(drill.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["drill"]["status"], "valid");
+    assert_eq!(payload["drill"]["safe_error_class"], "");
+    assert_eq!(payload["item"]["integrity_status"], "valid");
+
+    let events = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage/backends/s3-fixture/events")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(events.status(), StatusCode::OK);
+    let body = to_bytes(events.into_body(), usize::MAX).await.unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("tenants/1/evidence/930"));
+    let payload: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+    let event_types = payload["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["event_type"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert!(event_types.contains(&"storage_backend_config_saved"));
+    assert!(event_types.contains(&"storage_backend_validated"));
+    assert!(event_types.contains(&"storage_object_reference_linked"));
+    assert!(event_types.contains(&"storage_object_drill_completed"));
+}
+
+#[tokio::test]
+async fn evidence_s3_runtime_routes_enforce_auth_roles_tenants_and_production_policy() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO evidence_storage_backend_config (
+            tenant_id, backend_id, backend_type, display_name, status,
+            endpoint_reference, region, bucket_name, key_prefix,
+            access_key_secret_ref, secret_key_secret_ref, allow_path_style,
+            allowed_endpoint_policy
+        ) VALUES (
+            1, 'minio-local', 's3_compatible', 'Lokaler Test', 'ready',
+            'http://127.0.0.1:19090', 'us-east-1', 'iscy-test', 'runtime',
+            'env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY', 'env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY', 1,
+            'local_dev_only'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let state = AppState::default()
+        .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())));
+    let app = app_router_with_state(state);
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage/backends/minio-local/runtime-status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    for uri in [
+        "/api/v1/evidence/storage/backends/minio-local/validate-live",
+        "/api/v1/evidence/1/storage/upload",
+        "/api/v1/evidence/1/storage/verify-runtime",
+    ] {
+        let readonly = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .header("x-iscy-roles", "AUDITOR")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(readonly.status(), StatusCode::FORBIDDEN);
+    }
+
+    let foreign_tenant = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage/backends/minio-local/runtime-status")
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "2")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_tenant.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(foreign_tenant.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body_text.contains("ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY"));
+    assert!(!body_text.contains("127.0.0.1"));
+
+    let production_local = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/evidence/storage/backends/minio-local/runtime-status")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(production_local.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(production_local.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "insecure_scheme");
+}
+
+#[tokio::test]
+async fn rust_web_evidence_accepts_file_upload_from_form() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let media_root = test_media_root("web-evidence-upload");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/evidence/?tenant_id=42&user_id=7&evidence_title=CVE-Evidence%3A%20CVE-2026-0001&evidence_description=Patch%20proof&linked_requirement=PRODUCT-SECURITY%3ACVE%3ACVE-2026-0001&evidence_status=SUBMITTED&incident_id=1&return_to=%2Fproduct-security%2F%3Ftenant_id%3D42%26user_id%3D7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("CVE-Evidence: CVE-2026-0001"));
+    assert!(html.contains("PRODUCT-SECURITY:CVE:CVE-2026-0001"));
+    assert!(html.contains("Patch proof"));
+    assert!(html.contains("/evidence/quality/"));
+    assert!(html.contains("Vorgaenger-ID"));
+    assert!(html.contains("Schutzklasse"));
+    assert!(html.contains("Gueltig bis"));
+    assert!(html.contains("Aufbewahren bis"));
+    assert!(html.contains("Retention-Begruendung"));
+    assert!(html.contains("Storage-Backend"));
+    assert!(html.contains("Lokales Dateisystem"));
+    assert!(
+        html.contains(r#"name="return_to" value="/product-security/?tenant_id=42&amp;user_id=7""#)
+    );
+
+    let boundary = "iscy-web-evidence-upload-boundary";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("title", "Browser Rust Evidence"),
+            ("description", "Uploaded from Rust web form"),
+            ("session_id", "100"),
+            ("requirement_id", "1"),
+            ("incident_id", "1"),
+            ("status", "SUBMITTED"),
+            ("return_to", "/product-security/?tenant_id=42&user_id=7"),
+        ],
+        Some(("file", "browser.csv", "text/csv", b"name,value\nmfa,done\n")),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/evidence/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/product-security/?tenant_id=42&user_id=7"
+    );
+
+    let file_name: String = sqlx::query_scalar(
+        "SELECT file FROM evidence_evidenceitem WHERE tenant_id = 42 AND title = 'Browser Rust Evidence'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(media_root.join(file_name).exists());
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn rust_web_evidence_quality_renders_maturity_queue() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_evidence_tables(&pool).await;
+    insert_evidence_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/evidence/quality/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Evidence Quality"));
+    assert!(html.contains("Incident Playbook"));
+    assert!(html.contains("Datei oder Artefaktreferenz fehlt"));
+    assert!(html.contains("Nachweis f"));
+}
+
+#[tokio::test]
+async fn rust_web_evidence_integrity_renders_safe_metadata_and_write_actions_by_role() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool))),
+    );
+
+    let readonly = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/evidence/integrity/?tenant_id=1&user_id=2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly.status(), StatusCode::OK);
+    let body = to_bytes(readonly.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Evidence Integrity"));
+    assert!(html.contains("MFA rollout evidence"));
+    assert!(html.contains("Nur Lesen"));
+    assert!(!html.contains("Re-Hash"));
+    assert!(!html.contains("Storage-Drill"));
+
+    let admin = app
+        .oneshot(
+            Request::builder()
+                .uri("/evidence/integrity/")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(admin.status(), StatusCode::OK);
+    let body = to_bytes(admin.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Evidence Integrity"));
+    assert!(html.contains("MFA rollout evidence"));
+    assert!(html.contains("Re-Hash"));
+    assert!(html.contains("Storage-Drill"));
+    assert!(html.contains("Legal Hold"));
+    assert!(html.contains("Disposition"));
+}
+
+#[tokio::test]
+async fn import_center_jobs_require_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/jobs")
+                .header("x-iscy-tenant-id", "42")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"import_type":"processes","replace_existing":false,"rows":[]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn import_center_jobs_require_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/jobs")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"import_type":"processes","replace_existing":false,"rows":[]}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn import_center_job_applies_process_rows_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/jobs")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"
+                    {
+                        "import_type": "processes",
+                        "replace_existing": false,
+                        "rows": [
+                            {
+                                "name": "Incident Intake",
+                                "business_unit": "Security Operations",
+                                "scope": "SOC",
+                                "description": "Updated intake",
+                                "status": "SUFFICIENT",
+                                "documented": "yes",
+                                "approved": "yes",
+                                "communicated": "yes",
+                                "implemented": "yes",
+                                "effective": "yes",
+                                "evidenced": "yes"
+                            },
+                            {
+                                "name": "Vendor Review",
+                                "business_unit": "Governance",
+                                "scope": "Suppliers",
+                                "description": "Review supplier risk",
+                                "status": "PARTIAL",
+                                "documented": true
+                            },
+                            {"name": ""}
+                        ]
+                    }
+                    "#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["result"]["tenant_id"], 42);
+    assert_eq!(payload["result"]["created"], 1);
+    assert_eq!(payload["result"]["updated"], 1);
+    assert_eq!(payload["result"]["skipped"], 1);
+
+    let process_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM processes_process WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(process_count, 2);
+    let updated = sqlx::query(
+        "SELECT status, evidenced FROM processes_process WHERE tenant_id = 42 AND name = 'Incident Intake'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let status: String = updated.try_get("status").unwrap();
+    let evidenced: bool = updated.try_get("evidenced").unwrap();
+    assert_eq!(status, "SUFFICIENT");
+    assert!(evidenced);
+    let governance_bu_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 42 AND name = 'Governance'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(governance_bu_count, 1);
+}
+
+#[tokio::test]
+async fn import_center_job_replaces_tenant_assets() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/jobs")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"
+                    {
+                        "import_type": "assets",
+                        "replace_existing": true,
+                        "rows": [
+                            {
+                                "name": "Customer Portal",
+                                "business_unit": "Digital Services",
+                                "asset_type": "APPLICATION",
+                                "criticality": "HIGH",
+                                "description": "External portal",
+                                "confidentiality": "HIGH",
+                                "integrity": "HIGH",
+                                "availability": "MEDIUM",
+                                "lifecycle_status": "active",
+                                "in_scope": "yes"
+                            },
+                            {
+                                "name": "Data Lake",
+                                "asset_type": "DATA",
+                                "criticality": "VERY_HIGH",
+                                "description": "Analytics platform",
+                                "in_scope": "no"
+                            },
+                            {"name": ""}
+                        ]
+                    }
+                    "#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["result"]["created"], 2);
+    assert_eq!(payload["result"]["updated"], 0);
+    assert_eq!(payload["result"]["skipped"], 1);
+
+    let asset_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM assets_app_informationasset WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(asset_count, 2);
+    let old_asset_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM assets_app_informationasset WHERE tenant_id = 42 AND name = 'Legacy CRM'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(old_asset_count, 0);
+    let data_lake = sqlx::query(
+        "SELECT asset_type, criticality, is_in_scope FROM assets_app_informationasset WHERE tenant_id = 42 AND name = 'Data Lake'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let asset_type: String = data_lake.try_get("asset_type").unwrap();
+    let criticality: String = data_lake.try_get("criticality").unwrap();
+    let is_in_scope: bool = data_lake.try_get("is_in_scope").unwrap();
+    assert_eq!(asset_type, "DATA");
+    assert_eq!(criticality, "VERY_HIGH");
+    assert!(!is_in_scope);
+}
+
+#[tokio::test]
+async fn import_center_csv_job_applies_business_units_from_csv() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/csv")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{
+                        "import_type":"business_units",
+                        "replace_existing":false,
+                        "csv_data":"name\nSecurity Operations\n\"Cloud, Platform\"\n"
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["headers"][0], "name");
+    assert_eq!(payload["result"]["row_count"], 2);
+    assert_eq!(payload["result"]["created"], 1);
+    assert_eq!(payload["result"]["updated"], 1);
+
+    let business_unit_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(business_unit_count, 3);
+}
+
+#[tokio::test]
+async fn rust_web_imports_applies_csv_import_from_form() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/imports/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "import_type=business_units&replace_existing=1&csv_data=name%0ACloud%20Security%0AGovernance%0A",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Import uebernommen"));
+    assert!(html.contains("business_units"));
+
+    let tenant_business_units: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(tenant_business_units, 2);
+    let foreign_business_units: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 99")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(foreign_business_units, 1);
+}
+
+#[tokio::test]
+async fn import_center_preview_reads_csv_upload_and_builds_mapping() {
+    let app = app_router();
+    let boundary = "iscy-import-preview-csv-boundary";
+    let body = multipart_body(
+        boundary,
+        &[("import_type", "processes"), ("replace_existing", "1")],
+        Some((
+            "file",
+            "processes.csv",
+            "text/csv",
+            b"Name,Beschreibung,BusinessUnit,Status\nIncident Intake,Updated intake,Security Operations,SUFFICIENT\n",
+        )),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/preview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["preview"]["import_type"], "processes");
+    assert_eq!(payload["preview"]["headers"][0], "Name");
+    assert_eq!(payload["preview"]["selected_mapping"]["name"], "Name");
+    assert_eq!(
+        payload["preview"]["selected_mapping"]["description"],
+        "Beschreibung"
+    );
+    assert_eq!(
+        payload["preview"]["selected_mapping"]["business_unit"],
+        "BusinessUnit"
+    );
+    assert_eq!(payload["preview"]["matched"], 4);
+    assert_eq!(payload["preview"]["total_row_count"], 1);
+    assert_eq!(
+        payload["preview"]["preview_rows"][0]["Name"],
+        "Incident Intake"
+    );
+}
+
+#[tokio::test]
+async fn import_center_preview_reads_xlsx_upload_and_builds_mapping() {
+    let app = app_router();
+    let boundary = "iscy-import-preview-xlsx-boundary";
+    let xlsx_bytes = import_preview_xlsx_fixture();
+    let body = multipart_body(
+        boundary,
+        &[("import_type", "processes"), ("replace_existing", "0")],
+        Some((
+            "file",
+            "processes.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            xlsx_bytes.as_slice(),
+        )),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/preview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["preview"]["file_kind"], "xlsx");
+    assert_eq!(payload["preview"]["headers"][0], "Name");
+    assert_eq!(payload["preview"]["selected_mapping"]["name"], "Name");
+    assert_eq!(payload["preview"]["matched"], 4);
+    assert_eq!(payload["preview"]["total_row_count"], 2);
+    assert_eq!(
+        payload["preview"]["preview_rows"][1]["BusinessUnit"],
+        "Governance"
+    );
+}
+
+#[tokio::test]
+async fn import_center_preview_rejects_malformed_xlsx_and_read_only_access() {
+    let app = app_router();
+    let request = |roles: Option<&str>, file: &[u8]| {
+        let boundary = "iscy-import-preview-invalid-xlsx-boundary";
+        let body = multipart_body(
+            boundary,
+            &[("import_type", "processes"), ("replace_existing", "0")],
+            Some((
+                "file",
+                "processes.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                file,
+            )),
+        );
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/import-center/preview")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            );
+        if let Some(roles) = roles {
+            request = request
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", roles);
+        }
+        request.body(Body::from(body)).unwrap()
+    };
+
+    let response = app
+        .clone()
+        .oneshot(request(None, b"not-an-xlsx"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = app
+        .clone()
+        .oneshot(request(Some("AUDITOR"), b"not-an-xlsx"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let valid_xlsx = import_preview_xlsx_fixture();
+    let malformed_files = [
+        b"not-an-xlsx".as_slice(),
+        &valid_xlsx[..valid_xlsx.len() / 2],
+    ];
+    for malformed in malformed_files {
+        let response = app
+            .clone()
+            .oneshot(request(Some("ADMIN"), malformed))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(error["error_code"], "invalid_import_upload");
+        assert!(error["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("XLSX-Datei konnte nicht gelesen werden")));
+    }
+}
+
+#[tokio::test]
+async fn rust_web_imports_preview_renders_mapping_for_uploaded_file() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+    let boundary = "iscy-web-import-preview-boundary";
+    let xlsx_bytes = import_preview_xlsx_fixture();
+    let body = multipart_body(
+        boundary,
+        &[("action", "preview"), ("import_type", "processes")],
+        Some((
+            "file",
+            "processes.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            xlsx_bytes.as_slice(),
+        )),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/imports/preview/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Import-Vorschau"));
+    assert!(html.contains("Vulnerability Triage"));
+    assert!(html.contains("name=\"map_name\""));
+    assert!(html.contains("Import bestaetigen"));
+}
+
+#[tokio::test]
+async fn rust_web_imports_confirms_uploaded_xlsx_from_preview_form() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+    let boundary = "iscy-web-import-confirm-boundary";
+    let xlsx_bytes = import_preview_xlsx_fixture();
+    let xlsx_base64 = BASE64_STANDARD.encode(&xlsx_bytes);
+    let body = multipart_body(
+        boundary,
+        &[
+            ("action", "confirm"),
+            ("import_type", "processes"),
+            ("replace_existing", "0"),
+            ("file_name", "processes.xlsx"),
+            ("file_data_base64", xlsx_base64.as_str()),
+            ("map_name", "Name"),
+            ("map_description", "Beschreibung"),
+            ("map_business_unit", "BusinessUnit"),
+            ("map_status", "Status"),
+        ],
+        None,
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/imports/preview/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Import uebernommen"));
+    assert!(html.contains("processes"));
+
+    let process_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM processes_process WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(process_count, 3);
+    let governance_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 42 AND name = 'Governance'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(governance_count, 1);
+}
+
+#[tokio::test]
+async fn assessment_applicability_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/applicability")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn assessment_applicability_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/applicability")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn assessment_applicability_returns_tenant_rows_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_assessment_tables(&pool).await;
+    insert_assessment_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_assessment_store(Some(AssessmentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/applicability")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["items"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["items"][0]["tenant_name"], "Tenant SOC");
+    assert_eq!(payload["items"][0]["sector"], "MSSP");
+    assert_eq!(
+        payload["items"][0]["status_label"],
+        "Voraussichtlich relevant"
+    );
+}
+
+#[tokio::test]
+async fn assessment_register_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn assessment_register_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn assessment_register_returns_tenant_assessments_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_assessment_tables(&pool).await;
+    insert_assessment_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_assessment_store(Some(AssessmentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["items"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["items"][0]["process_name"], "Incident Intake");
+    assert_eq!(payload["items"][0]["requirement_framework"], "ISO27001");
+    assert_eq!(payload["items"][0]["status_label"], "Teilweise erf√ºllt");
+    assert_eq!(payload["items"][0]["owner_display"], "Ada Lovelace");
+    assert_eq!(payload["items"][1]["requirement_code"], "21.2");
+}
+
+#[tokio::test]
+async fn assessment_measures_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/measures")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn assessment_measures_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/measures")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn assessment_measures_return_tenant_measures_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_assessment_tables(&pool).await;
+    insert_assessment_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_assessment_store(Some(AssessmentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/assessments/measures")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["items"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["items"][0]["title"], "Policy aktualisieren");
+    assert_eq!(payload["items"][0]["status_label"], "Done");
+    assert_eq!(payload["items"][1]["title"], "MFA ausrollen");
+    assert_eq!(payload["items"][1]["priority_label"], "High");
+    assert_eq!(payload["items"][1]["status_label"], "Open");
+    assert_eq!(payload["items"][1]["due_date"], "2026-05-01");
+}
+
+#[tokio::test]
+async fn roadmap_plans_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/roadmap/plans")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn roadmap_plans_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/roadmap/plans")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn roadmap_plans_return_tenant_roadmaps_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/roadmap/plans")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["plans"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["plans"][0]["title"], "Security Roadmap");
+    assert_eq!(payload["plans"][0]["tenant_name"], "Tenant SOC");
+    assert_eq!(payload["plans"][0]["phase_count"], 2);
+    assert_eq!(payload["plans"][0]["task_count"], 3);
+    assert_eq!(payload["plans"][0]["open_task_count"], 2);
+    assert_eq!(payload["plans"][1]["title"], "Earlier Roadmap");
+}
+
+#[tokio::test]
+async fn roadmap_plan_detail_returns_tenant_roadmap_tree_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/roadmap/plans/10")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["plan"]["id"], 10);
+    assert_eq!(payload["plan"]["tenant_id"], 42);
+    assert_eq!(payload["plan"]["title"], "Security Roadmap");
+    assert_eq!(payload["phases"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["phases"][0]["name"], "Governance");
+    assert_eq!(payload["phases"][0]["task_count"], 2);
+    assert_eq!(payload["tasks"].as_array().unwrap().len(), 3);
+    assert_eq!(payload["tasks"][0]["title"], "Policy aktualisieren");
+    assert_eq!(payload["tasks"][0]["status_label"], "Offen");
+    assert_eq!(payload["tasks"][1]["incoming_dependency_count"], 1);
+    assert_eq!(payload["dependencies"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        payload["dependencies"][0]["predecessor_title"],
+        "Policy aktualisieren"
+    );
+    assert_eq!(
+        payload["dependencies"][0]["dependency_type_label"],
+        "Finish-to-Start"
+    );
+}
+
+#[tokio::test]
+async fn roadmap_plan_detail_blocks_foreign_tenant_roadmap() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/roadmap/plans/12")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "roadmap_not_found");
+}
+
+#[tokio::test]
+async fn roadmap_task_update_updates_tenant_task_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/roadmap/tasks/1001")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"status":"DONE","planned_start":"2026-05-02","due_date":"2026-05-08","owner_role":"CISO Office","notes":"Closed in Rust"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["plan_id"], 10);
+    assert_eq!(payload["task"]["id"], 1001);
+    assert_eq!(payload["task"]["status"], "DONE");
+    assert_eq!(payload["task"]["status_label"], "Erledigt");
+    assert_eq!(payload["task"]["owner_role"], "CISO Office");
+    assert_eq!(payload["task"]["notes"], "Closed in Rust");
+
+    let row =
+        sqlx::query("SELECT status, owner_role, notes FROM roadmap_roadmaptask WHERE id = 1001")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let status: String = row.try_get("status").unwrap();
+    let owner_role: String = row.try_get("owner_role").unwrap();
+    let notes: String = row.try_get("notes").unwrap();
+    assert_eq!(status, "DONE");
+    assert_eq!(owner_role, "CISO Office");
+    assert_eq!(notes, "Closed in Rust");
+}
+
+#[tokio::test]
+async fn roadmap_task_update_blocks_foreign_tenant_task() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/roadmap/tasks/1201")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"status":"DONE"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "roadmap_task_not_found");
+}
+
+#[tokio::test]
+async fn wizard_sessions_requires_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/wizard/sessions")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn wizard_sessions_requires_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/wizard/sessions")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn wizard_sessions_return_tenant_sessions_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_wizard_tables(&pool).await;
+    insert_wizard_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_wizard_store(Some(WizardStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/wizard/sessions")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["sessions"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["sessions"][0]["id"], 101);
+    assert_eq!(
+        payload["sessions"][0]["assessment_type_label"],
+        "ISO-27001-Readiness bewerten"
+    );
+    assert_eq!(payload["sessions"][0]["started_by_display"], "Ada Lovelace");
+    assert_eq!(payload["sessions"][1]["id"], 100);
+}
+
+#[tokio::test]
+async fn wizard_results_return_full_result_tree_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_wizard_tables(&pool).await;
+    insert_wizard_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_wizard_store(Some(WizardStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/wizard/sessions/100/results")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["session"]["id"], 100);
+    assert_eq!(payload["session"]["tenant_id"], 42);
+    assert_eq!(payload["domain_scores"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["domain_scores"][0]["domain_name"], "Governance");
+    assert_eq!(payload["gaps"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["gaps"][0]["severity_label"], "Hoch");
+    assert_eq!(payload["measures"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["measures"][0]["priority_label"], "Kritisch");
+    assert_eq!(payload["evidence_count"], 2);
+    assert_eq!(payload["report"]["title"], "April Readiness");
+    assert_eq!(
+        payload["report"]["domain_scores_json"][0]["domain"],
+        "Governance"
+    );
+    assert_eq!(payload["roadmap"]["plan"]["title"], "Security Roadmap");
+    assert_eq!(payload["roadmap"]["phases"][0]["name"], "Governance Phase");
+    assert_eq!(
+        payload["roadmap"]["tasks"][0]["title"],
+        "Policy aktualisieren"
+    );
+}
+
+#[tokio::test]
+async fn wizard_results_blocks_foreign_tenant_session() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_wizard_tables(&pool).await;
+    insert_wizard_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_wizard_store(Some(WizardStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/wizard/sessions/200/results")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "wizard_session_not_found");
+}
+
+#[tokio::test]
+async fn report_snapshots_require_authenticated_tenant_context() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/snapshots")
+                .header("x-iscy-tenant-id", "42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "missing_user_context");
+}
+
+#[tokio::test]
+async fn report_snapshots_require_configured_database() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/snapshots")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "database_not_configured");
+}
+
+#[tokio::test]
+async fn report_snapshots_return_tenant_reports_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_report_table(&pool).await;
+    insert_report_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/snapshots")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["reports"].as_array().unwrap().len(), 2);
+    assert_eq!(payload["reports"][0]["id"], 11);
+    assert_eq!(payload["reports"][0]["title"], "April Readiness");
+    assert_eq!(payload["reports"][0]["iso_readiness_percent"], 78);
+    assert_eq!(payload["reports"][1]["id"], 10);
+}
+
+#[tokio::test]
+async fn report_snapshot_detail_returns_report_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_report_table(&pool).await;
+    insert_report_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/snapshots/11")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["report"]["id"], 11);
+    assert_eq!(payload["report"]["tenant_id"], 42);
+    assert_eq!(
+        payload["report"]["executive_summary"],
+        "April Executive Summary"
+    );
+    assert_eq!(payload["report"]["kritis_readiness_percent"], 33);
+    assert_eq!(
+        payload["report"]["compliance_versions_json"]["ISO27001"]["version"],
+        "2022"
+    );
+    assert_eq!(
+        payload["report"]["top_measures_json"][0]["title"],
+        "MFA einfuehren"
+    );
+    assert_eq!(
+        payload["report"]["domain_scores_json"][0]["domain"],
+        "Governance"
+    );
+}
+
+#[tokio::test]
+async fn report_snapshot_detail_blocks_foreign_tenant_report() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_report_table(&pool).await;
+    insert_report_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/snapshots/12")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "report_not_found");
+}
+
+#[tokio::test]
+async fn management_review_packages_return_tenant_reviews_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_management_review_table(&pool).await;
+    insert_management_review_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["tenant_id"], 42);
+    assert_eq!(payload["packages"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["packages"][0]["id"], 21);
+    assert_eq!(payload["packages"][0]["title"], "Q2 Steering Review");
+    assert_eq!(
+        payload["packages"][0]["template_type"],
+        "generic_security_governance"
+    );
+    assert_eq!(payload["packages"][0]["status"], "IN_REVIEW");
+}
+
+#[tokio::test]
+async fn management_review_templates_list_detail_and_unknown_are_available() {
+    let app = app_router_with_state(AppState::default());
+
+    let list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/management/templates")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["templates"].as_array().unwrap().len(), 6);
+    assert!(payload["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|template| template["template_type"] == "nis2_management_summary"));
+    assert!(payload["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|template| { template["template_type"] == "dsgvo_data_protection_review" }));
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/management/templates/iso27001")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["template"]["template_type"],
+        "iso27001_management_review"
+    );
+    assert!(payload["template"]["sections"].is_array());
+
+    let unknown = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/management/templates/nope")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn management_review_detail_and_status_update_roundtrip() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_management_review_table(&pool).await;
+    insert_management_review_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews/21")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["package"]["id"], 21);
+    assert_eq!(
+        payload["package"]["top_risks_json"][0]["title"],
+        "ERP Risiko"
+    );
+    assert_eq!(
+        payload["package"]["control_gaps_json"][0]["code"],
+        "ISCY-04"
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/reports/management-reviews/21")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"status":"APPROVED","decision_notes":"Freigegeben","next_actions":"Roadmap nachziehen"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["package"]["status"], "APPROVED");
+    assert_eq!(payload["package"]["approved_by_id"], 7);
+    assert_eq!(payload["package"]["decision_notes"], "Freigegeben");
+}
+
+#[tokio::test]
+async fn management_review_exports_markdown_html_pdf_and_json() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_management_review_table(&pool).await;
+    insert_management_review_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let markdown = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews/21/export")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(markdown.status(), StatusCode::OK);
+    let body = to_bytes(markdown.into_body(), usize::MAX).await.unwrap();
+    let markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(markdown.contains("# ISCY Management Review"));
+    assert!(markdown.contains("Q2 Steering Review"));
+    assert!(markdown.contains("/api/v1/risks/1"));
+
+    let html = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews/21/export.html")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(html.status(), StatusCode::OK);
+    let body = to_bytes(html.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("<html lang=\"de\">"));
+    assert!(html.contains("ERP Risiko"));
+
+    let pdf = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews/21/export.pdf")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pdf.status(), StatusCode::OK);
+    let body = to_bytes(pdf.into_body(), usize::MAX).await.unwrap();
+    assert!(body.starts_with(b"%PDF-1.4"));
+
+    let json = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/reports/management-reviews/21/export.json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json.status(), StatusCode::OK);
+    let body = to_bytes(json.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["api_version"], "v1");
+    assert_eq!(payload["package"]["title"], "Q2 Steering Review");
+}
+
+#[tokio::test]
+async fn management_review_detail_write_and_exports_block_foreign_tenant_package() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_management_review_table(&pool).await;
+    insert_management_review_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    for path in [
+        "/api/v1/reports/management-reviews/22",
+        "/api/v1/reports/management-reviews/22/export",
+        "/api/v1/reports/management-reviews/22/export.html",
+        "/api/v1/reports/management-reviews/22/export.pdf",
+        "/api/v1/reports/management-reviews/22/export.json",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "path: {path}");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            payload["error_code"], "management_review_not_found",
+            "path: {path}"
+        );
+    }
+
+    let update = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/reports/management-reviews/22")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"status":"APPROVED","decision_notes":"cross tenant"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update.status(), StatusCode::NOT_FOUND);
+
+    let foreign_status: String =
+        sqlx::query_scalar("SELECT status FROM reports_managementreviewpackage WHERE id = 22")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(foreign_status, "DRAFT");
+}
+
+#[tokio::test]
+async fn management_review_generate_creates_demo_audit_snapshot() {
+    let root = test_media_root("management-review-pool");
+    let db_path = root.join("management-review.sqlite3");
+    fs::File::create(&db_path).unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&format!("sqlite:///{}", db_path.display()))
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_device (
+            tenant_id, stable_device_id, hostname, os_family, agent_version,
+            deployment_channel, enrollment_status, zero_trust_score, last_seen_at
+        ) VALUES (
+            1, 'management-review-rollout-device', 'management-review-rollout-device',
+            'LINUX', '1.3.0', 'systemd', 'ACTIVE', 98, CURRENT_TIMESTAMP
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let device_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM zero_trust_agent_device WHERE tenant_id = 1 ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_rollout (
+            id, tenant_id, name, target_agent_version, status,
+            active_ring_name, rollback_plan, created_by_id
+        ) VALUES (9100, 1, 'Review snapshot rollout', '1.4.0', 'active', 'lab',
+                  'Operator follows the approved recovery procedure.', 1)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_rollout_ring (
+            id, tenant_id, rollout_id, ring_name, sequence_number, status
+        ) VALUES (9101, 1, 9100, 'lab', 10, 'active')
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_rollout_target (
+            tenant_id, rollout_id, ring_id, device_id, status,
+            preflight_status, deployment_status, expected_agent_version
+        ) VALUES (1, 9100, 9101, ?, 'failed', 'passed', 'failed', '1.4.0')
+        "#,
+    )
+    .bind(device_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let packages_before_preview: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM reports_managementreviewpackage")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/regulatory/templates/dora/preview")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(
+                    r#"{"period_start":"2026-06-01","period_end":"2026-06-30"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let preview_status = preview.status();
+    let body = to_bytes(preview.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+        preview_status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&body)
+    );
+    let preview_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        preview_payload["preview"]["template"]["template_type"],
+        "dora_ict_risk_supplier_incident_summary"
+    );
+    assert!(preview_payload["preview"]["gap_summary_json"].is_object());
+    let packages_after_preview: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM reports_managementreviewpackage")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(packages_after_preview, packages_before_preview);
+
+    let readonly_generate = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/reports/management-reviews")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"template_type":"iso27001"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly_generate.status(), StatusCode::FORBIDDEN);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/reports/management-reviews")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"template_type":"nis2","title":"June Steering Package","period_start":"2026-06-01","period_end":"2026-06-30"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["package"]["title"], "June Steering Package");
+    assert_eq!(
+        payload["package"]["template_type"],
+        "nis2_management_summary"
+    );
+    assert_eq!(payload["package"]["template_version"], "2026.1");
+    assert_eq!(payload["package"]["status"], "DRAFT");
+    assert_eq!(payload["package"]["generated_by_id"], 1);
+    assert!(
+        payload["package"]["metrics_json"]["open_risks"]
+            .as_i64()
+            .unwrap()
+            >= 1
+    );
+    assert!(
+        payload["package"]["metrics_json"]["snapshot_items"]["roadmap"]
+            .as_i64()
+            .unwrap()
+            >= 1
+    );
+    assert_eq!(
+        payload["package"]["top_risks_json"][0]["entity_type"],
+        "risk"
+    );
+    assert!(payload["package"]["incident_decisions_json"][0]["href"]
+        .as_str()
+        .unwrap()
+        .starts_with("/incidents/"));
+    assert!(
+        payload["package"]["product_security_json"]["products"]
+            .as_i64()
+            .unwrap()
+            >= 1
+    );
+    assert!(
+        payload["package"]["supplier_json"]["supplier_count"]
+            .as_i64()
+            .unwrap()
+            >= 1
+    );
+    assert!(payload["package"]["source_counts_json"]["risks"].is_number());
+    assert!(payload["package"]["gap_summary_json"]["open_control_gaps"].is_number());
+    assert!(
+        payload["package"]["decision_summary_json"]["required_management_decisions"].is_array()
+    );
+    assert_eq!(
+        payload["package"]["regulatory_context_json"]["template_type"],
+        "nis2_management_summary"
+    );
+    assert!(
+        payload["package"]["ai_governance_json"]["system_count"]
+            .as_i64()
+            .unwrap()
+            >= 1
+    );
+    assert_eq!(
+        payload["package"]["ai_governance_json"]["systems"][0]["entity_type"],
+        "ai_governance_system"
+    );
+    assert!(payload["package"]["ai_governance_json"]["systems"][0]["risk_links"].is_number());
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollout_count"],
+        1
+    );
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollouts_active"],
+        1
+    );
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollouts_with_failures"],
+        1
+    );
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollout_highest_ring"],
+        "lab"
+    );
+    let review_id = payload["package"]["id"].as_i64().unwrap();
+    let frozen_name = payload["package"]["ai_governance_json"]["systems"][0]["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let frozen_risk_links = payload["package"]["ai_governance_json"]["systems"][0]["risk_links"]
+        .as_i64()
+        .unwrap();
+    let frozen_active_rollouts = payload["package"]["agent_posture_json"]["agent_rollouts_active"]
+        .as_i64()
+        .unwrap();
+
+    sqlx::query("UPDATE ai_governance_system SET name = 'Changed after snapshot' WHERE id = 3000")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO ai_governance_system_risk (tenant_id, system_id, risk_id, created_by_id) VALUES (1, 3000, 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE zero_trust_agent_rollout SET status = 'paused', active_ring_name = NULL WHERE tenant_id = 1 AND id = 9100",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let frozen_detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/reports/management-reviews/{review_id}"))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(frozen_detail.status(), StatusCode::OK);
+    let body = to_bytes(frozen_detail.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let frozen_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        frozen_payload["package"]["ai_governance_json"]["systems"][0]["name"],
+        frozen_name
+    );
+    assert_eq!(
+        frozen_payload["package"]["ai_governance_json"]["systems"][0]["risk_links"],
+        frozen_risk_links
+    );
+    assert_eq!(
+        frozen_payload["package"]["agent_posture_json"]["agent_rollouts_active"],
+        frozen_active_rollouts
+    );
+
+    for (suffix, content_type) in [
+        ("export", "text"),
+        ("export.html", "text"),
+        ("export.pdf", "pdf"),
+        ("export.json", "json"),
+    ] {
+        let export = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/api/v1/reports/management-reviews/{review_id}/{suffix}"
+                    ))
+                    .header("x-iscy-tenant-id", "1")
+                    .header("x-iscy-user-id", "1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(export.status(), StatusCode::OK, "{suffix}");
+        let body = to_bytes(export.into_body(), usize::MAX).await.unwrap();
+        let rendered = String::from_utf8_lossy(&body);
+        assert!(rendered.contains(&frozen_name), "{content_type}");
+        assert!(
+            !rendered.contains("Changed after snapshot"),
+            "{content_type}"
+        );
+    }
+
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM management_review_audit_event WHERE tenant_id = 1 AND review_id = ?",
+    )
+    .bind(review_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(audit_count >= 5);
+
+    let new_review = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/reports/management-reviews")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"title":"Post-change snapshot"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(new_review.status(), StatusCode::CREATED);
+    let body = to_bytes(new_review.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["package"]["ai_governance_json"]["systems"][0]["name"],
+        "Changed after snapshot"
+    );
+    assert_eq!(
+        payload["package"]["ai_governance_json"]["systems"][0]["risk_links"],
+        frozen_risk_links + 1
+    );
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollouts_active"],
+        0
+    );
+    assert_eq!(
+        payload["package"]["agent_posture_json"]["agent_rollouts_paused"],
+        1
+    );
+}
+
+#[tokio::test]
+async fn regulatory_review_pack_endpoints_snapshot_exports_and_security() {
+    let root = test_media_root("regulatory-review-pack-pool");
+    let db_path = root.join("regulatory-review-pack.sqlite3");
+    fs::File::create(&db_path).unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&format!("sqlite:///{}", db_path.display()))
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    sqlx::query(
+        r#"
+        UPDATE evidence_evidenceitem
+        SET integrity_status = 'mismatch',
+            integrity_mismatch = 1,
+            last_integrity_checked_at = CURRENT_TIMESTAMP,
+            last_calculated_sha256 = '0000000000000000000000000000000000000000000000000000000000000000',
+            legal_hold_status = 'active',
+            disposition_status = 'blocked_by_legal_hold',
+            disposition_due_at = date('now', '-1 day'),
+            legal_hold_blocks_disposition = 1,
+            disposal_candidate = 1
+        WHERE tenant_id = 1
+          AND id = (
+              SELECT id FROM evidence_evidenceitem
+              WHERE tenant_id = 1
+              ORDER BY id ASC
+              LIMIT 1
+          )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let packs = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/regulatory/review-packs")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(packs.status(), StatusCode::OK);
+    let body = to_bytes(packs.into_body(), usize::MAX).await.unwrap();
+    let packs_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(packs_payload["packs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|pack| { pack["template_type"] == "dsgvo_data_protection_review" }));
+
+    let preview = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/regulatory/review-packs/dsgvo/preview")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(
+                    r#"{"period_start":"2026-06-01","period_end":"2026-06-30"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let preview_status = preview.status();
+    let body = to_bytes(preview.into_body(), usize::MAX).await.unwrap();
+    let preview_body = String::from_utf8(body.to_vec()).unwrap();
+    assert_eq!(preview_status, StatusCode::OK, "{preview_body}");
+    assert!(!preview_body.contains(db_path.to_string_lossy().as_ref()));
+    assert!(!preview_body.contains("sqlite://"));
+    let preview_payload: serde_json::Value = serde_json::from_str(&preview_body).unwrap();
+    assert_eq!(
+        preview_payload["preview"]["template"]["template_type"],
+        "dsgvo_data_protection_review"
+    );
+    assert!(preview_payload["preview"]["metrics_json"]["evidence_integrity_storage"].is_object());
+    assert!(preview_payload["preview"]["incident_decisions_json"].is_array());
+    assert!(preview_payload["preview"]["supplier_json"].is_object());
+    assert!(preview_payload["preview"]["owner_hints_json"]["areas"].is_array());
+    assert!(preview_payload["preview"]["gap_groups_json"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|group| group["name"] == "Datenschutz- und Rollen-Gaps"));
+    assert_eq!(
+        preview_payload["preview"]["filter_summary_json"]["pack_type"],
+        "dsgvo_data_protection_review"
+    );
+    assert!(preview_payload["preview"]["data_completeness_summary_json"]["areas"].is_array());
+
+    let readonly_snapshot = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/regulatory/review-packs/nis2/snapshots")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"title":"Read-only should fail"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(readonly_snapshot.status(), StatusCode::FORBIDDEN);
+
+    let created = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/regulatory/review-packs/nis2/snapshots")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{"title":"NIS2 Contextual Pack","period_start":"2026-06-01","period_end":"2026-06-30"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let created_status = created.status();
+    let body = to_bytes(created.into_body(), usize::MAX).await.unwrap();
+    let created_body = String::from_utf8(body.to_vec()).unwrap();
+    assert_eq!(created_status, StatusCode::CREATED, "{created_body}");
+    assert!(!created_body.contains(db_path.to_string_lossy().as_ref()));
+    assert!(!created_body.contains("sqlite://"));
+    assert!(!created_body.contains("file://"));
+    let created_payload: serde_json::Value = serde_json::from_str(&created_body).unwrap();
+    assert_eq!(created_payload["accepted"], true);
+    assert_eq!(
+        created_payload["snapshot"]["template_type"],
+        "nis2_management_summary"
+    );
+    assert_eq!(
+        created_payload["snapshot"]["metrics_json"]["evidence_integrity_storage"]["mismatch"],
+        1
+    );
+    assert_eq!(
+        created_payload["snapshot"]["gap_summary_json"]["evidence_disposition_due"],
+        1
+    );
+    assert!(created_payload["snapshot"]["decision_summary_json"]["owner_hints"].is_object());
+    assert!(
+        created_payload["snapshot"]["decision_summary_json"]["gap_groups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| group["name"] == "Incident- und Meldeentscheidungs-Gaps")
+    );
+    let snapshot_id = created_payload["snapshot"]["id"].as_i64().unwrap();
+
+    let nis2_snapshots = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/regulatory/review-packs/nis2/snapshots")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(nis2_snapshots.status(), StatusCode::OK);
+    let body = to_bytes(nis2_snapshots.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(payload["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|snapshot| { snapshot["template_type"] == "nis2_management_summary" }));
+    assert!(payload["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|snapshot| snapshot["id"] == snapshot_id));
+    assert_eq!(
+        payload["filter_summary"]["pack_type"],
+        "nis2_management_summary"
+    );
+
+    let filtered_snapshots = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/regulatory/review-pack-snapshots?pack_type=nis2&status=DRAFT&period_start=2026-06-01&period_end=2026-06-30&has_open_gaps=true&has_critical_gaps=true&limit=5")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(filtered_snapshots.status(), StatusCode::OK);
+    let body = to_bytes(filtered_snapshots.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let filtered_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(filtered_payload["filter_summary"]["limit"], 5);
+    assert!(filtered_payload["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|snapshot| snapshot["id"] == snapshot_id));
+    assert!(filtered_payload["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(
+            |snapshot| snapshot["template_type"] == "nis2_management_summary"
+                && snapshot["status"] == "DRAFT"
+        ));
+
+    let limited_snapshots = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/regulatory/review-pack-snapshots?limit=1")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(limited_snapshots.status(), StatusCode::OK);
+    let body = to_bytes(limited_snapshots.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let limited_payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(limited_payload["snapshots"].as_array().unwrap().len() <= 1);
+
+    let bad_filter = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/regulatory/review-pack-snapshots?status=INVALID")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_filter.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(bad_filter.into_body(), usize::MAX).await.unwrap();
+    let bad_filter_body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(bad_filter_body.contains("Statusfilter"));
+    assert!(!bad_filter_body.contains(db_path.to_string_lossy().as_ref()));
+    assert!(!bad_filter_body.contains("sqlite://"));
+
+    let detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+
+    let json_export = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}/export?format=json"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json_export.status(), StatusCode::OK);
+    let body = to_bytes(json_export.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["package"]["title"], "NIS2 Contextual Pack");
+
+    let pdf_export = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}/export?format=pdf"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pdf_export.status(), StatusCode::OK);
+    let body = to_bytes(pdf_export.into_body(), usize::MAX).await.unwrap();
+    assert!(body.starts_with(b"%PDF-1.4"));
+
+    let bad_format = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}/export?format=docx"
+                ))
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(bad_format.status(), StatusCode::BAD_REQUEST);
+
+    let web_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/regulatory-review-packs/?tenant_id=1&user_id=1&pack_type=nis2&status=DRAFT")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(web_page.status(), StatusCode::OK);
+    let body = to_bytes(web_page.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Regulatory Review-Pakete"));
+    assert!(html.contains("Review-Paket"));
+    assert!(html.contains("Offene Luecken"));
+    assert!(html.contains("Keine Rechtsberatung"));
+    assert!(!html.contains(db_path.to_string_lossy().as_ref()));
+
+    let foreign_detail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/regulatory/review-pack-snapshots/{snapshot_id}"
+                ))
+                .header("x-iscy-tenant-id", "2")
+                .header("x-iscy-user-id", "2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_detail.status(), StatusCode::NOT_FOUND);
+
+    let audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM management_review_audit_event WHERE tenant_id = 1 AND (review_id = ? OR review_id IS NULL)",
+    )
+    .bind(snapshot_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(audit_count >= 4);
+    let regulatory_audit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM management_review_audit_event WHERE tenant_id = 1 AND action IN ('regulatory_review_pack_snapshot_created', 'regulatory_review_pack_export_generated')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(regulatory_audit_count >= 2);
+}
+
+#[tokio::test]
+async fn rust_web_surface_routes_return_ok() {
+    let paths = vec![
+        "/",
+        "/login/",
+        "/navigator/",
+        "/dashboard/",
+        "/zero-trust/",
+        "/catalog/",
+        "/reports/",
+        "/regulatory-review-packs/",
+        "/roadmap/",
+        "/evidence/",
+        "/assets/",
+        "/suppliers/",
+        "/imports/",
+        "/processes/",
+        "/ai-governance/",
+        "/requirements/",
+        "/risks/",
+        "/incidents/",
+        "/assessments/",
+        "/organizations/",
+        "/admin/users/",
+        "/product-security/",
+        "/cves/",
+    ];
+    for path in paths {
+        let response = app_router()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "path {}", path);
+    }
+}
+
+#[tokio::test]
+async fn rust_web_dashboard_without_context_renders_context_form() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Tenant-ID"));
+    assert!(html.contains("User-ID"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_dashboard_renders_summary_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_dashboard_tables(&pool).await;
+    insert_dashboard_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_dashboard_store(Some(DashboardStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard/?tenant_id=42&user_id=7&user_email=ada%40example.test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Dashboard"));
+    assert!(html.contains("Prozesse"));
+    assert!(html.contains("Erheblichkeit offen"));
+    assert!(html.contains("/incidents/?incident_filter=unassessed&amp;tenant_id=42&amp;user_id=7&amp;user_email=ada%40example.test"));
+    assert!(html.contains("April Readiness"));
+    assert!(html.contains("ISO 78%"));
+    assert!(html.contains("ada@example.test"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_risks_renders_rows_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/risks/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Credential Phishing"));
+    assert!(html.contains("Kritisch"));
+    assert!(html.contains("Ada Lovelace"));
+    assert!(html.contains("Evidence"));
+    assert!(html.contains("linked_requirement=RISK%3A10"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_incidents_renders_and_creates_incident() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_risk_tables(&pool).await;
+    insert_risk_fixture(&pool).await;
+    create_incident_table(&pool).await;
+    insert_incident_runbook_template_fixture(&pool).await;
+    insert_incident_fixture(&pool).await;
+    create_incident_evidence_support_tables(&pool).await;
+    let media_root = test_media_root("incident-evidence-upload");
+    let app = app_router_with_state(
+        AppState::default()
+            .with_incident_store(Some(IncidentStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_store(Some(EvidenceStore::from_sqlite_pool(pool.clone())))
+            .with_evidence_media_root(Some(media_root.clone())),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Credential phishing campaign"));
+    assert!(html.contains("/incidents/1?tenant_id=42"));
+    assert!(html.contains("NIS2 meldepflichtig"));
+    assert!(html.contains("Ueberfaellig"));
+    assert!(html.contains("Runbook-Vorlage"));
+    assert!(html.contains("Phishing Response"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Fallakte bearbeiten"));
+    assert!(html.contains("Incident-Entscheidungsfluss"));
+    assert!(html.contains("href=\"/incidents/1?tenant_id=42&amp;user_id=7#incident-case\""));
+    assert!(html.contains("href=\"/incidents/1?tenant_id=42&amp;user_id=7#incident-significance\""));
+    assert!(html.contains("Runbook / Evidence"));
+    assert!(html.contains("id=\"incident-package\""));
+    assert!(html.contains("NIS2 Markdown herunterladen"));
+    assert!(html.contains("DORA Markdown herunterladen"));
+    assert!(html.contains("DSGVO Markdown herunterladen"));
+    assert!(html.contains("/incidents/1/dora-export?tenant_id=42&amp;user_id=7"));
+    assert!(html.contains("/incidents/1/dsgvo-export?tenant_id=42&amp;user_id=7"));
+    assert!(html.contains("Phishing"));
+    assert!(html.contains("Eindaemmung durchfuehren"));
+    assert!(html.contains("Evidence zum Incident hochladen"));
+    assert!(html.contains("Runbook-Bibliothek"));
+    assert!(html.contains("SOC-Runbook fuer Credential-Phishing."));
+    assert!(html.contains("Customer portal support users affected."));
+    assert!(html.contains("Timeline"));
+    assert!(html.contains("Timeline-Notiz"));
+    assert!(html.contains("Keine Timeline-Events fuer diesen Filter vorhanden."));
+
+    let boundary = "iscy-incident-evidence-upload-boundary";
+    let body = multipart_body(
+        boundary,
+        &[
+            ("title", "Incident Evidence from Detail"),
+            ("description", "Uploaded directly from incident detail"),
+            ("incident_id", "1"),
+            ("return_to", "/incidents/1?tenant_id=42&user_id=7"),
+            ("status", "SUBMITTED"),
+        ],
+        Some((
+            "file",
+            "incident-evidence.txt",
+            "text/plain",
+            b"incident evidence\n",
+        )),
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/evidence/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/incidents/1?tenant_id=42&user_id=7"
+    );
+    let stored_evidence: (i64, String) = sqlx::query_as(
+        "SELECT incident_id, file FROM evidence_evidenceitem WHERE tenant_id = 42 AND title = 'Incident Evidence from Detail'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_evidence.0, 1);
+    assert!(media_root.join(stored_evidence.1).exists());
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Incident Evidence from Detail"));
+    assert!(html.contains("Evidence &#39;Incident Evidence from Detail&#39; hinzugefuegt."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/incidents/1/timeline-notes")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "summary=Management+informiert&detail=Management+und+Legal+wurden+ueber+den+Containment-Plan+informiert.",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/incidents/1?tenant_id=42&user_id=7"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Management informiert"));
+    assert!(html.contains("Management und Legal wurden ueber den Containment-Plan informiert."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/incidents/1")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "title=Credential+phishing+contained&severity=HIGH&status=CONTAINED&owner_id=8&reporter_id=7&related_risk_id=10&related_asset_id=1&related_process_id=1&detected_at=2026-04-20T10%3A00%3A00Z&nis2_reportable=on&notification_sent_at=2026-04-22T18%3A00%3A00Z&authority_reference=BSI-CASE-3&summary=Updated+from+detail&stakeholder_summary=Updated+stakeholder&lessons_learned=Improve+playbooks",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let stored: (String, String) =
+        sqlx::query_as("SELECT status, authority_reference FROM incidents_incident WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.0, "CONTAINED");
+    assert_eq!(stored.1, "BSI-CASE-3");
+    let timeline: Vec<IncidentTimelineRow> = sqlx::query_as(
+        r#"
+        SELECT event_type, from_status, to_status, evidence_item_id
+        FROM incidents_incidentevent
+        WHERE tenant_id = 42 AND incident_id = 1
+        ORDER BY id
+        "#,
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(timeline.len(), 3);
+    assert_eq!(timeline[0].0, "EVIDENCE_UPLOADED");
+    assert_eq!(timeline[0].3, Some(1));
+    assert_eq!(timeline[1].0, "TIMELINE_NOTE");
+    assert_eq!(timeline[2].0, "STATUS_CHANGED");
+    assert_eq!(timeline[2].1.as_deref(), Some("CONFIRMED"));
+    assert_eq!(timeline[2].2.as_deref(), Some("CONTAINED"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1/nis2-export?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(markdown.contains("Credential phishing contained"));
+    assert!(markdown.contains("Improve playbooks"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/incidents/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "title=Web+Incident&incident_type=VULNERABILITY&severity=HIGH&status=TRIAGE&owner_id=7&reporter_id=7&related_risk_id=10&related_asset_id=1&related_process_id=1&detected_at=2026-06-08&nis2_reportable=on&summary=Created+from+web",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let stored_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM incidents_incident WHERE tenant_id = 42 AND title = 'Web Incident'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_count, 1);
+    let incident_type: String = sqlx::query_scalar(
+        "SELECT incident_type FROM incidents_incident WHERE tenant_id = 42 AND title = 'Web Incident'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(incident_type, "VULNERABILITY");
+
+    let step_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM incidents_runbookstep WHERE tenant_id = 42 AND incident_id = 1 AND step_number = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/incidents/1/runbook-steps/{step_id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from("is_done=1"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let step_state: (bool, Option<i64>) =
+        sqlx::query_as("SELECT is_done, done_by_id FROM incidents_runbookstep WHERE id = ?")
+            .bind(step_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(step_state.0);
+    assert_eq!(step_state.1, Some(7));
+
+    let runbook_event_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM incidents_incidentevent WHERE tenant_id = 42 AND incident_id = 1 AND event_type = 'RUNBOOK_STEP_UPDATED'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/incidents/1/timeline-events/{runbook_event_id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "is_export_highlight=1&export_note=Relevant+fuer+NIS2-Meldepaket",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let marker: (bool, String) = sqlx::query_as(
+        "SELECT is_export_highlight, export_note FROM incidents_incidentevent WHERE id = ?",
+    )
+    .bind(runbook_event_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(marker.0);
+    assert_eq!(marker.1, "Relevant fuer NIS2-Meldepaket");
+
+    let step_two_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM incidents_runbookstep WHERE tenant_id = 42 AND incident_id = 1 AND step_number = 2",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/incidents/1/runbook-steps/{step_two_id}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from("action=move_up"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let moved_step_number: i64 =
+        sqlx::query_scalar("SELECT step_number FROM incidents_runbookstep WHERE id = ?")
+            .bind(step_two_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(moved_step_number, 1);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/incidents/1/review")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "action=approve&notes=Meldepaket+fachlich+freigegeben",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let review: (String, Option<i64>, String) = sqlx::query_as(
+        "SELECT review_state, approved_by_id, approval_notes FROM incidents_incident WHERE id = 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(review.0, "APPROVED");
+    assert_eq!(review.1, Some(7));
+    assert_eq!(review.2, "Meldepaket fachlich freigegeben");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1?tenant_id=42&user_id=7&timeline=highlighted")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Runbook-Schritt erledigt"));
+    assert!(html.contains("Review und Freigabe"));
+    assert!(html.contains("Freigegeben"));
+    assert!(html.contains("Relevant fuer NIS2-Meldepaket"));
+    assert!(!html.contains("Management informiert"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1/timeline.csv?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/csv; charset=utf-8"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let csv = String::from_utf8(body.to_vec()).unwrap();
+    assert!(csv.contains("\"INCIDENT_REVIEW_UPDATED\""));
+    assert!(csv.contains("\"RUNBOOK_STEP_UPDATED\""));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1/timeline.json?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let timeline_json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(timeline_json["incident_id"], 1);
+    assert_eq!(timeline_json["review_state"], "APPROVED");
+    assert!(timeline_json["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["event_type"] == "INCIDENT_REVIEW_UPDATED"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/incidents/1/nis2-export?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let markdown = String::from_utf8(body.to_vec()).unwrap();
+    assert!(markdown.contains("| Meldepaket-Review | Freigegeben |"));
+    assert!(markdown.contains("Exportrelevant: Relevant fuer NIS2-Meldepaket"));
+
+    let _ = fs::remove_dir_all(media_root);
+}
+
+#[tokio::test]
+async fn rust_web_reports_renders_snapshots_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_report_table(&pool).await;
+    insert_report_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/reports/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("April Readiness"));
+    assert!(html.contains("ISO"));
+    assert!(html.contains("78%"));
+    assert!(html.contains("82%"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_management_reviews_renders_packages_and_updates_status() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_management_review_table(&pool).await;
+    insert_management_review_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_report_store(Some(ReportStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/management-reviews/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Management Reviews"));
+    assert!(html.contains("Q2 Steering Review"));
+    assert!(html.contains("Management-Review-Paket erzeugen"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/management-reviews/21?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Top-Risiken"));
+    assert!(html.contains("ERP Risiko"));
+    assert!(html.contains("ISCY-27 Control-Gaps"));
+    assert!(html.contains("Review-Status speichern"));
+    assert!(html.contains("/management-reviews/21/export.pdf"));
+    assert!(html.contains("/management-reviews/21/export.json"));
+    assert!(html.contains("/api/v1/risks/1"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/management-reviews/21/status?tenant_id=42&user_id=7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "status=APPROVED&decision_notes=Web-Freigabe&next_actions=Naechste%20Review%20planen",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM reports_managementreviewpackage WHERE id = 21 AND tenant_id = 42",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "APPROVED");
+}
+
+#[tokio::test]
+async fn rust_web_roadmap_renders_plans_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_roadmap_tables(&pool).await;
+    insert_roadmap_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_roadmap_store(Some(RoadmapStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/roadmap/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Security Roadmap"));
+    assert!(html.contains("HIGH"));
+    assert!(html.contains("2026-05-01"));
+    assert!(html.contains("Roadmap-Tasks"));
+    assert!(html.contains("MFA ausrollen"));
+    assert!(html
+        .contains("linked_requirement=PRODUCT-SECURITY%3ACVE%3ACVE-2026-0002%3ACORRELATION%3A77"));
+    assert!(!html.contains("Foreign Roadmap"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_assets_renders_inventory_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_asset_tables(&pool).await;
+    insert_asset_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_asset_store(Some(AssetStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/assets/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Customer Portal"));
+    assert!(html.contains("Digital Services"));
+    assert!(html.contains("Ada Lovelace"));
+    assert!(html.contains("Anwendung"));
+    assert!(!html.contains("Foreign BU"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_suppliers_renders_risk_register_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_supplier_tables(&pool).await;
+    insert_supplier_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_supplier_store(Some(SupplierStore::from_sqlite_pool(pool))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/suppliers/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Supplier-Risk Register"));
+    assert!(html.contains("Secure Supplier"));
+    assert!(html.contains("Kritische offene Produkt-/Komponenten-Schwachstellen vorhanden."));
+    assert!(html.contains("linked_requirement=SUPPLIER%3A50"));
+    assert!(html.contains("/api/v1/suppliers/50"));
+    assert!(!html.contains("Foreign Supplier"));
+}
+
+#[tokio::test]
+async fn rust_web_processes_renders_register_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_process_tables(&pool).await;
+    insert_process_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_process_store(Some(ProcessStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/processes/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Incident Intake"));
+    assert!(html.contains("Security Operations"));
+    assert!(html.contains("Ada Lovelace"));
+    assert!(html.contains("Vorhanden, aber unvollst√§ndig"));
+    assert!(!html.contains("Foreign BU"));
+    assert!(!html.contains("Rust-Web-Migrationsroute"));
+}
+
+#[tokio::test]
+async fn rust_web_catalog_renders_domain_library_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_catalog_tables(&pool).await;
+    insert_catalog_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_catalog_store(Some(CatalogStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/catalog/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Governance"));
+    assert!(html.contains("GOV-APP-1"));
+    assert!(html.contains("Ist der NIS2-Scope geklaert?"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_requirements_renders_library_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_requirement_tables(&pool).await;
+    insert_requirement_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_requirement_store(Some(RequirementStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/requirements/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("ISO 27001 Mapping"));
+    assert!(html.contains("Authentication Information"));
+    assert!(html.contains("A.5.17"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_assessments_renders_registers_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_assessment_tables(&pool).await;
+    insert_assessment_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default()
+            .with_assessment_store(Some(AssessmentStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/assessments/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Incident Intake"));
+    assert!(html.contains("Authentication Information"));
+    assert!(html.contains("Policy aktualisieren"));
+    assert!(html.contains("Voraussichtlich relevant"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_organizations_renders_tenant_profile_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_tenant_table(&pool).await;
+    insert_tenant(&pool).await;
+    let app = app_router_with_state(AppState::with_stores(
+        None,
+        Some(TenantStore::from_sqlite_pool(pool.clone())),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/organizations/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Tenant SOC"));
+    assert!(html.contains("Managed Security Provider"));
+    assert!(html.contains("SOC und Incident Response"));
+    assert!(html.contains("tenant-soc"));
+    assert!(html.contains("Regulatorische Matrix"));
+    assert!(html.contains("DORA IKT-Drittdienstleister"));
+    assert!(html.contains("AI-Act-Profil"));
+    assert!(html.contains("Regulierungsprofil speichern"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_organizations_updates_regulatory_profile_from_form() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_tenant_table(&pool).await;
+    insert_tenant(&pool).await;
+    let app = app_router_with_state(AppState::with_stores(
+        None,
+        Some(TenantStore::from_sqlite_pool(pool.clone())),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/organizations/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "country=DE&operation_countries=DE%2CNL&sector=FINTECH&employee_count=300&annual_revenue_million=42.0&balance_sheet_million=21.0&critical_services=Payment+SOC&supply_chain_role=ICT+provider&description=Updated+tenant&nis2_relevant=1&dora_relevant=1&dora_financial_entity=1&processes_personal_data=1&gdpr_controller=1&gdpr_special_categories=1&develops_digital_products=1&cra_relevant=1&uses_ai_systems=1&ai_act_profile=HIGH_RISK&ai_act_high_risk=1&tisax_relevant=1&iso27001_target=CERTIFICATION_READY&product_security_scope=Regulated+portfolio&regulatory_profile_notes=Approved+by+board",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/organizations/?tenant_id=42&user_id=7"
+    );
+    let row = sqlx::query(
+        "SELECT sector, dora_financial_entity, gdpr_special_categories, ai_act_profile, iso27001_target, regulatory_profile_notes FROM organizations_tenant WHERE id = 42",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let sector: String = row.try_get("sector").unwrap();
+    let dora_financial_entity: bool = row.try_get("dora_financial_entity").unwrap();
+    let gdpr_special_categories: bool = row.try_get("gdpr_special_categories").unwrap();
+    let ai_act_profile: String = row.try_get("ai_act_profile").unwrap();
+    let iso27001_target: String = row.try_get("iso27001_target").unwrap();
+    let notes: String = row.try_get("regulatory_profile_notes").unwrap();
+    assert_eq!(sector, "FINTECH");
+    assert!(dora_financial_entity);
+    assert!(gdpr_special_categories);
+    assert_eq!(ai_act_profile, "HIGH_RISK");
+    assert_eq!(iso27001_target, "CERTIFICATION_READY");
+    assert_eq!(notes, "Approved by board");
+}
+
+#[tokio::test]
+async fn rust_web_navigator_renders_guidance_status_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_guidance_tables(&pool).await;
+    insert_guidance_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::with_stores(None, Some(TenantStore::from_sqlite_pool(pool.clone())))
+            .with_assessment_store(Some(AssessmentStore::from_sqlite_pool(pool.clone())))
+            .with_process_store(Some(ProcessStore::from_sqlite_pool(pool.clone())))
+            .with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone())))
+            .with_requirement_store(Some(RequirementStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/navigator/?tenant_id=42&user_id=7&user_email=ada%40example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Guidance Navigator"));
+    assert!(html.contains("Guidance Tenant"));
+    assert!(html.contains("Guided Steps"));
+    assert!(html.contains("Offene To-dos"));
+    assert!(html.contains("Betroffenheitsanalyse"));
+    assert!(html.contains("Noch 1 kritische Prozesse erfassen"));
+    assert!(html.contains("1 offene Ma√ünahmen nachverfolgen"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_product_security_renders_overview_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_incident_evidence_support_tables(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_importartifact (
+            id, tenant_id, product_id, artifact_type, file_name, document_id,
+            format_name, format_version, validation_status, validation_errors_json,
+            component_count, matched_component_count, cve_count, created_by_id,
+            created_at, updated_at
+        )
+        VALUES (
+            900, 42, 100, 'CSAF', 'invalid-csaf.json', 'BROKEN',
+            'CSAF', '2.0', 'INVALID', '["CSAF document.csaf_version fehlt."]',
+            0, 0, 1, 7, '2026-06-14T08:00:00Z', '2026-06-14T08:00:00Z'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_cvecorrelation (
+            id, tenant_id, cve, asset_id, product_id, component_id, match_type,
+            match_value, confidence, status, rationale, created_at, updated_at
+        )
+        VALUES (
+            901, 42, 'CVE-2026-0001', 700, 100, 250, 'CPE',
+            'cpe:2.3:o:iscy:sensor_gateway_firmware:1.0.3:*:*:*:*:*:*:*',
+            95, 'SUGGESTED', 'CPE match', '2026-06-14T08:00:00Z', '2026-06-14T08:00:00Z'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_cvecorrelation (
+            id, tenant_id, cve, asset_id, product_id, component_id, match_type,
+            match_value, confidence, status, rationale, created_at, updated_at
+        )
+        VALUES (
+            902, 42, 'CVE-2026-0002', 700, 100, 250, 'PURL',
+            'pkg:generic/gateway-firmware@1.0.3',
+            92, 'ACCEPTED', 'Accepted CVE queue fixture', '2026-06-14T08:05:00Z', '2026-06-14T08:05:00Z'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO risks_risk (
+            id, tenant_id, category_id, process_id, asset_id, owner_id, title,
+            description, threat, vulnerability, impact, likelihood, residual_impact,
+            residual_likelihood, status, treatment_strategy, treatment_plan,
+            treatment_due_date, accepted_by_id, accepted_at, review_date, created_at, updated_at
+        )
+        VALUES (
+            902, 42, NULL, NULL, 700, NULL, 'CVE-2026-0002 betrifft Customer Portal',
+            'Generated Product Security risk', 'Ausnutzung von CVE-2026-0002',
+            'Accepted PURL correlation', 4, 4, NULL, NULL, 'IDENTIFIED',
+            'MITIGATE',
+            'PSIRT-Triage durchfuehren. Evidence-Key: PRODUCT-SECURITY:CVE:CVE-2026-0002:CORRELATION:902.',
+            NULL, NULL, NULL, NULL, '2026-06-14T08:05:00Z', '2026-06-14T08:05:00Z'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO product_security_productsecurityroadmaptask (
+            id, tenant_id, roadmap_id, related_release_id, related_vulnerability_id,
+            phase, title, description, priority, owner_role, due_in_days,
+            dependency_text, status, created_at, updated_at
+        )
+        VALUES (
+            990, 42, 900, NULL, NULL, 'RESPONSE',
+            'CVE-2026-0002 behandeln (Gateway Firmware)',
+            'Remediation planen. Evidence-Key: PRODUCT-SECURITY:CVE:CVE-2026-0002:CORRELATION:902.',
+            'HIGH', 'PSIRT', 14, 'Akzeptierte Korrelation #902', 'OPEN',
+            '2026-06-14T08:05:00Z', '2026-06-14T08:05:00Z'
+        )
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let tenant_profile = TenantStore::from_sqlite_pool(pool.clone())
+        .tenant_profile(42)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        tenant_profile.product_security_scope,
+        "Connected gateway product family"
+    );
+    let app = app_router_with_state(
+        AppState::with_stores(None, Some(TenantStore::from_sqlite_pool(pool.clone())))
+            .with_product_security_store(Some(ProductSecurityStore::from_sqlite_pool(pool.clone())))
+            .with_risk_store(Some(RiskStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-security/overview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        payload["review_metrics"]["suggested_correlation_reviews"],
+        1
+    );
+    assert_eq!(payload["review_metrics"]["open_risk_reviews"], 1);
+    assert_eq!(payload["review_metrics"]["open_cve_reviews"], 2);
+    assert_eq!(payload["review_metrics"]["evidence_missing"], 1);
+    assert_eq!(
+        payload["cve_risk_review_queue"][0]["evidence_key"],
+        "PRODUCT-SECURITY:CVE:CVE-2026-0002:CORRELATION:902"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/product-security/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Product Security"));
+    assert!(html.contains("Regulatorische Matrix"));
+    assert!(html.contains("Sensor Gateway"));
+    assert!(html.contains("Industrial edge device"));
+    assert!(html.contains("OT/IACS"));
+    assert!(html.contains("Import-Historie"));
+    assert!(html.contains("CSV Export"));
+    assert!(html.contains("JSON Export"));
+    assert!(html.contains("Product-Security-Steuerung"));
+    assert!(html.contains("SBOM Coverage"));
+    assert!(html.contains("CSAF Coverage"));
+    assert!(html.contains("Threat/TARA Coverage"));
+    assert!(html.contains("Review-Backlog"));
+    assert!(html.contains("Product-Security-Trends"));
+    assert!(html.contains("Snapshot-Verlauf"));
+    assert!(html.contains("Importvalidierung:"));
+    assert!(html.contains("Offene Schwachstellen"));
+    assert!(html.contains("Ampel-Schwellen"));
+    assert!(html.contains("Connected gateway product family"));
+    assert!(html.contains("Schwellen speichern"));
+    assert!(html.contains(r#"value="80""#));
+    assert!(html.contains("CSAF document.csaf_version fehlt."));
+    assert!(html.contains("CVE-Reviews offen"));
+    assert!(html.contains("Evidence fehlt"));
+    assert!(html.contains("CVE-Risiko-Review-Queue"));
+    assert!(html.contains("Review offen (1)"));
+    assert!(html.contains("Evidence fehlt (1)"));
+    assert!(html.contains("Risiko fehlt (0)"));
+    assert!(html.contains("Bulk-Aktion"));
+    assert!(html.contains(r#"name="correlation_id" value="902""#));
+    assert!(html.contains("CVE-2026-0002 betrifft Customer Portal"));
+    assert!(html.contains("CVE-Massnahme umgesetzt und Evidence verknuepft."));
+    assert!(html.contains("return_to=%2Fproduct-security%2F%3Ftenant_id%3D42%26user_id%3D7"));
+    assert!(html.contains("CVE-Asset-Korrelationen"));
+    assert!(html.contains("Akzeptieren"));
+    assert!(html.contains("Akzeptierte CVEs uebernehmen"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/product-security/thresholds")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "scope=Regulated+gateway+portfolio&sbom_coverage_min=90&csaf_coverage_min=85&threat_tara_coverage_min=70&review_backlog_max=2&critical_open_vulnerabilities_max=1",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/product-security/?tenant_id=42&user_id=7"
+    );
+    let stored_scope: String =
+        sqlx::query_scalar("SELECT product_security_scope FROM organizations_tenant WHERE id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(stored_scope.contains(r#""scope":"Regulated gateway portfolio""#));
+    assert!(stored_scope.contains(r#""sbom_coverage_min":90"#));
+    assert!(stored_scope.contains(r#""review_backlog_max":2"#));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/product-security/?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Regulated gateway portfolio"));
+    assert!(html.contains(r#"value="90""#));
+    assert!(html.contains(r#"value="85""#));
+    assert!(html.contains(r#"value="70""#));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/product-security/cve-risk-reviews/bulk")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "action=mark_mitigated&correlation_id=902&review_filter=evidence_missing",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    if response.status() != StatusCode::SEE_OTHER {
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        panic!("unexpected bulk review response status {status}: {html}");
+    }
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get("location").unwrap(),
+        "/product-security/?review_filter=evidence_missing&tenant_id=42&user_id=7"
+    );
+    let reviewed_status: String =
+        sqlx::query_scalar("SELECT status FROM risks_risk WHERE tenant_id = 42 AND id = 902")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(reviewed_status, "MITIGATED");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/product-security/imports.csv?tenant_id=42&user_id=7")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let csv = String::from_utf8(body.to_vec()).unwrap();
+    assert!(csv.contains("invalid-csaf.json"));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/product-security/cve-correlations/901?tenant_id=42&user_id=7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .body(Body::from(
+                    "status=ACCEPTED&rationale=Accepted%20from%20web%20review",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM product_security_cvecorrelation WHERE id = 901")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "ACCEPTED");
+}
+
+#[tokio::test]
+async fn rust_web_cves_renders_feed_from_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    insert_risk_fixture(&pool).await;
+    insert_cveassessment_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/cves/")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("Vulnerability Intelligence"));
+    assert!(html.contains("Letzte Assessments"));
+    assert!(html.contains("CVE-2026-1001"));
+    assert!(html.contains("Kritisch"));
+    assert!(html.contains("Sensor Gateway"));
+    assert!(html.contains("Rust auth bypass vulnerability"));
+    assert!(html.contains("Letzte vollstaendige Bewertung"));
+    assert!(html.contains("noch nicht bewertet"));
+    assert!(!html.contains("Rust-Webroute aktiv."));
+}
+
+#[tokio::test]
+async fn rust_web_cve_assessment_detail_renders_database_row() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    insert_risk_fixture(&pool).await;
+    insert_cveassessment_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/cves/assessments/1?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("CVE-2026-1001"));
+    assert!(html.contains("Technische Zusammenfassung"));
+    assert!(html.contains("Patch immediately"));
+    assert!(html.contains("Apply vendor patch"));
+    assert!(html.contains("Benoetigte Evidenzen"));
+}
+
+#[tokio::test]
+async fn rust_web_cve_llm_test_renders_stub_output() {
+    let response = app_router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/cves/llm-test/?tenant_id=42&user_id=7")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("prompt=hello%20rust"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("LLM-Runtime-Test"));
+    assert!(html.contains("Testausgabe"));
+    assert!(html.contains("Rust-LLM Stub analysed prompt excerpt: hello rust"));
+}
+
+#[tokio::test]
+async fn cve_assessment_create_api_persists_rust_links_and_defaults() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cve-assessments")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "cve_id":"cve-2026-1001",
+                        "product_id":100,
+                        "release_id":200,
+                        "component_id":250,
+                        "exposure":"INTERNET",
+                        "asset_criticality":"CRITICAL",
+                        "repository_name":"sensor-gateway",
+                        "source_package":"gateway-firmware",
+                        "source_package_version":"1.0.3",
+                        "regulatory_tags":["CRA"],
+                        "business_context":"Gateway is reachable from partner network",
+                        "existing_controls":"Emergency WAF rule",
+                        "auto_create_risk":true,
+                        "run_llm":true
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let expected_risk_title = format!("CVE-2026-1001 {} Sensor Gateway", '\u{2013}');
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["created"], true);
+    assert_eq!(payload["assessment"]["cve_id"], "CVE-2026-1001");
+    assert_eq!(payload["assessment"]["product_name"], "Sensor Gateway");
+    assert_eq!(payload["assessment"]["in_kev_catalog"], true);
+    assert_eq!(payload["assessment"]["nis2_relevant"], true);
+    assert_eq!(payload["assessment"]["exploit_maturity"], "ACTIVE");
+    assert_eq!(payload["assessment"]["deterministic_priority"], "CRITICAL");
+    assert_eq!(payload["assessment"]["llm_status"], "GENERATED");
+    assert_eq!(
+        payload["assessment"]["related_risk_title"]
+            .as_str()
+            .unwrap(),
+        expected_risk_title
+    );
+    assert_eq!(
+        payload["assessment"]["linked_vulnerability_title"],
+        "CVE-2026-1001"
+    );
+    assert!(payload["assessment"]["technical_summary"]
+        .as_str()
+        .unwrap()
+        .contains("CVE-2026-1001"));
+
+    let assessment_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM vulnerability_intelligence_cveassessment WHERE tenant_id = 42",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let risk_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM risks_risk WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let vulnerability_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM product_security_vulnerability WHERE tenant_id = 42 AND cve = 'CVE-2026-1001' AND product_id = 100",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(assessment_count, 1);
+    assert_eq!(risk_count, 1);
+    assert_eq!(vulnerability_count, 1);
+}
+
+#[tokio::test]
+async fn cve_assessment_create_api_updates_existing_natural_key() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cve-assessments")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "cve_id":"CVE-2026-1002",
+                        "product_id":100,
+                        "release_id":200,
+                        "component_id":250,
+                        "exposure":"CUSTOMER",
+                        "asset_criticality":"HIGH",
+                        "business_context":"Initial rollout context",
+                        "auto_create_risk":true,
+                        "run_llm":true
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let first_body = to_bytes(first.into_body(), usize::MAX).await.unwrap();
+    let first_payload: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+    let first_id = first_payload["assessment"]["id"].as_i64().unwrap();
+    let first_risk_id = first_payload["assessment"]["related_risk_id"]
+        .as_i64()
+        .unwrap();
+    let first_summary = first_payload["assessment"]["technical_summary"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cve-assessments")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    r#"{
+                        "cve_id":"CVE-2026-1002",
+                        "product_id":100,
+                        "release_id":200,
+                        "component_id":250,
+                        "exposure":"INTERNAL",
+                        "asset_criticality":"MEDIUM",
+                        "business_context":"Updated rollout context",
+                        "auto_create_risk":false,
+                        "run_llm":false
+                    }"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    let second_payload: serde_json::Value = serde_json::from_slice(&second_body).unwrap();
+    assert_eq!(second_payload["created"], false);
+    assert_eq!(second_payload["assessment"]["id"], first_id);
+    assert_eq!(second_payload["assessment"]["llm_status"], "DISABLED");
+    assert_eq!(
+        second_payload["assessment"]["business_context"],
+        "Updated rollout context"
+    );
+    assert_eq!(
+        second_payload["assessment"]["related_risk_id"],
+        first_risk_id
+    );
+    assert_eq!(
+        second_payload["assessment"]["technical_summary"]
+            .as_str()
+            .unwrap(),
+        first_summary
+    );
+
+    let assessment_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM vulnerability_intelligence_cveassessment WHERE tenant_id = 42",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(assessment_count, 1);
+}
+
+#[tokio::test]
+async fn cve_assessment_create_api_rejects_read_only_role() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cve-assessments")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(r#"{"cve_id":"CVE-2026-1001"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "insufficient_role");
+}
+
+#[tokio::test]
+async fn cve_assessment_create_api_returns_not_found_for_missing_cve() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/cve-assessments")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(r#"{"cve_id":"CVE-2026-9999","product_id":100}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "cve_not_found");
+}
+
+#[tokio::test]
+async fn rust_web_cve_submit_creates_assessment_and_redirects_to_detail() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/cves/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-user-email", "security@example.test")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    "cve_id=CVE-2026-1002&product_id=100&release_id=200&component_id=250&exposure=CUSTOMER&asset_criticality=HIGH&auto_create_risk=on&run_llm=on",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(location.contains("/cves/1/"));
+    assert!(location.contains("tenant_id=42"));
+
+    let detail = app
+        .oneshot(
+            Request::builder()
+                .uri(location)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body = to_bytes(detail.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("CVE-2026-1002"));
+    assert!(html.contains("Technische Zusammenfassung"));
+    assert!(html.contains("Sensor Gateway"));
+}
+
+#[tokio::test]
+async fn rust_web_cve_detail_alias_matches_django_route_shape() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_cverecord_table(&pool).await;
+    create_product_security_tables(&pool).await;
+    create_risk_tables(&pool).await;
+    create_cveassessment_table(&pool).await;
+    insert_cverecord_fixture(&pool).await;
+    insert_product_security_fixture(&pool).await;
+    insert_cveassessment_fixture(&pool).await;
+    let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(
+        pool.clone(),
+    ))));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/cves/1/?tenant_id=42&user_id=7")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(html.contains("CVE-2026-1001"));
+    assert!(html.contains("Technische Zusammenfassung"));
+    assert!(html.contains("Sensor Gateway"));
+}
+
+#[tokio::test]
+async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+
+    let applied = db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    assert_eq!(
+        applied,
+        vec![
+            "0001_rust_operational_core",
+            "0002_rust_product_security_core",
+            "0003_rust_catalog_requirement_core",
+            "0004_rust_auth_session_core",
+            "0005_rust_auth_rbac_core",
+            "0006_rust_auth_group_permission_core",
+            "0007_rust_zero_trust_agent_core",
+            "0008_rust_agent_enrollment_hardening",
+            "0009_rust_incident_core",
+            "0010_rust_incident_runbooks_evidence_exports",
+            "0011_rust_incident_timeline",
+            "0012_rust_incident_runbook_template_library",
+            "0013_rust_incident_runbook_tasks_timeline_markers",
+            "0014_rust_review_supply_chain_metadata",
+            "0015_rust_iscy27_control_core",
+            "0016_rust_control_evidence_product_imports",
+            "0017_rust_incident_nis2_significance",
+            "0018_rust_tenant_regulatory_profile",
+            "0019_rust_management_review_packages",
+            "0020_rust_supplier_risk_core",
+            "0021_rust_product_security_vex_cra",
+            "0022_rust_ai_governance_core",
+            "0023_rust_security_runtime_state",
+            "0024_rust_evidence_lifecycle",
+            "0025_rust_agent_fleet_governance",
+            "0026_rust_product_security_evidence_packages",
+            "0027_rust_ai_governance_links",
+            "0028_rust_guided_agent_onboarding",
+            "0029_rust_cross_domain_notifications",
+            "0030_rust_notification_dispatch_claim",
+            "0031_rust_supplier_review_workflow",
+            "0032_rust_management_regulatory_templates",
+            "0033_rust_evidence_integrity_disposition",
+            "0034_rust_supplier_product_security_governance",
+            "0035_rust_evidence_worker_disposition_storage",
+            "0036_rust_agent_release_artifact_provenance",
+            "0037_rust_agent_pki_csr_governance",
+            "0038_rust_evidence_object_storage_client",
+            "0039_rust_evidence_s3_runtime_client",
+            "0040_rust_agent_rollout_governance",
+            "0041_rust_agent_rollout_manifest_handoff",
+            "0042_rust_native_threat_intelligence_observations",
+            "0043_rust_continuous_vulnerability_intelligence",
+            "0044_rust_vulnerability_hygiene_lifecycle",
+            "0045_rust_software_approval_exception_policy"
+        ]
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "iscy_schema_migrations")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "reports_reportsnapshot")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "product_security_product")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "product_security_evidencepackage")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "product_security_evidencepackageitem")
+            .await
+            .unwrap()
+    );
+    assert!(db_admin::sqlite_table_exists(&pool, "accounts_role")
+        .await
+        .unwrap());
+    assert!(db_admin::sqlite_table_exists(&pool, "django_content_type")
+        .await
+        .unwrap());
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "iscy_security_login_rate_limit")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "iscy_security_hmac_nonce")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "agent_release_artifact")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "agent_artifact_signature")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "agent_release_provenance")
+            .await
+            .unwrap()
+    );
+    for table in [
+        "agent_pki_provider",
+        "agent_certificate_request",
+        "agent_certificate_status",
+        "agent_pki_event",
+    ] {
+        assert!(db_admin::sqlite_table_exists(&pool, table).await.unwrap());
+    }
+    let evidence_columns = sqlx::query("PRAGMA table_info(evidence_evidenceitem)")
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<_>>();
+    for column in [
+        "version_number",
+        "supersedes_id",
+        "file_sha256",
+        "valid_until",
+        "retention_until",
+        "retention_reason",
+        "sensitivity",
+    ] {
+        assert!(evidence_columns.iter().any(|name| name == column));
+    }
+    assert!(db_admin::sqlite_table_exists(&pool, "incidents_incident")
+        .await
+        .unwrap());
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "incidents_incidentevent")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "incidents_runbooktemplate")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "incidents_runbookstep")
+            .await
+            .unwrap()
+    );
+    assert!(db_admin::sqlite_table_exists(&pool, "auth_permission")
+        .await
+        .unwrap());
+    assert!(db_admin::sqlite_table_exists(&pool, "auth_group")
+        .await
+        .unwrap());
+    assert!(db_admin::sqlite_table_exists(&pool, "accounts_user_groups")
+        .await
+        .unwrap());
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "accounts_user_user_permissions")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "catalog_assessmentquestion")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "requirements_app_requirementquestionmapping")
+            .await
+            .unwrap()
+    );
+    assert!(db_admin::sqlite_table_exists(&pool, "iscy_auth_session")
+        .await
+        .unwrap());
+    assert!(db_admin::sqlite_table_exists(&pool, "iscy_control_control")
+        .await
+        .unwrap());
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "iscy_control_regulatorymapping")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "iscy_control_tenantstatus")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "product_security_importartifact")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "product_security_cvecorrelation")
+            .await
+            .unwrap()
+    );
+    assert!(
+        db_admin::sqlite_table_exists(&pool, "reports_managementreviewpackage")
+            .await
+            .unwrap()
+    );
+    assert!(db_admin::sqlite_table_exists(&pool, "ai_governance_system")
+        .await
+        .unwrap());
+    for table in [
+        "changes_change",
+        "ai_governance_system_risk",
+        "ai_governance_system_roadmap_task",
+        "ai_governance_system_incident",
+        "ai_governance_system_change",
+        "ai_governance_link_audit",
+    ] {
+        assert!(db_admin::sqlite_table_exists(&pool, table).await.unwrap());
+    }
+    let roadmap_columns = sqlx::query("PRAGMA table_info(roadmap_roadmaptask)")
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<_>>();
+    assert!(roadmap_columns.iter().any(|name| name == "origin_key"));
+    let review_columns = sqlx::query("PRAGMA table_info(reports_managementreviewpackage)")
+        .fetch_all(&pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<_>>();
     assert!(review_columns
         .iter()
         .any(|name| name == "ai_governance_json"));
