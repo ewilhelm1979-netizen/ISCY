@@ -10369,9 +10369,7 @@ async fn incident_runbook_expansion_is_bounded_before_persistence() {
         .unwrap();
     create_incident_table(&pool).await;
     let store = IncidentStore::from_sqlite_pool(pool.clone());
-    let app = app_router_with_state(
-        AppState::default().with_incident_store(Some(store.clone())),
-    );
+    let app = app_router_with_state(AppState::default().with_incident_store(Some(store.clone())));
 
     let supported_runbook = (1..=100)
         .map(|step| format!("Schritt {step}: dokumentieren"))
@@ -10480,10 +10478,7 @@ async fn incident_runbook_expansion_is_bounded_before_persistence() {
         .execute(&pool)
         .await
         .unwrap();
-    let legacy_error = store
-        .list_runbook_steps(42, incident_id)
-        .await
-        .unwrap_err();
+    let legacy_error = store.list_runbook_steps(42, incident_id).await.unwrap_err();
     assert!(legacy_error.to_string().contains("hoechstens 100 Schritte"));
     let persisted_steps: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM incidents_runbookstep WHERE tenant_id = 42 AND incident_id = ?1",
@@ -10511,10 +10506,7 @@ async fn incident_runbook_expansion_is_bounded_before_persistence() {
         .await
         .unwrap();
     }
-    let stored_expansion_error = store
-        .list_runbook_steps(42, incident_id)
-        .await
-        .unwrap_err();
+    let stored_expansion_error = store.list_runbook_steps(42, incident_id).await.unwrap_err();
     assert!(stored_expansion_error
         .to_string()
         .contains("Gespeichertes Incident-Runbook darf hoechstens 100 Schritte enthalten"));

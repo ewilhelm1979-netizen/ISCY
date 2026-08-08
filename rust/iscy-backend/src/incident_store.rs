@@ -4137,9 +4137,7 @@ fn validate_runbook_template_size(runbook_template: &str) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn runbook_steps_from_template(
-    runbook_template: &str,
-) -> anyhow::Result<Vec<ParsedRunbookStep>> {
+fn runbook_steps_from_template(runbook_template: &str) -> anyhow::Result<Vec<ParsedRunbookStep>> {
     validate_runbook_template_size(runbook_template)?;
     let mut raw_steps = runbook_template
         .lines()
@@ -4232,10 +4230,7 @@ fn normalize_incident_type(value: Option<&str>) -> String {
     }
 }
 
-fn normalize_runbook_template(
-    value: Option<&str>,
-    incident_type: &str,
-) -> anyhow::Result<String> {
+fn normalize_runbook_template(value: Option<&str>, incident_type: &str) -> anyhow::Result<String> {
     validate_runbook_template_size(value.unwrap_or(""))?;
     let normalized = normalize_optional_text(value);
     if normalized.is_empty() {
