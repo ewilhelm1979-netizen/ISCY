@@ -75,6 +75,30 @@ pub mod threat_intelligence_store;
 pub mod vulnerability_intelligence;
 pub mod wizard_store;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlertmanagerServicePrincipal {
+    pub tenant_id: i64,
+    pub user_id: i64,
+}
+
+impl AlertmanagerServicePrincipal {
+    pub fn new(tenant_id: i64, user_id: i64) -> Option<Self> {
+        (tenant_id > 0 && user_id > 0).then_some(Self { tenant_id, user_id })
+    }
+
+    fn tenant_context(self) -> AuthenticatedTenantContext {
+        AuthenticatedTenantContext {
+            tenant_id: self.tenant_id,
+            user_id: self.user_id,
+            user_email: None,
+            roles: vec!["CONTRIBUTOR".to_string()],
+            permissions: Vec::new(),
+            is_staff: false,
+            is_superuser: false,
+        }
+    }
+}
+
 use account_store::AccountStore;
 use agent_governance_store::AgentGovernanceStore;
 use agent_pki_store::AgentPkiStore;
@@ -111,7 +135,7 @@ use evidence_s3_runtime::{
 };
 use evidence_s3_store::EvidenceS3RuntimeObject;
 use evidence_store::EvidenceStore;
-use hardening::CommunitySecurityConfig;
+use hardening::{AppMode, CommunitySecurityConfig};
 use import_preview::{ImportPreview, ImportUploadFile};
 use import_store::ImportStore;
 use incident_store::{IncidentAlertmanagerMetrics, IncidentStore};
@@ -154,6 +178,7 @@ use wizard_store::WizardStore;
 
 #[derive(Clone, Default)]
 pub struct AppState {
+    pub alertmanager_service_principal: Option<AlertmanagerServicePrincipal>,
     pub account_store: Option<AccountStore>,
     pub ai_governance_store: Option<AiGovernanceStore>,
     pub agent_governance_store: Option<AgentGovernanceStore>,
@@ -276,6 +301,7 @@ struct LoginRateLimitEntry {
 impl AppState {
     pub fn new(cve_store: Option<CveStore>) -> Self {
         Self {
+            alertmanager_service_principal: None,
             account_store: None,
             ai_governance_store: None,
             agent_governance_store: None,
@@ -319,6 +345,7 @@ impl AppState {
 
     pub fn with_stores(cve_store: Option<CveStore>, tenant_store: Option<TenantStore>) -> Self {
         Self {
+            alertmanager_service_principal: None,
             account_store: None,
             ai_governance_store: None,
             agent_governance_store: None,
@@ -362,6 +389,14 @@ impl AppState {
 
     pub fn with_dashboard_store(mut self, dashboard_store: Option<DashboardStore>) -> Self {
         self.dashboard_store = dashboard_store;
+        self
+    }
+
+    pub fn with_alertmanager_service_principal(
+        mut self,
+        principal: Option<AlertmanagerServicePrincipal>,
+    ) -> Self {
+        self.alertmanager_service_principal = principal;
         self
     }
 
@@ -3456,18 +3491,10 @@ async fn operations_alertmanager_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !alertmanager_token_matches(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "invalid_alertmanager_token",
-                message: "Alertmanager-Webhook-Token ist ungueltig oder fehlt.".to_string(),
-            }),
-        )
-            .into_response();
-    }
+    let token_verification = match alertmanager_token_verification(&headers) {
+        Ok(verification) => verification,
+        Err(response) => return response,
+    };
     if let Err(response) = alertmanager_hmac_valid(&state, &headers, &body).await {
         return response;
     }
@@ -3528,7 +3555,13 @@ async fn operations_alertmanager_webhook(
             }
         })
         .collect::<Vec<_>>();
-    let persistence = persist_alertmanager_alerts(&state, &headers, &alerts).await;
+    let persistence = persist_alertmanager_alerts(
+        &state,
+        &headers,
+        &alerts,
+        token_verification == AlertmanagerTokenVerification::Verified,
+    )
+    .await;
     let tenant_hint = payload
         .common_labels
         .get("tenant_id")
@@ -3565,26 +3598,57 @@ async fn operations_alertmanager_webhook(
         .into_response()
 }
 
-fn alertmanager_token_matches(headers: &HeaderMap) -> bool {
-    let Ok(Some(expected)) = hardening::secret_value("ISCY_ALERTMANAGER_TOKEN") else {
-        return true;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlertmanagerTokenVerification {
+    Unconfigured,
+    Verified,
+}
+
+fn alertmanager_token_verification(
+    headers: &HeaderMap,
+) -> Result<AlertmanagerTokenVerification, Response> {
+    let expected = match hardening::secret_value("ISCY_ALERTMANAGER_TOKEN") {
+        Ok(Some(expected)) => expected,
+        Ok(None) => return Ok(AlertmanagerTokenVerification::Unconfigured),
+        Err(_) => {
+            return Err(alertmanager_auth_response(
+                "invalid_alertmanager_token_config",
+                "Alertmanager-Webhook-Token konnte nicht sicher gelesen werden.",
+            ))
+        }
     };
     let expected = expected.trim();
     if expected.is_empty() {
-        return true;
+        return Err(alertmanager_auth_response(
+            "invalid_alertmanager_token_config",
+            "Alertmanager-Webhook-Token konnte nicht sicher gelesen werden.",
+        ));
     }
+    if alertmanager_token_matches_expected(headers, expected) {
+        return Ok(AlertmanagerTokenVerification::Verified);
+    }
+    Err(alertmanager_auth_response(
+        "invalid_alertmanager_token",
+        "Alertmanager-Webhook-Token ist ungueltig oder fehlt.",
+    ))
+}
+
+fn alertmanager_token_matches_expected(headers: &HeaderMap, expected: &str) -> bool {
     let header_token = headers
         .get("x-iscy-alert-token")
         .and_then(|value| value.to_str().ok())
         .map(str::trim);
-    if header_token == Some(expected) {
+    if header_token
+        .is_some_and(|value| constant_time_eq(value.as_bytes(), expected.as_bytes()))
+    {
         return true;
     }
     headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().strip_prefix("Bearer "))
-        .is_some_and(|value| value.trim() == expected)
+        .map(str::trim)
+        .is_some_and(|value| constant_time_eq(value.as_bytes(), expected.as_bytes()))
 }
 
 type AlertmanagerHmacSha256 = Hmac<Sha256>;
@@ -3793,10 +3857,19 @@ async fn persist_alertmanager_alerts(
     state: &AppState,
     headers: &HeaderMap,
     alerts: &[AlertmanagerAlertSummary],
+    webhook_token_verified: bool,
 ) -> AlertmanagerPersistenceSummary {
-    let context = match alertmanager_persistence_context(state, headers).await {
+    let context = match alertmanager_persistence_context(state, headers, webhook_token_verified)
+        .await
+    {
         Ok(context) => context,
-        Err(_) => {
+        Err(AlertmanagerPersistenceContextError::UnverifiedSource) => {
+            return AlertmanagerPersistenceSummary {
+                skipped_reason: Some("unverified_alertmanager_source".to_string()),
+                ..Default::default()
+            }
+        }
+        Err(AlertmanagerPersistenceContextError::MissingContext) => {
             return AlertmanagerPersistenceSummary {
                 skipped_reason: Some("missing_tenant_context".to_string()),
                 ..Default::default()
@@ -3982,14 +4055,35 @@ async fn persist_alertmanager_alerts(
     summary
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlertmanagerPersistenceContextError {
+    UnverifiedSource,
+    MissingContext,
+}
+
 async fn alertmanager_persistence_context(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<AuthenticatedTenantContext, RequiredTenantContextError> {
-    match RequestContext::authenticated_tenant_from_headers(headers) {
-        Ok(context) => Ok(context),
-        Err(_) => authenticated_tenant_context(state, headers).await,
+    webhook_token_verified: bool,
+) -> Result<AuthenticatedTenantContext, AlertmanagerPersistenceContextError> {
+    if let Some(token) = session_token_from_headers(headers) {
+        if let Some(store) = state.auth_store.as_ref() {
+            if let Ok(Some(session)) = store.resolve_session(&token).await {
+                return Ok(session.tenant_context());
+            }
+        }
     }
+    if !webhook_token_verified && state.security_config.app_mode != AppMode::Development {
+        return Err(AlertmanagerPersistenceContextError::UnverifiedSource);
+    }
+    if webhook_token_verified {
+        return state
+            .alertmanager_service_principal
+            .map(AlertmanagerServicePrincipal::tenant_context)
+            .ok_or(AlertmanagerPersistenceContextError::MissingContext);
+    }
+    RequestContext::authenticated_tenant_from_headers(headers)
+        .map_err(|_| AlertmanagerPersistenceContextError::MissingContext)
 }
 
 fn alertmanager_incident_payload(
@@ -48011,13 +48105,16 @@ mod tests {
 
     use super::{
         agent_installation_command, alertmanager_hmac_message, alertmanager_hmac_secret_matches,
+        alertmanager_persistence_context, alertmanager_token_matches_expected,
         evidence_disposition_preview_from_item, evidence_object_storage_bucket_valid,
         has_software_policy_permission, has_vulnerability_intelligence_permission,
         hex_encode_bytes, is_agent_payload_error, login_identifier_supported, login_rate_limit_key,
         login_rate_limit_record_failure_memory_with_limit,
         login_rate_limit_remaining_block_memory_with_limit, normalize_cve_id, powershell_quote,
-        prune_login_rate_limit_entries, shell_quote, simple_pdf_document, AlertmanagerHmacSha256,
-        AppState, ReadinessCheck, LOGIN_IDENTIFIER_MAX_CHARS,
+        persist_alertmanager_alerts, prune_login_rate_limit_entries, shell_quote,
+        simple_pdf_document, AlertmanagerHmacSha256, AlertmanagerPersistenceContextError,
+        AlertmanagerServicePrincipal, AppState, ReadinessCheck,
+        LOGIN_IDENTIFIER_MAX_CHARS,
     };
 
     #[tokio::test]
@@ -48099,6 +48196,80 @@ mod tests {
             .lock()
             .unwrap()
             .contains_key("replacement"));
+    }
+
+    #[test]
+    fn alertmanager_token_comparison_accepts_only_exact_configured_secret() {
+        use axum::http::{HeaderMap, HeaderValue};
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-iscy-alert-token",
+            HeaderValue::from_static("verified-alert-source"),
+        );
+        assert!(alertmanager_token_matches_expected(
+            &headers,
+            "verified-alert-source"
+        ));
+        assert!(!alertmanager_token_matches_expected(
+            &headers,
+            "different-alert-source"
+        ));
+    }
+
+    #[tokio::test]
+    async fn alertmanager_header_persistence_requires_verified_source_outside_development() {
+        use axum::http::{HeaderMap, HeaderValue};
+
+        use crate::hardening::{AppMode, CommunitySecurityConfig};
+
+        let state = AppState::default()
+            .with_alertmanager_service_principal(AlertmanagerServicePrincipal::new(42, 7))
+            .with_security_config(CommunitySecurityConfig {
+                app_mode: AppMode::Demo,
+                trust_identity_headers: true,
+                trusted_proxy_configured: true,
+                secure_cookies: true,
+                https_confirmed: true,
+                hsts_enabled: false,
+            });
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iscy-tenant-id", HeaderValue::from_static("999"));
+        headers.insert("x-iscy-user-id", HeaderValue::from_static("999"));
+        headers.insert("x-iscy-roles", HeaderValue::from_static("ADMIN"));
+
+        assert_eq!(
+            alertmanager_persistence_context(&state, &headers, false).await,
+            Err(AlertmanagerPersistenceContextError::UnverifiedSource)
+        );
+        let skipped = persist_alertmanager_alerts(&state, &headers, &[], false).await;
+        assert!(!skipped.enabled);
+        assert_eq!(
+            skipped.skipped_reason.as_deref(),
+            Some("unverified_alertmanager_source")
+        );
+
+        let verified = alertmanager_persistence_context(&state, &headers, true)
+            .await
+            .unwrap();
+        assert_eq!(verified.tenant_id, 42);
+        assert_eq!(verified.user_id, 7);
+        assert_eq!(verified.roles, vec!["CONTRIBUTOR"]);
+        assert!(verified.can_write());
+
+        let state_without_principal =
+            AppState::default().with_security_config(CommunitySecurityConfig {
+                app_mode: AppMode::Demo,
+                trust_identity_headers: true,
+                trusted_proxy_configured: true,
+                secure_cookies: true,
+                https_confirmed: true,
+                hsts_enabled: false,
+            });
+        assert_eq!(
+            alertmanager_persistence_context(&state_without_principal, &headers, true).await,
+            Err(AlertmanagerPersistenceContextError::MissingContext)
+        );
     }
     use crate::evidence_artifact_storage::FilesystemEvidenceArtifactStorage;
     use crate::evidence_store::EvidenceIntegrityItem;

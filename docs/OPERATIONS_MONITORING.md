@@ -17,7 +17,7 @@ Fuer den direkten Betrieb liegen Monitoring-Beispiele im Repository:
 - `deploy/monitoring/nixos/iscy-monitoring.nix`: NixOS-Modulbeispiel fuer denselben Stack.
 - `deploy/monitoring/nixos/example-host.nix`: kleine Beispiel-Hostkonfiguration, die das Modul importiert, Ports freigibt und den lokalen ISCY-Webhook verdrahtet.
 
-Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/operations/alertmanager` auf. Wenn `ISCY_ALERTMANAGER_TOKEN` gesetzt ist, muss Alertmanager denselben Wert per Bearer Token oder `x-iscy-alert-token` senden. Das Compose-Beispiel liest den Bearer Token aus `deploy/monitoring/alertmanager/secrets/iscy-alertmanager-token.example`; produktiv sollte `ISCY_ALERTMANAGER_TOKEN_FILE` auf eine lokale, nicht eingecheckte Secret-Datei zeigen. Optional kann zusaetzlich `ISCY_ALERTMANAGER_HMAC_SECRET_FILE` gesetzt werden; dann verlangt ISCY `x-iscy-alert-timestamp` und `x-iscy-alert-signature` ueber `timestamp.body` mit HMAC-SHA256. `x-iscy-alert-nonce` kann als eindeutiger Request-Wert mitgesendet werden; ohne Nonce nutzt ISCY Timestamp plus Signatur als Replay-Schluessel. Bei aktivem Security-Store werden verwendete Nonces im Replay-Fenster persistiert. Fuer Secret-Rotation kann temporaer `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE` gesetzt werden. Ohne Tenant-/User-Kontext normalisiert der Webhook Alerts nur; mit schreibendem Kontext erzeugt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege. Wiederholte firing Alerts werden dedupliziert, resolved Alerts schliessen die passende offene Alert-Fallakte automatisch. Optional kann `ISCY_ALERTMANAGER_REQUIRE_RESOLUTION_REVIEW=1` gesetzt werden; dann markiert ISCY automatisch geschlossene Alert-Fallakten ohne Lessons Learned als Review-Pflicht fuer Root Cause und Lessons Learned. Das lokale Beispiel setzt `x-iscy-tenant-id: 1`, `x-iscy-user-id: 2` und `x-iscy-roles: CONTRIBUTOR`; User `2` ist der per Demo-Seed angelegte technische Operations-User `ops-alertmanager`.
+Die Alertmanager-Beispielkonfiguration ruft den ISCY-Webhook `POST /api/v1/operations/alertmanager` auf. Sobald `ISCY_ALERTMANAGER_TOKEN` oder `ISCY_ALERTMANAGER_TOKEN_FILE` konfiguriert ist, muss Alertmanager denselben Wert per Bearer Token oder `x-iscy-alert-token` senden. Ausserhalb des Development-Modus duerfen Alertmanager-Identity-Header keine Zielidentitaet waehlen: Technische Webhook-Persistenz wird serverseitig an das gemeinsam zu setzende Paar `ISCY_ALERTMANAGER_TENANT_ID` und `ISCY_ALERTMANAGER_USER_ID` gebunden. Ohne verifiziertes Token oder ohne diesen Service-Principal bleibt ein technischer Webhook ein reiner Normalisierer. Eine gueltige ISCY-Session kann alternativ den Tenant-/User-Kontext liefern; ein konfiguriertes Webhook-Token bleibt trotzdem verpflichtend. Das Compose-Beispiel liest den Bearer Token aus `deploy/monitoring/alertmanager/secrets/iscy-alertmanager-token.example`; produktiv muss `ISCY_ALERTMANAGER_TOKEN_FILE` auf eine lokale, nicht eingecheckte Secret-Datei zeigen. Optional kann zusaetzlich `ISCY_ALERTMANAGER_HMAC_SECRET_FILE` gesetzt werden; dann verlangt ISCY `x-iscy-alert-timestamp` und `x-iscy-alert-signature` ueber `timestamp.body` mit HMAC-SHA256. `x-iscy-alert-nonce` kann als eindeutiger Request-Wert mitgesendet werden; ohne Nonce nutzt ISCY Timestamp plus Signatur als Replay-Schluessel. Bei aktivem Security-Store werden verwendete Nonces im Replay-Fenster persistiert. Fuer Secret-Rotation kann temporaer `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE` gesetzt werden. Mit verifiziertem Tenant-/User-Kontext erzeugt ISCY fuer firing Alerts automatisch Incident-Fallakten, verknuepfte Evidence und Timeline-Eintraege. Wiederholte firing Alerts werden dedupliziert, resolved Alerts schliessen die passende offene Alert-Fallakte automatisch. Optional kann `ISCY_ALERTMANAGER_REQUIRE_RESOLUTION_REVIEW=1` gesetzt werden; dann markiert ISCY automatisch geschlossene Alert-Fallakten ohne Lessons Learned als Review-Pflicht fuer Root Cause und Lessons Learned. Das lokale Beispiel verwendet Tenant `1` und den per Demo-Seed angelegten technischen Operations-User `2` (`ops-alertmanager`).
 
 ## Endpunkte
 
@@ -189,13 +189,14 @@ Das Modulbeispiel kann in eine NixOS-Konfiguration importiert werden:
     enable = true;
     iscyTarget = "127.0.0.1:9000";
     alertWebhookUrl = "http://127.0.0.1:9000/api/v1/operations/alertmanager";
-    alertTenantId = 1;
-    alertUserId = 2;
-    alertRoles = [ "CONTRIBUTOR" ];
     alertTokenFile = "/etc/iscy/alertmanager-token";
   };
 }
 ```
+
+Am ISCY-Backend muessen fuer die automatische Persistenz zusaetzlich
+`ISCY_ALERTMANAGER_TENANT_ID=1` und `ISCY_ALERTMANAGER_USER_ID=2` gesetzt
+sein. Alertmanager selbst sendet keine Identity- oder Rollen-Header mehr.
 
 Alternativ liegt eine kleine Beispiel-Hostkonfiguration unter `deploy/monitoring/nixos/example-host.nix`. Sie importiert das Modul, setzt die Standardports und oeffnet Prometheus, Alertmanager und Grafana in der lokalen Firewall.
 
@@ -215,6 +216,6 @@ Wenn Alertmanager einen firing Alert mit ISCY-Kontext an `POST /api/v1/operation
 - Fuer mandantenbezogene Metriken kann ein Reverse Proxy den Tenant-/User-Kontext setzen und `/api/v1/status/metrics` scrapen.
 - Die Statusseite `/status/` zeigt eine kopierbare Prometheus-Scrape-Konfiguration fuer den aktuell gesetzten `RUST_BACKEND_BIND` und einen Grafana-Query-Spickzettel.
 - Der JSON-Endpunkt eignet sich fuer Agenten, Runbooks und externe Checks, die Details wie `severity`, `exit_code`, `signals` und `modules` strukturiert auswerten wollen.
-- Der Alertmanager-Webhook persistiert Incidents/Evidence nur, wenn `x-iscy-tenant-id`, `x-iscy-user-id` und eine schreibende Rolle oder Session gesetzt sind. Ohne diesen Kontext bleibt der Webhook ein sicherer Normalisierer fuer Monitoring und ChatOps.
+- Der Alertmanager-Webhook persistiert Incidents/Evidence ausserhalb von Development nur mit gueltiger ISCY-Session oder nach erfolgreicher Webhook-Tokenpruefung fuer den serverseitig gebundenen `ISCY_ALERTMANAGER_TENANT_ID`/`ISCY_ALERTMANAGER_USER_ID`-Service-Principal. Request-Header koennen diesen Scope nicht veraendern. Ohne verifizierte Quelle bleibt der Webhook ein sicherer Normalisierer fuer Monitoring und ChatOps.
 - Mit `ISCY_ALERTMANAGER_REQUIRE_RESOLUTION_REVIEW=1` oder `ISCY_REQUIRE_INCIDENT_ROOT_CAUSE_ON_RESOLVE=1` wird ein automatisch resolved Alert ohne Lessons Learned als Review-Pflicht markiert.
-- Alertmanager unterstuetzt die Kontext-Header ueber `http_config.http_headers` und Bearer Token ueber `http_config.authorization.credentials_file`; fuer aeltere Alertmanager-Versionen sollte die Konfiguration vor dem Rollout mit `amtool check-config` oder einem Container-Starttest validiert werden.
+- Alertmanager sendet das Bearer Token ueber `http_config.authorization.credentials_file`; Tenant, User und Rolle werden nicht aus Webhook-Headern uebernommen. Fuer aeltere Alertmanager-Versionen sollte die Konfiguration vor dem Rollout mit `amtool check-config` oder einem Container-Starttest validiert werden.

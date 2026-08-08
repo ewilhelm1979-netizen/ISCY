@@ -11,28 +11,13 @@ let
     mkdir -p "$out"
     cp ${../grafana/iscy-operations-dashboard.json} "$out/iscy-operations-dashboard.json"
   '';
-  alertHeaderConfig =
-    lib.optionalAttrs (cfg.alertTenantId != null && cfg.alertUserId != null)
-      {
-        http_headers = {
-          "x-iscy-tenant-id" = {
-            values = [ (toString cfg.alertTenantId) ];
-          };
-          "x-iscy-user-id" = {
-            values = [ (toString cfg.alertUserId) ];
-          };
-          "x-iscy-roles" = {
-            values = cfg.alertRoles;
-          };
-        };
-      };
   alertAuthConfig = lib.optionalAttrs (cfg.alertTokenFile != null) {
     authorization = {
       type = "Bearer";
       credentials_file = cfg.alertTokenFile;
     };
   };
-  alertHttpConfig = alertHeaderConfig // alertAuthConfig;
+  alertHttpConfig = alertAuthConfig;
 in
 {
   options.services.iscy.monitoring = {
@@ -71,19 +56,19 @@ in
     alertTenantId = lib.mkOption {
       type = lib.types.nullOr lib.types.int;
       default = null;
-      description = "Optional ISCY tenant id header for persisting Alertmanager alerts as incidents.";
+      description = "Deprecated compatibility option; configure ISCY_ALERTMANAGER_TENANT_ID on the backend.";
     };
 
     alertUserId = lib.mkOption {
       type = lib.types.nullOr lib.types.int;
       default = null;
-      description = "Optional ISCY user id header for persisting Alertmanager alerts as incidents.";
+      description = "Deprecated compatibility option; configure ISCY_ALERTMANAGER_USER_ID on the backend.";
     };
 
     alertRoles = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ "CONTRIBUTOR" ];
-      description = "ISCY role header values used by Alertmanager when alertTenantId and alertUserId are set.";
+      description = "Deprecated compatibility option; Alertmanager cannot select backend roles.";
     };
 
     alertTokenFile = lib.mkOption {

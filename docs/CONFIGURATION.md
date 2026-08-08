@@ -16,6 +16,8 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 | `ISCY_HTTPS_CONFIRMED` | HTTPS ist fuer Nutzerzugriff bestaetigt | fuer HSTS: ja | `0` | `0/1`, `true/false` | Voraussetzung fuer HSTS | nein |
 | `ISCY_HSTS_ENABLED` | Aktiviert `Strict-Transport-Security` | nein | `0` | `0/1`, `true/false` | Darf nur nach bestaetigtem HTTPS aktiv sein | nein |
 | `ISCY_ALERTMANAGER_TOKEN` | Webhook-Secret | Production: ja | keine | starkes Secret, mind. 24 Zeichen | Schuetzt Alertmanager-Webhook | ja, `ISCY_ALERTMANAGER_TOKEN_FILE` |
+| `ISCY_ALERTMANAGER_TENANT_ID` | Fester Tenant fuer Alertmanager-Persistenz | fuer automatische Persistenz ausserhalb Development: ja | leer | positive Ganzzahl | Bindet das Webhook-Token serverseitig an genau einen Tenant | nein |
+| `ISCY_ALERTMANAGER_USER_ID` | Fester technischer User fuer Alertmanager-Persistenz | fuer automatische Persistenz ausserhalb Development: ja | leer | positive Ganzzahl | Muss gemeinsam mit `ISCY_ALERTMANAGER_TENANT_ID` gesetzt sein; Request-Header koennen den Service-Principal nicht ueberschreiben | nein |
 | `ISCY_ALERTMANAGER_HMAC_SECRET` | Optionales HMAC-Secret fuer Alertmanager | nein | leer | starkes Secret | Signiert `timestamp.body` und reduziert Spoofing-/Replay-Risiko | ja, `ISCY_ALERTMANAGER_HMAC_SECRET_FILE` |
 | `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET` | Altes HMAC-Secret fuer Rotation | nein | leer | starkes Secret | Erlaubt kurze Secret-Rotation ohne Monitoring-Ausfall | ja, `ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE` |
 | `ISCY_ALERTMANAGER_HMAC_MAX_AGE_SECONDS` | Replay-Fenster fuer HMAC-Timestamps | nein | `300` | positive Sekunden | Alte oder weit zukuenftige Signaturen werden abgewiesen | nein |
