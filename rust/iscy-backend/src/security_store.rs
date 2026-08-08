@@ -17,6 +17,30 @@ pub enum SecurityStore {
     Sqlite(SqlitePool),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct LoginRateLimitPolicy {
+    max_failures: u32,
+    window: StdDuration,
+    block: StdDuration,
+    max_entries: usize,
+}
+
+impl LoginRateLimitPolicy {
+    pub const fn new(
+        max_failures: u32,
+        window: StdDuration,
+        block: StdDuration,
+        max_entries: usize,
+    ) -> Self {
+        Self {
+            max_failures,
+            window,
+            block,
+            max_entries,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct LoginRateLimitRow {
     failures: i64,
@@ -81,25 +105,23 @@ impl SecurityStore {
         key: &str,
         tenant_id: Option<i64>,
         username: &str,
-        max_failures: u32,
-        window: StdDuration,
-        block: StdDuration,
-        max_entries: usize,
+        policy: LoginRateLimitPolicy,
     ) -> anyhow::Result<()> {
         let now = Utc::now();
-        self.prune_login_rate_limits(now, window).await?;
+        self.prune_login_rate_limits(now, policy.window).await?;
         let row = self.login_rate_limit_row(key).await?;
-        if row.is_none() && self.login_rate_limit_entry_count().await? >= max_entries as i64 {
+        if row.is_none() && self.login_rate_limit_entry_count().await? >= policy.max_entries as i64
+        {
             bail!("Login-Rate-Limit-Kapazitaet ist erreicht");
         }
         let (failures, first_failure_at) = match row {
-            Some(row) if !is_older_than(row.first_failure_at, now, window) => {
+            Some(row) if !is_older_than(row.first_failure_at, now, policy.window) => {
                 (row.failures.saturating_add(1), row.first_failure_at)
             }
             _ => (1, now),
         };
-        let blocked_until = if failures >= i64::from(max_failures) {
-            Some(now + duration_from_std(block))
+        let blocked_until = if failures >= i64::from(policy.max_failures) {
+            Some(now + duration_from_std(policy.block))
         } else {
             None
         };

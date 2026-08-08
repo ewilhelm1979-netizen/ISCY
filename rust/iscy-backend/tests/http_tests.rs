@@ -33,7 +33,7 @@ use iscy_backend::{
     requirement_store::RequirementStore,
     risk_store::RiskStore,
     roadmap_store::RoadmapStore,
-    security_store::SecurityStore,
+    security_store::{LoginRateLimitPolicy, SecurityStore},
     software_policy_store::SoftwarePolicyStore,
     supplier_product_security_store::SupplierProductSecurityStore,
     supplier_store::SupplierStore,
@@ -1670,16 +1670,17 @@ async fn rust_security_store_caps_and_prunes_login_rate_limit_entries() {
     let store = SecurityStore::from_sqlite_pool(pool.clone());
     let window = Duration::from_secs(15 * 60);
     let block = Duration::from_secs(15 * 60);
+    let policy = LoginRateLimitPolicy::new(5, window, block, 2);
 
     for key in ["key-1", "key-2"] {
         store
-            .record_login_failure(key, Some(1), key, 5, window, block, 2)
+            .record_login_failure(key, Some(1), key, policy)
             .await
             .unwrap();
     }
     let long_email = format!("{}@example.org", "a".repeat(242));
     store
-        .record_login_failure("key-1", Some(1), &long_email, 5, window, block, 2)
+        .record_login_failure("key-1", Some(1), &long_email, policy)
         .await
         .unwrap();
     let stored_username_chars: i64 = sqlx::query_scalar(
@@ -1696,7 +1697,7 @@ async fn rust_security_store_caps_and_prunes_login_rate_limit_entries() {
         .unwrap()
         .is_some());
     assert!(store
-        .record_login_failure("key-3", Some(1), "key-3", 5, window, block, 2)
+        .record_login_failure("key-3", Some(1), "key-3", policy)
         .await
         .is_err());
 
@@ -1715,7 +1716,7 @@ async fn rust_security_store_caps_and_prunes_login_rate_limit_entries() {
         .unwrap()
         .is_none());
     store
-        .record_login_failure("key-3", Some(1), "key-3", 5, window, block, 2)
+        .record_login_failure("key-3", Some(1), "key-3", policy)
         .await
         .unwrap();
     let stored_entries: i64 =

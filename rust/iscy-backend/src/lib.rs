@@ -122,7 +122,7 @@ use request_context::{AuthenticatedTenantContext, RequestContext, RequiredTenant
 use requirement_store::RequirementStore;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
-use security_store::SecurityStore;
+use security_store::{LoginRateLimitPolicy, SecurityStore};
 use software_policy_store::{
     SoftwareExceptionCreateRequest, SoftwareExceptionTransitionRequest,
     SoftwarePolicyCreateRequest, SoftwarePolicyError, SoftwarePolicyErrorKind,
@@ -6640,21 +6640,19 @@ async fn login_rate_limit_record_failure(
 ) {
     login_rate_limit_record_failure_memory(state, key);
     if let Some(store) = state.security_store.as_ref() {
-        if store
+        let _ = store
             .record_login_failure(
                 key,
                 tenant_id,
                 username,
-                LOGIN_RATE_LIMIT_MAX_FAILURES,
-                LOGIN_RATE_LIMIT_WINDOW,
-                LOGIN_RATE_LIMIT_BLOCK,
-                LOGIN_RATE_LIMIT_MAX_ENTRIES,
+                LoginRateLimitPolicy::new(
+                    LOGIN_RATE_LIMIT_MAX_FAILURES,
+                    LOGIN_RATE_LIMIT_WINDOW,
+                    LOGIN_RATE_LIMIT_BLOCK,
+                    LOGIN_RATE_LIMIT_MAX_ENTRIES,
+                ),
             )
-            .await
-            .is_ok()
-        {
-            return;
-        }
+            .await;
     }
 }
 
@@ -6696,9 +6694,7 @@ fn login_rate_limit_record_failure_memory_with_limit(
 async fn login_rate_limit_record_success(state: &AppState, key: &str) {
     login_rate_limit_record_success_memory(state, key);
     if let Some(store) = state.security_store.as_ref() {
-        if store.clear_login_limit(key).await.is_ok() {
-            return;
-        }
+        let _ = store.clear_login_limit(key).await;
     }
 }
 
