@@ -10367,6 +10367,7 @@ async fn incident_runbook_expansion_is_bounded_before_persistence() {
         .connect("sqlite::memory:")
         .await
         .unwrap();
+    create_incident_reference_tables(&pool).await;
     create_incident_table(&pool).await;
     let store = IncidentStore::from_sqlite_pool(pool.clone());
     let app = app_router_with_state(AppState::default().with_incident_store(Some(store.clone())));
