@@ -10400,7 +10400,7 @@ async fn incident_runbook_expansion_is_bounded_before_persistence() {
     assert_eq!(response.status(), StatusCode::CREATED);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let incident_id = payload["result"]["incident"]["id"].as_i64().unwrap();
+    let incident_id = payload["incident"]["id"].as_i64().unwrap();
     let steps = store.list_runbook_steps(42, incident_id).await.unwrap();
     assert_eq!(steps.len(), 100);
 
