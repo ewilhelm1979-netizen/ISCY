@@ -5525,12 +5525,10 @@ async fn notification_delivery_blocks_redirects_and_redacts_secret_failures() {
     });
     tokio::task::yield_now().await;
 
-    let app = app_router_with_state(
-        AppState::default()
-            .with_agent_governance_store(Some(AgentGovernanceStore::from_sqlite_pool(
-                pool.clone(),
-            ))),
-    );
+    let app =
+        app_router_with_state(AppState::default().with_agent_governance_store(Some(
+            AgentGovernanceStore::from_sqlite_pool(pool.clone()),
+        )));
     let response = app
         .clone()
         .oneshot(
