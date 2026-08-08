@@ -317,31 +317,35 @@ impl SecurityStore {
     ) -> anyhow::Result<()> {
         let cutoff = now - duration_from_std(window);
         match self {
-            Self::Postgres(pool) => sqlx::query(
-                r#"
-                DELETE FROM iscy_security_login_rate_limit
-                WHERE first_failure_at <= $1
-                  AND (blocked_until IS NULL OR blocked_until <= $2)
-                "#,
-            )
-            .bind(cutoff.to_rfc3339())
-            .bind(now.to_rfc3339())
-            .execute(pool)
-            .await
-            .context("PostgreSQL-Login-Rate-Limit-Pruning fehlgeschlagen")?,
-            Self::Sqlite(pool) => sqlx::query(
-                r#"
-                DELETE FROM iscy_security_login_rate_limit
-                WHERE first_failure_at <= ?1
-                  AND (blocked_until IS NULL OR blocked_until <= ?2)
-                "#,
-            )
-            .bind(cutoff.to_rfc3339())
-            .bind(now.to_rfc3339())
-            .execute(pool)
-            .await
-            .context("SQLite-Login-Rate-Limit-Pruning fehlgeschlagen")?,
-        };
+            Self::Postgres(pool) => {
+                sqlx::query(
+                    r#"
+                    DELETE FROM iscy_security_login_rate_limit
+                    WHERE first_failure_at <= $1
+                      AND (blocked_until IS NULL OR blocked_until <= $2)
+                    "#,
+                )
+                .bind(cutoff.to_rfc3339())
+                .bind(now.to_rfc3339())
+                .execute(pool)
+                .await
+                .context("PostgreSQL-Login-Rate-Limit-Pruning fehlgeschlagen")?;
+            }
+            Self::Sqlite(pool) => {
+                sqlx::query(
+                    r#"
+                    DELETE FROM iscy_security_login_rate_limit
+                    WHERE first_failure_at <= ?1
+                      AND (blocked_until IS NULL OR blocked_until <= ?2)
+                    "#,
+                )
+                .bind(cutoff.to_rfc3339())
+                .bind(now.to_rfc3339())
+                .execute(pool)
+                .await
+                .context("SQLite-Login-Rate-Limit-Pruning fehlgeschlagen")?;
+            }
+        }
         Ok(())
     }
 
