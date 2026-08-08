@@ -3638,9 +3638,7 @@ fn alertmanager_token_matches_expected(headers: &HeaderMap, expected: &str) -> b
         .get("x-iscy-alert-token")
         .and_then(|value| value.to_str().ok())
         .map(str::trim);
-    if header_token
-        .is_some_and(|value| constant_time_eq(value.as_bytes(), expected.as_bytes()))
-    {
+    if header_token.is_some_and(|value| constant_time_eq(value.as_bytes(), expected.as_bytes())) {
         return true;
     }
     headers
@@ -3859,23 +3857,22 @@ async fn persist_alertmanager_alerts(
     alerts: &[AlertmanagerAlertSummary],
     webhook_token_verified: bool,
 ) -> AlertmanagerPersistenceSummary {
-    let context = match alertmanager_persistence_context(state, headers, webhook_token_verified)
-        .await
-    {
-        Ok(context) => context,
-        Err(AlertmanagerPersistenceContextError::UnverifiedSource) => {
-            return AlertmanagerPersistenceSummary {
-                skipped_reason: Some("unverified_alertmanager_source".to_string()),
-                ..Default::default()
+    let context =
+        match alertmanager_persistence_context(state, headers, webhook_token_verified).await {
+            Ok(context) => context,
+            Err(AlertmanagerPersistenceContextError::UnverifiedSource) => {
+                return AlertmanagerPersistenceSummary {
+                    skipped_reason: Some("unverified_alertmanager_source".to_string()),
+                    ..Default::default()
+                }
             }
-        }
-        Err(AlertmanagerPersistenceContextError::MissingContext) => {
-            return AlertmanagerPersistenceSummary {
-                skipped_reason: Some("missing_tenant_context".to_string()),
-                ..Default::default()
+            Err(AlertmanagerPersistenceContextError::MissingContext) => {
+                return AlertmanagerPersistenceSummary {
+                    skipped_reason: Some("missing_tenant_context".to_string()),
+                    ..Default::default()
+                }
             }
-        }
-    };
+        };
     if !context.can_write() {
         return AlertmanagerPersistenceSummary {
             skipped_reason: Some("read_only_context".to_string()),
@@ -48110,11 +48107,10 @@ mod tests {
         has_software_policy_permission, has_vulnerability_intelligence_permission,
         hex_encode_bytes, is_agent_payload_error, login_identifier_supported, login_rate_limit_key,
         login_rate_limit_record_failure_memory_with_limit,
-        login_rate_limit_remaining_block_memory_with_limit, normalize_cve_id, powershell_quote,
-        persist_alertmanager_alerts, prune_login_rate_limit_entries, shell_quote,
+        login_rate_limit_remaining_block_memory_with_limit, normalize_cve_id,
+        persist_alertmanager_alerts, powershell_quote, prune_login_rate_limit_entries, shell_quote,
         simple_pdf_document, AlertmanagerHmacSha256, AlertmanagerPersistenceContextError,
-        AlertmanagerServicePrincipal, AppState, ReadinessCheck,
-        LOGIN_IDENTIFIER_MAX_CHARS,
+        AlertmanagerServicePrincipal, AppState, ReadinessCheck, LOGIN_IDENTIFIER_MAX_CHARS,
     };
 
     #[tokio::test]
