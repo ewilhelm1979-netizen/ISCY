@@ -26,7 +26,7 @@ use iscy_backend::{
     evidence_store::EvidenceStore,
     hardening::{AppMode, CommunitySecurityConfig},
     import_store::ImportStore,
-    incident_store::IncidentStore,
+    incident_store::{IncidentRunbookTemplateWriteRequest, IncidentStore},
     process_store::ProcessStore,
     product_security_store::ProductSecurityStore,
     report_store::ReportStore,
@@ -10358,6 +10358,159 @@ async fn incident_create_rejects_read_only_role() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "insufficient_role");
+}
+
+#[tokio::test]
+async fn incident_runbook_expansion_is_bounded_before_persistence() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_incident_reference_tables(&pool).await;
+    create_incident_table(&pool).await;
+    let store = IncidentStore::from_sqlite_pool(pool.clone());
+    let app = app_router_with_state(AppState::default().with_incident_store(Some(store.clone())));
+
+    let supported_runbook = (1..=100)
+        .map(|step| format!("Schritt {step}: dokumentieren"))
+        .collect::<Vec<_>>()
+        .join(";");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(
+                    serde_json::json!({
+                        "title": "Bounded runbook",
+                        "runbook_template": supported_runbook,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let incident_id = payload["incident"]["id"].as_i64().unwrap();
+    let steps = store.list_runbook_steps(42, incident_id).await.unwrap();
+    assert_eq!(steps.len(), 100);
+
+    let excessive_line_steps = (1..=101)
+        .map(|step| format!("{step}. Schritt"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let excessive_semicolon_steps = (1..=101)
+        .map(|step| format!("Schritt {step}"))
+        .collect::<Vec<_>>()
+        .join(";");
+    let oversized_body = "x".repeat(65_537);
+    for (title, runbook_template) in [
+        ("Too many line steps", excessive_line_steps.clone()),
+        ("Too many semicolon steps", excessive_semicolon_steps),
+        ("Oversized runbook", oversized_body),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/incidents")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "CONTRIBUTOR")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": title,
+                            "runbook_template": runbook_template,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(!response.status().is_success());
+    }
+    let stored_incidents: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM incidents_incident WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_incidents, 1);
+
+    let template_error = store
+        .create_runbook_template(
+            42,
+            IncidentRunbookTemplateWriteRequest {
+                slug: Some("unbounded-template".to_string()),
+                title: Some("Unbounded Template".to_string()),
+                description: None,
+                incident_type: Some("GENERAL".to_string()),
+                severity: Some("MEDIUM".to_string()),
+                body: Some(excessive_line_steps.clone()),
+                is_active: Some(true),
+                sort_order: Some(100),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(template_error
+        .to_string()
+        .contains("hoechstens 100 Schritte"));
+
+    sqlx::query("DELETE FROM incidents_runbookstep WHERE incident_id = ?1")
+        .bind(incident_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE incidents_incident SET runbook_template = ?1 WHERE id = ?2")
+        .bind(excessive_line_steps)
+        .bind(incident_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let legacy_error = store.list_runbook_steps(42, incident_id).await.unwrap_err();
+    assert!(legacy_error.to_string().contains("hoechstens 100 Schritte"));
+    let persisted_steps: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM incidents_runbookstep WHERE tenant_id = 42 AND incident_id = ?1",
+    )
+    .bind(incident_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(persisted_steps, 0);
+
+    for step_number in 1..=101 {
+        sqlx::query(
+            r#"
+            INSERT INTO incidents_runbookstep (
+                tenant_id, incident_id, step_number, title, detail,
+                is_done, created_at, updated_at
+            )
+            VALUES (42, ?1, ?2, ?3, '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            "#,
+        )
+        .bind(incident_id)
+        .bind(step_number)
+        .bind(format!("Stored step {step_number}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let stored_expansion_error = store.list_runbook_steps(42, incident_id).await.unwrap_err();
+    assert!(stored_expansion_error
+        .to_string()
+        .contains("Gespeichertes Incident-Runbook darf hoechstens 100 Schritte enthalten"));
 }
 
 #[tokio::test]

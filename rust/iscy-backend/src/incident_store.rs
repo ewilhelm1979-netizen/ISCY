@@ -9,6 +9,9 @@ use sqlx::{
 
 use crate::cve_store::normalize_database_url;
 
+const MAX_RUNBOOK_TEMPLATE_BYTES: usize = 64 * 1024;
+const MAX_RUNBOOK_STEPS: usize = 100;
+
 #[derive(Clone)]
 pub enum IncidentStore {
     Postgres(PgPool),
@@ -1735,17 +1738,32 @@ async fn ensure_runbook_steps_postgres(
     runbook_template: &str,
 ) -> anyhow::Result<()> {
     let existing_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::bigint FROM incidents_runbookstep WHERE tenant_id = $1 AND incident_id = $2",
+        r#"
+        SELECT COUNT(*)::bigint
+        FROM (
+            SELECT 1
+            FROM incidents_runbookstep
+            WHERE tenant_id = $1 AND incident_id = $2
+            LIMIT $3
+        ) bounded_steps
+        "#,
     )
     .bind(tenant_id)
     .bind(incident_id)
+    .bind((MAX_RUNBOOK_STEPS + 1) as i64)
     .fetch_one(pool)
     .await?;
+    if existing_count > MAX_RUNBOOK_STEPS as i64 {
+        bail!(
+            "Gespeichertes Incident-Runbook darf hoechstens {} Schritte enthalten",
+            MAX_RUNBOOK_STEPS
+        );
+    }
     if existing_count > 0 {
         return Ok(());
     }
     let now = Utc::now().to_rfc3339();
-    for (index, step) in runbook_steps_from_template(runbook_template)
+    for (index, step) in runbook_steps_from_template(runbook_template)?
         .into_iter()
         .enumerate()
     {
@@ -1779,17 +1797,32 @@ async fn ensure_runbook_steps_sqlite(
     runbook_template: &str,
 ) -> anyhow::Result<()> {
     let existing_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM incidents_runbookstep WHERE tenant_id = ?1 AND incident_id = ?2",
+        r#"
+        SELECT COUNT(*)
+        FROM (
+            SELECT 1
+            FROM incidents_runbookstep
+            WHERE tenant_id = ?1 AND incident_id = ?2
+            LIMIT ?3
+        ) bounded_steps
+        "#,
     )
     .bind(tenant_id)
     .bind(incident_id)
+    .bind((MAX_RUNBOOK_STEPS + 1) as i64)
     .fetch_one(pool)
     .await?;
+    if existing_count > MAX_RUNBOOK_STEPS as i64 {
+        bail!(
+            "Gespeichertes Incident-Runbook darf hoechstens {} Schritte enthalten",
+            MAX_RUNBOOK_STEPS
+        );
+    }
     if existing_count > 0 {
         return Ok(());
     }
     let now = Utc::now().to_rfc3339();
-    for (index, step) in runbook_steps_from_template(runbook_template)
+    for (index, step) in runbook_steps_from_template(runbook_template)?
         .into_iter()
         .enumerate()
     {
@@ -3025,7 +3058,7 @@ impl NewIncident {
         let summary = normalize_optional_text(payload.summary.as_deref());
         let incident_type = normalize_incident_type(payload.incident_type.as_deref());
         let runbook_template =
-            normalize_runbook_template(payload.runbook_template.as_deref(), &incident_type);
+            normalize_runbook_template(payload.runbook_template.as_deref(), &incident_type)?;
         let severity = normalize_severity(payload.severity.as_deref());
         let status = normalize_status(payload.status.as_deref());
         let detected_at = normalize_optional_datetime(payload.detected_at.flatten().as_deref())?
@@ -3124,10 +3157,10 @@ impl ExistingIncident {
             .incident_type
             .map(|value| normalize_incident_type(Some(&value)))
             .unwrap_or(current.incident_type);
-        let runbook_template = payload
-            .runbook_template
-            .map(|value| normalize_runbook_template(Some(&value), &incident_type))
-            .unwrap_or(current.runbook_template);
+        let runbook_template = match payload.runbook_template {
+            Some(value) => normalize_runbook_template(Some(&value), &incident_type)?,
+            None => current.runbook_template,
+        };
         let severity = payload
             .severity
             .map(|value| normalize_severity(Some(&value)))
@@ -4003,7 +4036,9 @@ struct NormalizedRunbookTemplate {
 impl NormalizedRunbookTemplate {
     fn from_payload(payload: IncidentRunbookTemplateWriteRequest) -> anyhow::Result<Self> {
         let title = normalize_required_text(payload.title.as_deref(), "Runbook-Titel")?;
+        validate_runbook_template_size(payload.body.as_deref().unwrap_or(""))?;
         let body = normalize_required_text(payload.body.as_deref(), "Runbook-Inhalt")?;
+        validate_runbook_template(&body)?;
         let slug = normalize_runbook_slug(payload.slug.as_deref(), &title)?;
         Ok(Self {
             slug,
@@ -4088,12 +4123,28 @@ fn normalize_runbook_slug(value: Option<&str>, title: &str) -> anyhow::Result<St
     Ok(slug)
 }
 
-fn runbook_steps_from_template(runbook_template: &str) -> Vec<ParsedRunbookStep> {
+fn validate_runbook_template(runbook_template: &str) -> anyhow::Result<()> {
+    runbook_steps_from_template(runbook_template).map(|_| ())
+}
+
+fn validate_runbook_template_size(runbook_template: &str) -> anyhow::Result<()> {
+    if runbook_template.len() > MAX_RUNBOOK_TEMPLATE_BYTES {
+        bail!(
+            "Runbook-Inhalt darf hoechstens {} Bytes enthalten",
+            MAX_RUNBOOK_TEMPLATE_BYTES
+        );
+    }
+    Ok(())
+}
+
+fn runbook_steps_from_template(runbook_template: &str) -> anyhow::Result<Vec<ParsedRunbookStep>> {
+    validate_runbook_template_size(runbook_template)?;
     let mut raw_steps = runbook_template
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(str::to_string)
+        .take(MAX_RUNBOOK_STEPS + 1)
         .collect::<Vec<_>>();
     if raw_steps.len() <= 1 && runbook_template.contains(';') {
         raw_steps = runbook_template
@@ -4101,7 +4152,14 @@ fn runbook_steps_from_template(runbook_template: &str) -> Vec<ParsedRunbookStep>
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .map(str::to_string)
+            .take(MAX_RUNBOOK_STEPS + 1)
             .collect();
+    }
+    if raw_steps.len() > MAX_RUNBOOK_STEPS {
+        bail!(
+            "Runbook-Inhalt darf hoechstens {} Schritte enthalten",
+            MAX_RUNBOOK_STEPS
+        );
     }
     let mut steps = raw_steps
         .into_iter()
@@ -4118,7 +4176,7 @@ fn runbook_steps_from_template(runbook_template: &str) -> Vec<ParsedRunbookStep>
             detail: String::new(),
         });
     }
-    steps
+    Ok(steps)
 }
 
 fn normalize_runbook_step_line(line: &str) -> String {
@@ -4172,12 +4230,14 @@ fn normalize_incident_type(value: Option<&str>) -> String {
     }
 }
 
-fn normalize_runbook_template(value: Option<&str>, incident_type: &str) -> String {
+fn normalize_runbook_template(value: Option<&str>, incident_type: &str) -> anyhow::Result<String> {
+    validate_runbook_template_size(value.unwrap_or(""))?;
     let normalized = normalize_optional_text(value);
     if normalized.is_empty() {
-        return runbook_template_for(incident_type).to_string();
+        return Ok(runbook_template_for(incident_type).to_string());
     }
-    normalized
+    validate_runbook_template(&normalized)?;
+    Ok(normalized)
 }
 
 fn runbook_template_for(incident_type: &str) -> &'static str {
