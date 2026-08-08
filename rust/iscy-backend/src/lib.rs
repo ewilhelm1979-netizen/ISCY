@@ -48197,12 +48197,12 @@ mod tests {
         alertmanager_persistence_context, alertmanager_token_matches_expected,
         evidence_disposition_preview_from_item, evidence_object_storage_bucket_valid,
         has_software_policy_permission, has_vulnerability_intelligence_permission,
-        hex_encode_bytes, is_agent_payload_error, login_identifier_supported, login_rate_limit_key,
+        hex_encode_bytes, is_agent_payload_error, login_identifier_supported,
+        login_password_supported, login_rate_limit_key,
         login_rate_limit_record_failure_memory_with_limit,
-        login_rate_limit_remaining_block_memory_with_limit, login_password_supported,
-        normalize_cve_id, persist_alertmanager_alerts, powershell_quote,
-        prune_login_rate_limit_entries, shell_quote, simple_pdf_document,
-        AlertmanagerHmacSha256, AlertmanagerPersistenceContextError,
+        login_rate_limit_remaining_block_memory_with_limit, normalize_cve_id,
+        persist_alertmanager_alerts, powershell_quote, prune_login_rate_limit_entries, shell_quote,
+        simple_pdf_document, AlertmanagerHmacSha256, AlertmanagerPersistenceContextError,
         AlertmanagerServicePrincipal, AppState, LoginPasswordVerificationGate, ReadinessCheck,
         LOGIN_IDENTIFIER_MAX_CHARS, LOGIN_PASSWORD_MAX_BYTES,
     };
@@ -48264,9 +48264,13 @@ mod tests {
     #[test]
     fn login_passwords_and_verification_concurrency_are_bounded() {
         assert!(login_password_supported("password"));
-        assert!(login_password_supported(&"a".repeat(LOGIN_PASSWORD_MAX_BYTES)));
+        assert!(login_password_supported(
+            &"a".repeat(LOGIN_PASSWORD_MAX_BYTES)
+        ));
         assert!(!login_password_supported(""));
-        assert!(!login_password_supported(&"a".repeat(LOGIN_PASSWORD_MAX_BYTES + 1)));
+        assert!(!login_password_supported(
+            &"a".repeat(LOGIN_PASSWORD_MAX_BYTES + 1)
+        ));
 
         let gate = LoginPasswordVerificationGate::new(1);
         let permit = gate.try_acquire().unwrap();
