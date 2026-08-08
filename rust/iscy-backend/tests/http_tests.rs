@@ -229,6 +229,7 @@ async fn software_hygiene_list_ignores_manipulated_tenant_query() {
     let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(pool))));
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/software-hygiene/findings?tenant_id=502&limit=10")
@@ -1588,6 +1589,141 @@ async fn rust_auth_session_rate_limits_repeated_failed_passwords() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "login_rate_limited");
+}
+
+#[tokio::test]
+async fn rust_auth_session_rejects_oversized_identifiers_before_rate_limit_storage() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone())))
+            .with_security_store(Some(SecurityStore::from_sqlite_pool(pool.clone()))),
+    );
+    let oversized_identifier = "a".repeat(255);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "tenant_id": 1,
+                        "username": &oversized_identifier,
+                        "password": "wrong"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_login_payload");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "tenant_id=1&username={oversized_identifier}&password=wrong"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(String::from_utf8(body.to_vec())
+        .unwrap()
+        .contains("1 bis 254 Zeichen"));
+
+    let stored_entries: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM iscy_security_login_rate_limit")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_entries, 0);
+}
+
+#[tokio::test]
+async fn rust_security_store_caps_and_prunes_login_rate_limit_entries() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let store = SecurityStore::from_sqlite_pool(pool.clone());
+    let window = Duration::from_secs(15 * 60);
+    let block = Duration::from_secs(15 * 60);
+
+    for key in ["key-1", "key-2"] {
+        store
+            .record_login_failure(key, Some(1), key, 5, window, block, 2)
+            .await
+            .unwrap();
+    }
+    let long_email = format!("{}@example.org", "a".repeat(242));
+    store
+        .record_login_failure("key-1", Some(1), &long_email, 5, window, block, 2)
+        .await
+        .unwrap();
+    let stored_username_chars: i64 = sqlx::query_scalar(
+        "SELECT LENGTH(username) FROM iscy_security_login_rate_limit WHERE key = 'key-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_username_chars, 150);
+
+    assert!(store
+        .login_rate_limit_remaining_block("key-3", window, 2)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(store
+        .record_login_failure("key-3", Some(1), "key-3", 5, window, block, 2)
+        .await
+        .is_err());
+
+    let expired = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+    sqlx::query(
+        "UPDATE iscy_security_login_rate_limit SET first_failure_at = ?1, blocked_until = NULL WHERE key = 'key-1'",
+    )
+    .bind(expired)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(store
+        .login_rate_limit_remaining_block("key-3", window, 2)
+        .await
+        .unwrap()
+        .is_none());
+    store
+        .record_login_failure("key-3", Some(1), "key-3", 5, window, block, 2)
+        .await
+        .unwrap();
+    let stored_entries: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM iscy_security_login_rate_limit")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_entries, 2);
 }
 
 #[tokio::test]

@@ -55,11 +55,16 @@ impl SecurityStore {
         &self,
         key: &str,
         window: StdDuration,
+        max_entries: usize,
     ) -> anyhow::Result<Option<StdDuration>> {
+        let now = Utc::now();
+        self.prune_login_rate_limits(now, window).await?;
         let Some(row) = self.login_rate_limit_row(key).await? else {
+            if self.login_rate_limit_entry_count().await? >= max_entries as i64 {
+                return Ok(Some(window));
+            }
             return Ok(None);
         };
-        let now = Utc::now();
         if let Some(blocked_until) = row.blocked_until {
             if blocked_until > now {
                 return Ok((blocked_until - now).to_std().ok());
@@ -79,9 +84,14 @@ impl SecurityStore {
         max_failures: u32,
         window: StdDuration,
         block: StdDuration,
+        max_entries: usize,
     ) -> anyhow::Result<()> {
         let now = Utc::now();
+        self.prune_login_rate_limits(now, window).await?;
         let row = self.login_rate_limit_row(key).await?;
+        if row.is_none() && self.login_rate_limit_entry_count().await? >= max_entries as i64 {
+            bail!("Login-Rate-Limit-Kapazitaet ist erreicht");
+        }
         let (failures, first_failure_at) = match row {
             Some(row) if !is_older_than(row.first_failure_at, now, window) => {
                 (row.failures.saturating_add(1), row.first_failure_at)
@@ -283,6 +293,58 @@ impl SecurityStore {
         Ok(())
     }
 
+    async fn login_rate_limit_entry_count(&self) -> anyhow::Result<i64> {
+        match self {
+            Self::Postgres(pool) => sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM iscy_security_login_rate_limit",
+            )
+            .fetch_one(pool)
+            .await
+            .context("PostgreSQL-Login-Rate-Limit-Kapazitaet konnte nicht gelesen werden"),
+            Self::Sqlite(pool) => sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM iscy_security_login_rate_limit",
+            )
+            .fetch_one(pool)
+            .await
+            .context("SQLite-Login-Rate-Limit-Kapazitaet konnte nicht gelesen werden"),
+        }
+    }
+
+    async fn prune_login_rate_limits(
+        &self,
+        now: DateTime<Utc>,
+        window: StdDuration,
+    ) -> anyhow::Result<()> {
+        let cutoff = now - duration_from_std(window);
+        match self {
+            Self::Postgres(pool) => sqlx::query(
+                r#"
+                DELETE FROM iscy_security_login_rate_limit
+                WHERE first_failure_at <= $1
+                  AND (blocked_until IS NULL OR blocked_until <= $2)
+                "#,
+            )
+            .bind(cutoff.to_rfc3339())
+            .bind(now.to_rfc3339())
+            .execute(pool)
+            .await
+            .context("PostgreSQL-Login-Rate-Limit-Pruning fehlgeschlagen")?,
+            Self::Sqlite(pool) => sqlx::query(
+                r#"
+                DELETE FROM iscy_security_login_rate_limit
+                WHERE first_failure_at <= ?1
+                  AND (blocked_until IS NULL OR blocked_until <= ?2)
+                "#,
+            )
+            .bind(cutoff.to_rfc3339())
+            .bind(now.to_rfc3339())
+            .execute(pool)
+            .await
+            .context("SQLite-Login-Rate-Limit-Pruning fehlgeschlagen")?,
+        };
+        Ok(())
+    }
+
     async fn prune_hmac_nonces(&self, now: DateTime<Utc>) -> anyhow::Result<()> {
         match self {
             Self::Postgres(pool) => {
@@ -305,7 +367,12 @@ impl SecurityStore {
 }
 
 fn normalized_username(username: &str) -> String {
-    username.trim().to_ascii_lowercase()
+    username
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .take(150)
+        .collect()
 }
 
 fn login_rate_limit_row_from_values(
