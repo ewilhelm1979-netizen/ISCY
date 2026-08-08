@@ -5525,47 +5525,54 @@ async fn notification_delivery_blocks_redirects_and_redacts_secret_failures() {
     });
     tokio::task::yield_now().await;
 
-    let app = app_router_with_state(
-        AppState::default()
-            .with_agent_governance_store(Some(AgentGovernanceStore::from_sqlite_pool(pool))),
-    );
-    for (name, auth_type, secret_env_name) in [
-        ("Redirect channel", "NONE", ""),
-        (
-            "Missing secret channel",
-            "BEARER",
-            "ISCY_TEST_WEBHOOK_SECRET_INTENTIONALLY_UNSET_8A71",
-        ),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/agents/notification-channels")
-                    .header("content-type", "application/json")
-                    .header("x-iscy-tenant-id", "1")
-                    .header("x-iscy-user-id", "1")
-                    .header("x-iscy-roles", "ADMIN")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "name": name,
-                            "endpoint_url": receiver_url,
-                            "minimum_level": "WARN",
-                            "event_types": ["AGENT_POLICY"],
-                            "auth_type": auth_type,
-                            "secret_env_name": secret_env_name,
-                            "cooldown_minutes": 60,
-                            "enabled": true
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-    }
+    let app =
+        app_router_with_state(AppState::default().with_agent_governance_store(Some(
+            AgentGovernanceStore::from_sqlite_pool(pool.clone()),
+        )));
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/notification-channels")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    serde_json::json!({
+                        "name": "Redirect channel",
+                        "endpoint_url": receiver_url,
+                        "minimum_level": "WARN",
+                        "event_types": ["AGENT_POLICY"],
+                        "auth_type": "NONE",
+                        "secret_env_name": "",
+                        "cooldown_minutes": 60,
+                        "enabled": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Simulate a channel persisted before secret references were constrained.
+    // Runtime delivery must reject the reference before reading the environment.
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_notification_channel
+            (tenant_id, name, endpoint_url, minimum_level, event_types_json,
+             auth_type, secret_env_name, cooldown_minutes, enabled)
+        VALUES (1, 'Legacy secret channel', ?1, 'WARN', '["AGENT_POLICY"]',
+                'BEARER', 'ISCY_TEST_WEBHOOK_SECRET_INTENTIONALLY_UNSET_8A71', 60, 1)
+        "#,
+    )
+    .bind(&receiver_url)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let response = app
         .clone()
@@ -5630,7 +5637,7 @@ async fn notification_delivery_blocks_redirects_and_redacts_secret_failures() {
         .any(|delivery| delivery["error_class"] == "DESTINATION_REJECTED"));
     assert!(deliveries
         .iter()
-        .any(|delivery| delivery["error_class"] == "SECRET_UNAVAILABLE"));
+        .any(|delivery| delivery["error_class"] == "SECRET_REFERENCE_REJECTED"));
     assert!(deliveries
         .iter()
         .all(|delivery| delivery.get("payload").is_none()));

@@ -92,10 +92,13 @@ ISCY_NOTIFICATION_ALLOW_HTTP=0
 ISCY_AGENT_NOTIFICATION_SECRET=<secret>
 ```
 
-Der Kanal speichert bei Bearer- oder HMAC-Authentisierung nur
-`ISCY_AGENT_NOTIFICATION_SECRET` als Referenz, nicht den Wert. HTTPS ist der
-Standard, URL-Zugangsdaten und Redirects sind gesperrt. Die Host-Allowlist wird
-beim Speichern und erneut bei jeder Zustellung geprueft. Transiente
+Der Kanal speichert bei Bearer- oder HMAC-Authentisierung ausschliesslich
+`ISCY_AGENT_NOTIFICATION_SECRET` als Referenz, nicht den Wert. Andere
+Environment-Variablen werden beim Speichern und erneut vor der Secret-Aufloesung
+abgewiesen. HTTPS ist der Standard, URL-Zugangsdaten und Redirects sind gesperrt.
+Die Host-Allowlist wird beim Speichern und erneut bei jeder Zustellung geprueft.
+Die Production-Erkennung beruecksichtigt `ISCY_APP_MODE`, `ISCY_ENV` und
+`APP_ENV`. Transiente
 Verbindungs-/Timeoutfehler und ausgewaehlte HTTP-Status werden begrenzt erneut
 versucht; Cooldown und Delivery-Audit reduzieren Doppelmeldungen und halten das
 Ergebnis nachvollziehbar. DNS-/Netzwerk-Egress sollte zusaetzlich auf
