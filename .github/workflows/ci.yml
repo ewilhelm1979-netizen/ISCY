@@ -48,9 +48,20 @@ jobs:
         with:
           tool: cargo-audit,cargo-deny
           fallback: none
+      - name: Verify advisory-ignored optional dependencies are unreachable
+        run: |
+          set -euo pipefail
+          active_dependency_tree="$(cargo tree --locked --manifest-path rust/iscy-backend/Cargo.toml --edges normal,build,dev --prefix none)"
+          if grep -Eq '^(rkyv|rsa) v' <<<"$active_dependency_tree"; then
+            echo "::error::An advisory-ignored optional dependency is active; remove the exception or upgrade the dependency."
+            grep -E '^(rkyv|rsa) v' <<<"$active_dependency_tree"
+            exit 1
+          fi
       - name: Audit Rust dependency advisories
         run: |
-          cargo audit --file rust/iscy-backend/Cargo.lock --ignore RUSTSEC-2023-0071
+          cargo audit --file rust/iscy-backend/Cargo.lock \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2026-0235
       - name: Check Rust dependency licenses and sources
         run: |
           cargo deny --manifest-path rust/iscy-backend/Cargo.toml check advisories licenses sources
