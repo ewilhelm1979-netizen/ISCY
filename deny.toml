@@ -4,6 +4,9 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+  { id = "RUSTSEC-2026-0235", reason = "rkyv 0.7 is an inactive optional rust_decimal edge retained only in Cargo.lock; CI fails if rkyv becomes reachable" },
+]
 
 [licenses]
 version = 2
