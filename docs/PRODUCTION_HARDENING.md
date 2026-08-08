@@ -54,6 +54,10 @@ Der Command fuehrt Migrationen aus, legt falls noetig einen Tenant an, erzeugt d
 Lokale Username-/Passwort-Logins werden pro Tenant/Username begrenzt. Nach
 fuenf fehlgeschlagenen Versuchen in 15 Minuten blockiert ISCY weitere Versuche
 fuer 15 Minuten. Login-Identifier sind auf 254 Zeichen begrenzt;
+Passwoerter auf 1024 Byte und Request-Bodies der Login-Routen auf 4096 Byte.
+Hoechstens zwei Passwortpruefungen laufen gleichzeitig; weitere Versuche
+werden mit HTTP 429 fail-closed abgewiesen. Die PBKDF2-Pruefung laeuft im
+Blocking-Pool und bereitet den HMAC-Schluessel nur einmal pro Versuch vor.
 Rate-Limit-Schluessel sind auf 255 Byte begrenzt. Abgelaufene Eintraege werden
 global entfernt. Prozess- und Datenbankzustand akzeptieren jeweils hoechstens
 4096 aktive Schluessel; bei erreichter Grenze werden neue Schluessel bis zum

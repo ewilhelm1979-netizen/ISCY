@@ -1699,6 +1699,109 @@ async fn rust_auth_session_rejects_oversized_identifiers_before_rate_limit_stora
 }
 
 #[tokio::test]
+async fn rust_auth_session_rejects_oversized_passwords_before_verification() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone())))
+            .with_security_store(Some(SecurityStore::from_sqlite_pool(pool.clone()))),
+    );
+    let oversized_password = "a".repeat(1_025);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "tenant_id": 1,
+                        "username": "admin",
+                        "password": &oversized_password
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_login_payload");
+    assert!(payload["message"].as_str().unwrap().contains("1024 Byte"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "tenant_id=1&username=admin&password={oversized_password}"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(String::from_utf8(body.to_vec())
+        .unwrap()
+        .contains("1024 Byte"));
+
+    let oversized_request_password = "b".repeat(4_096);
+    for (path, content_type, body) in [
+        (
+            "/api/v1/auth/sessions",
+            "application/json",
+            serde_json::json!({
+                "tenant_id": 1,
+                "username": "admin",
+                "password": &oversized_request_password
+            })
+            .to_string(),
+        ),
+        (
+            "/login/",
+            "application/x-www-form-urlencoded",
+            format!("tenant_id=1&username=admin&password={oversized_request_password}"),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", content_type)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    let stored_entries: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM iscy_security_login_rate_limit")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_entries, 0);
+}
+
+#[tokio::test]
 async fn rust_security_store_caps_and_prunes_login_rate_limit_entries() {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
