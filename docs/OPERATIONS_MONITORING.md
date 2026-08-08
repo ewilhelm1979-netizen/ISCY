@@ -153,8 +153,17 @@ ISCY zuerst starten:
 Danach den Monitoring-Stack starten:
 
 ```bash
+read -rsp 'Grafana-Admin-Passwort: ' ISCY_GRAFANA_PASSWORD
+printf '\n'
+export ISCY_GRAFANA_PASSWORD
 docker compose -f deploy/monitoring/docker-compose.yml up -d
 ```
+
+Der Stack veroeffentlicht Prometheus, Alertmanager und Grafana standardmaessig
+nur auf `127.0.0.1`. Ein anderer Host-Bind muss bewusst ueber
+`ISCY_MONITORING_BIND_ADDRESS` gesetzt und durch Firewall, TLS sowie eine
+authentifizierende Ingress-Grenze geschuetzt werden. Der unauthentifizierte
+Prometheus-Lifecycle-Endpunkt ist nicht aktiviert.
 
 Standard-URLs:
 
@@ -162,7 +171,9 @@ Standard-URLs:
 - Alertmanager: `http://127.0.0.1:9093`
 - Grafana: `http://127.0.0.1:3000`
 
-Grafana-Login im Beispiel: `admin / admin`. Fuer dauerhaften Betrieb `ISCY_GRAFANA_PASSWORD` setzen.
+Grafana-Benutzer im Beispiel: `admin`. Ein explizites
+`ISCY_GRAFANA_PASSWORD` ist bereits fuer den Compose-Start verpflichtend; es
+gibt kein Standardpasswort.
 
 Fuer produktive Alertmanager-Tokens eine lokale Secret-Datei anlegen und beim Compose-Start verweisen:
 

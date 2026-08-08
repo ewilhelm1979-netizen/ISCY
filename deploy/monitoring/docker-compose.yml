@@ -5,11 +5,13 @@ services:
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
-      - "--web.enable-lifecycle"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${ISCY_PROMETHEUS_PORT:-9090}:9090"
+      - target: 9090
+        published: "${ISCY_PROMETHEUS_PORT:-9090}"
+        host_ip: "${ISCY_MONITORING_BIND_ADDRESS:-127.0.0.1}"
+        protocol: tcp
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/iscy-operations-alerts.yml:/etc/prometheus/rules/iscy-operations-alerts.yml:ro
@@ -24,7 +26,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${ISCY_ALERTMANAGER_PORT:-9093}:9093"
+      - target: 9093
+        published: "${ISCY_ALERTMANAGER_PORT:-9093}"
+        host_ip: "${ISCY_MONITORING_BIND_ADDRESS:-127.0.0.1}"
+        protocol: tcp
     volumes:
       - ./alertmanager/iscy-alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - ${ISCY_ALERTMANAGER_TOKEN_FILE:-./alertmanager/secrets/iscy-alertmanager-token.example}:/etc/alertmanager/secrets/iscy-alertmanager-token:ro
@@ -36,10 +41,13 @@ services:
     depends_on:
       - prometheus
     ports:
-      - "${ISCY_GRAFANA_PORT:-3000}:3000"
+      - target: 3000
+        published: "${ISCY_GRAFANA_PORT:-3000}"
+        host_ip: "${ISCY_MONITORING_BIND_ADDRESS:-127.0.0.1}"
+        protocol: tcp
     environment:
       GF_SECURITY_ADMIN_USER: ${ISCY_GRAFANA_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${ISCY_GRAFANA_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${ISCY_GRAFANA_PASSWORD:?ISCY_GRAFANA_PASSWORD must be set}
       GF_USERS_DEFAULT_THEME: light
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
