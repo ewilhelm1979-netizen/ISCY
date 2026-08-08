@@ -334,10 +334,12 @@ Clients durchgereicht.
 Unterstuetzte Authentisierung:
 
 - `NONE`: nur fuer bewusst ungeschuetzte Ziele
-- `BEARER`: Secret aus der in `secret_env_name` referenzierten Variable
+- `BEARER`: Secret aus der fest erlaubten Variable `ISCY_AGENT_NOTIFICATION_SECRET`
 - `HMAC_SHA256`: Signatur `sha256=<hex>` ueber `timestamp.payload`
 
-Secrets werden nicht in der Datenbank gespeichert. HTTP ist nur fuer Loopback
+Secrets werden nicht in der Datenbank gespeichert. `secret_env_name` darf fuer
+Bearer und HMAC ausschliesslich `ISCY_AGENT_NOTIFICATION_SECRET` referenzieren;
+andere Environment-Namen werden vor jeder Aufloesung abgewiesen. HTTP ist nur fuer Loopback
 oder mit `ISCY_NOTIFICATION_ALLOW_HTTP=1` erlaubt. Im Production-Modus muss der
 Zielhost zusaetzlich exakt in `ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS` stehen;
 Redirects werden nicht verfolgt. Der Hintergrundworker wertet standardmaessig

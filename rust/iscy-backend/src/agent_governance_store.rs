@@ -24,6 +24,7 @@ const NOTIFICATION_EVENT_TYPES: &[&str] = &[
     "INCIDENT",
     "ROADMAP",
 ];
+const NOTIFICATION_SECRET_ENV_NAME: &str = "ISCY_AGENT_NOTIFICATION_SECRET";
 
 #[derive(Clone)]
 pub enum AgentGovernanceStore {
@@ -686,9 +687,9 @@ fn validate_channel_payload(
     }
     if payload.auth_type == "NONE" {
         payload.secret_env_name.clear();
-    } else if !valid_env_name(&payload.secret_env_name) {
+    } else if !notification_secret_env_name_allowed(&payload.secret_env_name) {
         bail!(
-            "Notification-Secret muss als gueltiger Environment-Variablenname referenziert werden"
+            "Notification-Secret muss ISCY_AGENT_NOTIFICATION_SECRET referenzieren"
         );
     }
     if !(1..=10_080).contains(&payload.cooldown_minutes) {
@@ -698,9 +699,7 @@ fn validate_channel_payload(
 }
 
 fn validate_webhook_url(raw_url: &str) -> anyhow::Result<Url> {
-    let production = env::var("ISCY_APP_MODE")
-        .unwrap_or_else(|_| "development".to_string())
-        .eq_ignore_ascii_case("production");
+    let production = notification_production_mode_from_environment();
     let allowed_hosts = env::var("ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS")
         .unwrap_or_default()
         .split(',')
@@ -744,16 +743,56 @@ fn validate_webhook_url_with_policy(
     Ok(url)
 }
 
-fn valid_env_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .chars()
-            .next()
-            .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
-        && value
-            .chars()
-            .all(|character| character == '_' || character.is_ascii_alphanumeric())
+fn notification_secret_env_name_allowed(value: &str) -> bool {
+    value == NOTIFICATION_SECRET_ENV_NAME
+}
+
+fn notification_production_mode_from_environment() -> bool {
+    let app_mode = env::var("ISCY_APP_MODE").ok();
+    let iscy_env = env::var("ISCY_ENV").ok();
+    let app_env = env::var("APP_ENV").ok();
+    notification_production_mode(
+        app_mode.as_deref(),
+        iscy_env.as_deref(),
+        app_env.as_deref(),
+    )
+}
+
+fn notification_production_mode(
+    app_mode: Option<&str>,
+    iscy_env: Option<&str>,
+    app_env: Option<&str>,
+) -> bool {
+    [app_mode, iscy_env, app_env]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "prod" | "production"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NotificationSecretReferenceError {
+    Disallowed,
+}
+
+fn notification_secret_with<F>(
+    secret_env_name: &str,
+    lookup: F,
+) -> Result<Option<String>, NotificationSecretReferenceError>
+where
+    F: FnOnce(&str) -> Option<String>,
+{
+    if !notification_secret_env_name_allowed(secret_env_name) {
+        return Err(NotificationSecretReferenceError::Disallowed);
+    }
+    Ok(lookup(secret_env_name).filter(|value| !value.trim().is_empty()))
+}
+
+fn notification_secret_from_environment(
+    secret_env_name: &str,
+) -> Result<Option<String>, NotificationSecretReferenceError> {
+    notification_secret_with(secret_env_name, |name| env::var(name).ok())
 }
 
 fn env_flag(name: &str) -> bool {
@@ -999,15 +1038,18 @@ async fn deliver_webhook(
     let secret = if channel.auth_type == "NONE" {
         None
     } else {
-        match env::var(&channel.secret_env_name)
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-        {
-            Some(secret) => Some(secret),
-            None => {
+        match notification_secret_from_environment(&channel.secret_env_name) {
+            Ok(Some(secret)) => Some(secret),
+            Ok(None) => {
                 return failed_attempt(
                     "SECRET_UNAVAILABLE",
                     "Konfigurierte Secret-Referenz ist nicht verfuegbar",
+                )
+            }
+            Err(NotificationSecretReferenceError::Disallowed) => {
+                return failed_attempt(
+                    "SECRET_REFERENCE_REJECTED",
+                    "Konfigurierte Secret-Referenz wurde durch die Sicherheitsrichtlinie abgelehnt",
                 )
             }
         }
@@ -1146,9 +1188,10 @@ fn json_string_array(value: &str) -> Vec<String> {
 
 fn secret_available(auth_type: &str, secret_env_name: &str) -> bool {
     auth_type == "NONE"
-        || env::var(secret_env_name)
+        || notification_secret_from_environment(secret_env_name)
             .ok()
-            .is_some_and(|value| !value.trim().is_empty())
+            .flatten()
+            .is_some()
 }
 
 fn notification_signal(
@@ -2443,8 +2486,13 @@ mod tests {
     fn webhook_and_secret_validation_rejects_unsafe_values() {
         assert!(validate_webhook_url("file:///tmp/notification").is_err());
         assert!(validate_webhook_url("http://127.0.0.1:9000/hook").is_ok());
-        assert!(valid_env_name("ISCY_NOTIFY_SECRET"));
-        assert!(!valid_env_name("ISCY-NOTIFY-SECRET"));
+        assert!(notification_secret_env_name_allowed(
+            "ISCY_AGENT_NOTIFICATION_SECRET"
+        ));
+        assert!(!notification_secret_env_name_allowed("DATABASE_URL"));
+        assert!(!notification_secret_env_name_allowed(
+            "ISCY_INITIAL_ADMIN_PASSWORD"
+        ));
         assert!(validate_webhook_url_with_policy(
             "https://notify.example.org/hook",
             false,
@@ -2465,5 +2513,59 @@ mod tests {
         for status in [400, 401, 403, 404, 422] {
             assert!(!webhook_retryable_status(status));
         }
+
+        let unsafe_channel = AgentNotificationChannelWriteRequest {
+            name: "SOC".to_string(),
+            endpoint_url: "https://notify.example.org/hook".to_string(),
+            minimum_level: "WARN".to_string(),
+            event_types: vec!["AGENT_POLICY".to_string()],
+            auth_type: "BEARER".to_string(),
+            secret_env_name: "DATABASE_URL".to_string(),
+            cooldown_minutes: 60,
+            enabled: true,
+        };
+        assert!(validate_channel_payload(unsafe_channel).is_err());
+
+        let allowed_channel = AgentNotificationChannelWriteRequest {
+            name: "SOC".to_string(),
+            endpoint_url: "https://notify.example.org/hook".to_string(),
+            minimum_level: "WARN".to_string(),
+            event_types: vec!["AGENT_POLICY".to_string()],
+            auth_type: "HMAC_SHA256".to_string(),
+            secret_env_name: "ISCY_AGENT_NOTIFICATION_SECRET".to_string(),
+            cooldown_minutes: 60,
+            enabled: true,
+        };
+        assert!(validate_channel_payload(allowed_channel).is_ok());
+    }
+
+    #[test]
+    fn notification_secret_lookup_rejects_unrelated_environment_names_before_lookup() {
+        let result = notification_secret_with("DATABASE_URL", |_| {
+            panic!("disallowed environment reference must not be resolved")
+        });
+
+        assert_eq!(result, Err(NotificationSecretReferenceError::Disallowed));
+        assert_eq!(
+            notification_secret_with("ISCY_AGENT_NOTIFICATION_SECRET", |_| {
+                Some("test-notification-secret".to_string())
+            }),
+            Ok(Some("test-notification-secret".to_string()))
+        );
+    }
+
+    #[test]
+    fn notification_production_aliases_enable_host_allowlist_policy() {
+        assert!(notification_production_mode(None, Some("prod"), None));
+        assert!(notification_production_mode(
+            None,
+            None,
+            Some("production")
+        ));
+        assert!(!notification_production_mode(
+            Some("development"),
+            Some("production"),
+            None
+        ));
     }
 }

@@ -23,6 +23,7 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 | `ISCY_SHUTDOWN_TIMEOUT_SECONDS` | Graceful-Shutdown-Grenze | nein | `30` | 5 bis 120 Sekunden | Begrenzt das Auslaufen laufender HTTP-Requests nach SIGINT/SIGTERM | nein |
 | `ISCY_NOTIFICATION_ALLOW_HTTP` | Erlaubt HTTP-Webhookziele ausser Loopback | nein | `0` | `0/1`, `true/false` | Nur fuer kontrollierte Entwicklungsnetze; Production sollte HTTPS nutzen | nein |
 | `ISCY_NOTIFICATION_WEBHOOK_ALLOWED_HOSTS` | Production-Allowlist fuer Notification-Ziele | Production bei aktivem Kanal: ja | leer | kommaseparierte exakte Hostnamen | Verhindert freie serverseitige Webhook-Ziele; Redirects bleiben deaktiviert | nein |
+| `ISCY_AGENT_NOTIFICATION_SECRET` | Bearer-/HMAC-Secret fuer Agent-Notification-Webhooks | bei geschuetztem Kanal: ja | leer | starkes Secret | Einzige erlaubte Secret-Referenz fuer tenant-konfigurierbare Notification-Kanaele | nein |
 | `ISCY_INITIAL_ADMIN_TENANT_NAME` | Tenant-Name fuer `init-admin` | fuer `init-admin` empfohlen | `ISCY Production Tenant` | Text | Erstzugang ohne Demo-Seed | nein |
 | `ISCY_INITIAL_ADMIN_TENANT_SLUG` | Tenant-Slug fuer `init-admin` | fuer `init-admin` empfohlen | `iscy-production` | Kleinbuchstaben, Zahlen, Bindestrich | Eindeutige Mandantenkennung | nein |
 | `ISCY_INITIAL_ADMIN_USERNAME` | Initialer Admin-Username | fuer `init-admin` empfohlen | `iscy-admin` | Text | Wird nicht ueberschrieben, wenn aktiver Admin existiert | nein |
@@ -87,9 +88,10 @@ ISCY_EVIDENCE_SECRET_ROOTS=/run/secrets
 ISCY_VULNERABILITY_SYNC_INTERVAL_SECONDS=7200
 ```
 
-Ein Agent-Notification-Kanal speichert fuer Bearer oder HMAC nur den Namen der
-Secret-Variable, beispielsweise `ISCY_AGENT_NOTIFICATION_SECRET`, nie den
-Secret-Wert. Die referenzierte Variable muss im Backend-Prozess gesetzt sein.
+Ein Agent-Notification-Kanal speichert fuer Bearer oder HMAC nur den Namen
+`ISCY_AGENT_NOTIFICATION_SECRET`, nie den Secret-Wert. Andere
+Environment-Variablen werden beim Speichern und erneut vor jeder Zustellung
+abgewiesen. Die referenzierte Variable muss im Backend-Prozess gesetzt sein.
 
 Identity-Header duerfen produktiv nur aktiviert werden, wenn der Reverse Proxy eingehende `x-iscy-tenant-id`, `x-iscy-user-id`, `x-iscy-user-email`, `x-iscy-roles`, `x-iscy-is-staff` und `x-iscy-is-superuser` immer entfernt und nur selbst neu setzt.
 
