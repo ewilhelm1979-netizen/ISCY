@@ -295,18 +295,18 @@ impl SecurityStore {
 
     async fn login_rate_limit_entry_count(&self) -> anyhow::Result<i64> {
         match self {
-            Self::Postgres(pool) => sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM iscy_security_login_rate_limit",
-            )
-            .fetch_one(pool)
-            .await
-            .context("PostgreSQL-Login-Rate-Limit-Kapazitaet konnte nicht gelesen werden"),
-            Self::Sqlite(pool) => sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM iscy_security_login_rate_limit",
-            )
-            .fetch_one(pool)
-            .await
-            .context("SQLite-Login-Rate-Limit-Kapazitaet konnte nicht gelesen werden"),
+            Self::Postgres(pool) => {
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM iscy_security_login_rate_limit")
+                    .fetch_one(pool)
+                    .await
+                    .context("PostgreSQL-Login-Rate-Limit-Kapazitaet konnte nicht gelesen werden")
+            }
+            Self::Sqlite(pool) => {
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM iscy_security_login_rate_limit")
+                    .fetch_one(pool)
+                    .await
+                    .context("SQLite-Login-Rate-Limit-Kapazitaet konnte nicht gelesen werden")
+            }
         }
     }
 

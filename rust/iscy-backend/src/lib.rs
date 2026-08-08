@@ -48017,8 +48017,8 @@ mod tests {
         agent_installation_command, alertmanager_hmac_message, alertmanager_hmac_secret_matches,
         evidence_disposition_preview_from_item, evidence_object_storage_bucket_valid,
         has_software_policy_permission, has_vulnerability_intelligence_permission,
-        hex_encode_bytes, is_agent_payload_error, login_identifier_supported,
-        login_rate_limit_key, login_rate_limit_record_failure_memory_with_limit,
+        hex_encode_bytes, is_agent_payload_error, login_identifier_supported, login_rate_limit_key,
+        login_rate_limit_record_failure_memory_with_limit,
         login_rate_limit_remaining_block_memory_with_limit, normalize_cve_id, powershell_quote,
         prune_login_rate_limit_entries, shell_quote, simple_pdf_document, AlertmanagerHmacSha256,
         AppState, ReadinessCheck, LOGIN_IDENTIFIER_MAX_CHARS,
@@ -48086,9 +48086,7 @@ mod tests {
         login_rate_limit_record_failure_memory_with_limit(&state, "key-1", 2);
         login_rate_limit_record_failure_memory_with_limit(&state, "key-2", 2);
 
-        assert!(
-            login_rate_limit_remaining_block_memory_with_limit(&state, "key-3", 2).is_some()
-        );
+        assert!(login_rate_limit_remaining_block_memory_with_limit(&state, "key-3", 2).is_some());
         assert_eq!(state.login_rate_limits.lock().unwrap().len(), 2);
 
         let pruning_state = AppState::default();
@@ -48096,11 +48094,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(5));
         {
             let mut guard = pruning_state.login_rate_limits.lock().unwrap();
-            prune_login_rate_limit_entries(
-                &mut guard,
-                Instant::now(),
-                Duration::from_millis(1),
-            );
+            prune_login_rate_limit_entries(&mut guard, Instant::now(), Duration::from_millis(1));
             assert!(guard.is_empty());
         }
         login_rate_limit_record_failure_memory_with_limit(&pruning_state, "replacement", 1);
