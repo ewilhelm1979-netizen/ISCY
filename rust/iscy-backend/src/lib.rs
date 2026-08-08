@@ -3493,7 +3493,7 @@ async fn operations_alertmanager_webhook(
 ) -> Response {
     let token_verification = match alertmanager_token_verification(&headers) {
         Ok(verification) => verification,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if let Err(response) = alertmanager_hmac_valid(&state, &headers, &body).await {
         return response;
@@ -3606,31 +3606,31 @@ enum AlertmanagerTokenVerification {
 
 fn alertmanager_token_verification(
     headers: &HeaderMap,
-) -> Result<AlertmanagerTokenVerification, Response> {
+) -> Result<AlertmanagerTokenVerification, Box<Response>> {
     let expected = match hardening::secret_value("ISCY_ALERTMANAGER_TOKEN") {
         Ok(Some(expected)) => expected,
         Ok(None) => return Ok(AlertmanagerTokenVerification::Unconfigured),
         Err(_) => {
-            return Err(alertmanager_auth_response(
+            return Err(Box::new(alertmanager_auth_response(
                 "invalid_alertmanager_token_config",
                 "Alertmanager-Webhook-Token konnte nicht sicher gelesen werden.",
-            ))
+            )))
         }
     };
     let expected = expected.trim();
     if expected.is_empty() {
-        return Err(alertmanager_auth_response(
+        return Err(Box::new(alertmanager_auth_response(
             "invalid_alertmanager_token_config",
             "Alertmanager-Webhook-Token konnte nicht sicher gelesen werden.",
-        ));
+        )));
     }
     if alertmanager_token_matches_expected(headers, expected) {
         return Ok(AlertmanagerTokenVerification::Verified);
     }
-    Err(alertmanager_auth_response(
+    Err(Box::new(alertmanager_auth_response(
         "invalid_alertmanager_token",
         "Alertmanager-Webhook-Token ist ungueltig oder fehlt.",
-    ))
+    )))
 }
 
 fn alertmanager_token_matches_expected(headers: &HeaderMap, expected: &str) -> bool {
