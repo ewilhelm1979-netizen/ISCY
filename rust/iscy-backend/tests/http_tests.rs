@@ -386,6 +386,45 @@ fn docs_markdown_screenshot_references_resolve() {
     }
 }
 
+#[test]
+fn monitoring_compose_defaults_are_fail_closed() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("repo root");
+    let compose_path = repo_root.join("deploy/monitoring/docker-compose.yml");
+    let compose = fs::read_to_string(&compose_path).expect("read monitoring compose file");
+
+    let loopback_binding = "host_ip: \"${ISCY_MONITORING_BIND_ADDRESS:-127.0.0.1}\"";
+    assert_eq!(
+        compose.matches(loopback_binding).count(),
+        3,
+        "every published monitoring port must default to loopback"
+    );
+    for published_port in [
+        "published: \"${ISCY_PROMETHEUS_PORT:-9090}\"",
+        "published: \"${ISCY_ALERTMANAGER_PORT:-9093}\"",
+        "published: \"${ISCY_GRAFANA_PORT:-3000}\"",
+    ] {
+        assert!(
+            compose.contains(published_port),
+            "expected monitoring port mapping is missing: {published_port}"
+        );
+    }
+    assert!(
+        compose.contains("GF_SECURITY_ADMIN_PASSWORD: ${ISCY_GRAFANA_PASSWORD:?"),
+        "Grafana must require an explicit admin password"
+    );
+    assert!(
+        !compose.contains("GF_SECURITY_ADMIN_PASSWORD: ${ISCY_GRAFANA_PASSWORD:-admin}"),
+        "Grafana must not fall back to admin/admin"
+    );
+    assert!(
+        !compose.contains("--web.enable-lifecycle"),
+        "the unauthenticated Prometheus lifecycle endpoint must remain disabled"
+    );
+}
+
 #[tokio::test]
 async fn health_endpoint_returns_ok() {
     let response = app_router()
