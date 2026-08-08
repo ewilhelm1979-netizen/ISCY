@@ -122,7 +122,7 @@ use request_context::{AuthenticatedTenantContext, RequestContext, RequiredTenant
 use requirement_store::RequirementStore;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
-use security_store::SecurityStore;
+use security_store::{LoginRateLimitPolicy, SecurityStore};
 use software_policy_store::{
     SoftwareExceptionCreateRequest, SoftwareExceptionTransitionRequest,
     SoftwarePolicyCreateRequest, SoftwarePolicyError, SoftwarePolicyErrorKind,
@@ -6547,42 +6547,89 @@ fn redirect_with_cookie(location: &str, cookie: &str) -> Response {
 const LOGIN_RATE_LIMIT_MAX_FAILURES: u32 = 5;
 const LOGIN_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(15 * 60);
 const LOGIN_RATE_LIMIT_BLOCK: Duration = Duration::from_secs(15 * 60);
+const LOGIN_RATE_LIMIT_MAX_ENTRIES: usize = 4_096;
+const LOGIN_IDENTIFIER_MAX_CHARS: usize = 254;
+
+fn login_identifier_supported(username: &str) -> bool {
+    let username = username.trim();
+    !username.is_empty()
+        && username
+            .chars()
+            .take(LOGIN_IDENTIFIER_MAX_CHARS + 1)
+            .count()
+            <= LOGIN_IDENTIFIER_MAX_CHARS
+}
 
 fn login_rate_limit_key(tenant_id: Option<i64>, username: &str) -> String {
-    format!(
-        "{}:{}",
-        tenant_id
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "global".to_string()),
-        username.trim().to_ascii_lowercase()
-    )
+    let tenant = tenant_id
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "global".to_string());
+    let normalized_username = username.trim().to_ascii_lowercase();
+    let legacy_compatible_key = format!("{tenant}:{normalized_username}");
+    if legacy_compatible_key.len() <= 255 {
+        return legacy_compatible_key;
+    }
+    let mut digest = Sha256::new();
+    digest.update(legacy_compatible_key.as_bytes());
+    format!("login:{:x}", digest.finalize())
 }
 
 async fn login_rate_limit_remaining_block(state: &AppState, key: &str) -> Option<Duration> {
+    if let Some(remaining) = login_rate_limit_remaining_block_memory(state, key) {
+        return Some(remaining);
+    }
     if let Some(store) = state.security_store.as_ref() {
         if let Ok(remaining) = store
-            .login_rate_limit_remaining_block(key, LOGIN_RATE_LIMIT_WINDOW)
+            .login_rate_limit_remaining_block(
+                key,
+                LOGIN_RATE_LIMIT_WINDOW,
+                LOGIN_RATE_LIMIT_MAX_ENTRIES,
+            )
             .await
         {
             return remaining;
         }
     }
-    login_rate_limit_remaining_block_memory(state, key)
+    None
 }
 
 fn login_rate_limit_remaining_block_memory(state: &AppState, key: &str) -> Option<Duration> {
+    login_rate_limit_remaining_block_memory_with_limit(state, key, LOGIN_RATE_LIMIT_MAX_ENTRIES)
+}
+
+fn login_rate_limit_remaining_block_memory_with_limit(
+    state: &AppState,
+    key: &str,
+    max_entries: usize,
+) -> Option<Duration> {
     let now = Instant::now();
     let mut guard = state.login_rate_limits.lock().ok()?;
-    let entry = guard.get(key)?;
-    if let Some(blocked_until) = entry.blocked_until {
-        if blocked_until > now {
-            return Some(blocked_until.duration_since(now));
+    prune_login_rate_limit_entries(&mut guard, now, LOGIN_RATE_LIMIT_WINDOW);
+    if let Some(entry) = guard.get(key) {
+        if let Some(blocked_until) = entry.blocked_until {
+            if blocked_until > now {
+                return Some(blocked_until.duration_since(now));
+            }
         }
+        return None;
     }
-    if now.duration_since(entry.first_failure_at) > LOGIN_RATE_LIMIT_WINDOW {
-        guard.remove(key);
+    if guard.len() >= max_entries {
+        return Some(LOGIN_RATE_LIMIT_BLOCK);
     }
     None
+}
+
+fn prune_login_rate_limit_entries(
+    entries: &mut HashMap<String, LoginRateLimitEntry>,
+    now: Instant,
+    window: Duration,
+) {
+    entries.retain(|_, entry| {
+        entry
+            .blocked_until
+            .is_some_and(|blocked_until| blocked_until > now)
+            || now.saturating_duration_since(entry.first_failure_at) <= window
+    });
 }
 
 async fn login_rate_limit_record_failure(
@@ -6591,30 +6638,41 @@ async fn login_rate_limit_record_failure(
     tenant_id: Option<i64>,
     username: &str,
 ) {
+    login_rate_limit_record_failure_memory(state, key);
     if let Some(store) = state.security_store.as_ref() {
-        if store
+        let _ = store
             .record_login_failure(
                 key,
                 tenant_id,
                 username,
-                LOGIN_RATE_LIMIT_MAX_FAILURES,
-                LOGIN_RATE_LIMIT_WINDOW,
-                LOGIN_RATE_LIMIT_BLOCK,
+                LoginRateLimitPolicy::new(
+                    LOGIN_RATE_LIMIT_MAX_FAILURES,
+                    LOGIN_RATE_LIMIT_WINDOW,
+                    LOGIN_RATE_LIMIT_BLOCK,
+                    LOGIN_RATE_LIMIT_MAX_ENTRIES,
+                ),
             )
-            .await
-            .is_ok()
-        {
-            return;
-        }
+            .await;
     }
-    login_rate_limit_record_failure_memory(state, key);
 }
 
 fn login_rate_limit_record_failure_memory(state: &AppState, key: &str) {
+    login_rate_limit_record_failure_memory_with_limit(state, key, LOGIN_RATE_LIMIT_MAX_ENTRIES);
+}
+
+fn login_rate_limit_record_failure_memory_with_limit(
+    state: &AppState,
+    key: &str,
+    max_entries: usize,
+) {
     let now = Instant::now();
     let Ok(mut guard) = state.login_rate_limits.lock() else {
         return;
     };
+    prune_login_rate_limit_entries(&mut guard, now, LOGIN_RATE_LIMIT_WINDOW);
+    if !guard.contains_key(key) && guard.len() >= max_entries {
+        return;
+    }
     let entry = guard
         .entry(key.to_string())
         .or_insert_with(|| LoginRateLimitEntry {
@@ -6634,12 +6692,10 @@ fn login_rate_limit_record_failure_memory(state: &AppState, key: &str) {
 }
 
 async fn login_rate_limit_record_success(state: &AppState, key: &str) {
-    if let Some(store) = state.security_store.as_ref() {
-        if store.clear_login_limit(key).await.is_ok() {
-            return;
-        }
-    }
     login_rate_limit_record_success_memory(state, key);
+    if let Some(store) = state.security_store.as_ref() {
+        let _ = store.clear_login_limit(key).await;
+    }
 }
 
 fn login_rate_limit_record_success_memory(state: &AppState, key: &str) {
@@ -6797,6 +6853,20 @@ async fn auth_session_create(
         payload.user_id,
     ) {
         (Some(username), Some(password), tenant_id, _) => {
+            if !login_identifier_supported(username) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: "invalid_login_payload",
+                        message: format!(
+                            "Login-Identifier muss 1 bis {LOGIN_IDENTIFIER_MAX_CHARS} Zeichen enthalten."
+                        ),
+                    }),
+                )
+                    .into_response();
+            }
             let key = login_rate_limit_key(tenant_id, username);
             if let Some(remaining) = login_rate_limit_remaining_block(&state, &key).await {
                 return login_rate_limited_response(remaining);
@@ -18860,6 +18930,17 @@ async fn web_login_submit(
         )
         .into_response();
     };
+    if !login_identifier_supported(&form.username) {
+        return web_page(
+            "Login",
+            "/login/",
+            None,
+            &format!(
+                r#"<section class="panel form-panel error"><h1>Login</h1><p>Benutzername oder E-Mail muss 1 bis {LOGIN_IDENTIFIER_MAX_CHARS} Zeichen enthalten.</p></section>"#,
+            ),
+        )
+        .into_response();
+    }
     let login_key = login_rate_limit_key(form.tenant_id, &form.username);
     if let Some(remaining) = login_rate_limit_remaining_block(&state, &login_key).await {
         return web_page(
@@ -47932,8 +48013,11 @@ mod tests {
         agent_installation_command, alertmanager_hmac_message, alertmanager_hmac_secret_matches,
         evidence_disposition_preview_from_item, evidence_object_storage_bucket_valid,
         has_software_policy_permission, has_vulnerability_intelligence_permission,
-        hex_encode_bytes, is_agent_payload_error, normalize_cve_id, powershell_quote, shell_quote,
-        simple_pdf_document, AlertmanagerHmacSha256, ReadinessCheck,
+        hex_encode_bytes, is_agent_payload_error, login_identifier_supported, login_rate_limit_key,
+        login_rate_limit_record_failure_memory_with_limit,
+        login_rate_limit_remaining_block_memory_with_limit, normalize_cve_id, powershell_quote,
+        prune_login_rate_limit_entries, shell_quote, simple_pdf_document, AlertmanagerHmacSha256,
+        AppState, ReadinessCheck, LOGIN_IDENTIFIER_MAX_CHARS,
     };
 
     #[tokio::test]
@@ -47972,6 +48056,49 @@ mod tests {
             assert_eq!(task.await.unwrap().applied_count, 1);
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn login_rate_limit_keys_and_identifiers_are_bounded() {
+        let maximum_identifier = "a".repeat(LOGIN_IDENTIFIER_MAX_CHARS);
+        let oversized_identifier = "a".repeat(LOGIN_IDENTIFIER_MAX_CHARS + 1);
+
+        assert!(login_identifier_supported(&maximum_identifier));
+        assert!(!login_identifier_supported(&oversized_identifier));
+        assert!(!login_identifier_supported("   "));
+
+        assert_eq!(login_rate_limit_key(Some(7), " Admin "), "7:admin");
+        let key = login_rate_limit_key(Some(7), &maximum_identifier);
+        assert_eq!(key.len(), "login:".len() + 64);
+        assert_eq!(key, login_rate_limit_key(Some(7), &maximum_identifier));
+        assert_ne!(key, login_rate_limit_key(Some(8), &maximum_identifier));
+    }
+
+    #[test]
+    fn login_rate_limit_memory_capacity_fails_closed_and_prunes_expired_entries() {
+        use std::time::{Duration, Instant};
+
+        let state = AppState::default();
+        login_rate_limit_record_failure_memory_with_limit(&state, "key-1", 2);
+        login_rate_limit_record_failure_memory_with_limit(&state, "key-2", 2);
+
+        assert!(login_rate_limit_remaining_block_memory_with_limit(&state, "key-3", 2).is_some());
+        assert_eq!(state.login_rate_limits.lock().unwrap().len(), 2);
+
+        let pruning_state = AppState::default();
+        login_rate_limit_record_failure_memory_with_limit(&pruning_state, "expired", 1);
+        std::thread::sleep(Duration::from_millis(5));
+        {
+            let mut guard = pruning_state.login_rate_limits.lock().unwrap();
+            prune_login_rate_limit_entries(&mut guard, Instant::now(), Duration::from_millis(1));
+            assert!(guard.is_empty());
+        }
+        login_rate_limit_record_failure_memory_with_limit(&pruning_state, "replacement", 1);
+        assert!(pruning_state
+            .login_rate_limits
+            .lock()
+            .unwrap()
+            .contains_key("replacement"));
     }
     use crate::evidence_artifact_storage::FilesystemEvidenceArtifactStorage;
     use crate::evidence_store::EvidenceIntegrityItem;
