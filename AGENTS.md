@@ -77,7 +77,7 @@ Run the relevant subset and explain any skipped command:
 cargo fmt --manifest-path rust/iscy-backend/Cargo.toml -- --check
 cargo clippy --locked --manifest-path rust/iscy-backend/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml
-cargo audit --file rust/iscy-backend/Cargo.lock --ignore RUSTSEC-2023-0071
+cargo audit --file rust/iscy-backend/Cargo.lock --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0235
 cargo deny --manifest-path rust/iscy-backend/Cargo.toml check advisories licenses sources
 make rust-smoke
 make rust-restore-smoke
@@ -87,7 +87,7 @@ docker compose --env-file .env -f docker-compose.yml -f docker-compose.prod.yml 
 docker build --file rust/iscy-backend/Dockerfile rust/iscy-backend
 ```
 
-`RUSTSEC-2023-0071` is ignored only because `rsa` is present in the lockfile through the disabled optional `sqlx-mysql` dependency path and is not reachable from any ISCY target. Re-evaluate and remove the exception if dependency features change.
+`RUSTSEC-2023-0071` is ignored only because `rsa` is present in the lockfile through the disabled optional `sqlx-mysql` dependency path and is not reachable from any ISCY target. `RUSTSEC-2026-0235` is ignored only because `rkyv 0.7` is retained in the lockfile as an inactive optional dependency of `rust_decimal`; ISCY enables only the `serde` and `std` features. CI checks that neither ignored package is present in the active normal, build, or development dependency graph. Re-evaluate and remove an exception if dependency features change or an upstream-safe dependency path becomes available.
 
 Changes to authorization, tenant scoping, evidence, webhooks, imports, backup/restore, or deployment defaults require focused negative tests in addition to the general suite.
 
