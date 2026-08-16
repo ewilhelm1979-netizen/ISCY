@@ -5,12 +5,12 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 source_manifest='release/release-manifest.json'
-source_snapshot='release/published/V23.7.32.json'
+source_snapshot='release/published/V23.7.33.json'
 source_db_admin='rust/iscy-backend/src/db_admin.rs'
 source_notes='docs/RELEASE_NOTES_DRAFT.md'
 guard='./scripts/check_release_candidate_metadata.sh'
-published_version='V23.7.32'
-published_commit='76fa7384bf25e8eaab87f98377cb1db10d4432da'
+published_version='V23.7.33'
+published_commit='2820f19f5fa33069db81e05c10949f2558948d04'
 tmp_dir="$(mktemp -d)"
 cleanup() {
     rm -rf "$tmp_dir"
@@ -132,10 +132,10 @@ expect_tag_fixture_rejected wrong_published_tag_target
 
 git -C "$tag_fixture" tag --delete "$published_version" >/dev/null
 git -C "$tag_fixture" tag "$published_version" "$published_commit"
-git -C "$tag_fixture" tag 'V23.7.33' "$wrong_tag_commit"
+git -C "$tag_fixture" tag 'V23.7.34' "$wrong_tag_commit"
 expect_tag_fixture_category existing_candidate_tag candidate_tag
 
-candidate="$(mutate_manifest wrong_candidate_version '.proposed_version = "V23.7.34"')"
+candidate="$(mutate_manifest wrong_candidate_version '.proposed_version = "V23.7.35"')"
 expect_rejected wrong_candidate_version "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" manifest
 
 candidate="$(mutate_manifest root_binary_claim '
@@ -185,7 +185,7 @@ expect_rejected changed_asset_size "$source_manifest" "$snapshot" "$source_db_ad
 snapshot="$(mutate_snapshot changed_content_type '.assets[0].content_type = "application/x-elf"')"
 expect_rejected changed_content_type "$source_manifest" "$snapshot" "$source_db_admin" "$source_notes" published_snapshot
 
-snapshot="$(mutate_snapshot changed_download_url '.assets[0].download_url = "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.32/replacement"')"
+snapshot="$(mutate_snapshot changed_download_url '.assets[0].download_url = "https://github.com/ewilhelm1979-netizen/ISCY/releases/download/V23.7.33/replacement"')"
 expect_rejected changed_download_url "$source_manifest" "$snapshot" "$source_db_admin" "$source_notes" published_snapshot
 
 snapshot="$(mutate_snapshot removed_evidence_notice 'del(.evidence_notice)')"
@@ -198,9 +198,9 @@ candidate_manifest="$(mutate_manifest prepared_mode '
 ')"
 candidate_notes="$tmp_dir/candidate-notes.md"
 cat >"$candidate_notes" <<'EOF'
-# ISCY V23.7.33 - Release Notes
+# ISCY V23.7.34 - Release Notes
 Status: Stabiler Release.
-Vorgänger: `V23.7.32`.
+Vorgänger: `V23.7.33`.
 nginx:1.31-alpine, Rust `1.97.0`, MSRV bleibt Rust `1.88.0`, nixos-26.05.
 PostgreSQL 16 bleibt der Standard; PostgreSQL 18.4 ist zusaetzlich geprueft.
 Der NIS2-Relevanz-Wizard erzeugt eine Applicability-Begruendung im NIS2- und
