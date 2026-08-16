@@ -125,6 +125,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           nix develop --command make docs-pdf
+          handbook_sha256="$(sha256sum docs/ISCY_Handbuch.pdf | cut -d ' ' -f 1)"
+          tmp_manifest="$(mktemp)"
+          jq --arg handbook_sha256 "$handbook_sha256" \
+            '.handbook_sha256 = $handbook_sha256' \
+            release/release-manifest.json > "$tmp_manifest"
+          mv "$tmp_manifest" release/release-manifest.json
           nix develop --command make release-sbom
           nix develop --command make release-dependency-metadata
           nix develop --command make release-candidate-metadata-check
