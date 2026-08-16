@@ -1,47 +1,36 @@
-# ISCY V23.7.33 - Development Notes
+# ISCY V23.7.33
 
-Status: Development / Unreleased.
+Status: Stabiler Release.
+Vorgänger: `V23.7.32`
 
-Basis: `V23.7.32` (`76fa7384bf25e8eaab87f98377cb1db10d4432da`).
+V23.7.33 bündelt Security-Hardening, Betriebsgrenzen und kontrollierte Dependency-Maintenance seit V23.7.32. Die Datenbankstruktur bleibt bei 45 Migrationen; die 42 visuellen Baselines bleiben unverändert.
 
-Dieser Entwicklungsstand wurde noch nicht veroeffentlicht. Es gibt noch keinen
-Tag und noch kein GitHub Release fuer `V23.7.33`. Aenderungen werden bis zur
-getrennten Release-Vorbereitung unter Unreleased dokumentiert.
+## Security und Betriebsgrenzen
 
-## Veröffentlichte Basis
+- Evidence-S3-Secret-Referenzen sind auf erlaubte, validierte Quellen begrenzt und verhalten sich bei ungültigen Referenzen fail-closed.
+- Öffentliche Readiness-Prüfungen begrenzen Datenbankzugriffe und vermeiden unnötige interne Prüfdetails an der öffentlichen Grenze.
+- Agent-Webhook-Secret-Referenzen werden kanonisch begrenzt; Legacy-Fälle sind durch Regressionstests abgedeckt.
+- Login-Rate-Limit-Zustand und Passwortverifikation sind begrenzt, damit Angreifer keine unbeschränkte Zustands- oder Verifikationsarbeit erzwingen können.
+- Alertmanager-Persistenz ist an eine vertrauenswürdige Service-Identität gebunden; Monitoring-Defaults und Dokumentation wurden gehärtet.
+- Incident-Runbook-Expansion ist begrenzt und durch Datenbank- und API-Regressionstests abgesichert.
+- Die dokumentierte `rkyv`-Advisory-Ausnahme bleibt auf einen inaktiven optionalen Dependency-Pfad beschränkt; CI blockiert eine unbeabsichtigte Aktivierung fail-closed.
 
-`V23.7.32` wurde als GitHub Release `363588955` mit sechs Assets
-veroeffentlicht. Der kontrolliert heruntergeladene und per SHA-256
-rueckverifizierte Metadaten-Snapshot liegt unter
-`release/published/V23.7.32.json`. Er dokumentiert Tagziel,
-Veroeffentlichungszeitpunkt, Status, Asset-IDs, Groessen, Medientypen,
-Download-URLs und die verifizierten SHA-256-Werte.
+## Supply Chain und Plattform
 
-Der Snapshot ist Metadaten-Evidence und keine kryptografische Attestation. Das
-Release und seine Artefakte sind unsigniert. Die CycloneDX-SBOM bildet den
-finalen Dependency-Graph ab und ist reproduzierbar; ihr deterministischer
-Metadatenzeitstempel folgt dem bestehenden Repository-Vertrag. Sie ist weder
-eine Attestation noch eine VEX- oder Schwachstellenfreiheitsaussage.
+- `calamine` wurde kontrolliert von `0.36.0` auf `0.36.1` aktualisiert.
+- `base64` wurde kontrolliert von `0.23.0` auf `0.23.1` aktualisiert.
+- Der `nixos-26.05`-Lock wurde auf den validierten nixpkgs-Stand `8b8c811c7c2541c30382c5de7ed26be055569c60` aktualisiert.
+- `actions/checkout` 7.0.1 und `taiki-e/install-action` 2.85.10 werden weiterhin über unveränderliche Commit-SHAs eingebunden.
+- Die Produkt-Buildtoolchain bleibt Rust `1.97.0`; die MSRV bleibt Rust `1.88.0`. Der Reverse-Proxy-Stand bleibt `nginx:1.31-alpine`.
+- PostgreSQL 16 bleibt der Standard. Die zusätzliche PostgreSQL 18.4-Kompatibilität und der logische Upgrade-Pfad werden weiterhin in der Pflichtpipeline geprüft.
 
-## Entwicklungsstand seit der Basis
+## Governance-Grenzen
 
-Dieser Lifecycle-Stand enthaelt gegenueber dem veroeffentlichten
-`V23.7.32`-Commit keine Produktfunktion, Migration, Dependency-Aktualisierung,
-Visual-Baseline oder Release-Artefaktaenderung. Kuenftige Aenderungen fuer
-`V23.7.33` muessen unter Unreleased dokumentiert und in einer separaten
-Release-Vorbereitung vollstaendig neu validiert werden.
+- Der NIS2-Relevanz-Wizard und seine Applicability-Begruendung unterstützen die nachvollziehbare Einordnung im NIS2- und KRITIS-Kontext, liefern aber keine rechtsverbindliche Einstufung.
+- Eine DORA-Konformitaetsbewertung erfolgt nicht.
+- Für den Cyber Resilience Act (CRA) erfolgt keine automatische Konformitaetsbewertung oder CE-Freigabe.
+- ISCY liefert keine automatische Zertifizierung und ersetzt keine Rechtsberatung.
 
-## Lifecycle-Grenzen
+## Release-Qualität
 
-- Das Root-Manifest steht auf `development_unreleased` mit `git:HEAD` und dem
-  veroeffentlichten V23.7.32-Commit als `source_base_commit`.
-- Teststatus und Release-Artefakt-Reproduzierbarkeit sind auf erneute
-  Development- beziehungsweise Release-Validierung zurueckgesetzt.
-- In diesem Status kann fuer `V23.7.33` kein Release-Bundle erzeugt werden.
-- `V23.7.32` kann als bereits veroeffentlichte Version nicht erneut vorbereitet
-  oder ueberschrieben werden.
-- Tag, GitHub Release, Assets und Published-Snapshot von `V23.7.32` werden
-  nicht veraendert.
-- Es wird keine Signatur, Attestation, VEX-Aussage, Zertifizierung,
-  Schwachstellenfreiheit oder Release-Freigabe behauptet.
-- Die menschliche Security-, Betriebs- und Release-Review bleibt erforderlich.
+Der Release-Gate umfasst Rust-Formatierung, Clippy und Tests, Supply-Chain-Audit und Lizenzprüfung, Secret-Scan, MSRV-Prüfung, Nix-Smoke, Docker-Konfiguration, Object-Storage-Integration, HA- und PostgreSQL-18-Prüfung, Performance-Smoke, Visual Regression sowie einen zweifachen reproduzierbaren Build des portablen Release-Binaries. SBOM und Release-Checksummen werden deterministisch aus dem Release-Stand erzeugt.

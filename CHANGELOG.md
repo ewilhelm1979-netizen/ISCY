@@ -6,19 +6,28 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
-### Release lifecycle
+Keine Änderungen außerhalb des für V23.7.33 eingefrorenen Release-Scope.
 
-- dokumentiert die Veroeffentlichung von `V23.7.32` mit Release-ID
-  `363588955`, Tagziel
-  `76fa7384bf25e8eaab87f98377cb1db10d4432da` und sechs kontrolliert
-  heruntergeladenen, per SHA-256 verifizierten Assets im unveraenderlichen
-  Published-Snapshot `release/published/V23.7.32.json`
-- beginnt den Entwicklungszyklus fuer `V23.7.33` auf Basis des unveraenderten,
-  veroeffentlichten Stable Release `V23.7.32` und setzt den Root-Lifecycle auf
-  `development_unreleased`
-- setzt Release-Artefakt- und Teststatus fail-closed auf erneute Development-
-  und Release-Validierung zurueck; in diesem Zustand kann kein Release-Bundle
-  fuer `V23.7.33` oder eine bereits veroeffentlichte Version erzeugt werden
+## V23.7.33 - 2026-08-16
+
+### Security hardening
+
+- begrenzt Evidence-S3- und Agent-Webhook-Secret-Referenzen auf validierte Quellen und deckt Legacy-Grenzen durch Regressionstests ab
+- begrenzt öffentlichen Readiness-Datenbankzugriff, Login-Rate-Limit-Zustand, Passwortverifikation und Incident-Runbook-Expansion fail-closed
+- bindet Alertmanager-Persistenz an eine vertrauenswürdige Service-Identität und härtet Monitoring-Defaults
+- hält die dokumentierte `rkyv`-Advisory-Ausnahme auf einem inaktiven optionalen Dependency-Pfad und überwacht diese Grenze in CI
+
+### Supply chain maintenance
+
+- aktualisiert `calamine` auf `0.36.1` und `base64` auf `0.23.1`
+- aktualisiert den `nixos-26.05`-Lock auf `8b8c811c7c2541c30382c5de7ed26be055569c60`
+- übernimmt die gepinnten Action-Maintenance-Stände `actions/checkout` 7.0.1 und `taiki-e/install-action` 2.85.10
+- lässt Rust-Produkttoolchain 1.97.0, MSRV 1.88.0, PostgreSQL-16-Standard, PostgreSQL-18.4-Kompatibilität und 45 Migrationen unverändert
+
+### Release integrity
+
+- erzeugt Handbuch, CycloneDX-1.5-SBOM und Dependency-Hashes deterministisch neu
+- verlangt alle elf CI-Pflichtjobs, 42 Visual-Baselines und den zweifachen reproduzierbaren portablen Binary-Build vor der Freigabe
 
 ## V23.7.32 - 2026-08-01
 

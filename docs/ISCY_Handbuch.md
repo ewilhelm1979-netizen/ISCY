@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand August 2026 (ISCY V23.7.32 Release vorbereitet / Rust 0.3.22)
+Version: Arbeitsstand August 2026 (ISCY V23.7.33 Release vorbereitet / Rust 0.3.22)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
