@@ -152,7 +152,7 @@ jobs:
             --latest
           test "$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = 'false'
           test "$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')" = 'false'
-          test "$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json isLatest --jq '.isLatest')" = 'true'
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')" = "$RELEASE_VERSION"
           git fetch --force origin "refs/tags/$RELEASE_VERSION:refs/tags/$RELEASE_VERSION"
           tag_commit="$(git rev-list -n 1 "$RELEASE_VERSION")"
           test "$tag_commit" = "$GITHUB_SHA"
@@ -166,4 +166,5 @@ jobs:
             release-manifest.json
           )
           test "${final_assets[*]}" = "${expected_assets[*]}"
-          gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json databaseId,tagName,name,publishedAt,isDraft,isPrerelease,isLatest,targetCommitish,assets
+          gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json databaseId,tagName,name,publishedAt,isDraft,isPrerelease,targetCommitish,assets
+          gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '{id, tag_name, name, published_at, draft, prerelease, target_commitish}'
