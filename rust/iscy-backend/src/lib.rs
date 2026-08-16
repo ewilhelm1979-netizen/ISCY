@@ -75,6 +75,30 @@ pub mod threat_intelligence_store;
 pub mod vulnerability_intelligence;
 pub mod wizard_store;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlertmanagerServicePrincipal {
+    pub tenant_id: i64,
+    pub user_id: i64,
+}
+
+impl AlertmanagerServicePrincipal {
+    pub fn new(tenant_id: i64, user_id: i64) -> Option<Self> {
+        (tenant_id > 0 && user_id > 0).then_some(Self { tenant_id, user_id })
+    }
+
+    fn tenant_context(self) -> AuthenticatedTenantContext {
+        AuthenticatedTenantContext {
+            tenant_id: self.tenant_id,
+            user_id: self.user_id,
+            user_email: None,
+            roles: vec!["CONTRIBUTOR".to_string()],
+            permissions: Vec::new(),
+            is_staff: false,
+            is_superuser: false,
+        }
+    }
+}
+
 use account_store::AccountStore;
 use agent_governance_store::AgentGovernanceStore;
 use agent_pki_store::AgentPkiStore;
@@ -111,7 +135,7 @@ use evidence_s3_runtime::{
 };
 use evidence_s3_store::EvidenceS3RuntimeObject;
 use evidence_store::EvidenceStore;
-use hardening::CommunitySecurityConfig;
+use hardening::{AppMode, CommunitySecurityConfig};
 use import_preview::{ImportPreview, ImportUploadFile};
 use import_store::ImportStore;
 use incident_store::{IncidentAlertmanagerMetrics, IncidentStore};
@@ -122,7 +146,7 @@ use request_context::{AuthenticatedTenantContext, RequestContext, RequiredTenant
 use requirement_store::RequirementStore;
 use risk_store::RiskStore;
 use roadmap_store::RoadmapStore;
-use security_store::SecurityStore;
+use security_store::{LoginRateLimitPolicy, SecurityStore};
 use software_policy_store::{
     SoftwareExceptionCreateRequest, SoftwareExceptionTransitionRequest,
     SoftwarePolicyCreateRequest, SoftwarePolicyError, SoftwarePolicyErrorKind,
@@ -154,6 +178,7 @@ use wizard_store::WizardStore;
 
 #[derive(Clone, Default)]
 pub struct AppState {
+    pub alertmanager_service_principal: Option<AlertmanagerServicePrincipal>,
     pub account_store: Option<AccountStore>,
     pub ai_governance_store: Option<AiGovernanceStore>,
     pub agent_governance_store: Option<AgentGovernanceStore>,
@@ -192,6 +217,7 @@ pub struct AppState {
     runtime_status: RuntimeStatus,
     readiness_check: ReadinessCheck,
     login_rate_limits: Arc<Mutex<HashMap<String, LoginRateLimitEntry>>>,
+    login_password_verification_gate: LoginPasswordVerificationGate,
 }
 
 const READINESS_CACHE_TTL: Duration = Duration::from_secs(5);
@@ -206,6 +232,29 @@ struct ReadinessCheck {
 struct CachedReadiness {
     checked_at: Instant,
     result: Result<db_admin::DbMigrationStatus, ReadinessCheckError>,
+}
+
+#[derive(Clone)]
+struct LoginPasswordVerificationGate {
+    semaphore: Arc<tokio::sync::Semaphore>,
+}
+
+impl LoginPasswordVerificationGate {
+    fn new(max_concurrent: usize) -> Self {
+        Self {
+            semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent)),
+        }
+    }
+
+    fn try_acquire(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.semaphore).try_acquire_owned().ok()
+    }
+}
+
+impl Default for LoginPasswordVerificationGate {
+    fn default() -> Self {
+        Self::new(LOGIN_PASSWORD_VERIFICATION_MAX_CONCURRENCY)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -276,6 +325,7 @@ struct LoginRateLimitEntry {
 impl AppState {
     pub fn new(cve_store: Option<CveStore>) -> Self {
         Self {
+            alertmanager_service_principal: None,
             account_store: None,
             ai_governance_store: None,
             agent_governance_store: None,
@@ -314,11 +364,13 @@ impl AppState {
             runtime_status: RuntimeStatus::default(),
             readiness_check: ReadinessCheck::default(),
             login_rate_limits: Arc::new(Mutex::new(HashMap::new())),
+            login_password_verification_gate: LoginPasswordVerificationGate::default(),
         }
     }
 
     pub fn with_stores(cve_store: Option<CveStore>, tenant_store: Option<TenantStore>) -> Self {
         Self {
+            alertmanager_service_principal: None,
             account_store: None,
             ai_governance_store: None,
             agent_governance_store: None,
@@ -357,11 +409,20 @@ impl AppState {
             runtime_status: RuntimeStatus::default(),
             readiness_check: ReadinessCheck::default(),
             login_rate_limits: Arc::new(Mutex::new(HashMap::new())),
+            login_password_verification_gate: LoginPasswordVerificationGate::default(),
         }
     }
 
     pub fn with_dashboard_store(mut self, dashboard_store: Option<DashboardStore>) -> Self {
         self.dashboard_store = dashboard_store;
+        self
+    }
+
+    pub fn with_alertmanager_service_principal(
+        mut self,
+        principal: Option<AlertmanagerServicePrincipal>,
+    ) -> Self {
+        self.alertmanager_service_principal = principal;
         self
     }
 
@@ -3456,18 +3517,10 @@ async fn operations_alertmanager_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if !alertmanager_token_matches(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(ApiErrorResponse {
-                accepted: false,
-                api_version: "v1",
-                error_code: "invalid_alertmanager_token",
-                message: "Alertmanager-Webhook-Token ist ungueltig oder fehlt.".to_string(),
-            }),
-        )
-            .into_response();
-    }
+    let token_verification = match alertmanager_token_verification(&headers) {
+        Ok(verification) => verification,
+        Err(response) => return *response,
+    };
     if let Err(response) = alertmanager_hmac_valid(&state, &headers, &body).await {
         return response;
     }
@@ -3528,7 +3581,13 @@ async fn operations_alertmanager_webhook(
             }
         })
         .collect::<Vec<_>>();
-    let persistence = persist_alertmanager_alerts(&state, &headers, &alerts).await;
+    let persistence = persist_alertmanager_alerts(
+        &state,
+        &headers,
+        &alerts,
+        token_verification == AlertmanagerTokenVerification::Verified,
+    )
+    .await;
     let tenant_hint = payload
         .common_labels
         .get("tenant_id")
@@ -3565,26 +3624,55 @@ async fn operations_alertmanager_webhook(
         .into_response()
 }
 
-fn alertmanager_token_matches(headers: &HeaderMap) -> bool {
-    let Ok(Some(expected)) = hardening::secret_value("ISCY_ALERTMANAGER_TOKEN") else {
-        return true;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlertmanagerTokenVerification {
+    Unconfigured,
+    Verified,
+}
+
+fn alertmanager_token_verification(
+    headers: &HeaderMap,
+) -> Result<AlertmanagerTokenVerification, Box<Response>> {
+    let expected = match hardening::secret_value("ISCY_ALERTMANAGER_TOKEN") {
+        Ok(Some(expected)) => expected,
+        Ok(None) => return Ok(AlertmanagerTokenVerification::Unconfigured),
+        Err(_) => {
+            return Err(Box::new(alertmanager_auth_response(
+                "invalid_alertmanager_token_config",
+                "Alertmanager-Webhook-Token konnte nicht sicher gelesen werden.",
+            )))
+        }
     };
     let expected = expected.trim();
     if expected.is_empty() {
-        return true;
+        return Err(Box::new(alertmanager_auth_response(
+            "invalid_alertmanager_token_config",
+            "Alertmanager-Webhook-Token konnte nicht sicher gelesen werden.",
+        )));
     }
+    if alertmanager_token_matches_expected(headers, expected) {
+        return Ok(AlertmanagerTokenVerification::Verified);
+    }
+    Err(Box::new(alertmanager_auth_response(
+        "invalid_alertmanager_token",
+        "Alertmanager-Webhook-Token ist ungueltig oder fehlt.",
+    )))
+}
+
+fn alertmanager_token_matches_expected(headers: &HeaderMap, expected: &str) -> bool {
     let header_token = headers
         .get("x-iscy-alert-token")
         .and_then(|value| value.to_str().ok())
         .map(str::trim);
-    if header_token == Some(expected) {
+    if header_token.is_some_and(|value| constant_time_eq(value.as_bytes(), expected.as_bytes())) {
         return true;
     }
     headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().strip_prefix("Bearer "))
-        .is_some_and(|value| value.trim() == expected)
+        .map(str::trim)
+        .is_some_and(|value| constant_time_eq(value.as_bytes(), expected.as_bytes()))
 }
 
 type AlertmanagerHmacSha256 = Hmac<Sha256>;
@@ -3793,16 +3881,24 @@ async fn persist_alertmanager_alerts(
     state: &AppState,
     headers: &HeaderMap,
     alerts: &[AlertmanagerAlertSummary],
+    webhook_token_verified: bool,
 ) -> AlertmanagerPersistenceSummary {
-    let context = match alertmanager_persistence_context(state, headers).await {
-        Ok(context) => context,
-        Err(_) => {
-            return AlertmanagerPersistenceSummary {
-                skipped_reason: Some("missing_tenant_context".to_string()),
-                ..Default::default()
+    let context =
+        match alertmanager_persistence_context(state, headers, webhook_token_verified).await {
+            Ok(context) => context,
+            Err(AlertmanagerPersistenceContextError::UnverifiedSource) => {
+                return AlertmanagerPersistenceSummary {
+                    skipped_reason: Some("unverified_alertmanager_source".to_string()),
+                    ..Default::default()
+                }
             }
-        }
-    };
+            Err(AlertmanagerPersistenceContextError::MissingContext) => {
+                return AlertmanagerPersistenceSummary {
+                    skipped_reason: Some("missing_tenant_context".to_string()),
+                    ..Default::default()
+                }
+            }
+        };
     if !context.can_write() {
         return AlertmanagerPersistenceSummary {
             skipped_reason: Some("read_only_context".to_string()),
@@ -3982,14 +4078,35 @@ async fn persist_alertmanager_alerts(
     summary
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AlertmanagerPersistenceContextError {
+    UnverifiedSource,
+    MissingContext,
+}
+
 async fn alertmanager_persistence_context(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<AuthenticatedTenantContext, RequiredTenantContextError> {
-    match RequestContext::authenticated_tenant_from_headers(headers) {
-        Ok(context) => Ok(context),
-        Err(_) => authenticated_tenant_context(state, headers).await,
+    webhook_token_verified: bool,
+) -> Result<AuthenticatedTenantContext, AlertmanagerPersistenceContextError> {
+    if let Some(token) = session_token_from_headers(headers) {
+        if let Some(store) = state.auth_store.as_ref() {
+            if let Ok(Some(session)) = store.resolve_session(&token).await {
+                return Ok(session.tenant_context());
+            }
+        }
     }
+    if !webhook_token_verified && state.security_config.app_mode != AppMode::Development {
+        return Err(AlertmanagerPersistenceContextError::UnverifiedSource);
+    }
+    if webhook_token_verified {
+        return state
+            .alertmanager_service_principal
+            .map(AlertmanagerServicePrincipal::tenant_context)
+            .ok_or(AlertmanagerPersistenceContextError::MissingContext);
+    }
+    RequestContext::authenticated_tenant_from_headers(headers)
+        .map_err(|_| AlertmanagerPersistenceContextError::MissingContext)
 }
 
 fn alertmanager_incident_payload(
@@ -6547,42 +6664,96 @@ fn redirect_with_cookie(location: &str, cookie: &str) -> Response {
 const LOGIN_RATE_LIMIT_MAX_FAILURES: u32 = 5;
 const LOGIN_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(15 * 60);
 const LOGIN_RATE_LIMIT_BLOCK: Duration = Duration::from_secs(15 * 60);
+const LOGIN_RATE_LIMIT_MAX_ENTRIES: usize = 4_096;
+const LOGIN_IDENTIFIER_MAX_CHARS: usize = 254;
+const LOGIN_PASSWORD_MAX_BYTES: usize = 1_024;
+const LOGIN_PASSWORD_VERIFICATION_MAX_CONCURRENCY: usize = 2;
+const LOGIN_REQUEST_BODY_MAX_BYTES: usize = 4 * 1_024;
+
+fn login_identifier_supported(username: &str) -> bool {
+    let username = username.trim();
+    !username.is_empty()
+        && username
+            .chars()
+            .take(LOGIN_IDENTIFIER_MAX_CHARS + 1)
+            .count()
+            <= LOGIN_IDENTIFIER_MAX_CHARS
+}
+
+fn login_password_supported(password: &str) -> bool {
+    !password.is_empty() && password.len() <= LOGIN_PASSWORD_MAX_BYTES
+}
 
 fn login_rate_limit_key(tenant_id: Option<i64>, username: &str) -> String {
-    format!(
-        "{}:{}",
-        tenant_id
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "global".to_string()),
-        username.trim().to_ascii_lowercase()
-    )
+    let tenant = tenant_id
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "global".to_string());
+    let normalized_username = username.trim().to_ascii_lowercase();
+    let legacy_compatible_key = format!("{tenant}:{normalized_username}");
+    if legacy_compatible_key.len() <= 255 {
+        return legacy_compatible_key;
+    }
+    let mut digest = Sha256::new();
+    digest.update(legacy_compatible_key.as_bytes());
+    format!("login:{:x}", digest.finalize())
 }
 
 async fn login_rate_limit_remaining_block(state: &AppState, key: &str) -> Option<Duration> {
+    if let Some(remaining) = login_rate_limit_remaining_block_memory(state, key) {
+        return Some(remaining);
+    }
     if let Some(store) = state.security_store.as_ref() {
         if let Ok(remaining) = store
-            .login_rate_limit_remaining_block(key, LOGIN_RATE_LIMIT_WINDOW)
+            .login_rate_limit_remaining_block(
+                key,
+                LOGIN_RATE_LIMIT_WINDOW,
+                LOGIN_RATE_LIMIT_MAX_ENTRIES,
+            )
             .await
         {
             return remaining;
         }
     }
-    login_rate_limit_remaining_block_memory(state, key)
+    None
 }
 
 fn login_rate_limit_remaining_block_memory(state: &AppState, key: &str) -> Option<Duration> {
+    login_rate_limit_remaining_block_memory_with_limit(state, key, LOGIN_RATE_LIMIT_MAX_ENTRIES)
+}
+
+fn login_rate_limit_remaining_block_memory_with_limit(
+    state: &AppState,
+    key: &str,
+    max_entries: usize,
+) -> Option<Duration> {
     let now = Instant::now();
     let mut guard = state.login_rate_limits.lock().ok()?;
-    let entry = guard.get(key)?;
-    if let Some(blocked_until) = entry.blocked_until {
-        if blocked_until > now {
-            return Some(blocked_until.duration_since(now));
+    prune_login_rate_limit_entries(&mut guard, now, LOGIN_RATE_LIMIT_WINDOW);
+    if let Some(entry) = guard.get(key) {
+        if let Some(blocked_until) = entry.blocked_until {
+            if blocked_until > now {
+                return Some(blocked_until.duration_since(now));
+            }
         }
+        return None;
     }
-    if now.duration_since(entry.first_failure_at) > LOGIN_RATE_LIMIT_WINDOW {
-        guard.remove(key);
+    if guard.len() >= max_entries {
+        return Some(LOGIN_RATE_LIMIT_BLOCK);
     }
     None
+}
+
+fn prune_login_rate_limit_entries(
+    entries: &mut HashMap<String, LoginRateLimitEntry>,
+    now: Instant,
+    window: Duration,
+) {
+    entries.retain(|_, entry| {
+        entry
+            .blocked_until
+            .is_some_and(|blocked_until| blocked_until > now)
+            || now.saturating_duration_since(entry.first_failure_at) <= window
+    });
 }
 
 async fn login_rate_limit_record_failure(
@@ -6591,30 +6762,41 @@ async fn login_rate_limit_record_failure(
     tenant_id: Option<i64>,
     username: &str,
 ) {
+    login_rate_limit_record_failure_memory(state, key);
     if let Some(store) = state.security_store.as_ref() {
-        if store
+        let _ = store
             .record_login_failure(
                 key,
                 tenant_id,
                 username,
-                LOGIN_RATE_LIMIT_MAX_FAILURES,
-                LOGIN_RATE_LIMIT_WINDOW,
-                LOGIN_RATE_LIMIT_BLOCK,
+                LoginRateLimitPolicy::new(
+                    LOGIN_RATE_LIMIT_MAX_FAILURES,
+                    LOGIN_RATE_LIMIT_WINDOW,
+                    LOGIN_RATE_LIMIT_BLOCK,
+                    LOGIN_RATE_LIMIT_MAX_ENTRIES,
+                ),
             )
-            .await
-            .is_ok()
-        {
-            return;
-        }
+            .await;
     }
-    login_rate_limit_record_failure_memory(state, key);
 }
 
 fn login_rate_limit_record_failure_memory(state: &AppState, key: &str) {
+    login_rate_limit_record_failure_memory_with_limit(state, key, LOGIN_RATE_LIMIT_MAX_ENTRIES);
+}
+
+fn login_rate_limit_record_failure_memory_with_limit(
+    state: &AppState,
+    key: &str,
+    max_entries: usize,
+) {
     let now = Instant::now();
     let Ok(mut guard) = state.login_rate_limits.lock() else {
         return;
     };
+    prune_login_rate_limit_entries(&mut guard, now, LOGIN_RATE_LIMIT_WINDOW);
+    if !guard.contains_key(key) && guard.len() >= max_entries {
+        return;
+    }
     let entry = guard
         .entry(key.to_string())
         .or_insert_with(|| LoginRateLimitEntry {
@@ -6634,12 +6816,10 @@ fn login_rate_limit_record_failure_memory(state: &AppState, key: &str) {
 }
 
 async fn login_rate_limit_record_success(state: &AppState, key: &str) {
-    if let Some(store) = state.security_store.as_ref() {
-        if store.clear_login_limit(key).await.is_ok() {
-            return;
-        }
-    }
     login_rate_limit_record_success_memory(state, key);
+    if let Some(store) = state.security_store.as_ref() {
+        let _ = store.clear_login_limit(key).await;
+    }
 }
 
 fn login_rate_limit_record_success_memory(state: &AppState, key: &str) {
@@ -6659,6 +6839,20 @@ fn login_rate_limited_response(remaining: Duration) -> Response {
                 "Zu viele fehlgeschlagene Login-Versuche. Bitte in {} Sekunden erneut versuchen.",
                 remaining.as_secs().max(1)
             ),
+        }),
+    )
+        .into_response()
+}
+
+fn login_verification_busy_response() -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(ApiErrorResponse {
+            accepted: false,
+            api_version: "v1",
+            error_code: "login_verification_busy",
+            message: "Zu viele parallele Login-Pruefungen. Bitte spaeter erneut versuchen."
+                .to_string(),
         }),
     )
         .into_response()
@@ -6797,10 +6991,42 @@ async fn auth_session_create(
         payload.user_id,
     ) {
         (Some(username), Some(password), tenant_id, _) => {
+            if !login_identifier_supported(username) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: "invalid_login_payload",
+                        message: format!(
+                            "Login-Identifier muss 1 bis {LOGIN_IDENTIFIER_MAX_CHARS} Zeichen enthalten."
+                        ),
+                    }),
+                )
+                    .into_response();
+            }
+            if !login_password_supported(password) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiErrorResponse {
+                        accepted: false,
+                        api_version: "v1",
+                        error_code: "invalid_login_payload",
+                        message: format!(
+                            "Login-Passwort muss 1 bis {LOGIN_PASSWORD_MAX_BYTES} Byte umfassen."
+                        ),
+                    }),
+                )
+                    .into_response();
+            }
             let key = login_rate_limit_key(tenant_id, username);
             if let Some(remaining) = login_rate_limit_remaining_block(&state, &key).await {
                 return login_rate_limited_response(remaining);
             }
+            let Some(_verification_permit) = state.login_password_verification_gate.try_acquire()
+            else {
+                return login_verification_busy_response();
+            };
             login_context = Some((key, tenant_id, username.to_string()));
             store
                 .create_session_for_login(tenant_id, username, password)
@@ -18860,6 +19086,28 @@ async fn web_login_submit(
         )
         .into_response();
     };
+    if !login_identifier_supported(&form.username) {
+        return web_page(
+            "Login",
+            "/login/",
+            None,
+            &format!(
+                r#"<section class="panel form-panel error"><h1>Login</h1><p>Benutzername oder E-Mail muss 1 bis {LOGIN_IDENTIFIER_MAX_CHARS} Zeichen enthalten.</p></section>"#,
+            ),
+        )
+        .into_response();
+    }
+    if !login_password_supported(&form.password) {
+        return web_page(
+            "Login",
+            "/login/",
+            None,
+            &format!(
+                r#"<section class="panel form-panel error"><h1>Login</h1><p>Passwort muss 1 bis {LOGIN_PASSWORD_MAX_BYTES} Byte umfassen.</p></section>"#,
+            ),
+        )
+        .into_response();
+    }
     let login_key = login_rate_limit_key(form.tenant_id, &form.username);
     if let Some(remaining) = login_rate_limit_remaining_block(&state, &login_key).await {
         return web_page(
@@ -18873,6 +19121,15 @@ async fn web_login_submit(
         )
         .into_response();
     }
+    let Some(_verification_permit) = state.login_password_verification_gate.try_acquire() else {
+        return web_page(
+            "Login",
+            "/login/",
+            None,
+            r#"<section class="panel form-panel error"><h1>Login</h1><p>Zu viele parallele Login-Pruefungen. Bitte spaeter erneut versuchen.</p></section>"#,
+        )
+        .into_response();
+    };
     match store
         .create_session_for_login(form.tenant_id, &form.username, &form.password)
         .await
@@ -46558,7 +46815,9 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/api/v1/context/tenant", get(context_tenant))
         .route(
             "/api/v1/auth/sessions",
-            post(auth_session_create).get(auth_session_current),
+            post(auth_session_create)
+                .get(auth_session_current)
+                .layer(DefaultBodyLimit::max(LOGIN_REQUEST_BODY_MAX_BYTES)),
         )
         .route("/api/v1/auth/session", get(auth_session_current))
         .route("/api/v1/auth/logout", post(auth_logout))
@@ -47413,7 +47672,12 @@ pub fn app_router_with_state(state: AppState) -> Router {
         )
         .route("/api/v1/requirements", get(requirement_library))
         .route("/", get(web_index))
-        .route("/login/", get(web_login).post(web_login_submit))
+        .route(
+            "/login/",
+            get(web_login)
+                .post(web_login_submit)
+                .layer(DefaultBodyLimit::max(LOGIN_REQUEST_BODY_MAX_BYTES)),
+        )
         .route("/navigator/", get(web_navigator))
         .route("/dashboard/", get(web_dashboard))
         .route("/status/", get(web_status))
@@ -47930,10 +48194,17 @@ mod tests {
 
     use super::{
         agent_installation_command, alertmanager_hmac_message, alertmanager_hmac_secret_matches,
+        alertmanager_persistence_context, alertmanager_token_matches_expected,
         evidence_disposition_preview_from_item, evidence_object_storage_bucket_valid,
         has_software_policy_permission, has_vulnerability_intelligence_permission,
-        hex_encode_bytes, is_agent_payload_error, normalize_cve_id, powershell_quote, shell_quote,
-        simple_pdf_document, AlertmanagerHmacSha256, ReadinessCheck,
+        hex_encode_bytes, is_agent_payload_error, login_identifier_supported,
+        login_password_supported, login_rate_limit_key,
+        login_rate_limit_record_failure_memory_with_limit,
+        login_rate_limit_remaining_block_memory_with_limit, normalize_cve_id,
+        persist_alertmanager_alerts, powershell_quote, prune_login_rate_limit_entries, shell_quote,
+        simple_pdf_document, AlertmanagerHmacSha256, AlertmanagerPersistenceContextError,
+        AlertmanagerServicePrincipal, AppState, LoginPasswordVerificationGate, ReadinessCheck,
+        LOGIN_IDENTIFIER_MAX_CHARS, LOGIN_PASSWORD_MAX_BYTES,
     };
 
     #[tokio::test]
@@ -47972,6 +48243,141 @@ mod tests {
             assert_eq!(task.await.unwrap().applied_count, 1);
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn login_rate_limit_keys_and_identifiers_are_bounded() {
+        let maximum_identifier = "a".repeat(LOGIN_IDENTIFIER_MAX_CHARS);
+        let oversized_identifier = "a".repeat(LOGIN_IDENTIFIER_MAX_CHARS + 1);
+
+        assert!(login_identifier_supported(&maximum_identifier));
+        assert!(!login_identifier_supported(&oversized_identifier));
+        assert!(!login_identifier_supported("   "));
+
+        assert_eq!(login_rate_limit_key(Some(7), " Admin "), "7:admin");
+        let key = login_rate_limit_key(Some(7), &maximum_identifier);
+        assert_eq!(key.len(), "login:".len() + 64);
+        assert_eq!(key, login_rate_limit_key(Some(7), &maximum_identifier));
+        assert_ne!(key, login_rate_limit_key(Some(8), &maximum_identifier));
+    }
+
+    #[test]
+    fn login_passwords_and_verification_concurrency_are_bounded() {
+        assert!(login_password_supported("password"));
+        assert!(login_password_supported(
+            &"a".repeat(LOGIN_PASSWORD_MAX_BYTES)
+        ));
+        assert!(!login_password_supported(""));
+        assert!(!login_password_supported(
+            &"a".repeat(LOGIN_PASSWORD_MAX_BYTES + 1)
+        ));
+
+        let gate = LoginPasswordVerificationGate::new(1);
+        let permit = gate.try_acquire().unwrap();
+        assert!(gate.try_acquire().is_none());
+        drop(permit);
+        assert!(gate.try_acquire().is_some());
+    }
+
+    #[test]
+    fn login_rate_limit_memory_capacity_fails_closed_and_prunes_expired_entries() {
+        use std::time::{Duration, Instant};
+
+        let state = AppState::default();
+        login_rate_limit_record_failure_memory_with_limit(&state, "key-1", 2);
+        login_rate_limit_record_failure_memory_with_limit(&state, "key-2", 2);
+
+        assert!(login_rate_limit_remaining_block_memory_with_limit(&state, "key-3", 2).is_some());
+        assert_eq!(state.login_rate_limits.lock().unwrap().len(), 2);
+
+        let pruning_state = AppState::default();
+        login_rate_limit_record_failure_memory_with_limit(&pruning_state, "expired", 1);
+        std::thread::sleep(Duration::from_millis(5));
+        {
+            let mut guard = pruning_state.login_rate_limits.lock().unwrap();
+            prune_login_rate_limit_entries(&mut guard, Instant::now(), Duration::from_millis(1));
+            assert!(guard.is_empty());
+        }
+        login_rate_limit_record_failure_memory_with_limit(&pruning_state, "replacement", 1);
+        assert!(pruning_state
+            .login_rate_limits
+            .lock()
+            .unwrap()
+            .contains_key("replacement"));
+    }
+
+    #[test]
+    fn alertmanager_token_comparison_accepts_only_exact_configured_secret() {
+        use axum::http::{HeaderMap, HeaderValue};
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-iscy-alert-token",
+            HeaderValue::from_static("verified-alert-source"),
+        );
+        assert!(alertmanager_token_matches_expected(
+            &headers,
+            "verified-alert-source"
+        ));
+        assert!(!alertmanager_token_matches_expected(
+            &headers,
+            "different-alert-source"
+        ));
+    }
+
+    #[tokio::test]
+    async fn alertmanager_header_persistence_requires_verified_source_outside_development() {
+        use axum::http::{HeaderMap, HeaderValue};
+
+        use crate::hardening::{AppMode, CommunitySecurityConfig};
+
+        let state = AppState::default()
+            .with_alertmanager_service_principal(AlertmanagerServicePrincipal::new(42, 7))
+            .with_security_config(CommunitySecurityConfig {
+                app_mode: AppMode::Demo,
+                trust_identity_headers: true,
+                trusted_proxy_configured: true,
+                secure_cookies: true,
+                https_confirmed: true,
+                hsts_enabled: false,
+            });
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iscy-tenant-id", HeaderValue::from_static("999"));
+        headers.insert("x-iscy-user-id", HeaderValue::from_static("999"));
+        headers.insert("x-iscy-roles", HeaderValue::from_static("ADMIN"));
+
+        assert_eq!(
+            alertmanager_persistence_context(&state, &headers, false).await,
+            Err(AlertmanagerPersistenceContextError::UnverifiedSource)
+        );
+        let skipped = persist_alertmanager_alerts(&state, &headers, &[], false).await;
+        assert!(!skipped.enabled);
+        assert_eq!(
+            skipped.skipped_reason.as_deref(),
+            Some("unverified_alertmanager_source")
+        );
+
+        let verified = alertmanager_persistence_context(&state, &headers, true)
+            .await
+            .unwrap();
+        assert_eq!(verified.tenant_id, 42);
+        assert_eq!(verified.user_id, 7);
+        assert_eq!(verified.roles, vec!["CONTRIBUTOR"]);
+        assert!(verified.can_write());
+
+        let state_without_principal =
+            AppState::default().with_security_config(CommunitySecurityConfig {
+                app_mode: AppMode::Demo,
+                trust_identity_headers: true,
+                trusted_proxy_configured: true,
+                secure_cookies: true,
+                https_confirmed: true,
+                hsts_enabled: false,
+            });
+        assert_eq!(
+            alertmanager_persistence_context(&state_without_principal, &headers, true).await,
+            Err(AlertmanagerPersistenceContextError::MissingContext)
+        );
     }
     use crate::evidence_artifact_storage::FilesystemEvidenceArtifactStorage;
     use crate::evidence_store::EvidenceIntegrityItem;

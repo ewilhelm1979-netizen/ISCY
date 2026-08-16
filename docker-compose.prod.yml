@@ -17,6 +17,8 @@ services:
       ISCY_ALERTMANAGER_TOKEN_FILE: /run/secrets/iscy_alertmanager_token
       ISCY_ALERTMANAGER_HMAC_SECRET_FILE: /run/secrets/iscy_alertmanager_hmac_secret
       ISCY_ALERTMANAGER_HMAC_PREVIOUS_SECRET_FILE: /run/secrets/iscy_alertmanager_hmac_previous_secret
+      ISCY_ALERTMANAGER_TENANT_ID: ${ISCY_ALERTMANAGER_TENANT_ID:-}
+      ISCY_ALERTMANAGER_USER_ID: ${ISCY_ALERTMANAGER_USER_ID:-}
       ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY_FILE: /run/secrets/iscy_s3_access_key
       ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY_FILE: /run/secrets/iscy_s3_secret_key
       ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN_FILE: /run/secrets/iscy_s3_session_token

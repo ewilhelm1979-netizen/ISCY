@@ -46,7 +46,7 @@ use iscy_backend::{
         VulnerabilityFeedTransport, SOURCE_CISA_KEV, SOURCE_FIRST_EPSS, SOURCE_NVD,
     },
     wizard_store::WizardStore,
-    AppState,
+    AlertmanagerServicePrincipal, AppState,
 };
 use security_boundary::sanitize_legacy_identity_query;
 use tokio::{net::TcpListener, sync::watch, task::JoinHandle};
@@ -89,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "127.0.0.1:9000".to_string())
         .parse()?;
     let database_url = secret_value("DATABASE_URL")?;
+    let alertmanager_service_principal = alertmanager_principal_from_env()?;
     run_production_preflight(&security_config, &addr, database_url.as_deref()).await?;
     let (
         cve_store,
@@ -211,6 +212,7 @@ async fn main() -> anyhow::Result<()> {
         None => None,
     };
     let state = AppState::with_stores(cve_store, tenant_store)
+        .with_alertmanager_service_principal(alertmanager_service_principal)
         .with_account_store(account_store)
         .with_agent_governance_store(agent_governance_store)
         .with_agent_pki_store(agent_pki_store)
@@ -311,6 +313,39 @@ async fn main() -> anyhow::Result<()> {
             .map_err(|_| anyhow::anyhow!("Vulnerability-Intelligence-Worker-Shutdown-Timeout"))??;
     }
     serve_result
+}
+
+fn alertmanager_principal_from_env() -> anyhow::Result<Option<AlertmanagerServicePrincipal>> {
+    let tenant_id = positive_i64_env("ISCY_ALERTMANAGER_TENANT_ID")?;
+    let user_id = positive_i64_env("ISCY_ALERTMANAGER_USER_ID")?;
+    match (tenant_id, user_id) {
+        (None, None) => Ok(None),
+        (Some(tenant_id), Some(user_id)) => Ok(AlertmanagerServicePrincipal::new(
+            tenant_id, user_id,
+        )),
+        _ => anyhow::bail!(
+            "ISCY_ALERTMANAGER_TENANT_ID und ISCY_ALERTMANAGER_USER_ID muessen gemeinsam gesetzt werden."
+        ),
+    }
+}
+
+fn positive_i64_env(name: &str) -> anyhow::Result<Option<i64>> {
+    let Some(value) = std::env::var_os(name) else {
+        return Ok(None);
+    };
+    let value = value
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("{name} enthaelt keine gueltige UTF-8-Zeichenfolge."))?;
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|value| *value > 0)
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("{name} muss eine positive Ganzzahl sein."))
 }
 
 fn start_vulnerability_intelligence_worker(

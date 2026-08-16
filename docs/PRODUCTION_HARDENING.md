@@ -51,7 +51,24 @@ Der Command fuehrt Migrationen aus, legt falls noetig einen Tenant an, erzeugt d
 
 ## Login-Schutz
 
-Lokale Username-/Passwort-Logins werden pro Tenant/Username begrenzt. Nach fuenf fehlgeschlagenen Versuchen in 15 Minuten blockiert ISCY weitere Versuche fuer 15 Minuten. Wenn `DATABASE_URL` gesetzt und Migration `0023_rust_security_runtime_state` angewendet ist, liegt dieser Zustand in der Datenbank und ist damit fuer mehrere Backend-Instanzen gemeinsam nutzbar. Ohne Security-Store faellt ISCY fuer lokale Entwicklung auf einen Prozessspeicher zurueck. Die Fehlermeldung bleibt generisch und liefert keine Benutzerexistenz zurueck. Betreiber sollten weiterhin Reverse-Proxy-, WAF- oder SIEM-Regeln fuer IP- und Geo-Anomalien nutzen.
+Lokale Username-/Passwort-Logins werden pro Tenant/Username begrenzt. Nach
+fuenf fehlgeschlagenen Versuchen in 15 Minuten blockiert ISCY weitere Versuche
+fuer 15 Minuten. Login-Identifier sind auf 254 Zeichen begrenzt;
+Passwoerter auf 1024 Byte und Request-Bodies der Login-Routen auf 4096 Byte.
+Hoechstens zwei Passwortpruefungen laufen gleichzeitig; weitere Versuche
+werden mit HTTP 429 fail-closed abgewiesen. Die PBKDF2-Pruefung laeuft im
+Blocking-Pool und bereitet den HMAC-Schluessel nur einmal pro Versuch vor.
+Rate-Limit-Schluessel sind auf 255 Byte begrenzt. Abgelaufene Eintraege werden
+global entfernt. Prozess- und Datenbankzustand akzeptieren jeweils hoechstens
+4096 aktive Schluessel; bei erreichter Grenze werden neue Schluessel bis zum
+Ablauf des Fensters fail-closed abgewiesen, ohne bestehende Benutzerlimits zu
+verdraengen. Wenn `DATABASE_URL` gesetzt und Migration
+`0023_rust_security_runtime_state` angewendet ist, liegt dieser Zustand in der
+Datenbank und ist damit fuer mehrere Backend-Instanzen gemeinsam nutzbar. Ohne
+Security-Store faellt ISCY fuer lokale Entwicklung auf einen Prozessspeicher
+zurueck. Die Fehlermeldung bleibt generisch und liefert keine Benutzerexistenz
+zurueck. Betreiber sollten weiterhin Reverse-Proxy-, WAF- oder SIEM-Regeln fuer
+IP- und Geo-Anomalien nutzen.
 
 Der historische passwortlose `tenant_id`-/`user_id`-Kompatibilitaetspfad ist
 ausschliesslich im Modus `development` verfuegbar. `demo` und `production`
@@ -92,10 +109,13 @@ ISCY_NOTIFICATION_ALLOW_HTTP=0
 ISCY_AGENT_NOTIFICATION_SECRET=<secret>
 ```
 
-Der Kanal speichert bei Bearer- oder HMAC-Authentisierung nur
-`ISCY_AGENT_NOTIFICATION_SECRET` als Referenz, nicht den Wert. HTTPS ist der
-Standard, URL-Zugangsdaten und Redirects sind gesperrt. Die Host-Allowlist wird
-beim Speichern und erneut bei jeder Zustellung geprueft. Transiente
+Der Kanal speichert bei Bearer- oder HMAC-Authentisierung ausschliesslich
+`ISCY_AGENT_NOTIFICATION_SECRET` als Referenz, nicht den Wert. Andere
+Environment-Variablen werden beim Speichern und erneut vor der Secret-Aufloesung
+abgewiesen. HTTPS ist der Standard, URL-Zugangsdaten und Redirects sind gesperrt.
+Die Host-Allowlist wird beim Speichern und erneut bei jeder Zustellung geprueft.
+Die Production-Erkennung beruecksichtigt `ISCY_APP_MODE`, `ISCY_ENV` und
+`APP_ENV`. Transiente
 Verbindungs-/Timeoutfehler und ausgewaehlte HTTP-Status werden begrenzt erneut
 versucht; Cooldown und Delivery-Audit reduzieren Doppelmeldungen und halten das
 Ergebnis nachvollziehbar. DNS-/Netzwerk-Egress sollte zusaetzlich auf

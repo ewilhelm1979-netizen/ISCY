@@ -26,14 +26,14 @@ use iscy_backend::{
     evidence_store::EvidenceStore,
     hardening::{AppMode, CommunitySecurityConfig},
     import_store::ImportStore,
-    incident_store::IncidentStore,
+    incident_store::{IncidentRunbookTemplateWriteRequest, IncidentStore},
     process_store::ProcessStore,
     product_security_store::ProductSecurityStore,
     report_store::ReportStore,
     requirement_store::RequirementStore,
     risk_store::RiskStore,
     roadmap_store::RoadmapStore,
-    security_store::SecurityStore,
+    security_store::{LoginRateLimitPolicy, SecurityStore},
     software_policy_store::SoftwarePolicyStore,
     supplier_product_security_store::SupplierProductSecurityStore,
     supplier_store::SupplierStore,
@@ -229,6 +229,7 @@ async fn software_hygiene_list_ignores_manipulated_tenant_query() {
     let app = app_router_with_state(AppState::new(Some(CveStore::from_sqlite_pool(pool))));
 
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v1/software-hygiene/findings?tenant_id=502&limit=10")
@@ -383,6 +384,45 @@ fn docs_markdown_screenshot_references_resolve() {
             }
         }
     }
+}
+
+#[test]
+fn monitoring_compose_defaults_are_fail_closed() {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("repo root");
+    let compose_path = repo_root.join("deploy/monitoring/docker-compose.yml");
+    let compose = fs::read_to_string(&compose_path).expect("read monitoring compose file");
+
+    let loopback_binding = "host_ip: \"${ISCY_MONITORING_BIND_ADDRESS:-127.0.0.1}\"";
+    assert_eq!(
+        compose.matches(loopback_binding).count(),
+        3,
+        "every published monitoring port must default to loopback"
+    );
+    for published_port in [
+        "published: \"${ISCY_PROMETHEUS_PORT:-9090}\"",
+        "published: \"${ISCY_ALERTMANAGER_PORT:-9093}\"",
+        "published: \"${ISCY_GRAFANA_PORT:-3000}\"",
+    ] {
+        assert!(
+            compose.contains(published_port),
+            "expected monitoring port mapping is missing: {published_port}"
+        );
+    }
+    assert!(
+        compose.contains("GF_SECURITY_ADMIN_PASSWORD: ${ISCY_GRAFANA_PASSWORD:?"),
+        "Grafana must require an explicit admin password"
+    );
+    assert!(
+        !compose.contains("GF_SECURITY_ADMIN_PASSWORD: ${ISCY_GRAFANA_PASSWORD:-admin}"),
+        "Grafana must not fall back to admin/admin"
+    );
+    assert!(
+        !compose.contains("--web.enable-lifecycle"),
+        "the unauthenticated Prometheus lifecycle endpoint must remain disabled"
+    );
 }
 
 #[tokio::test]
@@ -1588,6 +1628,245 @@ async fn rust_auth_session_rate_limits_repeated_failed_passwords() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "login_rate_limited");
+}
+
+#[tokio::test]
+async fn rust_auth_session_rejects_oversized_identifiers_before_rate_limit_storage() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone())))
+            .with_security_store(Some(SecurityStore::from_sqlite_pool(pool.clone()))),
+    );
+    let oversized_identifier = "a".repeat(255);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "tenant_id": 1,
+                        "username": &oversized_identifier,
+                        "password": "wrong"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_login_payload");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "tenant_id=1&username={oversized_identifier}&password=wrong"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(String::from_utf8(body.to_vec())
+        .unwrap()
+        .contains("1 bis 254 Zeichen"));
+
+    let stored_entries: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM iscy_security_login_rate_limit")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_entries, 0);
+}
+
+#[tokio::test]
+async fn rust_auth_session_rejects_oversized_passwords_before_verification() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    db_admin::seed_sqlite_demo(&pool).await.unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_auth_store(Some(AuthStore::from_sqlite_pool(pool.clone())))
+            .with_security_store(Some(SecurityStore::from_sqlite_pool(pool.clone()))),
+    );
+    let oversized_password = "a".repeat(1_025);
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "tenant_id": 1,
+                        "username": "admin",
+                        "password": &oversized_password
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_login_payload");
+    assert!(payload["message"].as_str().unwrap().contains("1024 Byte"));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/login/")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "tenant_id=1&username=admin&password={oversized_password}"
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(String::from_utf8(body.to_vec())
+        .unwrap()
+        .contains("1024 Byte"));
+
+    let oversized_request_password = "b".repeat(4_096);
+    for (path, content_type, body) in [
+        (
+            "/api/v1/auth/sessions",
+            "application/json",
+            serde_json::json!({
+                "tenant_id": 1,
+                "username": "admin",
+                "password": &oversized_request_password
+            })
+            .to_string(),
+        ),
+        (
+            "/login/",
+            "application/x-www-form-urlencoded",
+            format!("tenant_id=1&username=admin&password={oversized_request_password}"),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("content-type", content_type)
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    let stored_entries: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM iscy_security_login_rate_limit")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_entries, 0);
+}
+
+#[tokio::test]
+async fn rust_security_store_caps_and_prunes_login_rate_limit_entries() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    let store = SecurityStore::from_sqlite_pool(pool.clone());
+    let window = Duration::from_secs(15 * 60);
+    let block = Duration::from_secs(15 * 60);
+    let policy = LoginRateLimitPolicy::new(5, window, block, 2);
+
+    for key in ["key-1", "key-2"] {
+        store
+            .record_login_failure(key, Some(1), key, policy)
+            .await
+            .unwrap();
+    }
+    let long_email = format!("{}@example.org", "a".repeat(242));
+    store
+        .record_login_failure("key-1", Some(1), &long_email, policy)
+        .await
+        .unwrap();
+    let stored_username_chars: i64 = sqlx::query_scalar(
+        "SELECT LENGTH(username) FROM iscy_security_login_rate_limit WHERE key = 'key-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(stored_username_chars, 150);
+
+    assert!(store
+        .login_rate_limit_remaining_block("key-3", window, 2)
+        .await
+        .unwrap()
+        .is_some());
+    assert!(store
+        .record_login_failure("key-3", Some(1), "key-3", policy)
+        .await
+        .is_err());
+
+    let expired = (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+    sqlx::query(
+        "UPDATE iscy_security_login_rate_limit SET first_failure_at = ?1, blocked_until = NULL WHERE key = 'key-1'",
+    )
+    .bind(expired)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(store
+        .login_rate_limit_remaining_block("key-3", window, 2)
+        .await
+        .unwrap()
+        .is_none());
+    store
+        .record_login_failure("key-3", Some(1), "key-3", policy)
+        .await
+        .unwrap();
+    let stored_entries: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM iscy_security_login_rate_limit")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_entries, 2);
 }
 
 #[tokio::test]
@@ -5525,47 +5804,54 @@ async fn notification_delivery_blocks_redirects_and_redacts_secret_failures() {
     });
     tokio::task::yield_now().await;
 
-    let app = app_router_with_state(
-        AppState::default()
-            .with_agent_governance_store(Some(AgentGovernanceStore::from_sqlite_pool(pool))),
-    );
-    for (name, auth_type, secret_env_name) in [
-        ("Redirect channel", "NONE", ""),
-        (
-            "Missing secret channel",
-            "BEARER",
-            "ISCY_TEST_WEBHOOK_SECRET_INTENTIONALLY_UNSET_8A71",
-        ),
-    ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/agents/notification-channels")
-                    .header("content-type", "application/json")
-                    .header("x-iscy-tenant-id", "1")
-                    .header("x-iscy-user-id", "1")
-                    .header("x-iscy-roles", "ADMIN")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "name": name,
-                            "endpoint_url": receiver_url,
-                            "minimum_level": "WARN",
-                            "event_types": ["AGENT_POLICY"],
-                            "auth_type": auth_type,
-                            "secret_env_name": secret_env_name,
-                            "cooldown_minutes": 60,
-                            "enabled": true
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-    }
+    let app =
+        app_router_with_state(AppState::default().with_agent_governance_store(Some(
+            AgentGovernanceStore::from_sqlite_pool(pool.clone()),
+        )));
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/agents/notification-channels")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "1")
+                .header("x-iscy-user-id", "1")
+                .header("x-iscy-roles", "ADMIN")
+                .body(Body::from(
+                    serde_json::json!({
+                        "name": "Redirect channel",
+                        "endpoint_url": receiver_url,
+                        "minimum_level": "WARN",
+                        "event_types": ["AGENT_POLICY"],
+                        "auth_type": "NONE",
+                        "secret_env_name": "",
+                        "cooldown_minutes": 60,
+                        "enabled": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Simulate a channel persisted before secret references were constrained.
+    // Runtime delivery must reject the reference before reading the environment.
+    sqlx::query(
+        r#"
+        INSERT INTO zero_trust_agent_notification_channel
+            (tenant_id, name, endpoint_url, minimum_level, event_types_json,
+             auth_type, secret_env_name, cooldown_minutes, enabled)
+        VALUES (1, 'Legacy secret channel', ?1, 'WARN', '["AGENT_POLICY"]',
+                'BEARER', 'ISCY_TEST_WEBHOOK_SECRET_INTENTIONALLY_UNSET_8A71', 60, 1)
+        "#,
+    )
+    .bind(&receiver_url)
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let response = app
         .clone()
@@ -5630,7 +5916,7 @@ async fn notification_delivery_blocks_redirects_and_redacts_secret_failures() {
         .any(|delivery| delivery["error_class"] == "DESTINATION_REJECTED"));
     assert!(deliveries
         .iter()
-        .any(|delivery| delivery["error_class"] == "SECRET_UNAVAILABLE"));
+        .any(|delivery| delivery["error_class"] == "SECRET_REFERENCE_REJECTED"));
     assert!(deliveries
         .iter()
         .all(|delivery| delivery.get("payload").is_none()));
@@ -10175,6 +10461,159 @@ async fn incident_create_rejects_read_only_role() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error_code"], "insufficient_role");
+}
+
+#[tokio::test]
+async fn incident_runbook_expansion_is_bounded_before_persistence() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_incident_reference_tables(&pool).await;
+    create_incident_table(&pool).await;
+    let store = IncidentStore::from_sqlite_pool(pool.clone());
+    let app = app_router_with_state(AppState::default().with_incident_store(Some(store.clone())));
+
+    let supported_runbook = (1..=100)
+        .map(|step| format!("Schritt {step}: dokumentieren"))
+        .collect::<Vec<_>>()
+        .join(";");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/incidents")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::from(
+                    serde_json::json!({
+                        "title": "Bounded runbook",
+                        "runbook_template": supported_runbook,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let incident_id = payload["incident"]["id"].as_i64().unwrap();
+    let steps = store.list_runbook_steps(42, incident_id).await.unwrap();
+    assert_eq!(steps.len(), 100);
+
+    let excessive_line_steps = (1..=101)
+        .map(|step| format!("{step}. Schritt"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let excessive_semicolon_steps = (1..=101)
+        .map(|step| format!("Schritt {step}"))
+        .collect::<Vec<_>>()
+        .join(";");
+    let oversized_body = "x".repeat(65_537);
+    for (title, runbook_template) in [
+        ("Too many line steps", excessive_line_steps.clone()),
+        ("Too many semicolon steps", excessive_semicolon_steps),
+        ("Oversized runbook", oversized_body),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/incidents")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .header("x-iscy-roles", "CONTRIBUTOR")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "title": title,
+                            "runbook_template": runbook_template,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(!response.status().is_success());
+    }
+    let stored_incidents: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM incidents_incident WHERE tenant_id = 42")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stored_incidents, 1);
+
+    let template_error = store
+        .create_runbook_template(
+            42,
+            IncidentRunbookTemplateWriteRequest {
+                slug: Some("unbounded-template".to_string()),
+                title: Some("Unbounded Template".to_string()),
+                description: None,
+                incident_type: Some("GENERAL".to_string()),
+                severity: Some("MEDIUM".to_string()),
+                body: Some(excessive_line_steps.clone()),
+                is_active: Some(true),
+                sort_order: Some(100),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(template_error
+        .to_string()
+        .contains("hoechstens 100 Schritte"));
+
+    sqlx::query("DELETE FROM incidents_runbookstep WHERE incident_id = ?1")
+        .bind(incident_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE incidents_incident SET runbook_template = ?1 WHERE id = ?2")
+        .bind(excessive_line_steps)
+        .bind(incident_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let legacy_error = store.list_runbook_steps(42, incident_id).await.unwrap_err();
+    assert!(legacy_error.to_string().contains("hoechstens 100 Schritte"));
+    let persisted_steps: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM incidents_runbookstep WHERE tenant_id = 42 AND incident_id = ?1",
+    )
+    .bind(incident_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(persisted_steps, 0);
+
+    for step_number in 1..=101 {
+        sqlx::query(
+            r#"
+            INSERT INTO incidents_runbookstep (
+                tenant_id, incident_id, step_number, title, detail,
+                is_done, created_at, updated_at
+            )
+            VALUES (42, ?1, ?2, ?3, '', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            "#,
+        )
+        .bind(incident_id)
+        .bind(step_number)
+        .bind(format!("Stored step {step_number}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let stored_expansion_error = store.list_runbook_steps(42, incident_id).await.unwrap_err();
+    assert!(stored_expansion_error
+        .to_string()
+        .contains("Gespeichertes Incident-Runbook darf hoechstens 100 Schritte enthalten"));
 }
 
 #[tokio::test]
