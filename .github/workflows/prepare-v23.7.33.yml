@@ -108,6 +108,24 @@ jobs:
 
           '''
           path.write_text(text[:start] + section + text[end:], encoding='utf-8')
+
+          lifecycle = Path('tests/release/test_release_lifecycle.sh')
+          lifecycle_text = lifecycle.read_text(encoding='utf-8')
+          replacements = [
+              ("development_version='V23.7.33'", "candidate_version='V23.7.33'"),
+              ("$development_version", "$candidate_version"),
+              ("[[ \"$source_status\" == 'development_unreleased' \\", "[[ \"$source_status\" == 'prepared_not_published' \\", 1),
+              ("&& \"$source_test_status\" == 'development_validation_required' \\", "&& \"$source_test_status\" == 'validated_by_release_candidate_check_and_ci' \\", 1),
+              ("&& \"$source_artifact_status\" == 'not_prepared' \\", "&& \"$source_artifact_status\" == 'required_two_build_sha256' \\", 1),
+              ("RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest oeffnet V23.7.33 nicht fail-closed als Development.", "RELEASE_LIFECYCLE_TEST_ERROR[root_status]: Root-Manifest bereitet V23.7.33 nicht repositorykonform und publikationsneutral vor."),
+              ("RELEASE_LIFECYCLE_TEST_ERROR[candidate_tag]: V23.7.33 ist im Development-Zustand bereits getaggt.", "RELEASE_LIFECYCLE_TEST_ERROR[candidate_tag]: V23.7.33 ist im vorbereiteten Zustand bereits getaggt."),
+          ]
+          for replacement in replacements:
+              old, new, *count = replacement
+              if old not in lifecycle_text:
+                  raise SystemExit(f'missing lifecycle release-prep marker: {old}')
+              lifecycle_text = lifecycle_text.replace(old, new, count[0] if count else -1)
+          lifecycle.write_text(lifecycle_text, encoding='utf-8')
           PY
 
           tmp_manifest="$(mktemp)"
@@ -133,10 +151,10 @@ jobs:
           mv "$tmp_manifest" release/release-manifest.json
           nix develop --command make release-sbom
           nix develop --command make release-dependency-metadata
-          nix develop --command make release-candidate-metadata-check
+          ISCY_SKIP_RELEASE_REGRESSION_TESTS=true nix develop --command make release-candidate-metadata-check
           git diff --check
 
-      - name: Commit prepared release state
+      - name: Commit and fully validate prepared release state
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -147,10 +165,13 @@ jobs:
             docs/RELEASE_NOTES_DRAFT.md \
             release/SHA256SUMS \
             release/iscy-backend.cdx.json \
-            release/release-manifest.json
+            release/release-manifest.json \
+            tests/release/test_release_lifecycle.sh
           git diff --cached --check
           test -n "$(git diff --cached --name-only)"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'chore(release): prepare ISCY V23.7.33 metadata'
+          nix develop --command make release-candidate-metadata-check
+          git diff --check
           git push origin HEAD:release/v23.7.33
