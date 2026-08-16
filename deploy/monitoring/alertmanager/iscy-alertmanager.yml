@@ -22,13 +22,6 @@ receivers:
       - url: http://host.docker.internal:9000/api/v1/operations/alertmanager
         send_resolved: true
         http_config:
-          http_headers:
-            x-iscy-tenant-id:
-              values: ["1"]
-            x-iscy-user-id:
-              values: ["2"]
-            x-iscy-roles:
-              values: ["CONTRIBUTOR"]
           authorization:
             type: Bearer
             credentials_file: /etc/alertmanager/secrets/iscy-alertmanager-token
@@ -38,13 +31,6 @@ receivers:
       - url: http://host.docker.internal:9000/api/v1/operations/alertmanager
         send_resolved: true
         http_config:
-          http_headers:
-            x-iscy-tenant-id:
-              values: ["1"]
-            x-iscy-user-id:
-              values: ["2"]
-            x-iscy-roles:
-              values: ["CONTRIBUTOR"]
           authorization:
             type: Bearer
             credentials_file: /etc/alertmanager/secrets/iscy-alertmanager-token
