@@ -1,0 +1,169 @@
+name: Publish ISCY V23.7.33
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/releases/V23.7.33.md
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-iscy-v23.7.33
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'ewilhelm1979-netizen/ISCY'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: V23.7.33
+      RELEASE_TITLE: ISCY V23.7.33
+      ARTIFACT_DIR: artifacts/release-candidate
+    steps:
+      - name: Check out exact main commit without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Install pinned Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+
+      - name: Fail closed on release identity or existing publication
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$GITHUB_REF_NAME" = 'main'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -f docs/releases/V23.7.33.md
+          test "$(jq -r '.proposed_version' release/release-manifest.json)" = "$RELEASE_VERSION"
+          test "$(jq -r '.release_status' release/release-manifest.json)" = 'prepared_not_published'
+          test "$(jq -r '.test_suite_summary.status' release/release-manifest.json)" = 'validated_by_release_candidate_check_and_ci'
+          test "$(jq -r '.release_artifact.reproducibility_status' release/release-manifest.json)" = 'required_two_build_sha256'
+          test "$(jq -r '.release_artifact.binary_sha256' release/release-manifest.json)" = 'null'
+          if git show-ref --verify --quiet "refs/tags/$RELEASE_VERSION"; then
+            echo "Release tag $RELEASE_VERSION already exists; refusing to overwrite." >&2
+            exit 1
+          fi
+          if gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "GitHub release $RELEASE_VERSION already exists; refusing to overwrite." >&2
+            exit 1
+          fi
+
+      - name: Validate repository release metadata and secret hygiene
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          nix develop --command make secrets
+          nix develop --command make release-candidate-metadata-check
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Build reproducible portable release binary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          nix develop --command make release-binary-gate
+          test -x artifacts/portable-release/iscy-backend
+          jq -e --arg source_commit "$GITHUB_SHA" '
+            .status == "verified_two_build_sha256"
+            and .source_commit == $source_commit
+            and .target == "linux-x86_64-glibc"
+            and .builds == 2
+            and (.sha256 | type == "string" and length == 64)
+          ' artifacts/portable-release/reproducibility.json >/dev/null
+
+      - name: Assemble and verify exact six-file release bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          nix develop --command make release-candidate-artifacts
+          mapfile -t actual < <(find "$ARTIFACT_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+          expected=(
+            ISCY_Handbuch.pdf
+            RELEASE_NOTES.md
+            SHA256SUMS
+            iscy-backend
+            iscy-backend.cdx.json
+            release-manifest.json
+          )
+          test "${actual[*]}" = "${expected[*]}"
+          (
+            cd "$ARTIFACT_DIR"
+            sha256sum -c SHA256SUMS
+          )
+          jq -e --arg source_commit "$GITHUB_SHA" --arg version "$RELEASE_VERSION" '
+            .proposed_version == $version
+            and .release_status == "stable_release_prepared"
+            and .source_commit == $source_commit
+            and .release_artifact.reproducibility_status == "verified_two_build_sha256"
+            and (.release_artifact.binary_sha256 | type == "string" and length == 64)
+            and .signature_status == "unsigned"
+            and .provenance_status == "prepared_unsigned"
+          ' "$ARTIFACT_DIR/release-manifest.json" >/dev/null
+          sha256sum "$ARTIFACT_DIR"/*
+
+      - name: Create draft release with all verified assets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh release create "$RELEASE_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_TITLE" \
+            --notes-file "$ARTIFACT_DIR/RELEASE_NOTES.md" \
+            "$ARTIFACT_DIR/iscy-backend" \
+            "$ARTIFACT_DIR/iscy-backend.cdx.json" \
+            "$ARTIFACT_DIR/ISCY_Handbuch.pdf" \
+            "$ARTIFACT_DIR/release-manifest.json" \
+            "$ARTIFACT_DIR/RELEASE_NOTES.md" \
+            "$ARTIFACT_DIR/SHA256SUMS"
+
+      - name: Verify draft release before publication
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = 'true'
+          test "$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')" = 'false'
+          mapfile -t actual_assets < <(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)
+          expected_assets=(
+            ISCY_Handbuch.pdf
+            RELEASE_NOTES.md
+            SHA256SUMS
+            iscy-backend
+            iscy-backend.cdx.json
+            release-manifest.json
+          )
+          test "${actual_assets[*]}" = "${expected_assets[*]}"
+
+      - name: Publish as latest stable release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gh release edit "$RELEASE_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --latest
+          test "$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')" = 'false'
+          test "$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease')" = 'false'
+          test "$(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json isLatest --jq '.isLatest')" = 'true'
+          git fetch --force origin "refs/tags/$RELEASE_VERSION:refs/tags/$RELEASE_VERSION"
+          tag_commit="$(git rev-list -n 1 "$RELEASE_VERSION")"
+          test "$tag_commit" = "$GITHUB_SHA"
+          mapfile -t final_assets < <(gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sort)
+          expected_assets=(
+            ISCY_Handbuch.pdf
+            RELEASE_NOTES.md
+            SHA256SUMS
+            iscy-backend
+            iscy-backend.cdx.json
+            release-manifest.json
+          )
+          test "${final_assets[*]}" = "${expected_assets[*]}"
+          gh release view "$RELEASE_VERSION" --repo "$GITHUB_REPOSITORY" --json databaseId,tagName,name,publishedAt,isDraft,isPrerelease,isLatest,targetCommitish,assets
