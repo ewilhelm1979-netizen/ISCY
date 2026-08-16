@@ -1,0 +1,150 @@
+name: Prepare V23.7.33 release metadata
+
+on:
+  push:
+    branches:
+      - release/v23.7.33
+    paths:
+      - .github/workflows/prepare-v23.7.33.yml
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.repository == 'ewilhelm1979-netizen/ISCY'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out release branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install pinned Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342
+
+      - name: Prepare fixed V23.7.33 release sources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${GITHUB_REF_NAME}" = 'release/v23.7.33'
+          test "$(jq -r '.proposed_version' release/release-manifest.json)" = 'V23.7.33'
+          test "$(jq -r '.release_status' release/release-manifest.json)" = 'development_unreleased'
+
+          cat > docs/RELEASE_NOTES_DRAFT.md <<'EOF'
+          # ISCY V23.7.33
+
+          Status: Stabiler Release.
+          Vorgänger: `V23.7.32`
+
+          V23.7.33 bündelt Security-Hardening, Betriebsgrenzen und kontrollierte Dependency-Maintenance seit V23.7.32. Die Datenbankstruktur bleibt bei 45 Migrationen; die 42 visuellen Baselines bleiben unverändert.
+
+          ## Security und Betriebsgrenzen
+
+          - Evidence-S3-Secret-Referenzen sind auf erlaubte, validierte Quellen begrenzt und verhalten sich bei ungültigen Referenzen fail-closed.
+          - Öffentliche Readiness-Prüfungen begrenzen Datenbankzugriffe und vermeiden unnötige interne Prüfdetails an der öffentlichen Grenze.
+          - Agent-Webhook-Secret-Referenzen werden kanonisch begrenzt; Legacy-Fälle sind durch Regressionstests abgedeckt.
+          - Login-Rate-Limit-Zustand und Passwortverifikation sind begrenzt, damit Angreifer keine unbeschränkte Zustands- oder Verifikationsarbeit erzwingen können.
+          - Alertmanager-Persistenz ist an eine vertrauenswürdige Service-Identität gebunden; Monitoring-Defaults und Dokumentation wurden gehärtet.
+          - Incident-Runbook-Expansion ist begrenzt und durch Datenbank- und API-Regressionstests abgesichert.
+          - Die dokumentierte `rkyv`-Advisory-Ausnahme bleibt auf einen inaktiven optionalen Dependency-Pfad beschränkt; CI blockiert eine unbeabsichtigte Aktivierung fail-closed.
+
+          ## Supply Chain und Plattform
+
+          - `calamine` wurde kontrolliert von `0.36.0` auf `0.36.1` aktualisiert.
+          - `base64` wurde kontrolliert von `0.23.0` auf `0.23.1` aktualisiert.
+          - Der `nixos-26.05`-Lock wurde auf den validierten nixpkgs-Stand `8b8c811c7c2541c30382c5de7ed26be055569c60` aktualisiert.
+          - `actions/checkout` 7.0.1 und `taiki-e/install-action` 2.85.10 werden weiterhin über unveränderliche Commit-SHAs eingebunden.
+          - Die Produkt-Buildtoolchain bleibt Rust `1.97.0`; die MSRV bleibt Rust `1.88.0`. Der Reverse-Proxy-Stand bleibt `nginx:1.31-alpine`.
+          - PostgreSQL 16 bleibt der Standard. Die zusätzliche PostgreSQL 18.4-Kompatibilität und der logische Upgrade-Pfad werden weiterhin in der Pflichtpipeline geprüft.
+
+          ## Governance-Grenzen
+
+          - Der NIS2-Relevanz-Wizard und seine Applicability-Begruendung unterstützen die nachvollziehbare Einordnung im NIS2- und KRITIS-Kontext, liefern aber keine rechtsverbindliche Einstufung.
+          - Eine DORA-Konformitaetsbewertung erfolgt nicht.
+          - Für den Cyber Resilience Act (CRA) erfolgt keine automatische Konformitaetsbewertung oder CE-Freigabe.
+          - ISCY liefert keine automatische Zertifizierung und ersetzt keine Rechtsberatung.
+
+          ## Release-Qualität
+
+          Der Release-Gate umfasst Rust-Formatierung, Clippy und Tests, Supply-Chain-Audit und Lizenzprüfung, Secret-Scan, MSRV-Prüfung, Nix-Smoke, Docker-Konfiguration, Object-Storage-Integration, HA- und PostgreSQL-18-Prüfung, Performance-Smoke, Visual Regression sowie einen zweifachen reproduzierbaren Build des portablen Release-Binaries. SBOM und Release-Checksummen werden deterministisch aus dem Release-Stand erzeugt.
+          EOF
+
+          sed -i 's/^Version: .*/Version: Arbeitsstand August 2026 (ISCY V23.7.33 Release vorbereitet \/ Rust 0.3.22)/' docs/ISCY_Handbuch.md
+          grep -Fxq 'Version: Arbeitsstand August 2026 (ISCY V23.7.33 Release vorbereitet / Rust 0.3.22)' docs/ISCY_Handbuch.md
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('CHANGELOG.md')
+          text = path.read_text(encoding='utf-8')
+          start = text.index('## Unreleased')
+          end = text.index('## V23.7.32 - 2026-08-01')
+          section = '''## Unreleased
+
+          Keine Änderungen außerhalb des für V23.7.33 eingefrorenen Release-Scope.
+
+          ## V23.7.33 - 2026-08-16
+
+          ### Security hardening
+
+          - begrenzt Evidence-S3- und Agent-Webhook-Secret-Referenzen auf validierte Quellen und deckt Legacy-Grenzen durch Regressionstests ab
+          - begrenzt öffentlichen Readiness-Datenbankzugriff, Login-Rate-Limit-Zustand, Passwortverifikation und Incident-Runbook-Expansion fail-closed
+          - bindet Alertmanager-Persistenz an eine vertrauenswürdige Service-Identität und härtet Monitoring-Defaults
+          - hält die dokumentierte `rkyv`-Advisory-Ausnahme auf einem inaktiven optionalen Dependency-Pfad und überwacht diese Grenze in CI
+
+          ### Supply chain maintenance
+
+          - aktualisiert `calamine` auf `0.36.1` und `base64` auf `0.23.1`
+          - aktualisiert den `nixos-26.05`-Lock auf `8b8c811c7c2541c30382c5de7ed26be055569c60`
+          - übernimmt die gepinnten Action-Maintenance-Stände `actions/checkout` 7.0.1 und `taiki-e/install-action` 2.85.10
+          - lässt Rust-Produkttoolchain 1.97.0, MSRV 1.88.0, PostgreSQL-16-Standard, PostgreSQL-18.4-Kompatibilität und 45 Migrationen unverändert
+
+          ### Release integrity
+
+          - erzeugt Handbuch, CycloneDX-1.5-SBOM und Dependency-Hashes deterministisch neu
+          - verlangt alle elf CI-Pflichtjobs, 42 Visual-Baselines und den zweifachen reproduzierbaren portablen Binary-Build vor der Freigabe
+
+          '''
+          path.write_text(text[:start] + section + text[end:], encoding='utf-8')
+          PY
+
+          tmp_manifest="$(mktemp)"
+          jq '
+            .release_status = "prepared_not_published"
+            | .test_suite_summary.status = "validated_by_release_candidate_check_and_ci"
+            | .release_artifact.reproducibility_status = "required_two_build_sha256"
+            | .release_artifact.binary_sha256 = null
+            | .source_date_epoch = null
+          ' release/release-manifest.json > "$tmp_manifest"
+          mv "$tmp_manifest" release/release-manifest.json
+
+      - name: Regenerate deterministic release artifacts and metadata
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          nix develop --command make docs-pdf
+          nix develop --command make release-sbom
+          nix develop --command make release-dependency-metadata
+          nix develop --command make release-candidate-metadata-check
+          git diff --check
+
+      - name: Commit prepared release state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git add \
+            CHANGELOG.md \
+            docs/ISCY_Handbuch.md \
+            docs/ISCY_Handbuch.pdf \
+            docs/RELEASE_NOTES_DRAFT.md \
+            release/SHA256SUMS \
+            release/iscy-backend.cdx.json \
+            release/release-manifest.json
+          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'chore(release): prepare ISCY V23.7.33 metadata'
+          git push origin HEAD:release/v23.7.33
