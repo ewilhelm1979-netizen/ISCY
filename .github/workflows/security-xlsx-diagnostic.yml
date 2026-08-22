@@ -1,0 +1,36 @@
+name: Security XLSX diagnostic
+
+on:
+  push:
+    branches:
+      - security/bound-xlsx-import-memory
+
+permissions:
+  contents: read
+
+jobs:
+  generate-deterministic-diff:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.0
+          components: rustfmt
+      - name: Generate Cargo and rustfmt diff without writes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --manifest-path rust/iscy-backend/Cargo.toml
+          set +e
+          cargo check --manifest-path rust/iscy-backend/Cargo.toml
+          check_status=$?
+          set -e
+          printf '%s\n' '--- GENERATED DIFF START ---'
+          git diff -- rust/iscy-backend/Cargo.lock rust/iscy-backend/src/import_preview.rs
+          printf '%s\n' '--- GENERATED DIFF END ---'
+          exit "$check_status"
