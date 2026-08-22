@@ -607,7 +607,7 @@ fn normalize_import_type(import_type: &str) -> Result<&'static str, String> {
         "business_units" => Ok("business_units"),
         "processes" => Ok("processes"),
         "suppliers" => Ok("suppliers"),
-        "assets" => Ok(ASSET_COLUMNS),
+        "assets" => Ok("assets"),
         _ => Err(format!(
             "Importtyp ist nicht unterstuetzt: {}",
             import_type.trim()
