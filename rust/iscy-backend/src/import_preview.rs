@@ -325,9 +325,7 @@ fn xlsx_rows_from_sparse(
     ))
 }
 
-fn xlsx_header_indexes(
-    header_row: &BTreeMap<u32, String>,
-) -> Result<Vec<(u32, String)>, String> {
+fn xlsx_header_indexes(header_row: &BTreeMap<u32, String>) -> Result<Vec<(u32, String)>, String> {
     let mut indexes = Vec::new();
     let mut seen = HashSet::new();
     for (column, value) in header_row {
@@ -396,9 +394,7 @@ fn validate_xlsx_archive(data: &[u8]) -> Result<(), String> {
             return Err("XLSX-Datei ueberschreitet das sichere Entpack-Limit.".to_string());
         }
         let normalized_name = file.name().replace('\\', "/").to_ascii_lowercase();
-        if normalized_name == "sharedstrings.xml"
-            || normalized_name.ends_with("/sharedstrings.xml")
-        {
+        if normalized_name == "sharedstrings.xml" || normalized_name.ends_with("/sharedstrings.xml") {
             shared_strings_index = Some(index);
         }
     }
@@ -488,8 +484,8 @@ fn validate_shared_string_root_attributes(
     max_references: usize,
 ) -> Result<(), String> {
     for attribute in element.attributes() {
-        let attribute = attribute
-            .map_err(|_| "XLSX-Shared-Strings sind nicht gueltig.".to_string())?;
+        let attribute =
+            attribute.map_err(|_| "XLSX-Shared-Strings sind nicht gueltig.".to_string())?;
         let local_name = attribute.key.local_name();
         let limit = if local_name.as_ref() == b"uniqueCount" {
             Some(max_unique_strings)
@@ -510,9 +506,7 @@ fn validate_shared_string_root_attributes(
             .parse::<u64>()
             .map_err(|_| "XLSX-Shared-Strings sind nicht gueltig.".to_string())?;
         if declared > limit as u64 {
-            return Err(
-                "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit.".to_string(),
-            );
+            return Err("XLSX-Shared-Strings ueberschreiten das sichere Import-Limit.".to_string());
         }
     }
     Ok(())
@@ -613,7 +607,7 @@ fn normalize_import_type(import_type: &str) -> Result<&'static str, String> {
         "business_units" => Ok("business_units"),
         "processes" => Ok("processes"),
         "suppliers" => Ok("suppliers"),
-        "assets" => Ok("assets"),
+        "assets" => Ok(ASSET_COLUMNS),
         _ => Err(format!(
             "Importtyp ist nicht unterstuetzt: {}",
             import_type.trim()
