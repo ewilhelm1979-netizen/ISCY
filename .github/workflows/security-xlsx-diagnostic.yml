@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   generate-deterministic-diff:
@@ -21,7 +22,8 @@ jobs:
         with:
           toolchain: 1.97.0
           components: rustfmt
-      - name: Generate Cargo and rustfmt diff without writes
+      - name: Generate deterministic Cargo and rustfmt diff
+        id: generate
         shell: bash
         run: |
           set -euo pipefail
@@ -30,7 +32,41 @@ jobs:
           cargo check --manifest-path rust/iscy-backend/Cargo.toml
           check_status=$?
           set -e
-          printf '%s\n' '--- GENERATED DIFF START ---'
-          git diff -- rust/iscy-backend/Cargo.lock rust/iscy-backend/src/import_preview.rs
-          printf '%s\n' '--- GENERATED DIFF END ---'
-          exit "$check_status"
+          diff_file="$RUNNER_TEMP/xlsx-generated.diff"
+          git diff -- rust/iscy-backend/Cargo.lock rust/iscy-backend/src/import_preview.rs >"$diff_file"
+          diff_bytes="$(wc -c <"$diff_file")"
+          if (( diff_bytes > 55000 )); then
+            echo 'Generated diff exceeds bounded comment size.' >&2
+            exit 1
+          fi
+          printf 'check_status=%s\n' "$check_status" >>"$GITHUB_OUTPUT"
+          printf 'diff_file=%s\n' "$diff_file" >>"$GITHUB_OUTPUT"
+      - name: Publish bounded generated diff to PR 122
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          DIFF_FILE: ${{ steps.generate.outputs.diff_file }}
+          CHECK_STATUS: ${{ steps.generate.outputs.check_status }}
+        with:
+          script: |
+            const fs = require('fs');
+            const diff = fs.readFileSync(process.env.DIFF_FILE, 'utf8');
+            const marker = '<!-- iscy-xlsx-diagnostic -->';
+            const body = `${marker}\n## XLSX security diagnostic\n\n` +
+              `cargo check exit: \`${process.env.CHECK_STATUS}\`\n\n` +
+              '```diff\n' + diff.replaceAll('```', '``\\`') + '\n```';
+            const issue_number = 122;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner, repo: context.repo.repo, issue_number, per_page: 100
+            });
+            const existing = comments.find((comment) =>
+              comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number, body
+              });
+            }
