@@ -376,7 +376,7 @@ fn validate_xlsx_archive(data: &[u8]) -> Result<(), String> {
     }
 
     let mut total_uncompressed = 0_u64;
-    let mut shared_strings_index = None;
+    let mut shared_string_indices = Vec::new();
     for index in 0..archive.len() {
         let file = archive
             .by_index(index)
@@ -396,11 +396,11 @@ fn validate_xlsx_archive(data: &[u8]) -> Result<(), String> {
         let normalized_name = file.name().replace('\\', "/").to_ascii_lowercase();
         if normalized_name == "sharedstrings.xml" || normalized_name.ends_with("/sharedstrings.xml")
         {
-            shared_strings_index = Some(index);
+            shared_string_indices.push(index);
         }
     }
 
-    if let Some(index) = shared_strings_index {
+    for index in shared_string_indices {
         let file = archive
             .by_index(index)
             .map_err(|_| "XLSX-Shared-Strings konnten nicht sicher gelesen werden.".to_string())?;
@@ -736,6 +736,33 @@ mod tests {
         assert_eq!(imported.len(), 1);
         assert_eq!(imported[0]["name"], "endpoint");
         assert_eq!(imported[0]["description"], "far but sparse");
+    }
+
+    #[test]
+    fn xlsx_archive_preflight_checks_every_shared_strings_candidate() {
+        use std::io::Write;
+
+        let mut archive_bytes = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut archive_bytes);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            writer.start_file("xl/sharedStrings.xml", options).unwrap();
+            write!(
+                writer,
+                r#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="{}"><si><t>attack</t></si></sst>"#,
+                XLSX_MAX_SHARED_STRINGS + 1
+            )
+            .unwrap();
+            writer
+                .start_file("decoy/sharedStrings.xml", options)
+                .unwrap();
+            writer.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1"><si><t>benign</t></si></sst>"#).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let error = validate_xlsx_archive(archive_bytes.get_ref()).unwrap_err();
+        assert!(error.contains("sichere Import-Limit"));
     }
 
     #[test]
