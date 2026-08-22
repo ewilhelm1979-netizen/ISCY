@@ -1,9 +1,8 @@
 name: Security XLSX duplicate-entry fix
 
 on:
-  push:
-    branches:
-      - security/bound-xlsx-import-memory
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -12,13 +11,15 @@ jobs:
   apply-source-fix:
     if: >-
       github.repository == 'ewilhelm1979-netizen/ISCY' &&
-      github.actor == 'ewilhelm1979-netizen'
+      github.actor == 'ewilhelm1979-netizen' &&
+      github.event.pull_request.number == 122 &&
+      github.event.pull_request.head.ref == 'security/bound-xlsx-import-memory'
     runs-on: ubuntu-24.04
     steps:
       - name: Check out exact security branch head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: true
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
