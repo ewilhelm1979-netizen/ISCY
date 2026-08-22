@@ -394,7 +394,8 @@ fn validate_xlsx_archive(data: &[u8]) -> Result<(), String> {
             return Err("XLSX-Datei ueberschreitet das sichere Entpack-Limit.".to_string());
         }
         let normalized_name = file.name().replace('\\', "/").to_ascii_lowercase();
-        if normalized_name == "sharedstrings.xml" || normalized_name.ends_with("/sharedstrings.xml") {
+        if normalized_name == "sharedstrings.xml" || normalized_name.ends_with("/sharedstrings.xml")
+        {
             shared_strings_index = Some(index);
         }
     }
@@ -432,9 +433,11 @@ fn validate_shared_strings_xml<R: Read>(
                         max_references,
                     )?;
                 } else if local_name.as_ref() == b"si" {
-                    actual_unique_strings = actual_unique_strings.checked_add(1).ok_or_else(|| {
-                        "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit.".to_string()
-                    })?;
+                    actual_unique_strings =
+                        actual_unique_strings.checked_add(1).ok_or_else(|| {
+                            "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit."
+                                .to_string()
+                        })?;
                     if actual_unique_strings > max_unique_strings {
                         return Err(
                             "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit."
@@ -453,9 +456,11 @@ fn validate_shared_strings_xml<R: Read>(
                         max_references,
                     )?;
                 } else if local_name.as_ref() == b"si" {
-                    actual_unique_strings = actual_unique_strings.checked_add(1).ok_or_else(|| {
-                        "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit.".to_string()
-                    })?;
+                    actual_unique_strings =
+                        actual_unique_strings.checked_add(1).ok_or_else(|| {
+                            "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit."
+                                .to_string()
+                        })?;
                     if actual_unique_strings > max_unique_strings {
                         return Err(
                             "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit."
@@ -716,10 +721,7 @@ mod tests {
         let mut rows = BTreeMap::new();
         rows.insert(
             0,
-            BTreeMap::from([
-                (0, "name".to_string()),
-                (16_383, "description".to_string()),
-            ]),
+            BTreeMap::from([(0, "name".to_string()), (16_383, "description".to_string())]),
         );
         rows.insert(
             1_048_575,
