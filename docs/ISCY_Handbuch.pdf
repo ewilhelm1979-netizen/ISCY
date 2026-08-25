@@ -1582,7 +1582,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 25 0 R >>
 endobj
 25 0 obj
-<< /Length 4168 >>
+<< /Length 3825 >>
 stream
 BT
 /F1 9 Tf
@@ -1684,13 +1684,43 @@ T*
 T*
 (Requirements, Evidence-Gaps, offene Reviews sowie eine technische) Tj
 T*
-(Dokumentationsvorschau. CLOSED bezeichnet nur das Ende eines Workflows.) Tj
+(Dokumentationsvorschau. Der allgemeine Anwendungstermin der) Tj
 T*
-(READYFORHUMANREVIEW bleibt die oberste technische Readiness; ISCY trifft) Tj
+(Maschinenverordnung \(EU\) 2023/1230 ist gemaess dem offiziellen) Tj
 T*
-(keine Rechts-, CE-, Safety- oder Konformitaetsentscheidung. Die fachliche) Tj
+(EUR-Lex-Korrigendum zu Artikel 54) Tj
 T*
-(Architektur, API und Quellen sind in) Tj
+(der 20. Januar 2027.) Tj
+T*
+() Tj
+T*
+(Die Technical-Documentation-Readiness folgt einer fail-closed Matrix:) Tj
+T*
+() Tj
+T*
+(- EVIDENCEGAPS: Pflichtdaten, Requirement-Evidence oder Evidence-Links) Tj
+T*
+(fehlen.) Tj
+T*
+(- ASSESSMENTINPROGRESS: Grunddaten und Evidence sind vorhanden, aber) Tj
+T*
+(Hazards, Reviews oder MITIGATIONREQUIRED-Interactions sind offen.) Tj
+T*
+(- READYFORHUMANREVIEW: keine strukturellen Luecken und keine offenen) Tj
+T*
+(fachlichen Blocker; die menschliche Abschlusspruefung bleibt erforderlich.) Tj
+T*
+() Tj
+T*
+(humanassessment bleibt immer REQUIRED. Die GUI stellt auch) Tj
+T*
+(READYFORHUMANREVIEW als Warn-/Review-Zustand und nicht als gruene) Tj
+T*
+(Endfreigabe dar. CLOSED bezeichnet nur das Ende eines Workflows. ISCY trifft) Tj
+T*
+(keine Rechts-, CE-, Safety-, CRA-, MVO-, Norm- oder Konformitaetsentscheidung.) Tj
+T*
+(Die fachliche Architektur, API und Quellen sind in) Tj
 T*
 (MACHINERY_CRA_SAFETY_SECURITY.md) Tj
 T*
@@ -1702,6 +1732,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+26 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
+endobj
+27 0 obj
+<< /Length 4262 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- Import-Historie fuer CSAF, CycloneDX und SPDX mit CSV-/JSON-Export) Tj
 T*
 (- Import-Detailseite mit Validierungsfehlern und Komponenten-Matches) Tj
@@ -1732,19 +1775,6 @@ T*
 T*
 (- Evidence-Vorbefuellung und Ruecksprung zur Ausgangsseite nach Upload) Tj
 T*
-ET
-endstream
-endobj
-26 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 27 0 R >>
-endobj
-27 0 obj
-<< /Length 4180 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Paketregister unter /product-security/evidence-packages/ fuer Release- und PSIRT-Scope) Tj
 T*
 (- versionierte Snapshots aus Lifecycle, SBOM, VEX, Advisories, Risiko-/Roadmap-Stand und) Tj
@@ -1859,6 +1889,19 @@ T*
 T*
 (- Anforderungen fuer Klassifizierung, Risikomanagement, Human Oversight, Logging, Transparenz,) Tj
 T*
+ET
+endstream
+endobj
+28 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
+endobj
+29 0 obj
+<< /Length 4465 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Cybersecurity/Robustheit sowie Monitoring/Evidence) Tj
 T*
 (- Evidence-Vorbefuellung ueber stabile AI-Governance-Evidence-Keys) Tj
@@ -1889,19 +1932,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-28 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 29 0 R >>
-endobj
-29 0 obj
-<< /Length 4616 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Tenant- und Berechtigungsgrenzen:) Tj
 T*
 () Tj
@@ -2016,6 +2046,19 @@ T*
 T*
 (/api/v1/suppliers/{supplierid}/contract-exit-history) Tj
 T*
+ET
+endstream
+endobj
+30 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
+endobj
+31 0 obj
+<< /Length 4789 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- Datenfelder fuer Vertrags-/Security-Annex-Bezug, Security-Kontakt, Datenarten, Regionen,) Tj
 T*
 (Exit-Abhaengigkeit, regulatorischen Scope, Review-Status, Review-Faelligkeit und Notes) Tj
@@ -2046,19 +2089,6 @@ T*
 T*
 (- Supplier/Product-Security-Review-Statusmodell: draft, needsreview, inreview, acceptedrisk,) Tj
 T*
-ET
-endstream
-endobj
-30 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 31 0 R >>
-endobj
-31 0 obj
-<< /Length 4274 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (remediationrequired, mitigated, closed und notapplicable) Tj
 T*
 (- Exit-Test-Statusmodell: notrequired, required, planned, passed, failed und overdue) Tj
@@ -2173,6 +2203,19 @@ T*
 T*
 (kritisch sind sie, welche Nachweise fehlen und wo entsteht daraus Risiko?) Tj
 T*
+ET
+endstream
+endobj
+32 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
+endobj
+33 0 obj
+<< /Length 3985 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (5.18 Vulnerability Intelligence:) Tj
@@ -2203,19 +2246,6 @@ T*
 T*
 (- vorhandene tenantgebundene Assets, Softwarekomponenten und SBOMs ueber) Tj
 T*
-ET
-endstream
-endobj
-32 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 33 0 R >>
-endobj
-33 0 obj
-<< /Length 4313 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (nachvollziehbare CPE-/Versionsregeln korrelieren) Tj
 T*
 (- unsichere Matches als Pruefkandidaten statt als bestaetigte Betroffenheit) Tj
@@ -2330,6 +2360,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+34 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
+endobj
+35 0 obj
+<< /Length 4140 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Phase 1 unterstuetzt lokal validierte IPv4-, IPv6-, Domain-, HTTP\(S\)-URL- und) Tj
 T*
 (SHA-256-Indicators. Jeder Indicator besitzt Source-/Provenance-Angaben,) Tj
@@ -2360,19 +2403,6 @@ T*
 T*
 (Evidence-Datensatz, Risiko, Roadmap-Task oder eine technische Reaktion.) Tj
 T*
-ET
-endstream
-endobj
-34 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 35 0 R >>
-endobj
-35 0 obj
-<< /Length 3871 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Die Rollen sind bewusst getrennt:) Tj
@@ -2487,6 +2517,19 @@ T*
 T*
 (Ausnahme niemals genehmigen oder ablehnen.) Tj
 T*
+ET
+endstream
+endobj
+36 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
+endobj
+37 0 obj
+<< /Length 3347 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Rollen:) Tj
@@ -2517,19 +2560,6 @@ T*
 T*
 (und atomare Audittransaktionen sichern parallele Entscheidungen.) Tj
 T*
-ET
-endstream
-endobj
-36 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 37 0 R >>
-endobj
-37 0 obj
-<< /Length 3598 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Die Auswertung bleibt passiv. Sie installiert, blockiert, deinstalliert oder) Tj
@@ -2644,6 +2674,19 @@ T*
 T*
 (8. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen) Tj
 T*
+ET
+endstream
+endobj
+38 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 39 0 R >>
+endobj
+39 0 obj
+<< /Length 5289 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (9. CVE-Risiko-Review-Queue abarbeiten) Tj
 T*
 (10. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen) Tj
@@ -2674,19 +2717,6 @@ T*
 T*
 (Case-Referenz. Tenantbezogene Runbook-Vorlagen werden in incidentsrunbooktemplate gepflegt,) Tj
 T*
-ET
-endstream
-endobj
-38 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 39 0 R >>
-endobj
-39 0 obj
-<< /Length 5166 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (per /api/v1/incidents/runbook-templates ausgeliefert und koennen beim Anlegen eines Incidents) Tj
 T*
 (direkt als bearbeitbare Startvorlage uebernommen werden. Runbook-Inhalte sind auf 64 KiB und) Tj
@@ -2801,6 +2831,19 @@ T*
 T*
 (NIS2/DORA/DSGVO-Entscheidungsmatrix, Runbook, verknuepfte Evidence, Audit-Timeline, betroffene) Tj
 T*
+ET
+endstream
+endobj
+40 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 41 0 R >>
+endobj
+41 0 obj
+<< /Length 3867 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Bezuege, 24h-/72h-/30-Tage-Fristen, Stakeholder-Zusammenfassung und Lessons Learned;) Tj
 T*
 (zusaetzlich stehen HTML und PDF ueber /incidents/{id}/nis2-export.html und) Tj
@@ -2831,19 +2874,6 @@ T*
 T*
 (1. Scope bestimmen) Tj
 T*
-ET
-endstream
-endobj
-40 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 41 0 R >>
-endobj
-41 0 obj
-<< /Length 3705 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Klaeren, wer und was betroffen ist, seit wann der Vorfall laeuft und welche Systeme, Konten,) Tj
 T*
 (Daten oder Geschaeftsbereiche im Risiko stehen.) Tj
@@ -2958,6 +2988,19 @@ T*
 T*
 (Secretwerte oder credential-haltigen URLs. Vollstaendige Regeln und) Tj
 T*
+ET
+endstream
+endobj
+42 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 43 0 R >>
+endobj
+43 0 obj
+<< /Length 4892 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Rotationshinweise stehen in SECURITY.md und docs/CONFIGURATION.md.) Tj
 T*
 () Tj
@@ -2988,19 +3031,6 @@ T*
 T*
 (Ohne Tenant-/User-Kontext wird der Alert nur normalisiert. Mit schreibendem Tenant-Kontext) Tj
 T*
-ET
-endstream
-endobj
-42 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 43 0 R >>
-endobj
-43 0 obj
-<< /Length 5060 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (erzeugt ISCY fuer firing Alerts automatisch eine Incident-Fallakte, verknuepfte Evidence und) Tj
 T*
 (einen Timeline-Eintrag. Wiederholte firing Alerts werden dedupliziert, resolved Alerts) Tj
@@ -3115,6 +3145,19 @@ T*
 T*
 (invalidevidenceupload und entfernt die bereits temporaer gespeicherte Datei.) Tj
 T*
+ET
+endstream
+endobj
+44 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 45 0 R >>
+endobj
+45 0 obj
+<< /Length 3966 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Fuer den direkten Monitoring-Betrieb liegen diese Artefakte im Repository:) Tj
@@ -3145,19 +3188,6 @@ T*
 T*
 (zusaetzlich Panels fuer Alert-Incidents mit konfigurierbarer iscybaseurl, konkretem) Tj
 T*
-ET
-endstream
-endobj
-44 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 45 0 R >>
-endobj
-45 0 obj
-<< /Length 3754 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Incident-Drilldown ueber iscyoperationsalertmanagerincidentinfo, Product-Security-Coverage,) Tj
 T*
 (CVE-Review-Trend und Importvalidierung.) Tj
@@ -3272,6 +3302,19 @@ T*
 T*
 (nix run .#iscy-agent) Tj
 T*
+ET
+endstream
+endobj
+46 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 47 0 R >>
+endobj
+47 0 obj
+<< /Length 3283 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Produktive Agenten sollten mit Enrollment-Token aufgenommen werden:) Tj
@@ -3302,19 +3345,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-46 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 47 0 R >>
-endobj
-47 0 obj
-<< /Length 3284 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (6.7 Docker-Betrieb in einfacher Sprache:) Tj
 T*
 () Tj
@@ -3429,6 +3459,19 @@ T*
 T*
 (6.9 Einfache Abnahme-Checkliste fuer die neuen Themen:) Tj
 T*
+ET
+endstream
+endobj
+48 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 49 0 R >>
+endobj
+49 0 obj
+<< /Length 4140 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Nutze diese Liste als schnelle Team-Abnahme in ISCY:) Tj
@@ -3459,19 +3502,6 @@ T*
 T*
 (4. Windows-Hardening umgesetzt) Tj
 T*
-ET
-endstream
-endobj
-48 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 49 0 R >>
-endobj
-49 0 obj
-<< /Length 4502 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Baselines sind definiert.) Tj
 T*
 (- lokale Adminrechte, Makros, SMB und Firewall sind geregelt.) Tj
@@ -3586,6 +3616,19 @@ T*
 T*
 (/zero-trust/rollouts/ fuehrt durch Zielversion, Scope, Ringzuordnung,) Tj
 T*
+ET
+endstream
+endobj
+50 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 51 0 R >>
+endobj
+51 0 obj
+<< /Length 4760 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Gate-Schwellenwerte und Rollback-Plan. Fremde Tenant-, Device-, Policy-,) Tj
 T*
 (Artefakt- und Owner-Bezuege werden serverseitig abgewiesen.) Tj
@@ -3616,19 +3659,6 @@ T*
 T*
 (automatische Softwareverteilung oder automatische Promotion.) Tj
 T*
-ET
-endstream
-endobj
-50 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 51 0 R >>
-endobj
-51 0 obj
-<< /Length 4735 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Neue Management-Reviews frieren nur sichere Rollout-Aggregate ein; bestehende) Tj
@@ -3743,6 +3773,19 @@ T*
 T*
 (Aus wiederkehrenden High-/Critical-Findings sollten Risiken, Massnahmen und) Tj
 T*
+ET
+endstream
+endobj
+52 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 53 0 R >>
+endobj
+53 0 obj
+<< /Length 4750 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Evidenzanforderungen ableitbar sein.) Tj
 T*
 (2. MDM-/EDR-Integrationen vorbereiten) Tj
@@ -3773,19 +3816,6 @@ T*
 T*
 (Private Schluessel und CSR sollen lokal auf dem Agent entstehen; Ausstellung, Rotation und) Tj
 T*
-ET
-endstream
-endobj
-52 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 53 0 R >>
-endobj
-53 0 obj
-<< /Length 4814 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Widerruf gehoeren in einen eigenen, providerunabhaengigen Meilenstein.) Tj
 T*
 (7. Remediation getrennt halten) Tj
@@ -3900,6 +3930,19 @@ T*
 T*
 (Zertifikatsstatus und PKI-Auditereignisse. Erfasst werden CA-Provider-ID,) Tj
 T*
+ET
+endstream
+endobj
+54 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 55 0 R >>
+endobj
+55 0 obj
+<< /Length 4675 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Provider-Typ und -Status, Trust Domain, Issuing Policy, erlaubte Agent-Profile,) Tj
 T*
 (Zertifikatslaufzeit, Renewal-Fenster, Widerrufsmodus, CRL-/OCSP-Referenz,) Tj
@@ -3930,19 +3973,6 @@ T*
 T*
 (/api/v1/agents/{agentid}/pki und /api/v1/agents/onboarding/pki.) Tj
 T*
-ET
-endstream
-endobj
-54 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 55 0 R >>
-endobj
-55 0 obj
-<< /Length 4197 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Diese Stufe erzeugt keine echten Zertifikate. Sie enthaelt keine produktive CA,) Tj
@@ -4057,6 +4087,19 @@ T*
 T*
 (Die Webansicht /evidence/integrity/ zeigt berechtigten Nutzern sichere) Tj
 T*
+ET
+endstream
+endobj
+56 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 57 0 R >>
+endobj
+57 0 obj
+<< /Length 4152 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Metadaten je Evidence Item:) Tj
 T*
 () Tj
@@ -4087,19 +4130,6 @@ T*
 T*
 (- POST /api/v1/evidence/integrity-checks) Tj
 T*
-ET
-endstream
-endobj
-56 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 57 0 R >>
-endobj
-57 0 obj
-<< /Length 4237 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- GET /api/v1/evidence/{evidenceid}/integrity-events) Tj
 T*
 (- POST /api/v1/evidence/{evidenceid}/legal-hold) Tj
@@ -4214,6 +4244,19 @@ T*
 T*
 (- canonical path containment unterhalb des Media Root) Tj
 T*
+ET
+endstream
+endobj
+58 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 59 0 R >>
+endobj
+59 0 obj
+<< /Length 4260 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (- Blockade von absoluten Pfaden, Directory Traversal und Symlink-Flucht) Tj
 T*
 (- sichere Metadaten wie Backend, Referenz vorhanden, Artefakt vorhanden,) Tj
@@ -4244,19 +4287,6 @@ T*
 T*
 (Der Storage-/Restore-Drill prueft, ob der Evidence-Datensatz tenantgebunden) Tj
 T*
-ET
-endstream
-endobj
-58 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 59 0 R >>
-endobj
-59 0 obj
-<< /Length 4287 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (existiert, ob eine Artefaktreferenz vorhanden ist, ob das lokale Artefakt sicher) Tj
 T*
 (unterhalb des Media Root erreichbar und lesbar ist und ob der serverseitig) Tj
@@ -4371,6 +4401,19 @@ T*
 T*
 (Items und Ergebniszaehler. Responses und Auditdetails enthalten keine) Tj
 T*
+ET
+endstream
+endobj
+60 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 61 0 R >>
+endobj
+61 0 obj
+<< /Length 4311 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (absoluten Dateipfade, Dateiinhalte, SQL-Details, Tokens oder Secrets.) Tj
 T*
 () Tj
@@ -4401,19 +4444,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-60 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 61 0 R >>
-endobj
-61 0 obj
-<< /Length 4427 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- GET /api/v1/evidence/disposition/candidates) Tj
 T*
 (- POST /api/v1/evidence/{evidenceid}/disposition/preview) Tj
@@ -4528,6 +4558,19 @@ T*
 T*
 (tenantgebunden als Backend-Metadatum gespeichert, validiert und mit Evidence) Tj
 T*
+ET
+endstream
+endobj
+62 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 63 0 R >>
+endobj
+63 0 obj
+<< /Length 4497 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (verknuepft werden.) Tj
 T*
 () Tj
@@ -4558,19 +4601,6 @@ T*
 T*
 (direkte Access-Key-Werte oder URL-artige Secretwerte werden mit sicheren) Tj
 T*
-ET
-endstream
-endobj
-62 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 63 0 R >>
-endobj
-63 0 obj
-<< /Length 4736 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Fehlerklassen abgelehnt.) Tj
 T*
 () Tj
@@ -4685,6 +4715,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+64 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 65 0 R >>
+endobj
+65 0 obj
+<< /Length 4748 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Migration 0039rustevidences3runtimeclient aktiviert die in Phase 3) Tj
 T*
 (vorbereitete Sicherheitsgrundlage fuer echte, explizit konfigurierte) Tj
@@ -4715,19 +4758,6 @@ T*
 T*
 (aktiviert. TLS wird ueber das bestehende Rustls-Backend von reqwest) Tj
 T*
-ET
-endstream
-endobj
-64 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 65 0 R >>
-endobj
-65 0 obj
-<< /Length 4667 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (bereitgestellt.) Tj
 T*
 () Tj
@@ -4842,6 +4872,19 @@ T*
 T*
 (Object idempotent. Fehler nach Remote-Upload und vor DB-Finalisierung erzeugen) Tj
 T*
+ET
+endstream
+endobj
+66 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 67 0 R >>
+endobj
+67 0 obj
+<< /Length 4774 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (orphanreviewrequired statt einer gueltigen Evidence-Referenz.) Tj
 T*
 () Tj
@@ -4872,19 +4915,6 @@ T*
 T*
 (Bewusste Grenzen: kein Bucket Create/Delete, kein List Objects, keine ACL- oder) Tj
 T*
-ET
-endstream
-endobj
-66 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 67 0 R >>
-endobj
-67 0 obj
-<< /Length 4719 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Bucket-Policy-Verwaltung, keine Presigned URLs, kein Multipart Upload/Copy,) Tj
 T*
 (keine Cloud-native Secret-Manager, keine automatische Credential Discovery,) Tj
@@ -4999,6 +5029,19 @@ T*
 T*
 (Neben Pixelabweichungen prueft die Suite leere Hauptbereiche, 500-Seiten,) Tj
 T*
+ET
+endstream
+endobj
+68 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 69 0 R >>
+endobj
+69 0 obj
+<< /Length 4947 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (horizontalen Ueberlauf, abgeschnittene Tabellenueberschriften und sichtbare) Tj
 T*
 (Secrets. CI aktualisiert Baselines nie automatisch.) Tj
@@ -5029,19 +5072,6 @@ T*
 T*
 (repositorykonform als preparednotpublished vorbereitet. Dieser Status) Tj
 T*
-ET
-endstream
-endobj
-68 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 69 0 R >>
-endobj
-69 0 obj
-<< /Length 5061 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (erzeugt weder einen Tag noch ein GitHub Release oder einen Upload. Freigabe und) Tj
 T*
 (Publikation bleiben getrennte menschliche Entscheidungen.) Tj
@@ -5156,6 +5186,19 @@ T*
 T*
 (Binary-SHA erst im Bundle auf.) Tj
 T*
+ET
+endstream
+endobj
+70 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 71 0 R >>
+endobj
+71 0 obj
+<< /Length 4223 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Eine reproduzierbare CycloneDX-1.5-SBOM wird mit dem durch flake.lock) Tj
@@ -5186,19 +5229,6 @@ T*
 T*
 (Die aus V23.7.31 vorhandenen Bereiche Native Threat Intelligence, Security) Tj
 T*
-ET
-endstream
-endobj
-70 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 71 0 R >>
-endobj
-71 0 obj
-<< /Length 4508 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Observations, Continuous Vulnerability Intelligence sowie tenantgebundene) Tj
 T*
 (Software Approval and Exception Policies bleiben passiv: Sie erzeugen keine) Tj
@@ -5313,6 +5343,19 @@ T*
 T*
 (10. Strategische Weiterentwicklung:) Tj
 T*
+ET
+endstream
+endobj
+72 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 73 0 R >>
+endobj
+73 0 obj
+<< /Length 5842 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (Die Rust-Migration ist abgeschlossen. Mit V23.7.19 ist das regulatorische Organisationsprofil) Tj
@@ -5343,19 +5386,6 @@ T*
 T*
 (Subprocessors, Vertragslaufzeiten, Exit-Test-Nachweisen und tenantgesicherten) Tj
 T*
-ET
-endstream
-endobj
-72 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 73 0 R >>
-endobj
-73 0 obj
-<< /Length 5611 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Evidence-/Control-/Risk-Links. Migration 0032rustmanagementregulatorytemplates ergaenzt) Tj
 T*
 (Management-/Regulatory-Templates fuer ISO 27001, NIS2, DORA, DSGVO, KRITIS und generische) Tj
@@ -5470,6 +5500,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+74 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 75 0 R >>
+endobj
+75 0 obj
+<< /Length 4433 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Migration 0044rustvulnerabilityhygienelifecycle ergaenzt dafuer) Tj
 T*
 (tenantgebundene Evaluationslaeufe und Last-Seen-Generationen. Eine aktive) Tj
@@ -5500,19 +5543,6 @@ T*
 T*
 (nach einem vollstaendigen Lauf nicht automatisch nicht betroffen und) Tj
 T*
-ET
-endstream
-endobj
-74 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 75 0 R >>
-endobj
-75 0 obj
-<< /Length 3325 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (erzeugt keine VEX-Aussage. Manuelle Triage, Verantwortliche, Fristen, VEX,) Tj
 T*
 (Risk Acceptance, Kommentare und Compensating Controls bleiben erhalten.) Tj
@@ -5650,58 +5680,58 @@ xref
 0000031622 00000 n
 0000033653 00000 n
 0000033781 00000 n
-0000038001 00000 n
-0000038129 00000 n
-0000042361 00000 n
-0000042489 00000 n
-0000047157 00000 n
-0000047285 00000 n
-0000051611 00000 n
-0000051739 00000 n
-0000056104 00000 n
-0000056232 00000 n
-0000060155 00000 n
-0000060283 00000 n
-0000063933 00000 n
-0000064061 00000 n
-0000069279 00000 n
-0000069407 00000 n
-0000073164 00000 n
-0000073292 00000 n
-0000078404 00000 n
-0000078532 00000 n
-0000082338 00000 n
-0000082466 00000 n
-0000085802 00000 n
-0000085930 00000 n
-0000090484 00000 n
-0000090612 00000 n
-0000095399 00000 n
-0000095527 00000 n
-0000100393 00000 n
-0000100521 00000 n
-0000104770 00000 n
-0000104898 00000 n
-0000109187 00000 n
-0000109315 00000 n
-0000113654 00000 n
-0000113782 00000 n
-0000118261 00000 n
-0000118389 00000 n
-0000123177 00000 n
-0000123305 00000 n
-0000128024 00000 n
-0000128152 00000 n
-0000132923 00000 n
-0000133051 00000 n
-0000138164 00000 n
-0000138292 00000 n
-0000142852 00000 n
-0000142980 00000 n
-0000148643 00000 n
-0000148771 00000 n
+0000037658 00000 n
+0000037786 00000 n
+0000042100 00000 n
+0000042228 00000 n
+0000046745 00000 n
+0000046873 00000 n
+0000051714 00000 n
+0000051842 00000 n
+0000055879 00000 n
+0000056007 00000 n
+0000060199 00000 n
+0000060327 00000 n
+0000063726 00000 n
+0000063854 00000 n
+0000069195 00000 n
+0000069323 00000 n
+0000073242 00000 n
+0000073370 00000 n
+0000078314 00000 n
+0000078442 00000 n
+0000082460 00000 n
+0000082588 00000 n
+0000085923 00000 n
+0000086051 00000 n
+0000090243 00000 n
+0000090371 00000 n
+0000095183 00000 n
+0000095311 00000 n
+0000100113 00000 n
+0000100241 00000 n
+0000104968 00000 n
+0000105096 00000 n
+0000109300 00000 n
+0000109428 00000 n
+0000113740 00000 n
+0000113868 00000 n
+0000118231 00000 n
+0000118359 00000 n
+0000122908 00000 n
+0000123036 00000 n
+0000127836 00000 n
+0000127964 00000 n
+0000132790 00000 n
+0000132918 00000 n
+0000137917 00000 n
+0000138045 00000 n
+0000142320 00000 n
+0000142448 00000 n
+0000148342 00000 n
+0000148470 00000 n
 trailer
 << /Size 76 /Root 1 0 R >>
 startxref
-152148
+152955
 %%EOF

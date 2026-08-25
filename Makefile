@@ -6,7 +6,7 @@ COMPOSE_PROD=docker compose --env-file $(COMPOSE_ENV_FILE) -f docker-compose.yml
 COMPOSE_PROD_LLM=docker compose --env-file $(COMPOSE_ENV_FILE) -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.llm.yml
 RUST_BACKEND_MANIFEST=rust/iscy-backend/Cargo.toml
 
-.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke rust-postgres-restore-drill graceful-shutdown-smoke object-storage-integration resilience-script-tests visual-runner-lifecycle-test artifact-hygiene-test performance-smoke ha-integration postgresql-18-contract-tests postgresql-18-compatibility visual-regression visual-baselines codex-automation-test docs-pdf release-sbom release-dependency-metadata release-portable-binary release-binary-hygiene release-binary-portability release-binary-reproducibility release-binary-gate release-candidate-artifacts release-candidate-metadata-check release-candidate-check canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
+.PHONY: dev-up dev-down stage-up stage-down prod-up prod-down prod-up-llm llm-download backup restore health local-bootstrap local-check local-test team-test docker-check docker-smoke easy-start prod-readiness rust-build rust-test rust-run rust-init rust-smoke rust-restore-smoke rust-postgres-restore-drill graceful-shutdown-smoke object-storage-integration resilience-script-tests visual-runner-lifecycle-test artifact-hygiene-test performance-smoke ha-integration postgresql-18-contract-tests postgresql-18-compatibility visual-regression visual-baselines codex-automation-test machinery-readiness-contract-test docs-pdf release-sbom release-dependency-metadata release-portable-binary release-binary-hygiene release-binary-portability release-binary-reproducibility release-binary-gate release-candidate-artifacts release-candidate-metadata-check release-candidate-check canary-daily rust-import-collection rust-sync-recent rust-canary-parity rust-canary-trend rust-canary-import
 
 local-bootstrap: rust-init
 
@@ -237,6 +237,9 @@ visual-baselines:
 
 codex-automation-test: artifact-hygiene-test
 	./scripts/check_codex_automation.sh
+
+machinery-readiness-contract-test:
+	./tests/release/test_machinery_regulatory_readiness.sh
 
 release-portable-binary:
 	./scripts/build_portable_release_binary.sh

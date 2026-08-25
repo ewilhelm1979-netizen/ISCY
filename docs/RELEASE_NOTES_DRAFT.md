@@ -34,6 +34,11 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
   Schutz, bounded Input und XSS-sichere Webansichten
 - `Safety & Conformity` Overview und Product Detail mit vier neuen
   viewport-spezifischen Visual-Baselines
+- allgemeiner Anwendungstermin der Maschinenverordnung (EU) 2023/1230 gemäß
+  offiziellem EUR-Lex-Korrigendum zu Artikel 54: 20. Januar 2027
+- deterministische, fail-closed Technical-Documentation-Readiness mit
+  `EVIDENCE_GAPS`, `ASSESSMENT_IN_PROGRESS` und der nicht freigebenden Grenze
+  `READY_FOR_HUMAN_REVIEW`; `human_assessment` bleibt immer `REQUIRED`
 
 Dieser Development-Stand erzeugt keine Rechtsberatung, Zertifizierung,
 CE-Freigabe, Safety-/Cybersecurity- oder Konformitätsentscheidung. Standards

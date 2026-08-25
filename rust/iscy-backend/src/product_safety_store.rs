@@ -1525,14 +1525,25 @@ fn readiness_from(
             .unwrap_or_else(|| "NOT_ASSESSED".to_string())
     };
     let mut missing_items = Vec::new();
+    for (legal_act, label) in [
+        ("CRA", "CRA applicability"),
+        ("MACHINERY_REGULATION", "Machinery Regulation applicability"),
+    ] {
+        if !applicability.iter().any(|item| item.legal_act == legal_act) {
+            missing_items.push(label.to_string());
+        }
+    }
     if profile.is_none() {
         missing_items.push("Machinery product profile".to_string());
     }
-    if functions.is_empty() {
-        missing_items.push("Safety functions".to_string());
+    if !functions.iter().any(|item| item.status == "ACTIVE") {
+        missing_items.push("Active safety functions".to_string());
     }
     if hazards.is_empty() {
         missing_items.push("Hazards".to_string());
+    }
+    if requirements.is_empty() {
+        missing_items.push("Regulatory requirement references".to_string());
     }
     if evidence_links == 0 {
         missing_items.push("Evidence links".to_string());
@@ -1553,6 +1564,31 @@ fn readiness_from(
             .filter(|item| item.implementation_status != "READY_FOR_HUMAN_REVIEW")
             .map(|item| item.requirement_code.clone()),
     );
+    let evidence_gaps = (if evidence_links == 0 { 1 } else { 0 })
+        + requirements
+            .iter()
+            .filter(|item| item.implementation_status == "EVIDENCE_GAPS")
+            .count() as i64;
+    let has_open_hazard_blocker = hazards.iter().any(|item| {
+        matches!(
+            item.status.as_str(),
+            "OPEN" | "UNDER_REVIEW" | "MITIGATION_REQUIRED"
+        )
+    });
+    let interactions_mitigation_required = interactions
+        .iter()
+        .filter(|item| item.status == "MITIGATION_REQUIRED")
+        .count() as i64;
+    let technical_documentation_status = if !missing_items.is_empty() || evidence_gaps > 0 {
+        "EVIDENCE_GAPS"
+    } else if has_open_hazard_blocker
+        || !open_reviews.is_empty()
+        || interactions_mitigation_required > 0
+    {
+        "ASSESSMENT_IN_PROGRESS"
+    } else {
+        "READY_FOR_HUMAN_REVIEW"
+    };
     ProductSafetyReadiness {
         cra_applicability: status("CRA"),
         machinery_regulation_applicability: status("MACHINERY_REGULATION"),
@@ -1566,15 +1602,12 @@ fn readiness_from(
             .filter(|item| item.status == "UNDER_REVIEW")
             .count() as i64,
         identified_interactions: interactions.len() as i64,
-        interactions_mitigation_required: interactions
-            .iter()
-            .filter(|item| item.status == "MITIGATION_REQUIRED")
-            .count() as i64,
-        evidence_gaps: if evidence_links == 0 { 1 } else { 0 },
+        interactions_mitigation_required,
+        evidence_gaps,
         missing_items,
         open_reviews,
         human_assessment: "REQUIRED",
-        technical_documentation_status: "READY_FOR_HUMAN_REVIEW",
+        technical_documentation_status,
     }
 }
 
@@ -3417,10 +3450,12 @@ mod tests {
     use sqlx::{sqlite::SqlitePoolOptions, Row};
 
     use super::{
-        ApplicabilityWriteRequest, CyberSourceRef, HazardWriteRequest, ProductSafetyErrorKind,
-        ProductSafetyStore, SafetyAssessmentCreateRequest, SafetyEvidenceLinkRequest,
-        SafetyFunctionWriteRequest, SafetySecurityInteractionCreateRequest,
-        SafetySecurityInteractionUpdateRequest,
+        readiness_from, ApplicabilityWriteRequest, CyberSourceRef, HazardWriteRequest,
+        MachineryProductProfile, ProductSafetyErrorKind, ProductSafetyReadiness,
+        ProductSafetyStore, RegulatoryApplicability, RegulatoryRequirementReference,
+        SafetyAssessmentCreateRequest, SafetyEvidenceLinkRequest, SafetyFunction,
+        SafetyFunctionWriteRequest, SafetyHazard, SafetySecurityInteraction,
+        SafetySecurityInteractionCreateRequest, SafetySecurityInteractionUpdateRequest,
     };
     use crate::db_admin::run_sqlite_migrations;
 
@@ -3510,6 +3545,196 @@ mod tests {
             status: Some("MITIGATION_REQUIRED".to_string()),
             owner_id: Some(5012),
             expected_revision: None,
+        }
+    }
+
+    fn prepared_readiness(
+        hazard_status: &str,
+        interaction_status: &str,
+        requirement_status: &str,
+        evidence_links: i64,
+    ) -> ProductSafetyReadiness {
+        let applicability = ["CRA", "MACHINERY_REGULATION"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, legal_act)| RegulatoryApplicability {
+                id: 100 + index as i64,
+                tenant_id: 501,
+                product_id: 5011,
+                legal_act: legal_act.to_string(),
+                applicability_status: "IN_SCOPE".to_string(),
+                product_role: "MACHINERY".to_string(),
+                reasoning: "Human scope assessment.".to_string(),
+                assessed_by_id: 5011,
+                assessed_at: "2026-08-25T10:00:00Z".to_string(),
+                reviewed_at: Some("2026-08-25T10:00:00Z".to_string()),
+                revision: 1,
+                created_at: "2026-08-25T10:00:00Z".to_string(),
+                updated_at: "2026-08-25T10:00:00Z".to_string(),
+            })
+            .collect::<Vec<_>>();
+        let profile = MachineryProductProfile {
+            id: 200,
+            tenant_id: 501,
+            product_id: 5011,
+            product_role: "MACHINERY".to_string(),
+            intended_purpose: "Synthetic machinery controller".to_string(),
+            reasonably_foreseeable_use: "Documented operation".to_string(),
+            reasonably_foreseeable_misuse: "Documented misuse".to_string(),
+            operational_environment: "Industrial environment".to_string(),
+            lifecycle_phase: "OPERATION".to_string(),
+            human_interaction: "Operator interaction".to_string(),
+            network_connectivity_context: "Bounded network".to_string(),
+            remote_access_context: "No direct remote access".to_string(),
+            safety_related_software_present: true,
+            programmable_control_system_present: true,
+            external_communication_interfaces_present: true,
+            revision: 1,
+            updated_at: "2026-08-25T10:00:00Z".to_string(),
+        };
+        let function = SafetyFunction {
+            id: 300,
+            tenant_id: 501,
+            product_id: 5011,
+            name: "Safe speed limitation".to_string(),
+            description: "Synthetic safety function".to_string(),
+            function_identifier: "SAFE-SPEED-READY".to_string(),
+            criticality: "HIGH".to_string(),
+            status: "ACTIVE".to_string(),
+            owner_id: Some(5012),
+            revision: 1,
+            created_at: "2026-08-25T10:00:00Z".to_string(),
+            updated_at: "2026-08-25T10:00:00Z".to_string(),
+        };
+        let hazard = SafetyHazard {
+            id: 400,
+            tenant_id: 501,
+            product_id: 5011,
+            title: "Unexpected movement".to_string(),
+            description: "Synthetic hazard".to_string(),
+            hazard_category: "MECHANICAL".to_string(),
+            affected_safety_function_id: Some(function.id),
+            operational_phase: "OPERATION".to_string(),
+            potential_consequence: "Hazardous movement".to_string(),
+            risk_estimation_method: "Human qualitative assessment".to_string(),
+            initial_risk: "HIGH".to_string(),
+            residual_risk: "REVIEW_REQUIRED".to_string(),
+            status: hazard_status.to_string(),
+            owner_id: Some(5012),
+            revision: 1,
+            created_at: "2026-08-25T10:00:00Z".to_string(),
+            updated_at: "2026-08-25T10:00:00Z".to_string(),
+        };
+        let interaction = SafetySecurityInteraction {
+            id: 500,
+            tenant_id: 501,
+            product_id: 5011,
+            hazard_id: hazard.id,
+            safety_function_id: function.id,
+            cyber_source: CyberSourceRef {
+                source_type: "VULNERABILITY".to_string(),
+                source_id: 5011,
+            },
+            interaction_type: "CYBER_CAN_DEGRADE_SAFETY_FUNCTION".to_string(),
+            status: interaction_status.to_string(),
+            security_consequence: "Control logic modified".to_string(),
+            measures: "Integrity validation".to_string(),
+            rationale: "Human-reviewed relationship".to_string(),
+            revision: 1,
+            closed_at: (interaction_status == "CLOSED").then(|| "2026-08-25T10:00:00Z".to_string()),
+            created_at: "2026-08-25T10:00:00Z".to_string(),
+            updated_at: "2026-08-25T10:00:00Z".to_string(),
+        };
+        let requirement = RegulatoryRequirementReference {
+            id: Some(600),
+            requirement_code: "EU-2023-1230-ANNEX-III-1.1.9".to_string(),
+            legal_act: "MACHINERY_REGULATION".to_string(),
+            citation: "Annex III 1.1.9".to_string(),
+            title: "Protection against corruption".to_string(),
+            source_classification: "OFFICIAL_PRIMARY".to_string(),
+            source_reference: "https://eur-lex.europa.eu/eli/reg/2023/1230/oj/eng".to_string(),
+            implementation_status: requirement_status.to_string(),
+            reasoning: "Human review record".to_string(),
+            revision: 1,
+        };
+
+        readiness_from(
+            &applicability,
+            Some(&profile),
+            &[function],
+            &[hazard],
+            &[interaction],
+            &[requirement],
+            evidence_links,
+        )
+    }
+
+    #[test]
+    fn technical_documentation_readiness_is_deterministic_and_fail_closed() {
+        let empty = readiness_from(&[], None, &[], &[], &[], &[], 0);
+        assert_eq!(empty.technical_documentation_status, "EVIDENCE_GAPS");
+        assert_eq!(empty.human_assessment, "REQUIRED");
+        assert!(empty
+            .missing_items
+            .iter()
+            .any(|item| item == "Machinery product profile"));
+
+        let missing_evidence = prepared_readiness("CLOSED", "CLOSED", "READY_FOR_HUMAN_REVIEW", 0);
+        assert_eq!(
+            missing_evidence.technical_documentation_status,
+            "EVIDENCE_GAPS"
+        );
+
+        let requirement_evidence_gap = prepared_readiness("CLOSED", "CLOSED", "EVIDENCE_GAPS", 1);
+        assert_eq!(
+            requirement_evidence_gap.technical_documentation_status,
+            "EVIDENCE_GAPS"
+        );
+        assert_eq!(requirement_evidence_gap.evidence_gaps, 1);
+
+        let open_hazard = prepared_readiness("OPEN", "CLOSED", "READY_FOR_HUMAN_REVIEW", 1);
+        assert_eq!(
+            open_hazard.technical_documentation_status,
+            "ASSESSMENT_IN_PROGRESS"
+        );
+
+        let mitigation_required =
+            prepared_readiness("CLOSED", "MITIGATION_REQUIRED", "READY_FOR_HUMAN_REVIEW", 1);
+        assert_eq!(
+            mitigation_required.technical_documentation_status,
+            "ASSESSMENT_IN_PROGRESS"
+        );
+
+        let open_requirement_review = prepared_readiness("CLOSED", "CLOSED", "NOT_ASSESSED", 1);
+        assert_eq!(
+            open_requirement_review.technical_documentation_status,
+            "ASSESSMENT_IN_PROGRESS"
+        );
+
+        let ready = prepared_readiness("CLOSED", "CLOSED", "READY_FOR_HUMAN_REVIEW", 1);
+        assert_eq!(
+            ready.technical_documentation_status,
+            "READY_FOR_HUMAN_REVIEW"
+        );
+
+        for readiness in [
+            empty,
+            missing_evidence,
+            requirement_evidence_gap,
+            open_hazard,
+            mitigation_required,
+            open_requirement_review,
+            ready,
+        ] {
+            assert_eq!(readiness.human_assessment, "REQUIRED");
+            assert!(matches!(
+                readiness.technical_documentation_status,
+                "EVIDENCE_GAPS" | "ASSESSMENT_IN_PROGRESS" | "READY_FOR_HUMAN_REVIEW"
+            ));
+            assert!(!readiness
+                .technical_documentation_status
+                .contains("COMPLIANT"));
+            assert!(!readiness.technical_documentation_status.contains("SAFE"));
         }
     }
 

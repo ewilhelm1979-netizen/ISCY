@@ -35948,7 +35948,7 @@ async fn web_product_safety(
             readiness.interactions_mitigation_required,
             web_badge(
                 readiness.technical_documentation_status,
-                "warning-badge",
+                product_safety_readiness_class(readiness.technical_documentation_status),
             ),
         ));
     }
@@ -36214,7 +36214,10 @@ async fn web_product_safety_detail(
         missing,
         readiness.evidence_gaps,
         open_reviews,
-        web_badge(readiness.technical_documentation_status, "warning-badge"),
+        web_badge(
+            readiness.technical_documentation_status,
+            product_safety_readiness_class(readiness.technical_documentation_status),
+        ),
     );
     web_page(
         "Product Safety Detail",
@@ -36222,6 +36225,14 @@ async fn web_product_safety_detail(
         Some(&context),
         &body,
     )
+}
+
+fn product_safety_readiness_class(value: &str) -> &'static str {
+    match value {
+        "EVIDENCE_GAPS" => "danger-badge",
+        "ASSESSMENT_IN_PROGRESS" | "READY_FOR_HUMAN_REVIEW" => "warning-badge",
+        _ => "danger-badge",
+    }
 }
 
 fn product_safety_status_class(value: &str) -> &'static str {
@@ -49267,11 +49278,32 @@ mod tests {
         login_password_supported, login_rate_limit_key,
         login_rate_limit_record_failure_memory_with_limit,
         login_rate_limit_remaining_block_memory_with_limit, normalize_cve_id,
-        persist_alertmanager_alerts, powershell_quote, prune_login_rate_limit_entries, shell_quote,
-        simple_pdf_document, AlertmanagerHmacSha256, AlertmanagerPersistenceContextError,
-        AlertmanagerServicePrincipal, AppState, LoginPasswordVerificationGate, ReadinessCheck,
-        LOGIN_IDENTIFIER_MAX_CHARS, LOGIN_PASSWORD_MAX_BYTES,
+        persist_alertmanager_alerts, powershell_quote, product_safety_readiness_class,
+        prune_login_rate_limit_entries, shell_quote, simple_pdf_document, AlertmanagerHmacSha256,
+        AlertmanagerPersistenceContextError, AlertmanagerServicePrincipal, AppState,
+        LoginPasswordVerificationGate, ReadinessCheck, LOGIN_IDENTIFIER_MAX_CHARS,
+        LOGIN_PASSWORD_MAX_BYTES,
     };
+
+    #[test]
+    fn product_safety_readiness_never_uses_final_green_badge() {
+        assert_eq!(
+            product_safety_readiness_class("EVIDENCE_GAPS"),
+            "danger-badge"
+        );
+        assert_eq!(
+            product_safety_readiness_class("ASSESSMENT_IN_PROGRESS"),
+            "warning-badge"
+        );
+        assert_eq!(
+            product_safety_readiness_class("READY_FOR_HUMAN_REVIEW"),
+            "warning-badge"
+        );
+        assert_eq!(
+            product_safety_readiness_class("UNEXPECTED_STATUS"),
+            "danger-badge"
+        );
+    }
 
     #[tokio::test]
     async fn readiness_database_check_is_cached_and_single_flight() {

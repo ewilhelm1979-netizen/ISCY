@@ -24,7 +24,7 @@ Nachweis fuer beliebige Skalierbarkeit oder vollstaendige Hochverfuegbarkeit.
 | Migrationen | separates Admin-Kommando | PostgreSQL-Migrationen werden mit einem Advisory Lock maximal 60 Sekunden serialisiert; SQLite bleibt Single-Instance. |
 | Operations-/Prometheus-Signale | Runtime plus DB-Aggregate | Keine Request-Payloads, User-Profile, Connection Strings oder Secrets. |
 | nginx | Reverse Proxy | Zwei Backend-Upstreams werden getestet; nginx selbst bleibt eine Einzelinstanz. |
-| GUI-Screenshots | Nix-/Playwright-Testpfad | 42 feste Baselines, zwei Viewports, keine automatische Aktualisierung in CI. |
+| GUI-Screenshots | Nix-/Playwright-Testpfad | 46 feste Baselines, zwei Viewports, keine automatische Aktualisierung in CI. |
 
 ## Systempruefungen
 
@@ -132,7 +132,10 @@ Erfasst werden Login, Dashboard/Betriebsuebersicht, Organisation, Management-
 und Regulatory Reviews, Evidence Quality und Integrity, Object-Storage-Status,
 Supplier Review, Supplier/Product Security, Product Security/PSIRT, AI
 Governance, Zero Trust/Fleet, Agent-Provenance, PKI/CSR/mTLS, Cross-Domain
-Notifications, Continuous Vulnerability Intelligence und Roadmap.
+Notifications, Continuous Vulnerability Intelligence, Safety & Conformity und
+Roadmap. Die Product-Safety-Baselines halten insbesondere fest, dass
+`READY_FOR_HUMAN_REVIEW` als Warn-/Review-Zustand und nicht als grüne
+Endfreigabe erscheint.
 
 Die Pixel-Toleranz ist auf `threshold = 0.15` und maximal 0,3 Prozent
 abweichende Pixel begrenzt. Zusaetzlich schlagen 500-Seiten, leere

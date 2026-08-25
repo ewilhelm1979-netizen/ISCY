@@ -118,6 +118,11 @@ granulare Permissions ohne automatische Zuweisung an bestehende Gruppen hinzu:
 Alle Object IDs werden zusätzlich im Store gegen den authentifizierten Tenant
 und bei produktgebundenen Relationen gegen dasselbe Product geprüft. Unbekannte
 JSON-Felder werden abgewiesen; Actor und Tenant stammen nicht aus der Payload.
+Die Readiness ist eine tenantgebundene, read-only Ableitung derselben
+autorisierten Daten. Fehlende Pflichtdaten/Evidence führen zu `EVIDENCE_GAPS`,
+offene fachliche Blocker zu `ASSESSMENT_IN_PROGRESS`; auch
+`READY_FOR_HUMAN_REVIEW` belässt `human_assessment` auf `REQUIRED` und erteilt
+keine Rechts-, CE-, Safety- oder Konformitätsfreigabe.
 
 ### Software Approval und Exceptions
 

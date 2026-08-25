@@ -27416,6 +27416,24 @@ async fn product_safety_api_enforces_rbac_tenant_typed_links_revisions_and_xss_b
         .await
         .unwrap();
     assert_eq!(auditor_read.status(), StatusCode::OK);
+    let auditor_payload: serde_json::Value = serde_json::from_slice(
+        &to_bytes(auditor_read.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        auditor_payload["detail"]["readiness"]["technical_documentation_status"],
+        "EVIDENCE_GAPS"
+    );
+    assert_eq!(
+        auditor_payload["detail"]["readiness"]["human_assessment"],
+        "REQUIRED"
+    );
+    assert_eq!(
+        auditor_payload["detail"]["legal_boundary"],
+        "Bewertungs- und Nachweisunterstuetzung; keine automatische Rechts-, CE- oder Konformitaetsentscheidung."
+    );
 
     let foreign_product = app
         .clone()

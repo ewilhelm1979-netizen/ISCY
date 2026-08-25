@@ -18,7 +18,7 @@ automatisches Upgradeversprechen noch eine Freigabe fuer ein In-place-Upgrade.
 | PostgreSQL-18-Volumeziel | `/var/lib/postgresql` |
 | PostgreSQL-18-PGDATA | `/var/lib/postgresql/18/docker` |
 | Datenuebertragung | logischer Dump und Restore mit PostgreSQL-18-Clientwerkzeugen |
-| Migrationen | alle 45 bestehenden Migrationen, ohne eigene PG18-Migration |
+| Migrationen | alle 46 bestehenden Migrationen, ohne eigene PG18-Migration |
 
 Der am 2026-07-13 read-only gegen Docker Hub gepruefte OCI-Index fuer
 `postgres:18` war

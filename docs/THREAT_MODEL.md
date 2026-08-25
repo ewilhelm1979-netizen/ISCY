@@ -138,8 +138,12 @@ interprets a workflow state as a legal or safety conclusion.
 - bounded input, unknown-field rejection and contextual HTML escaping
 - mutation and bounded audit event in one transaction
 - read-only auditor role and separated Compliance/Security/SOC permissions
-- readiness without score; `CLOSED` is workflow-only and final interpretation
-  remains `READY_FOR_HUMAN_REVIEW`
+- fail-closed readiness without score: missing required data or Evidence yields
+  `EVIDENCE_GAPS`; open Hazards, Reviews or mitigation-required Interactions
+  yield `ASSESSMENT_IN_PROGRESS`; only a blocker-free record reaches the
+  non-green `READY_FOR_HUMAN_REVIEW` human-review boundary
+- `human_assessment` remains `REQUIRED`; `CLOSED` is workflow-only and no
+  readiness state asserts legal, CE, Safety, CRA, MVO or standards conformity
 
 **Residual risk:** The correctness of the human legal and functional-safety
 assessment, standard edition/status, risk method and uploaded Evidence is not

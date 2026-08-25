@@ -151,6 +151,8 @@ Laptop durch vier gezielte Playwright-Baselines abgedeckt:
 Die Dateien liegen viewport-spezifisch unter `tests/visual/baselines/`.
 Cybersecurity, Interaction und Safety sind visuell getrennt; die Ansicht zeigt
 keine Compliance-Zahl und keine automatische Safety- oder CE-Aussage.
+`READY_FOR_HUMAN_REVIEW` bleibt ein Warn-/Review-Badge und wird nicht als grüne
+Endfreigabe dargestellt.
 
 ## Product Security Evidence Packages
 
