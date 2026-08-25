@@ -109,7 +109,7 @@ logischen PostgreSQL-16-zu-18-Forward-Restore.
 
 Die Testtopologie liegt unter `tests/postgresql/` und verwendet fuer PG16 und
 PG18 unterschiedliche Wegwerfvolumes sowie die versionsrichtigen Mountziele.
-Sie prueft Fresh Bootstrap, Restart, alle 45 Migrationen, den Advisory Lock,
+Sie prueft Fresh Bootstrap, Restart, alle 46 Migrationen, den Advisory Lock,
 Health/Auth/Fachsmokes, Custom- und Betreiberbackup-Restore, dynamische
 Tabellen-/Inhalts-/Sequenz-/Constraint-Vergleiche und Media-Integritaet.
 Details und die Rollback-Grenze stehen in
@@ -171,7 +171,7 @@ fehlgeschlagener Sanitization sind blockiert.
 Der Job `release-candidate-check` aggregiert die bestehenden Pflichtjobs. Er
 fuehrt die teuren Topologien nicht erneut aus, sondern scheitert, sobald ein
 benoetigter Job fehlschlaegt, abgebrochen oder uebersprungen wurde. Danach
-validiert er nur die deterministischen RC-Metadaten, 45 Migrationen, 42
+validiert er nur die deterministischen RC-Metadaten, 46 Migrationen, 46
 Baselines, Screenshot-Referenzen, Checksums und den Sensitive-Data-Scan.
 
 Bekannte Grenzen:

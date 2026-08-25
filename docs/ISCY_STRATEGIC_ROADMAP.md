@@ -294,7 +294,7 @@ Umgesetzt:
 - Zwei-Instanzen-Topologie mit PostgreSQL 16, S3-kompatiblem MinIO und nginx 1.31
 - Cross-Instance-Schreiben/Lesen, Evidence-Upload/Verify und Failover in beide Richtungen
 - isolierter PostgreSQL-18-Kompatibilitaets- und PG16-zu-PG18-Forward-Restore-Test mit getrennten Volumes, dynamischem Datenintegritaetsvergleich, Anwendungssmoke und Migrationsrennen; PostgreSQL 16 bleibt Standard
-- Nix-/Playwright-basierte visuelle Regression fuer 21 Bereiche und zwei Viewports mit 42 bewusst versionierten Baselines
+- Nix-/Playwright-basierte visuelle Regression fuer 23 Bereiche und zwei Viewports mit 46 bewusst versionierten Baselines
 - getrennte CI-Artefakte fuer Performance-Bericht und visuelle Abweichungen
 
 Bewusste Grenze:
@@ -424,6 +424,7 @@ Erfolgskriterium:
 | Erledigt | Agent-State, Secret-Rotation, Offline-Queue und OS-Service-Beispiele | Agenten behalten ihre Identitaet, puffern Ausfaelle und koennen auf Linux, NixOS, Windows und macOS periodisch betrieben werden. |
 | Erledigt | Agent-Policy, erwartete Coverage und Policy-Webhooks | Flottenabweichungen werden gegen einen Sollbestand bewertet, aktiv zugestellt und auditierbar protokolliert. |
 | Erledigt | Product-Security-Evidence-Pakete und Produkt-Lifecycle | Versionierte Release-/PSIRT-Freigaben enthalten SBOM, VEX, Advisories, Support-Ende, offene Risiken, Roadmap und Evidence; Blocker-Gates und Exporte sind umgesetzt. |
+| Implementiert / Veroeffentlichung ausstehend | Machinery & CRA Safety-Security Co-Engineering – Phase 1 | Product Applicability, Maschinenprofil, Safety Functions, Hazards, versionierte Assessments und typisierte Cyber/Safety-Interactions bilden eine getrennte, tenantgebundene Foundation mit Human-Review-Grenze. |
 | Erledigt | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
 | Erledigt | Gefuehrtes Agent-Onboarding | Enrollment-Tokens, Deployment-Artefakte und Flottenstatus sind ueber einen sicheren Admin-Assistenten bedienbar. |
 | Implementiert / Veroeffentlichung ausstehend | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
@@ -438,7 +439,7 @@ Erfolgskriterium:
 | Implementiert / Veroeffentlichung ausstehend | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |
 | Implementiert / Veroeffentlichung ausstehend | Evidence-Worker, kontrollierte physische Disposition und Object-Storage-Vorbereitung | Begrenzte Integritaets-Worker-Laeufe, Approval-gebundene physische Disposition, Tombstone-Metadaten und vorbereitete Object-Storage-Konfiguration sind tenantgebunden auditierbar. |
 | Implementiert / Veroeffentlichung ausstehend | S3-kompatibler Evidence-Storage-Runtime-Client | Explizite Secret-Referenzen, SigV4, DNS-/SSRF-Revalidierung, kanonische Object-IDs, begrenzte PUT-/HEAD-/GET-Operationen und kontrolliertes Remote-DELETE sind mit MinIO-Integrationstest umgesetzt. |
-| Implementiert / Veroeffentlichung ausstehend | Performance, HA und visuelle Regression | Grosszuegige CI-Budgets, gepruefter PostgreSQL-/S3-Zwei-Instanzen-Betrieb und 40 UI-Baselines machen grobe Regressionen sichtbar, ohne allgemeine HA oder SLA zu behaupten. |
+| Implementiert / Veroeffentlichung ausstehend | Performance, HA und visuelle Regression | Grosszuegige CI-Budgets, gepruefter PostgreSQL-/S3-Zwei-Instanzen-Betrieb und 46 UI-Baselines machen grobe Regressionen sichtbar, ohne allgemeine HA oder SLA zu behaupten. |
 | Implementiert / Veroeffentlichung ausstehend | Native Threat Intelligence und Security Observations - Phase 1 | Lokal validierte Indicators, normalisierte Referenzen auf vorhandene Findings, manuelle Matches, Triage und Audit sind tenantgebunden verfuegbar, ohne Feed-, SIEM- oder Active-Response-Funktion. |
 | Implementiert / Veroeffentlichung ausstehend | Continuous Vulnerability Intelligence und Software Hygiene - Phase 1 | NVD-Deltas, CISA KEV und FIRST EPSS reichern globale CVEs an; tenantgebundene, erklaerbare CPE-/Versionsmatches aktualisieren vorhandene Vulnerability Findings ausschliesslich passiv. |
 | Phase 2 | Software-Lifecycle und Approval-Policy | Belastbare EOL/EOS-Quellen, ecosystemspezifische PURL-Semantik und eine schmale tenantgebundene Approval-/Exception-Policy werden getrennt fachlich entschieden. |

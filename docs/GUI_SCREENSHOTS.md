@@ -6,7 +6,7 @@ Diese Screenshots dokumentieren die aktuelle serverseitige ISCY-Weboberflaeche f
 
 Die getrennten Visual-Regression-Baselines unter `../tests/visual/baselines/`
 werden mit dem durch `flake.lock` gepinnten Playwright-/Chromium-Pfad erzeugt.
-Sie pruefen 21 zentrale Bereiche bei 1440 x 1200 und 1024 x 900. Die
+Sie pruefen 23 zentrale Bereiche bei 1440 x 1200 und 1024 x 900. Die
 Dokumentationsbilder in `docs/assets/` werden nicht automatisch als
 Testbaselines verwendet oder durch CI ueberschrieben. Update- und Diff-Prozess
 sind in `PERFORMANCE_HA_VISUAL_TESTING.md` beschrieben.
@@ -139,6 +139,18 @@ Endpoints werden nicht fuer Screenshot-Artefakte verwendet.
 ## Product Security
 
 ![Product Security](assets/iscy-product-security.png)
+
+## Safety & Conformity
+
+Die neue Overview- und Product-Detail-Ansicht wird bei Desktop und kleinem
+Laptop durch vier gezielte Playwright-Baselines abgedeckt:
+
+- `safety-conformity-overview.png`
+- `product-safety-detail.png`
+
+Die Dateien liegen viewport-spezifisch unter `tests/visual/baselines/`.
+Cybersecurity, Interaction und Safety sind visuell getrennt; die Ansicht zeigt
+keine Compliance-Zahl und keine automatische Safety- oder CE-Aussage.
 
 ## Product Security Evidence Packages
 

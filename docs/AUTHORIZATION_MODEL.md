@@ -97,6 +97,28 @@ Komponenten und Findings, die Redaktion globaler Checkpoint-/Fenster-/Actor-Date
 idempotente Korrelationen sowie ausbleibende Incident-, Evidence- und
 Active-Response-Nebenwirkungen.
 
+### Machinery & CRA Product Safety
+
+Migration `0046_rust_machinery_cra_safety_security_foundation` fuegt sechs
+granulare Permissions ohne automatische Zuweisung an bestehende Gruppen hinzu:
+`view_product_safety`, `manage_product_applicability`,
+`manage_product_safety`, `review_product_safety`,
+`manage_safety_security_interaction` und
+`link_product_safety_evidence`.
+
+- `COMPLIANCE_MANAGER` verwaltet Applicability, Product-Safety-Dokumentation,
+  Reviews und Evidence.
+- `SECURITY_ADMIN` verwaltet typisierte Cyber/Safety-Interactions, Reviews und
+  Evidence, aber keine allgemeine Safety Function oder Applicability.
+- `SOC_ANALYST` darf lesen und Cyberbezug pflegen, jedoch keine Interaction als
+  `ACCEPTED_FOR_REVIEW` oder `CLOSED` setzen.
+- `AUDITOR` bleibt read-only.
+- Admin, Staff und Superuser behalten die bestehende Vollzugriffssemantik.
+
+Alle Object IDs werden zusätzlich im Store gegen den authentifizierten Tenant
+und bei produktgebundenen Relationen gegen dasselbe Product geprüft. Unbekannte
+JSON-Felder werden abgewiesen; Actor und Tenant stammen nicht aus der Payload.
+
 ### Software Approval und Exceptions
 
 Migration `0045_rust_software_approval_exception_policy` ergaenzt neun
