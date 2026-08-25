@@ -17,15 +17,20 @@ kanonische Cyber-Quelle → Security Consequence → Safety Function → Hazard
 
 Es gibt keine gemeinsame numerische Risk Engine und keine automatische
 Normabdeckung. `CLOSED` beendet nur den Interaction-Workflow. Es bedeutet weder
-„safe“ noch „compliant“. Jede Readiness-Antwort endet an der menschlichen
-Bewertungsgrenze `READY_FOR_HUMAN_REVIEW`.
+„safe“ noch „compliant“. Erst ein strukturell vollständiger Stand ohne offene
+fachliche Blocker erreicht die menschliche Bewertungsgrenze
+`READY_FOR_HUMAN_REVIEW`; `human_assessment` bleibt in jedem Zustand
+`REQUIRED`.
 
 ## Regulatorischer Referenzrahmen
 
-- Die Maschinenverordnung (EU) 2023/1230 wird nach dem aktuell konsolidierten
-  EUR-Lex-Stand ab 14. Januar 2027 angewendet. Anhang III 1.1.9 adressiert den
-  Schutz gegen Korrumpierung; 1.2.1 die Sicherheit und Zuverlässigkeit von
-  Steuerungen. Quelle: <https://eur-lex.europa.eu/eli/reg/2023/1230/oj/eng>
+- Die Maschinenverordnung (EU) 2023/1230 wird allgemein ab 20. Januar 2027
+  angewendet. Das offizielle EUR-Lex-Korrigendum zu Artikel 54 Absatz 2
+  berichtigt den ursprünglichen Termin:
+  <https://eur-lex.europa.eu/eli/reg/2023/1230/corrigendum/2023-07-04/oj/eng>.
+  Anhang III 1.1.9 adressiert den Schutz gegen Korrumpierung; 1.2.1 die
+  Sicherheit und Zuverlässigkeit von Steuerungen. Verordnungstext:
+  <https://eur-lex.europa.eu/eli/reg/2023/1230/oj/eng>
 - Der Cyber Resilience Act (EU) 2024/2847 verlangt unter anderem eine
   Cybersecurity-Risikobewertung und technische Dokumentation. Die
   Meldepflichten nach Artikel 14 gelten ab 11. September 2026, die allgemeine
@@ -107,12 +112,23 @@ Assessments, typisierte Interactions und Evidence-Link/Unlink zur Verfügung.
 JSON-Payloads lehnen unbekannte Felder ab und begrenzen Freitext.
 
 Die Readiness zeigt vorhandene und fehlende Daten, offene Hazards,
-mitigation-required Interactions, Evidence-Gaps und offene Reviews. Sie
-berechnet keine Compliance-Zahl. Die Technical-Documentation-Preview verweist
-auf Product Description, Intended Purpose, Rechtsakte, Cyber- und
-Safety-Kontext, SBOM/VEX/TARA, Supplier Evidence, Controls und offene Reviews;
-ein eingefrorenes Technical Documentation Package ist ausdrücklich nicht Teil
-dieser Phase.
+mitigation-required Interactions, Evidence-Gaps und offene Reviews. Die
+Entscheidung ist deterministisch und fail-closed:
+
+| Technical-Documentation-Status | Bedingung |
+| --- | --- |
+| `EVIDENCE_GAPS` | Applicability, Maschinenprofil, aktive Safety Function, Hazard, Requirement-Referenz oder Evidence fehlt; auch ein expliziter Requirement-Status `EVIDENCE_GAPS` blockiert. |
+| `ASSESSMENT_IN_PROGRESS` | Die strukturellen Pflichtdaten und Evidence sind vorhanden, aber ein Hazard, eine Applicability-/Requirement-Review oder eine `MITIGATION_REQUIRED`-Interaction ist offen. |
+| `READY_FOR_HUMAN_REVIEW` | Keine strukturelle Lücke und kein offener fachlicher Blocker; die menschliche Abschlussprüfung ist weiterhin erforderlich. |
+
+`human_assessment` ist in allen drei Zuständen `REQUIRED`. Die GUI zeigt
+`READY_FOR_HUMAN_REVIEW` bewusst als Warn-/Review-Badge und nicht als grüne
+Endfreigabe. Die Readiness berechnet keine Compliance-Zahl und behauptet keine
+Rechts-, CE-, Safety-, CRA-, MVO- oder Normkonformität. Die
+Technical-Documentation-Preview verweist auf Product Description, Intended
+Purpose, Rechtsakte, Cyber- und Safety-Kontext, SBOM/VEX/TARA, Supplier
+Evidence, Controls und offene Reviews; ein eingefrorenes Technical
+Documentation Package ist ausdrücklich nicht Teil dieser Phase.
 
 ## Threat Model und bewusste Grenzen
 

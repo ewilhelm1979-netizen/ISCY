@@ -52,6 +52,7 @@ for database_url in \
     fi
 done
 
+make machinery-readiness-contract-test
 cargo fmt --manifest-path rust/iscy-backend/Cargo.toml -- --check
 cargo clippy --locked --manifest-path rust/iscy-backend/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml

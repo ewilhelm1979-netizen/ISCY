@@ -676,10 +676,25 @@ Function oder einen Hazard beruehren kann.
 
 Die Detailansicht trennt Cyber Source, Interaction und Safety optisch und zeigt
 Requirements, Evidence-Gaps, offene Reviews sowie eine technische
-Dokumentationsvorschau. `CLOSED` bezeichnet nur das Ende eines Workflows.
-`READY_FOR_HUMAN_REVIEW` bleibt die oberste technische Readiness; ISCY trifft
-keine Rechts-, CE-, Safety- oder Konformitaetsentscheidung. Die fachliche
-Architektur, API und Quellen sind in
+Dokumentationsvorschau. Der allgemeine Anwendungstermin der
+Maschinenverordnung (EU) 2023/1230 ist gemäß dem offiziellen
+[EUR-Lex-Korrigendum zu Artikel 54](https://eur-lex.europa.eu/eli/reg/2023/1230/corrigendum/2023-07-04/oj/eng)
+der 20. Januar 2027.
+
+Die Technical-Documentation-Readiness folgt einer fail-closed Matrix:
+
+- `EVIDENCE_GAPS`: Pflichtdaten, Requirement-Evidence oder Evidence-Links
+  fehlen.
+- `ASSESSMENT_IN_PROGRESS`: Grunddaten und Evidence sind vorhanden, aber
+  Hazards, Reviews oder `MITIGATION_REQUIRED`-Interactions sind offen.
+- `READY_FOR_HUMAN_REVIEW`: keine strukturellen Luecken und keine offenen
+  fachlichen Blocker; die menschliche Abschlusspruefung bleibt erforderlich.
+
+`human_assessment` bleibt immer `REQUIRED`. Die GUI stellt auch
+`READY_FOR_HUMAN_REVIEW` als Warn-/Review-Zustand und nicht als grüne
+Endfreigabe dar. `CLOSED` bezeichnet nur das Ende eines Workflows. ISCY trifft
+keine Rechts-, CE-, Safety-, CRA-, MVO-, Norm- oder Konformitaetsentscheidung.
+Die fachliche Architektur, API und Quellen sind in
 [MACHINERY_CRA_SAFETY_SECURITY.md](MACHINERY_CRA_SAFETY_SECURITY.md)
 dokumentiert.
 

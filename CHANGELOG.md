@@ -19,9 +19,13 @@ The project uses release tags for immutable release points. Changes under **Unre
   serverseitige RBAC-/Tenant-Grenzen, atomisches Audit, Revision-/Concurrency-
   Schutz und idempotente Evidence-Verknüpfungen für SQLite und PostgreSQL
 - ergänzt die API-v1-Endpunkte und den Arbeitsbereich `Safety & Conformity`
-  mit transparenter Readiness und Technical-Documentation-Preview ohne
-  Compliance-Zahl oder automatische Rechts-, CE-, Safety- oder
-  Konformitätsentscheidung
+  mit fail-closed Technical-Documentation-Readiness als `EVIDENCE_GAPS`,
+  `ASSESSMENT_IN_PROGRESS` oder `READY_FOR_HUMAN_REVIEW`; die menschliche
+  Bewertung bleibt immer erforderlich und es entsteht keine Compliance-Zahl
+  oder automatische Rechts-, CE-, Safety- oder Konformitätsentscheidung
+- korrigiert den allgemeinen Anwendungstermin der Maschinenverordnung (EU)
+  2023/1230 gemäß dem offiziellen EUR-Lex-Korrigendum zu Artikel 54 auf den
+  20. Januar 2027
 - speichert zu EN ISO 12100, IEC 62443 und prEN 50742 ausschließlich
   Referenzmetadaten; `prEN 50742` bleibt `DRAFT` ohne Harmonisierungs- oder
   Konformitätsvermutung
