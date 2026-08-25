@@ -20,7 +20,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, Utc};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -59,6 +59,7 @@ pub mod import_preview;
 pub mod import_store;
 pub mod incident_store;
 pub mod process_store;
+pub mod product_safety_store;
 pub mod product_security_package_store;
 pub mod product_security_store;
 pub mod report_store;
@@ -140,6 +141,15 @@ use import_preview::{ImportPreview, ImportUploadFile};
 use import_store::ImportStore;
 use incident_store::{IncidentAlertmanagerMetrics, IncidentStore};
 use process_store::ProcessStore;
+use product_safety_store::{
+    ApplicabilityWriteRequest, HazardWriteRequest, MachineryProfileWriteRequest,
+    ProductSafetyError, ProductSafetyErrorKind, ProductSafetyStore, SafetyAssessmentCreateRequest,
+    SafetyEvidenceLinkRequest, SafetyFunctionWriteRequest, SafetySecurityInteractionCreateRequest,
+    SafetySecurityInteractionUpdateRequest, PERMISSION_LINK_PRODUCT_SAFETY_EVIDENCE,
+    PERMISSION_MANAGE_PRODUCT_APPLICABILITY, PERMISSION_MANAGE_PRODUCT_SAFETY,
+    PERMISSION_MANAGE_SAFETY_SECURITY_INTERACTION, PERMISSION_REVIEW_PRODUCT_SAFETY,
+    PERMISSION_VIEW_PRODUCT_SAFETY,
+};
 use product_security_store::ProductSecurityStore;
 use report_store::ReportStore;
 use request_context::{AuthenticatedTenantContext, RequestContext, RequiredTenantContextError};
@@ -199,6 +209,7 @@ pub struct AppState {
     pub import_store: Option<ImportStore>,
     pub process_store: Option<ProcessStore>,
     pub product_security_store: Option<ProductSecurityStore>,
+    pub product_safety_store: Option<ProductSafetyStore>,
     pub report_store: Option<ReportStore>,
     pub requirement_store: Option<RequirementStore>,
     pub risk_store: Option<RiskStore>,
@@ -346,6 +357,7 @@ impl AppState {
             import_store: None,
             process_store: None,
             product_security_store: None,
+            product_safety_store: None,
             report_store: None,
             requirement_store: None,
             risk_store: None,
@@ -391,6 +403,7 @@ impl AppState {
             import_store: None,
             process_store: None,
             product_security_store: None,
+            product_safety_store: None,
             report_store: None,
             requirement_store: None,
             risk_store: None,
@@ -572,6 +585,14 @@ impl AppState {
         product_security_store: Option<ProductSecurityStore>,
     ) -> Self {
         self.product_security_store = product_security_store;
+        self
+    }
+
+    pub fn with_product_safety_store(
+        mut self,
+        product_safety_store: Option<ProductSafetyStore>,
+    ) -> Self {
+        self.product_safety_store = product_safety_store;
         self
     }
 
@@ -4581,6 +4602,609 @@ fn software_policy_error_response(error: SoftwarePolicyError) -> Response {
 
 fn software_policy_store_unavailable() -> Response {
     api_database_not_configured("Rust-Software-Policy-Store ist nicht konfiguriert.")
+}
+
+fn has_product_safety_permission(context: &AuthenticatedTenantContext, permission: &str) -> bool {
+    if context.is_superuser || context.is_staff || context.has_role("ADMIN") {
+        return true;
+    }
+    if context.has_permission(permission) {
+        return true;
+    }
+    if context.has_role("SECURITY_ADMIN") {
+        return matches!(
+            permission,
+            PERMISSION_VIEW_PRODUCT_SAFETY
+                | PERMISSION_REVIEW_PRODUCT_SAFETY
+                | PERMISSION_MANAGE_SAFETY_SECURITY_INTERACTION
+                | PERMISSION_LINK_PRODUCT_SAFETY_EVIDENCE
+        );
+    }
+    if context.has_role("COMPLIANCE_MANAGER") {
+        return matches!(
+            permission,
+            PERMISSION_VIEW_PRODUCT_SAFETY
+                | PERMISSION_MANAGE_PRODUCT_APPLICABILITY
+                | PERMISSION_MANAGE_PRODUCT_SAFETY
+                | PERMISSION_REVIEW_PRODUCT_SAFETY
+                | PERMISSION_LINK_PRODUCT_SAFETY_EVIDENCE
+        );
+    }
+    if context.has_role("SOC_ANALYST") {
+        return matches!(
+            permission,
+            PERMISSION_VIEW_PRODUCT_SAFETY | PERMISSION_MANAGE_SAFETY_SECURITY_INTERACTION
+        );
+    }
+    context.has_role("AUDITOR") && permission == PERMISSION_VIEW_PRODUCT_SAFETY
+}
+
+fn product_safety_permission_error(
+    context: &AuthenticatedTenantContext,
+    permission: &str,
+) -> Option<Response> {
+    if has_product_safety_permission(context, permission) {
+        return None;
+    }
+    Some(api_error_response(
+        StatusCode::FORBIDDEN,
+        "insufficient_product_safety_permission",
+        "Fuer diese Safety- oder Conformity-Operation fehlt die Berechtigung.",
+    ))
+}
+
+fn product_safety_error_response(error: ProductSafetyError) -> Response {
+    let status = match error.kind() {
+        ProductSafetyErrorKind::InvalidInput => StatusCode::BAD_REQUEST,
+        ProductSafetyErrorKind::NotFound => StatusCode::NOT_FOUND,
+        ProductSafetyErrorKind::Conflict => StatusCode::CONFLICT,
+        ProductSafetyErrorKind::Database => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    api_error_response(status, error.code(), error.message())
+}
+
+async fn product_safety_access(
+    state: &AppState,
+    headers: &HeaderMap,
+    permission: &str,
+) -> Result<(AuthenticatedTenantContext, ProductSafetyStore), Response> {
+    let context = authenticated_tenant_context(state, headers)
+        .await
+        .map_err(api_context_error)?;
+    if let Some(response) = product_safety_permission_error(&context, permission) {
+        return Err(response);
+    }
+    let store = state.product_safety_store.clone().ok_or_else(|| {
+        api_database_not_configured("Rust-Product-Safety-Store ist nicht konfiguriert.")
+    })?;
+    Ok((context, store))
+}
+
+async fn product_conformity_detail(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store.product_detail(context.tenant_id, product_id).await {
+        Ok(detail) => (
+            StatusCode::OK,
+            Json(json!({"api_version": "v1", "detail": detail})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn product_applicability_list(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store.list_applicability(context.tenant_id, product_id).await {
+        Ok(applicability) => (
+            StatusCode::OK,
+            Json(json!({"api_version": "v1", "product_id": product_id, "applicability": applicability})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn product_applicability_upsert(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ApplicabilityWriteRequest>,
+) -> Response {
+    let (context, store) = match product_safety_access(
+        &state,
+        &headers,
+        PERMISSION_MANAGE_PRODUCT_APPLICABILITY,
+    )
+    .await
+    {
+        Ok(access) => access,
+        Err(response) => return response,
+    };
+    match store
+        .upsert_applicability(context.tenant_id, product_id, context.user_id, payload)
+        .await
+    {
+        Ok(applicability) => (
+            StatusCode::OK,
+            Json(json!({"accepted": true, "api_version": "v1", "applicability": applicability})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn machinery_profile_get(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store.machinery_profile(context.tenant_id, product_id).await {
+        Ok(Some(profile)) => (
+            StatusCode::OK,
+            Json(json!({"api_version": "v1", "profile": profile})),
+        )
+            .into_response(),
+        Ok(None) => {
+            api_not_found("Fuer dieses Produkt ist noch kein Maschinenprofil dokumentiert.")
+        }
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn machinery_profile_upsert(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<MachineryProfileWriteRequest>,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_MANAGE_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store
+        .upsert_machinery_profile(context.tenant_id, product_id, context.user_id, payload)
+        .await
+    {
+        Ok(profile) => (
+            StatusCode::OK,
+            Json(json!({"accepted": true, "api_version": "v1", "profile": profile})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_functions_list(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store.list_safety_functions(context.tenant_id, product_id).await {
+        Ok(functions) => (
+            StatusCode::OK,
+            Json(json!({"api_version": "v1", "product_id": product_id, "safety_functions": functions})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_function_create(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SafetyFunctionWriteRequest>,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_MANAGE_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store
+        .create_safety_function(context.tenant_id, product_id, context.user_id, payload)
+        .await
+    {
+        Ok(result) => (
+            if result.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(json!({"accepted": true, "api_version": "v1", "result": result})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_function_update(
+    Path(function_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SafetyFunctionWriteRequest>,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_MANAGE_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store
+        .update_safety_function(context.tenant_id, function_id, context.user_id, payload)
+        .await
+    {
+        Ok(safety_function) => (
+            StatusCode::OK,
+            Json(
+                json!({"accepted": true, "api_version": "v1", "safety_function": safety_function}),
+            ),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_hazards_list(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store.list_hazards(context.tenant_id, product_id).await {
+        Ok(hazards) => (
+            StatusCode::OK,
+            Json(json!({"api_version": "v1", "product_id": product_id, "hazards": hazards})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_hazard_create(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<HazardWriteRequest>,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_MANAGE_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store
+        .create_hazard(context.tenant_id, product_id, context.user_id, payload)
+        .await
+    {
+        Ok(hazard) => (
+            StatusCode::CREATED,
+            Json(json!({"accepted": true, "api_version": "v1", "hazard": hazard})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_hazard_detail(
+    Path(hazard_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store.get_hazard(context.tenant_id, hazard_id).await {
+        Ok(hazard) => (
+            StatusCode::OK,
+            Json(json!({"api_version": "v1", "hazard": hazard})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_hazard_update(
+    Path(hazard_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<HazardWriteRequest>,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_MANAGE_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store
+        .update_hazard(context.tenant_id, hazard_id, context.user_id, payload)
+        .await
+    {
+        Ok(hazard) => (
+            StatusCode::OK,
+            Json(json!({"accepted": true, "api_version": "v1", "hazard": hazard})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_assessments_list(
+    Path(hazard_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store.list_assessments(context.tenant_id, hazard_id).await {
+        Ok(assessments) => (
+            StatusCode::OK,
+            Json(json!({"api_version": "v1", "hazard_id": hazard_id, "assessments": assessments})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_assessment_create(
+    Path(hazard_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SafetyAssessmentCreateRequest>,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_REVIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store
+        .create_assessment(context.tenant_id, hazard_id, context.user_id, payload)
+        .await
+    {
+        Ok(assessment) => (
+            StatusCode::CREATED,
+            Json(json!({"accepted": true, "api_version": "v1", "assessment": assessment})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_interactions_list(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store.list_interactions(context.tenant_id, product_id).await {
+        Ok(interactions) => (
+            StatusCode::OK,
+            Json(json!({"api_version": "v1", "product_id": product_id, "security_interactions": interactions})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_interaction_create(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SafetySecurityInteractionCreateRequest>,
+) -> Response {
+    let (context, store) = match product_safety_access(
+        &state,
+        &headers,
+        PERMISSION_MANAGE_SAFETY_SECURITY_INTERACTION,
+    )
+    .await
+    {
+        Ok(access) => access,
+        Err(response) => return response,
+    };
+    if context.has_role("SOC_ANALYST")
+        && matches!(
+            payload.status.as_deref(),
+            Some("ACCEPTED_FOR_REVIEW" | "CLOSED")
+        )
+    {
+        return api_error_response(
+            StatusCode::FORBIDDEN,
+            "soc_analyst_final_safety_state_denied",
+            "SOC_ANALYST darf keine finale Safety-Review- oder Abschlussentscheidung setzen.",
+        );
+    }
+    match store
+        .create_interaction(context.tenant_id, product_id, context.user_id, payload)
+        .await
+    {
+        Ok(result) => (
+            if result.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(json!({"accepted": true, "api_version": "v1", "result": result})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn safety_interaction_update(
+    Path(interaction_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SafetySecurityInteractionUpdateRequest>,
+) -> Response {
+    let (context, store) = match product_safety_access(
+        &state,
+        &headers,
+        PERMISSION_MANAGE_SAFETY_SECURITY_INTERACTION,
+    )
+    .await
+    {
+        Ok(access) => access,
+        Err(response) => return response,
+    };
+    if context.has_role("SOC_ANALYST")
+        && matches!(payload.status.as_str(), "ACCEPTED_FOR_REVIEW" | "CLOSED")
+    {
+        return api_error_response(
+            StatusCode::FORBIDDEN,
+            "soc_analyst_final_safety_state_denied",
+            "SOC_ANALYST darf keine finale Safety-Review- oder Abschlussentscheidung setzen.",
+        );
+    }
+    match store
+        .update_interaction(context.tenant_id, interaction_id, context.user_id, payload)
+        .await
+    {
+        Ok(interaction) => (
+            StatusCode::OK,
+            Json(json!({"accepted": true, "api_version": "v1", "interaction": interaction})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn product_requirements_list(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store.list_requirements(context.tenant_id, product_id).await {
+        Ok(requirements) => (
+            StatusCode::OK,
+            Json(json!({"api_version": "v1", "product_id": product_id, "requirements": requirements})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn product_safety_readiness(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (context, store) =
+        match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
+            Ok(access) => access,
+            Err(response) => return response,
+        };
+    match store.readiness(context.tenant_id, product_id).await {
+        Ok(readiness) => (
+            StatusCode::OK,
+            Json(json!({"api_version": "v1", "product_id": product_id, "readiness": readiness})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn product_safety_evidence_link(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SafetyEvidenceLinkRequest>,
+) -> Response {
+    let (context, store) = match product_safety_access(
+        &state,
+        &headers,
+        PERMISSION_LINK_PRODUCT_SAFETY_EVIDENCE,
+    )
+    .await
+    {
+        Ok(access) => access,
+        Err(response) => return response,
+    };
+    match store
+        .link_evidence(context.tenant_id, product_id, context.user_id, payload)
+        .await
+    {
+        Ok(link) => (
+            if link.created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
+            },
+            Json(json!({"accepted": true, "api_version": "v1", "evidence_link": link})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
+}
+
+async fn product_safety_evidence_unlink(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<SafetyEvidenceLinkRequest>,
+) -> Response {
+    let (context, store) = match product_safety_access(
+        &state,
+        &headers,
+        PERMISSION_LINK_PRODUCT_SAFETY_EVIDENCE,
+    )
+    .await
+    {
+        Ok(access) => access,
+        Err(response) => return response,
+    };
+    match store
+        .unlink_evidence(context.tenant_id, product_id, context.user_id, payload)
+        .await
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({"accepted": true, "api_version": "v1", "unlinked": true})),
+        )
+            .into_response(),
+        Err(error) => product_safety_error_response(error),
+    }
 }
 
 fn vulnerability_intelligence_error_response(error: VulnerabilityIntelligenceError) -> Response {
@@ -35073,7 +35697,7 @@ async fn web_product_security(
             );
             let body = format!(
                 r#"
-                <section class="hero compact"><h1>Product Security</h1><p>Tenant {} · {} · <a href="{}">Evidence-Pakete</a></p></section>
+                <section class="hero compact"><h1>Product Security</h1><p>Tenant {} · {} · <a href="{}">Evidence-Pakete</a> · <a href="{}">Safety &amp; Conformity</a></p></section>
                 <section class="metrics">
                   {}
                   {}
@@ -35146,6 +35770,7 @@ async fn web_product_security(
                 overview.tenant_id,
                 html_escape(&overview.matrix.summary),
                 web_path_with_context("/product-security/evidence-packages/", Some(&context)),
+                web_path_with_context("/product-safety/", Some(&context)),
                 metric_card("Produkte", overview.posture.products),
                 metric_card("Offene Vulns", overview.posture.open_vulnerabilities),
                 metric_card(
@@ -35228,6 +35853,384 @@ async fn web_product_security(
             &context,
             &err.to_string(),
         ),
+    }
+}
+
+async fn web_product_safety(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(_query): Query<WebContextQuery>,
+) -> Html<String> {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Safety & Conformity", "/product-safety/"),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !has_product_safety_permission(&auth_context, PERMISSION_VIEW_PRODUCT_SAFETY) {
+        return web_error_page(
+            "Safety & Conformity",
+            "/product-safety/",
+            &context,
+            "Fuer diese Safety- und Conformity-Ansicht fehlt die Berechtigung.",
+        );
+    }
+    let Some(product_store) = state.product_security_store.as_ref() else {
+        return web_store_missing(
+            "Safety & Conformity",
+            "/product-safety/",
+            &context,
+            "Product Security",
+        );
+    };
+    let Some(safety_store) = state.product_safety_store.as_ref() else {
+        return web_store_missing(
+            "Safety & Conformity",
+            "/product-safety/",
+            &context,
+            "Product Safety",
+        );
+    };
+    let overview = match product_store.overview(context.tenant_id, 100, 5).await {
+        Ok(Some(overview)) => overview,
+        Ok(None) => {
+            return web_error_page(
+                "Safety & Conformity",
+                "/product-safety/",
+                &context,
+                "Tenant wurde nicht gefunden.",
+            )
+        }
+        Err(error) => {
+            return web_error_page(
+                "Safety & Conformity",
+                "/product-safety/",
+                &context,
+                &error.to_string(),
+            )
+        }
+    };
+    let mut rows = Vec::new();
+    let mut review_required = 0_i64;
+    let mut open_hazards = 0_i64;
+    let mut mitigation_required = 0_i64;
+    for product in &overview.products {
+        let readiness = match safety_store.readiness(context.tenant_id, product.id).await {
+            Ok(readiness) => readiness,
+            Err(_) => continue,
+        };
+        review_required += readiness.open_reviews.len() as i64;
+        open_hazards += readiness.open_hazards;
+        mitigation_required += readiness.interactions_mitigation_required;
+        rows.push(format!(
+            r#"<tr><td><a href="{}">{}</a><br><code>{}</code></td><td>{}</td><td>{}</td><td>{} dokumentiert</td><td>{} offen / {} in Review</td><td>{} identifiziert / {} Massnahmen erforderlich</td><td>{}</td></tr>"#,
+            web_path_with_context(
+                &format!("/product-safety/products/{}/", product.id),
+                Some(&context),
+            ),
+            html_escape(&product.name),
+            html_escape(&product.code),
+            web_badge(
+                &readiness.cra_applicability,
+                product_safety_status_class(&readiness.cra_applicability),
+            ),
+            web_badge(
+                &readiness.machinery_regulation_applicability,
+                product_safety_status_class(&readiness.machinery_regulation_applicability),
+            ),
+            readiness.documented_safety_functions,
+            readiness.open_hazards,
+            readiness.hazards_under_review,
+            readiness.identified_interactions,
+            readiness.interactions_mitigation_required,
+            web_badge(
+                readiness.technical_documentation_status,
+                "warning-badge",
+            ),
+        ));
+    }
+    let body = format!(
+        r#"
+        <section class="hero compact safety-hero">
+          <p class="eyebrow">Product Security · Product Safety · Regulatory Review</p>
+          <h1>Safety &amp; Conformity</h1>
+          <p>Machinery Regulation und CRA als getrennte menschliche Bewertungen mit expliziten Safety-Security-Interactions. Keine automatische Konformitaets-, CE- oder Sicherheitsentscheidung.</p>
+        </section>
+        <section class="metrics">
+          {}
+          {}
+          {}
+          {}
+        </section>
+        <section class="domain-map">
+          <article class="panel cyber-lane"><p class="eyebrow">Cybersecurity</p><h2>Threats, Vulnerabilities &amp; Controls</h2><p>Bestehende Product-Security-, TARA-, Risk-, SBOM-, CVE- und Observation-Daten bleiben im Cyber-Fachmodell.</p></article>
+          <article class="panel interaction-lane"><p class="eyebrow">Explizite Grenze</p><h2>Safety ↔ Security</h2><p>Typisierte, tenantvalidierte Interactions verbinden eine Cyberquelle mit Safety Function und Hazard.</p></article>
+          <article class="panel safety-lane"><p class="eyebrow">Product Safety</p><h2>Functions, Hazards &amp; Assessments</h2><p>Qualitative, versionierte Safety-Bewertungen bleiben eigenstaendig und erfordern menschlichen Review.</p></article>
+        </section>
+        <section class="grid">
+          <article class="panel wide">
+            <h2>Produktbezogene Readiness</h2>
+            <p>Transparente Bestands- und Gap-Sicht ohne Score und ohne Compliance-Behauptung.</p>
+            <table><thead><tr><th>Produkt</th><th>CRA</th><th>Maschinenverordnung</th><th>Safety Functions</th><th>Hazards</th><th>Interactions</th><th>Technical Documentation</th></tr></thead>
+            <tbody>{}</tbody></table>
+          </article>
+          <article class="panel wide"><h2>Human Review Boundary</h2><p><strong>REQUIRED.</strong> IN_SCOPE und OUT_OF_SCOPE sind dokumentierte menschliche Applicability-Bewertungen. CLOSED beendet nur einen Workflow. ISCY bestaetigt weder Konformitaet noch CE, Safety oder Cybersecurity.</p></article>
+        </section>
+        "#,
+        metric_card("Produkte", rows.len() as i64),
+        metric_card("Offene Reviews", review_required),
+        metric_card("Offene Hazards", open_hazards),
+        metric_card("Interactions mit Massnahmen", mitigation_required),
+        if rows.is_empty() {
+            web_empty_row(7, "Noch keine Product-Security-Produkte vorhanden.")
+        } else {
+            rows.join("")
+        },
+    );
+    web_page(
+        "Safety & Conformity",
+        "/product-safety/",
+        Some(&context),
+        &body,
+    )
+}
+
+async fn web_product_safety_detail(
+    Path(product_id): Path<i64>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(_query): Query<WebContextQuery>,
+) -> Html<String> {
+    let auth_context = match authenticated_tenant_context(&state, &headers).await {
+        Ok(context) => context,
+        Err(_) => return web_missing_context("Product Safety Detail", "/product-safety/"),
+    };
+    let context = WebContext {
+        tenant_id: auth_context.tenant_id,
+        user_id: auth_context.user_id,
+        user_email: auth_context.user_email.clone(),
+    };
+    if !has_product_safety_permission(&auth_context, PERMISSION_VIEW_PRODUCT_SAFETY) {
+        return web_error_page(
+            "Product Safety Detail",
+            "/product-safety/",
+            &context,
+            "Fuer diese Safety- und Conformity-Ansicht fehlt die Berechtigung.",
+        );
+    }
+    let Some(store) = state.product_safety_store.as_ref() else {
+        return web_store_missing(
+            "Product Safety Detail",
+            "/product-safety/",
+            &context,
+            "Product Safety",
+        );
+    };
+    let detail = match store.product_detail(context.tenant_id, product_id).await {
+        Ok(detail) => detail,
+        Err(error) => {
+            return web_error_page(
+                "Product Safety Detail",
+                "/product-safety/",
+                &context,
+                error.message(),
+            )
+        }
+    };
+    let applicability_rows = detail
+        .applicability
+        .iter()
+        .map(|item| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>Revision {}</td></tr>"#,
+                html_escape(&item.legal_act),
+                web_badge(
+                    &item.applicability_status,
+                    product_safety_status_class(&item.applicability_status),
+                ),
+                html_escape(&item.product_role),
+                html_escape(&item.reasoning),
+                item.revision,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let function_rows = detail
+        .safety_functions
+        .iter()
+        .map(|item| {
+            format!(
+                r#"<tr><td>{}</td><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&item.name),
+                html_escape(&item.function_identifier),
+                html_escape(&item.description),
+                web_badge(
+                    &item.criticality,
+                    product_safety_status_class(&item.criticality)
+                ),
+                html_escape(&item.status),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let hazard_rows = detail
+        .hazards
+        .iter()
+        .map(|item| {
+            format!(
+                r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{} → {}</td><td>{}</td></tr>"#,
+                html_escape(&item.title),
+                html_escape(&item.hazard_category),
+                html_escape(&item.operational_phase),
+                html_escape(&item.initial_risk),
+                html_escape(&item.residual_risk),
+                web_badge(&item.status, product_safety_status_class(&item.status)),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let interaction_rows = detail
+        .security_interactions
+        .iter()
+        .map(|item| {
+            let function_name = detail
+                .safety_functions
+                .iter()
+                .find(|candidate| candidate.id == item.safety_function_id)
+                .map(|candidate| candidate.name.as_str())
+                .unwrap_or("Unbekannte Safety Function");
+            let hazard_title = detail
+                .hazards
+                .iter()
+                .find(|candidate| candidate.id == item.hazard_id)
+                .map(|candidate| candidate.title.as_str())
+                .unwrap_or("Unbekannter Hazard");
+            format!(
+                r#"<tr><td><code>{} #{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
+                html_escape(&item.cyber_source.source_type),
+                item.cyber_source.source_id,
+                html_escape(&item.security_consequence),
+                html_escape(function_name),
+                html_escape(hazard_title),
+                html_escape(&item.measures),
+                web_badge(&item.status, product_safety_status_class(&item.status)),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let requirement_rows = detail
+        .requirements
+        .iter()
+        .map(|item| {
+            format!(
+                r#"<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td><a href="{}" rel="noreferrer">EUR-Lex</a></td></tr>"#,
+                html_escape(&item.requirement_code),
+                html_escape(&item.citation),
+                html_escape(&item.title),
+                web_badge(
+                    &item.implementation_status,
+                    product_safety_status_class(&item.implementation_status),
+                ),
+                html_escape(&item.source_reference),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let profile = detail.machinery_profile.as_ref().map(|profile| format!(
+        r#"<dl class="detail-list"><dt>Rolle</dt><dd>{}</dd><dt>Intended purpose</dt><dd>{}</dd><dt>Foreseeable use</dt><dd>{}</dd><dt>Foreseeable misuse</dt><dd>{}</dd><dt>Operational environment</dt><dd>{}</dd><dt>Lifecycle</dt><dd>{}</dd><dt>Human interaction</dt><dd>{}</dd><dt>Network</dt><dd>{}</dd><dt>Remote access</dt><dd>{}</dd><dt>Safety-related software</dt><dd>{}</dd><dt>Programmable control</dt><dd>{}</dd><dt>External interfaces</dt><dd>{}</dd></dl>"#,
+        html_escape(&profile.product_role), html_escape(&profile.intended_purpose), html_escape(&profile.reasonably_foreseeable_use), html_escape(&profile.reasonably_foreseeable_misuse), html_escape(&profile.operational_environment), html_escape(&profile.lifecycle_phase), html_escape(&profile.human_interaction), html_escape(&profile.network_connectivity_context), html_escape(&profile.remote_access_context), yes_no(profile.safety_related_software_present), yes_no(profile.programmable_control_system_present), yes_no(profile.external_communication_interfaces_present)
+    )).unwrap_or_else(|| "<p>Machinery Product Profile fehlt. Human Review erforderlich.</p>".to_string());
+    let readiness = &detail.readiness;
+    let missing = if readiness.missing_items.is_empty() {
+        "Keine strukturellen Luecken erfasst.".to_string()
+    } else {
+        readiness
+            .missing_items
+            .iter()
+            .map(|item| format!("<li>{}</li>", html_escape(item)))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let open_reviews = if readiness.open_reviews.is_empty() {
+        "Keine offenen Reviews erfasst.".to_string()
+    } else {
+        readiness
+            .open_reviews
+            .iter()
+            .map(|item| format!("<li>{}</li>", html_escape(item)))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    let body = format!(
+        r#"
+        <section class="hero compact safety-hero"><p class="eyebrow"><a href="{}">Safety &amp; Conformity</a> · Product Detail</p><h1>{}</h1><p><code>{}</code> · {}</p><p><strong>Human assessment: REQUIRED.</strong> Keine automatische Konformitaets-, CE-, Safety- oder Cybersecurity-Entscheidung.</p></section>
+        <section class="metrics">{}{}{}{}{}</section>
+        <section class="grid">
+          <article class="panel wide"><p class="eyebrow">Applicability</p><h2>CRA &amp; Machinery Regulation</h2><table><thead><tr><th>Rechtsakt</th><th>Status</th><th>Produktrolle</th><th>Menschliche Begruendung</th><th>Revision</th></tr></thead><tbody>{}</tbody></table></article>
+          <article class="panel wide safety-lane"><p class="eyebrow">Machinery Product Profile</p><h2>Intended Use &amp; Operating Context</h2>{}</article>
+          <article class="panel wide safety-lane"><p class="eyebrow">Product Safety</p><h2>Safety Functions</h2><table><thead><tr><th>Function</th><th>ID</th><th>Beschreibung</th><th>Kritikalitaet</th><th>Status</th></tr></thead><tbody>{}</tbody></table></article>
+          <article class="panel wide safety-lane"><p class="eyebrow">Product Safety</p><h2>Hazards &amp; qualitative Safety Risk</h2><p>Methodik wird dokumentiert; ISCY berechnet keine ISO-12100-Risikozahl.</p><table><thead><tr><th>Hazard</th><th>Kategorie</th><th>Phase</th><th>Initial → Residual</th><th>Status</th></tr></thead><tbody>{}</tbody></table></article>
+          <article class="panel wide interaction-lane"><p class="eyebrow">Safety ↔ Security</p><h2>Typed Cyber-to-Hazard Interactions</h2><table><thead><tr><th>Cyber Source</th><th>Security consequence</th><th>Safety Function</th><th>Hazard</th><th>Measures</th><th>Status</th></tr></thead><tbody>{}</tbody></table><p><strong>CLOSED</strong> bedeutet nur Workflow abgeschlossen, nicht sicher oder konform.</p></article>
+          <article class="panel wide"><p class="eyebrow">Regulatory Requirements</p><h2>Machinery Regulation Annex III</h2><table><thead><tr><th>Reference</th><th>Citation</th><th>Kurzbeschreibung</th><th>Status</th><th>Quelle</th></tr></thead><tbody>{}</tbody></table></article>
+          <article class="panel"><p class="eyebrow">Readiness</p><h2>Fehlende Daten / Evidence</h2><ul>{}</ul><p>Evidence gaps: {}</p></article>
+          <article class="panel"><p class="eyebrow">Readiness</p><h2>Open Human Reviews</h2><ul>{}</ul></article>
+          <article class="panel wide"><p class="eyebrow">Technical Documentation Preview</p><h2>Product Technical Documentation Readiness</h2><p>Status: {}</p><p>Produktbeschreibung · Intended purpose · anwendbare Rechtsakte · Cybersecurity-Risikoinformation · Safety Functions · Hazards · Safety-Security Interactions · SBOM/VEX/TARA · Vulnerability Handling · Supplier Evidence · Controls · Evidence Gaps · Open Reviews.</p><p>Dies ist eine Preview fuer menschliche Pruefung, kein eingefrorenes Technical File.</p></article>
+        </section>
+        "#,
+        web_path_with_context("/product-safety/", Some(&context)),
+        html_escape(&detail.product.name),
+        html_escape(&detail.product.code),
+        html_escape(&detail.product.description),
+        metric_card("Safety Functions", readiness.documented_safety_functions),
+        metric_card("Offene Hazards", readiness.open_hazards),
+        metric_card("Interactions", readiness.identified_interactions),
+        metric_card("Evidence Gaps", readiness.evidence_gaps),
+        metric_card("Open Reviews", readiness.open_reviews.len() as i64),
+        if applicability_rows.is_empty() {
+            web_empty_row(5, "Applicability noch nicht bewertet.")
+        } else {
+            applicability_rows
+        },
+        profile,
+        if function_rows.is_empty() {
+            web_empty_row(5, "Noch keine Safety Functions dokumentiert.")
+        } else {
+            function_rows
+        },
+        if hazard_rows.is_empty() {
+            web_empty_row(5, "Noch keine Hazards dokumentiert.")
+        } else {
+            hazard_rows
+        },
+        if interaction_rows.is_empty() {
+            web_empty_row(6, "Noch keine Safety-Security-Interactions dokumentiert.")
+        } else {
+            interaction_rows
+        },
+        requirement_rows,
+        missing,
+        readiness.evidence_gaps,
+        open_reviews,
+        web_badge(readiness.technical_documentation_status, "warning-badge"),
+    );
+    web_page(
+        "Product Safety Detail",
+        "/product-safety/",
+        Some(&context),
+        &body,
+    )
+}
+
+fn product_safety_status_class(value: &str) -> &'static str {
+    match value {
+        "IN_SCOPE" | "ACTIVE" | "READY_FOR_HUMAN_REVIEW" => "ok-badge",
+        "OUT_OF_SCOPE" | "ARCHIVED" | "CLOSED" => "muted-badge",
+        "CRITICAL" | "MITIGATION_REQUIRED" | "EVIDENCE_GAPS" => "danger-badge",
+        "NOT_ASSESSED" | "REVIEW_REQUIRED" | "UNDER_REVIEW" => "warning-badge",
+        _ => "info-badge",
     }
 }
 
@@ -42162,6 +43165,12 @@ fn web_page(
     p {{ margin:0 0 8px; color:var(--muted); overflow-wrap:anywhere; }}
     .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:14px; }}
     .metrics {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px; margin-bottom:16px; }}
+    .domain-map {{ display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:14px; margin-bottom:16px; }}
+    .cyber-lane {{ border-top:4px solid #2563eb; }}
+    .interaction-lane {{ border-top:4px solid #7c3aed; }}
+    .safety-lane {{ border-top:4px solid #ea580c; }}
+    .safety-hero {{ border-left:5px solid #ea580c; padding-left:18px; }}
+    .safety-hero .eyebrow, .safety-lane .eyebrow, .domain-map .eyebrow {{ margin-bottom:6px; letter-spacing:.08em; }}
     .incident-flow {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:12px; margin:0 0 16px; }}
     .flow-step {{ display:grid; grid-template-columns:auto minmax(0, 1fr); gap:4px 10px; align-items:start; min-height:116px; padding:14px; color:var(--ink); text-decoration:none; background:#fff; border:1px solid var(--line); border-radius:8px; box-shadow:0 1px 2px rgba(20,30,40,.04); }}
     .flow-step:hover {{ border-color:#b8d8d0; box-shadow:0 8px 22px rgba(20,30,40,.08); }}
@@ -42235,7 +43244,7 @@ fn web_page(
     button:hover {{ background:#0b5f58; }}
     a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {{ outline:3px solid #99f6e4; outline-offset:2px; }}
     @media (max-width: 1100px) {{ .hygiene-table .hygiene-detail {{ display:none; }} }}
-    @media (max-width: 720px) {{ header {{ grid-template-columns:1fr; align-items:start; padding:12px 16px; }} nav {{ width:100%; flex-wrap:nowrap; overflow-x:auto; padding-bottom:2px; }} h1 {{ font-size:32px; }} .context {{ justify-content:flex-start; }} .zt-focus {{ grid-template-columns:1fr; }} main {{ padding:22px 14px 36px; }} }}
+    @media (max-width: 720px) {{ header {{ grid-template-columns:1fr; align-items:start; padding:12px 16px; }} nav {{ width:100%; flex-wrap:nowrap; overflow-x:auto; padding-bottom:2px; }} h1 {{ font-size:32px; }} .context {{ justify-content:flex-start; }} .zt-focus, .domain-map {{ grid-template-columns:1fr; }} main {{ padding:22px 14px 36px; }} }}
   </style>
 </head>
 <body>
@@ -47215,6 +48224,58 @@ pub fn app_router_with_state(state: AppState) -> Router {
             get(product_security_product_detail),
         )
         .route(
+            "/api/v1/product-conformity/products/{product_id}",
+            get(product_conformity_detail),
+        )
+        .route(
+            "/api/v1/product-conformity/products/{product_id}/applicability",
+            get(product_applicability_list).post(product_applicability_upsert),
+        )
+        .route(
+            "/api/v1/product-conformity/products/{product_id}/machinery-profile",
+            get(machinery_profile_get).post(machinery_profile_upsert),
+        )
+        .route(
+            "/api/v1/product-conformity/products/{product_id}/requirements",
+            get(product_requirements_list),
+        )
+        .route(
+            "/api/v1/product-conformity/products/{product_id}/readiness",
+            get(product_safety_readiness),
+        )
+        .route(
+            "/api/v1/product-safety/products/{product_id}/evidence-links",
+            post(product_safety_evidence_link).delete(product_safety_evidence_unlink),
+        )
+        .route(
+            "/api/v1/product-safety/products/{product_id}/functions",
+            get(safety_functions_list).post(safety_function_create),
+        )
+        .route(
+            "/api/v1/product-safety/functions/{function_id}",
+            patch(safety_function_update),
+        )
+        .route(
+            "/api/v1/product-safety/products/{product_id}/hazards",
+            get(safety_hazards_list).post(safety_hazard_create),
+        )
+        .route(
+            "/api/v1/product-safety/hazards/{hazard_id}",
+            get(safety_hazard_detail).patch(safety_hazard_update),
+        )
+        .route(
+            "/api/v1/product-safety/hazards/{hazard_id}/assessments",
+            get(safety_assessments_list).post(safety_assessment_create),
+        )
+        .route(
+            "/api/v1/product-safety/products/{product_id}/security-interactions",
+            get(safety_interactions_list).post(safety_interaction_create),
+        )
+        .route(
+            "/api/v1/product-safety/security-interactions/{interaction_id}",
+            patch(safety_interaction_update),
+        )
+        .route(
             "/api/v1/product-security/products/{product_id}/cra-readiness",
             get(product_security_product_cra_readiness),
         )
@@ -48090,6 +49151,11 @@ pub fn app_router_with_state(state: AppState) -> Router {
             post(web_ai_governance_create_gap_task),
         )
         .route("/product-security/", get(web_product_security))
+        .route("/product-safety/", get(web_product_safety))
+        .route(
+            "/product-safety/products/{product_id}/",
+            get(web_product_safety_detail),
+        )
         .route(
             "/product-security/evidence-packages/",
             get(web_product_security_evidence_packages)
