@@ -115,8 +115,14 @@ cp -- scripts/check_release_notes_completeness.sh "$tag_fixture/scripts/check_re
 cp -- "$source_manifest" "$tag_fixture/$source_manifest"
 cp -- "$source_snapshot" "$tag_fixture/$source_snapshot"
 cp -- "$source_notes" "$tag_fixture/$source_notes"
+cp -- "$source_db_admin" "$tag_fixture/$source_db_admin"
 cp -- docs/RELEASE_CANDIDATE_CHECKLIST.md "$tag_fixture/docs/RELEASE_CANDIDATE_CHECKLIST.md"
+cp -- docs/ISCY_Handbuch.pdf "$tag_fixture/docs/ISCY_Handbuch.pdf"
+cp -- rust/iscy-backend/Cargo.lock "$tag_fixture/rust/iscy-backend/Cargo.lock"
+cp -- flake.lock "$tag_fixture/flake.lock"
+cp -- release/iscy-backend.cdx.json "$tag_fixture/release/iscy-backend.cdx.json"
 cp -- release/SHA256SUMS "$tag_fixture/release/SHA256SUMS"
+cp -a -- tests/visual/baselines/. "$tag_fixture/tests/visual/baselines/"
 run_tag_fixture_guard >/dev/null
 
 git -C "$tag_fixture" tag --delete "$published_version" >/dev/null
@@ -144,15 +150,15 @@ candidate="$(mutate_manifest root_binary_claim '
 ')"
 expect_rejected root_binary_claim "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" manifest
 
-candidate="$(mutate_manifest migration_count_low '.migration_count = 44')"
+candidate="$(mutate_manifest migration_count_low '.migration_count = 45')"
 expect_rejected migration_count_low "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" migration_count
 
-candidate="$(mutate_manifest migration_count_high '.migration_count = 46')"
+candidate="$(mutate_manifest migration_count_high '.migration_count = 47')"
 expect_rejected migration_count_high "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" migration_count
 
 gap_db_admin="$tmp_dir/gap-db-admin.rs"
 sed '/version: "0020_/d' "$source_db_admin" >"$gap_db_admin"
-gap_manifest="$(mutate_manifest migration_gap '.migration_count = 44')"
+gap_manifest="$(mutate_manifest migration_gap '.migration_count = 45')"
 expect_rejected migration_gap "$gap_manifest" "$source_snapshot" "$gap_db_admin" "$source_notes" migration_sequence
 
 duplicate_db_admin="$tmp_dir/duplicate-db-admin.rs"

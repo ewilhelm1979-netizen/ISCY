@@ -42,6 +42,7 @@ Out of scope unless explicitly added by an operator:
 | Database credentials and runtime secrets | confidentiality |
 | SBOM/CSAF/VEX and vulnerability data | integrity, provenance, availability |
 | Software policies, exceptions and effective decisions | integrity, tenant isolation, expiry, traceability |
+| Product applicability, safety functions, hazards, assessments and safety-security interactions | integrity, tenant isolation, revision safety, human-review boundary |
 | Audit events and review decisions | integrity, non-ambiguity, traceability |
 | Backups | confidentiality, integrity, recoverability |
 
@@ -122,6 +123,27 @@ Backup files contain production database and evidence data. File permissions, in
 - not-found behavior should avoid disclosing foreign object existence
 
 **Residual risk:** New modules can omit tenant predicates. Review and route-specific negative tests remain mandatory.
+
+### Safety/security reference confusion or false conformity
+
+**Threat:** A tenant user supplies a foreign or type-confused Cyber, Safety,
+Control, Requirement or Evidence ID, races a stale review, injects markup, or
+interprets a workflow state as a legal or safety conclusion.
+
+**Controls:**
+
+- one typed Cyber FK per Interaction and same-tenant/product ownership checks
+- exact-one-target Evidence relation with a stable duplicate key
+- optimistic revisions, PostgreSQL row locks and SQLite write serialization
+- bounded input, unknown-field rejection and contextual HTML escaping
+- mutation and bounded audit event in one transaction
+- read-only auditor role and separated Compliance/Security/SOC permissions
+- readiness without score; `CLOSED` is workflow-only and final interpretation
+  remains `READY_FOR_HUMAN_REVIEW`
+
+**Residual risk:** The correctness of the human legal and functional-safety
+assessment, standard edition/status, risk method and uploaded Evidence is not
+established by ISCY. Independent competent review remains required.
 
 ### Direct evidence disclosure
 

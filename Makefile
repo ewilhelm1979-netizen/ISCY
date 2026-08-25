@@ -128,6 +128,9 @@ rust-smoke:
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/incidents/1/dora-export" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/incidents/1/dsgvo-export.pdf" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/product-security/overview" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/product-safety/" >/dev/null; \
+	curl -fsS -b "$$cookie_file" "$$url/product-safety/products/1100/" >/dev/null; \
+	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" -H "x-iscy-roles: ADMIN" "$$url/api/v1/product-conformity/products/1100" >/dev/null; \
 	curl -fsS -H "x-iscy-tenant-id: 1" -H "x-iscy-user-id: 1" "$$url/api/v1/status/metrics?tenant_id=1&user_id=1" >/dev/null; \
 	echo "Rust smoke OK: $$url"
 

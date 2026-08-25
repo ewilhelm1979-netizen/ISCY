@@ -6,7 +6,26 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
-Keine Änderungen außerhalb des für V23.7.33 eingefrorenen Release-Scope.
+### Machinery & CRA Safety-Security Co-Engineering – Phase 1
+
+- ergänzt eine schmale, tenantgebundene Product-Safety-Domain für
+  produktbezogene CRA-/Maschinenverordnungs-Applicability, Maschinenprofile,
+  Safety Functions, Hazards und versionierte qualitative Assessments
+- verbindet bestehende Product-Security-, CVE-, Risk-, Threat/TARA-,
+  Component-, Control-, Requirement- und Evidence-Objekte ausschließlich über
+  typisierte, validierte Relationen; Safety- und Cybersecurity-Bewertungen
+  bleiben fachlich getrennt
+- ergänzt Migration `0046_rust_machinery_cra_safety_security_foundation`,
+  serverseitige RBAC-/Tenant-Grenzen, atomisches Audit, Revision-/Concurrency-
+  Schutz und idempotente Evidence-Verknüpfungen für SQLite und PostgreSQL
+- ergänzt die API-v1-Endpunkte und den Arbeitsbereich `Safety & Conformity`
+  mit transparenter Readiness und Technical-Documentation-Preview ohne
+  Compliance-Zahl oder automatische Rechts-, CE-, Safety- oder
+  Konformitätsentscheidung
+- speichert zu EN ISO 12100, IEC 62443 und prEN 50742 ausschließlich
+  Referenzmetadaten; `prEN 50742` bleibt `DRAFT` ohne Harmonisierungs- oder
+  Konformitätsvermutung
+- führt keine lokal-aegis-, Netzwerk-, LLM-, RAG- oder Action-Kopplung ein
 
 ## V23.7.33 - 2026-08-16
 

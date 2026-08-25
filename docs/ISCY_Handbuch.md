@@ -663,6 +663,26 @@ Fachlicher Nutzen:
 Fuer Nicht-Sicherheitsleute:
 Dieser Bereich ist fuer Unternehmen wichtig, die Software, digitale Produkte oder vernetzte Systeme bereitstellen.
 
+#### 5.15.1 Safety & Conformity
+
+Der Product-Security-nahe Arbeitsbereich `/product-safety/` verbindet
+Cybersecurity und funktionale Produktsicherheit, ohne beide in dasselbe
+Risikomodell zu pressen. Product Applicability fuer CRA und Maschinenverordnung,
+Maschinenprofil, Safety Functions, Hazards und qualitative Safety Assessments
+bleiben eigene fachliche Datensaetze. Typisierte Interactions zeigen explizit,
+wie eine vorhandene Vulnerability, Security Observation, ein Risk, eine
+SBOM-Komponente, CVE-Korrelation oder ein Threat/TARA-Kontext eine Safety
+Function oder einen Hazard beruehren kann.
+
+Die Detailansicht trennt Cyber Source, Interaction und Safety optisch und zeigt
+Requirements, Evidence-Gaps, offene Reviews sowie eine technische
+Dokumentationsvorschau. `CLOSED` bezeichnet nur das Ende eines Workflows.
+`READY_FOR_HUMAN_REVIEW` bleibt die oberste technische Readiness; ISCY trifft
+keine Rechts-, CE-, Safety- oder Konformitaetsentscheidung. Die fachliche
+Architektur, API und Quellen sind in
+[MACHINERY_CRA_SAFETY_SECURITY.md](MACHINERY_CRA_SAFETY_SECURITY.md)
+dokumentiert.
+
 Aktueller Rust-Funktionsumfang:
 
 - Import-Historie fuer CSAF, CycloneDX und SPDX mit CSV-/JSON-Export
@@ -1977,8 +1997,8 @@ unterschiedliche Instanzen geschrieben, gelesen und verifiziert. Danach wird
 Failover in beide Richtungen sowie ein paralleler Migrationsstart geprueft.
 Lokaler Dateispeicher und SQLite werden nicht als HA-faehig dargestellt.
 
-`make visual-regression` vergleicht 42 bewusst versionierte Playwright-
-Baselines fuer 21 zentrale Seiten bei Desktop- und kleinem Laptop-Viewport.
+`make visual-regression` vergleicht 46 bewusst versionierte Playwright-
+Baselines fuer 23 zentrale Seiten bei Desktop- und kleinem Laptop-Viewport.
 Neben Pixelabweichungen prueft die Suite leere Hauptbereiche, 500-Seiten,
 horizontalen Ueberlauf, abgeschnittene Tabellenueberschriften und sichtbare
 Secrets. CI aktualisiert Baselines nie automatisch.
@@ -2021,7 +2041,7 @@ Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
 Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
 und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust
 1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem
-Bootstrap, 45 Migrationen, Restart, Migrationsrennen und einem logischen
+Bootstrap, 46 Migrationen, Restart, Migrationsrennen und einem logischen
 Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der
 PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder
 ein In-place-Upgrade noch ein automatisiertes `pg_upgrade` oder einen
@@ -2182,6 +2202,14 @@ Self-Approval, fremde Tenantziele, veraltete Revisionen und unbefristete
 Ausnahmen werden serverseitig abgewiesen. Die Funktion aendert keine
 Software, Finding-Triage, VEX-, Risk-Acceptance-, Incident-, Evidence-,
 Security-Observation- oder Agentdaten.
+
+Migration `0046_rust_machinery_cra_safety_security_foundation` ergaenzt die
+produktbezogene Safety-&-Conformity-Schicht. Die Migration klassifiziert kein
+Bestandsprodukt automatisch, uebernimmt keine Organisations-Applicability und
+erzeugt keine Compliance-Aussage. Requirements und Evidence werden aus den
+bestehenden Engines referenziert; typisierte Foreign Keys, Tenant-Pruefungen,
+optimistische Revisionen, SQLite-Write-Serialisierung und transaktionales Audit
+sichern die Objektgrenzen.
 
 Die priorisierte Roadmap liegt in `docs/ISCY_STRATEGIC_ROADMAP.md` und umfasst:
 

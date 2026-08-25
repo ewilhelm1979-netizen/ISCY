@@ -279,8 +279,8 @@ weiterhin elf zeitbegrenzte Aggregationsabhaengigkeiten fuer Secret-Scan,
 Rust, MSRV, Bootstrap, Nix, MinIO, Performance, HA/PostgreSQL 18, Visual
 Regression, Docker und das portable Linux-Binary. Codex-Automation ist ein
 zusaetzlicher separater CI-Nachweis. Der abschliessende Aggregationsjob prueft
-den Erfolg seiner Abhaengigkeiten sowie Manifest, Checksums, 45 Migrationen,
-42 Baselines, Dokumentationsreferenzen, den wertredigierten Sensitive-Data-
+den Erfolg seiner Abhaengigkeiten sowie Manifest, Checksums, 46 Migrationen,
+46 Baselines, Dokumentationsreferenzen, den wertredigierten Sensitive-Data-
 Scan und den exakten V23.7.31-Tag. CodeQL fuer Actions,
 JavaScript/TypeScript und Rust bleibt ein separater Pflichtnachweis.
 

@@ -41,6 +41,8 @@ const pages = [
   ["supplier-review", "/suppliers/", true],
   ["supplier-product-security", "/suppliers/product-security/", true],
   ["product-security-psirt", "/product-security/", true],
+  ["safety-conformity-overview", "/product-safety/", true],
+  ["product-safety-detail", "/product-safety/products/1100/", true],
   ["continuous-vulnerability-intelligence", "/cves/", true],
   ["software-approval-exceptions", "/software-policies/", true],
   ["ai-governance", "/ai-governance/", true],
