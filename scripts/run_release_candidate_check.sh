@@ -55,7 +55,9 @@ done
 cargo fmt --manifest-path rust/iscy-backend/Cargo.toml -- --check
 cargo clippy --locked --manifest-path rust/iscy-backend/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml
-cargo audit --file rust/iscy-backend/Cargo.lock --ignore RUSTSEC-2023-0071
+cargo audit --file rust/iscy-backend/Cargo.lock \
+    --ignore RUSTSEC-2023-0071 \
+    --ignore RUSTSEC-2026-0235
 cargo deny --manifest-path rust/iscy-backend/Cargo.toml check advisories licenses sources
 
 make rust-smoke

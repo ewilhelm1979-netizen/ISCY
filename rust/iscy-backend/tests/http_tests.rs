@@ -28,6 +28,7 @@ use iscy_backend::{
     import_store::ImportStore,
     incident_store::{IncidentRunbookTemplateWriteRequest, IncidentStore},
     process_store::ProcessStore,
+    product_safety_store::ProductSafetyStore,
     product_security_store::ProductSecurityStore,
     report_store::ReportStore,
     requirement_store::RequirementStore,
@@ -1177,8 +1178,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0045_rust_software_approval_exception_policy"));
-    assert!(html.contains("45/45 angewendet"));
+    assert!(html.contains("0046_rust_machinery_cra_safety_security_foundation"));
+    assert!(html.contains("46/46 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -17631,7 +17632,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0042_rust_native_threat_intelligence_observations",
             "0043_rust_continuous_vulnerability_intelligence",
             "0044_rust_vulnerability_hygiene_lifecycle",
-            "0045_rust_software_approval_exception_policy"
+            "0045_rust_software_approval_exception_policy",
+            "0046_rust_machinery_cra_safety_security_foundation"
         ]
     );
     assert!(
@@ -27310,4 +27312,409 @@ async fn software_policy_api_enforces_rbac_tenant_revision_and_self_approval() {
             .await
             .unwrap();
     assert_eq!((own_count, foreign_count), (1, 0));
+}
+
+#[tokio::test]
+async fn product_safety_api_enforces_rbac_tenant_typed_links_revisions_and_xss_boundary() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    sqlx::query("PRAGMA foreign_keys=ON")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO organizations_tenant (id,name,slug) VALUES
+         (701,'Safety API A','safety-api-a'),(702,'Safety API B','safety-api-b')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO accounts_user (id,username,tenant_id,role,is_active) VALUES
+         (70101,'safety-compliance',701,'COMPLIANCE_MANAGER',1),
+         (70102,'safety-security',701,'SECURITY_ADMIN',1),
+         (70103,'safety-soc',701,'SOC_ANALYST',1),
+         (70104,'safety-auditor',701,'AUDITOR',1),
+         (70201,'foreign-safety',702,'COMPLIANCE_MANAGER',1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO product_security_product (id,tenant_id,name,code,description) VALUES
+         (70110,701,'Industrial Controller','CTRL-API','Synthetic controller'),
+         (70210,702,'Foreign Controller','CTRL-FOREIGN','Foreign product')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO product_security_vulnerability (
+            id,tenant_id,product_id,title,cve,status,vex_status,origin_key,summary
+         ) VALUES
+         (70120,701,70110,'Unauthorized manipulation','CVE-2026-7010','OPEN','AFFECTED','safety-api-vulnerability','Control logic modified'),
+         (70220,702,70210,'Foreign finding','CVE-2026-7020','OPEN','AFFECTED','foreign-safety-api-vulnerability','Foreign')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO evidence_evidenceitem (id,tenant_id,title,status) VALUES
+         (70130,701,'Configuration baseline','APPROVED'),
+         (70230,702,'Foreign configuration baseline','APPROVED')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let app = app_router_with_state(
+        AppState::default()
+            .with_product_safety_store(Some(ProductSafetyStore::from_sqlite_pool(pool.clone()))),
+    );
+
+    let unauthenticated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-conformity/products/70110")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+
+    let contributor_denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-conformity/products/70110")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70101")
+                .header("x-iscy-roles", "CONTRIBUTOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(contributor_denied.status(), StatusCode::FORBIDDEN);
+
+    let auditor_read = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-conformity/products/70110")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70104")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(auditor_read.status(), StatusCode::OK);
+
+    let foreign_product = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/product-conformity/products/70210")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70104")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_product.status(), StatusCode::NOT_FOUND);
+
+    let applicability = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-conformity/products/70110/applicability?tenant_id=702")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70101")
+                .header("x-iscy-roles", "COMPLIANCE_MANAGER")
+                .body(Body::from(r#"{"legal_act":"MACHINERY_REGULATION","applicability_status":"IN_SCOPE","product_role":"MACHINERY","reasoning":"Human assessment for the synthetic controller."}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(applicability.status(), StatusCode::OK);
+
+    let security_admin_function_denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-safety/products/70110/functions")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70102")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(
+                    r#"{"name":"Denied","function_identifier":"DENIED","criticality":"HIGH"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        security_admin_function_denied.status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let function_create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-safety/products/70110/functions")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70101")
+                .header("x-iscy-roles", "COMPLIANCE_MANAGER")
+                .body(Body::from(r#"{"name":"<script>alert('safety')</script> Safe speed limitation","description":"Bounded safety function","function_identifier":"SAFE-SPEED-API","criticality":"HIGH","owner_id":70101}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(function_create.status(), StatusCode::CREATED);
+    let function_json: serde_json::Value = serde_json::from_slice(
+        &to_bytes(function_create.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let function_id = function_json["result"]["safety_function"]["id"]
+        .as_i64()
+        .unwrap();
+
+    let hazard_create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-safety/products/70110/hazards")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70101")
+                .header("x-iscy-roles", "COMPLIANCE_MANAGER")
+                .body(Body::from(format!(r#"{{"title":"Unexpected high-speed movement","description":"<img src=x onerror=alert(1)>","hazard_category":"MECHANICAL","affected_safety_function_id":{function_id},"operational_phase":"OPERATION","potential_consequence":"Hazardous movement","risk_estimation_method":"Qualitative expert assessment","initial_risk":"HIGH","residual_risk":"REVIEW_REQUIRED","status":"MITIGATION_REQUIRED","owner_id":70101}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(hazard_create.status(), StatusCode::CREATED);
+    let hazard_json: serde_json::Value = serde_json::from_slice(
+        &to_bytes(hazard_create.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let hazard_id = hazard_json["hazard"]["id"].as_i64().unwrap();
+
+    let foreign_evidence = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-safety/products/70110/evidence-links")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70101")
+                .header("x-iscy-roles", "COMPLIANCE_MANAGER")
+                .body(Body::from(format!(
+                    r#"{{"evidence_id":70230,"target_type":"HAZARD","target_id":{hazard_id}}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_evidence.status(), StatusCode::NOT_FOUND);
+
+    for expected_status in [StatusCode::CREATED, StatusCode::OK] {
+        let evidence = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/product-safety/products/70110/evidence-links")
+                    .header("content-type", "application/json")
+                    .header("x-iscy-tenant-id", "701")
+                    .header("x-iscy-user-id", "70101")
+                    .header("x-iscy-roles", "COMPLIANCE_MANAGER")
+                    .body(Body::from(format!(
+                        r#"{{"evidence_id":70130,"target_type":"HAZARD","target_id":{hazard_id}}}"#
+                    )))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(evidence.status(), expected_status);
+    }
+
+    let auditor_unlink_denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v1/product-safety/products/70110/evidence-links")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70104")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::from(format!(
+                    r#"{{"evidence_id":70130,"target_type":"HAZARD","target_id":{hazard_id}}}"#
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(auditor_unlink_denied.status(), StatusCode::FORBIDDEN);
+
+    let foreign_interaction = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-safety/products/70110/security-interactions")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70103")
+                .header("x-iscy-roles", "SOC_ANALYST")
+                .body(Body::from(format!(r#"{{"hazard_id":{hazard_id},"safety_function_id":{function_id},"cyber_source":{{"source_type":"VULNERABILITY","source_id":70220}},"interaction_type":"CYBER_CAN_DEGRADE_SAFETY_FUNCTION","security_consequence":"Foreign must fail"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(foreign_interaction.status(), StatusCode::NOT_FOUND);
+
+    let interaction_create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-safety/products/70110/security-interactions")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70103")
+                .header("x-iscy-roles", "SOC_ANALYST")
+                .body(Body::from(format!(r#"{{"hazard_id":{hazard_id},"safety_function_id":{function_id},"cyber_source":{{"source_type":"VULNERABILITY","source_id":70120}},"interaction_type":"CYBER_CAN_DEGRADE_SAFETY_FUNCTION","status":"MITIGATION_REQUIRED","security_consequence":"Control logic modified","measures":"Authenticated update; integrity validation; independent protective measure"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(interaction_create.status(), StatusCode::CREATED);
+    let interaction_json: serde_json::Value = serde_json::from_slice(
+        &to_bytes(interaction_create.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let interaction_id = interaction_json["result"]["interaction"]["id"]
+        .as_i64()
+        .unwrap();
+
+    let direct_close_denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/product-safety/products/70110/security-interactions")
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70102")
+                .header("x-iscy-roles", "SECURITY_ADMIN")
+                .body(Body::from(format!(r#"{{"hazard_id":{hazard_id},"safety_function_id":{function_id},"cyber_source":{{"source_type":"VULNERABILITY","source_id":70120}},"interaction_type":"SECURITY_CONTROL_CAN_AFFECT_SAFETY","status":"CLOSED","security_consequence":"A newly created workflow must not bypass review"}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(direct_close_denied.status(), StatusCode::BAD_REQUEST);
+    let direct_close_json: serde_json::Value = serde_json::from_slice(
+        &to_bytes(direct_close_denied.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        direct_close_json["error_code"],
+        "invalid_interaction_initial_status"
+    );
+
+    let soc_close_denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v1/product-safety/security-interactions/{interaction_id}"))
+                .header("content-type", "application/json")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70103")
+                .header("x-iscy-roles", "SOC_ANALYST")
+                .body(Body::from(r#"{"expected_revision":1,"status":"CLOSED","security_consequence":"Control logic modified"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(soc_close_denied.status(), StatusCode::FORBIDDEN);
+
+    let detail_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/product-safety/products/70110/?tenant_id=701&user_id=70104")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70104")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail_page.status(), StatusCode::OK);
+    let page_body = String::from_utf8(
+        to_bytes(detail_page.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(page_body.contains("Safety &amp; Conformity"));
+    assert!(page_body.contains("&lt;script&gt;alert(&#39;safety&#39;)&lt;/script&gt;"));
+    assert!(!page_body.contains("<script>alert('safety')</script>"));
+    assert!(!page_body.contains("<img src=x onerror=alert(1)>"));
+    assert!(page_body.contains("CLOSED</strong> bedeutet nur Workflow abgeschlossen"));
+
+    let manipulated_detail_page = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/product-safety/products/70210/?tenant_id=702&user_id=70201")
+                .header("x-iscy-tenant-id", "701")
+                .header("x-iscy-user-id", "70104")
+                .header("x-iscy-roles", "AUDITOR")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(manipulated_detail_page.status(), StatusCode::OK);
+    let manipulated_page_body = String::from_utf8(
+        to_bytes(manipulated_detail_page.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(manipulated_page_body.contains("wurde nicht gefunden"));
+    assert!(!manipulated_page_body.contains("Foreign Controller"));
 }
