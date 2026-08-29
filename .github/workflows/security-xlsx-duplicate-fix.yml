@@ -1,0 +1,123 @@
+name: Security XLSX duplicate-entry fix
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-source-fix:
+    if: >-
+      github.repository == 'ewilhelm1979-netizen/ISCY' &&
+      github.actor == 'ewilhelm1979-netizen' &&
+      github.event.pull_request.number == 122 &&
+      github.event.pull_request.head.ref == 'security/bound-xlsx-import-memory'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact security branch head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.0
+          components: rustfmt
+      - name: Apply exact duplicate-entry hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('rust/iscy-backend/src/import_preview.rs')
+          text = path.read_text()
+
+          replacements = [
+              (
+                  '    let mut shared_strings_index = None;',
+                  '    let mut shared_string_indices = Vec::new();',
+              ),
+              (
+                  '            shared_strings_index = Some(index);',
+                  '            shared_string_indices.push(index);',
+              ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected source fragment not found exactly once: {old}')
+              text = text.replace(old, new)
+
+          pattern = re.compile(
+              r'    if let Some\(index\) = shared_strings_index \{\n'
+              r'(?P<body>        let file = archive\n'
+              r'            \.by_index\(index\)\n'
+              r'            \.map_err\(\|_\| "XLSX-Shared-Strings konnten nicht sicher gelesen werden\."\.to_string\(\)\)\?;\n'
+              r'        validate_shared_strings_xml\(file, XLSX_MAX_SHARED_STRINGS, XLSX_MAX_USED_CELLS\)\?;)\n'
+              r'    \}\n'
+          )
+          text, count = pattern.subn(
+              lambda match: '    for index in shared_string_indices {\n' + match.group('body') + '\n    }\n',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit('expected shared-strings validation block not found exactly once')
+
+          marker = '''    #[test]
+          fn ordinary_shared_strings_remain_supported() {
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit('ordinary shared strings test marker not found exactly once')
+          new_test = '''    #[test]
+          fn xlsx_archive_preflight_checks_every_shared_strings_candidate() {
+              use std::io::Write;
+
+              let mut archive_bytes = Cursor::new(Vec::new());
+              {
+                  let mut writer = zip::ZipWriter::new(&mut archive_bytes);
+                  let options = zip::write::SimpleFileOptions::default()
+                      .compression_method(zip::CompressionMethod::Deflated);
+                  writer.start_file("xl/sharedStrings.xml", options).unwrap();
+                  write!(
+                      writer,
+                      r#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="{}"><si><t>attack</t></si></sst>"#,
+                      XLSX_MAX_SHARED_STRINGS + 1
+                  )
+                  .unwrap();
+                  writer.start_file("decoy/sharedStrings.xml", options).unwrap();
+                  writer.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1"><si><t>benign</t></si></sst>"#).unwrap();
+                  writer.finish().unwrap();
+              }
+
+              let error = validate_xlsx_archive(archive_bytes.get_ref()).unwrap_err();
+              assert!(error.contains("sichere Import-Limit"));
+          }
+
+          '''
+          text = text.replace(marker, new_test + marker, 1)
+          path.write_text(text)
+          PY
+
+          cargo fmt --manifest-path rust/iscy-backend/Cargo.toml
+          cargo check --locked --manifest-path rust/iscy-backend/Cargo.toml
+          cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml --lib import_preview::tests
+          cargo fmt --manifest-path rust/iscy-backend/Cargo.toml -- --check
+          git diff --check
+
+          mapfile -t changed < <(git diff --name-only)
+          test "${#changed[@]}" = '1'
+          test "${changed[0]}" = 'rust/iscy-backend/src/import_preview.rs'
+      - name: Commit exact source fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- rust/iscy-backend/src/import_preview.rs
+          git commit -m 'fix(security): validate all XLSX shared-string entries'
+          git push origin HEAD:refs/heads/security/bound-xlsx-import-memory
