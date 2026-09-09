@@ -258,7 +258,7 @@ jobs:
       - name: Run Codex without write or GitHub credentials
         id: codex
         continue-on-error: true
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1 verified 2026-07-18
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1 verified 2026-07-18
         with:
           openai-api-key: ${{ secrets.openai_api_key }}
           prompt-file: ${{ github.workspace }}/worktree/.codex/runtime/input/prompt.md
@@ -506,7 +506,7 @@ jobs:
           cp trusted/.codex/schemas/result.schema.json "$RUNNER_TEMP/iscy-codex-input/result.schema.json"
       - name: Run Codex without push credentials
         id: codex
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56 # v1 verified 2026-07-18
+        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1 verified 2026-07-18
         with:
           openai-api-key: ${{ secrets.openai_api_key }}
           prompt-file: ${{ runner.temp }}/iscy-codex-input/prompt.md
