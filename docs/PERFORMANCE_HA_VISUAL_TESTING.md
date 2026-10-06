@@ -24,7 +24,7 @@ Nachweis fuer beliebige Skalierbarkeit oder vollstaendige Hochverfuegbarkeit.
 | Migrationen | separates Admin-Kommando | PostgreSQL-Migrationen werden mit einem Advisory Lock maximal 60 Sekunden serialisiert; SQLite bleibt Single-Instance. |
 | Operations-/Prometheus-Signale | Runtime plus DB-Aggregate | Keine Request-Payloads, User-Profile, Connection Strings oder Secrets. |
 | nginx | Reverse Proxy | Zwei Backend-Upstreams werden getestet; nginx selbst bleibt eine Einzelinstanz. |
-| GUI-Screenshots | Nix-/Playwright-Testpfad | 42 feste Baselines, zwei Viewports, keine automatische Aktualisierung in CI. |
+| GUI-Screenshots | Nix-/Playwright-Testpfad | 46 feste Baselines, zwei Viewports, keine automatische Aktualisierung in CI. |
 
 ## Systempruefungen
 
@@ -109,7 +109,7 @@ logischen PostgreSQL-16-zu-18-Forward-Restore.
 
 Die Testtopologie liegt unter `tests/postgresql/` und verwendet fuer PG16 und
 PG18 unterschiedliche Wegwerfvolumes sowie die versionsrichtigen Mountziele.
-Sie prueft Fresh Bootstrap, Restart, alle 45 Migrationen, den Advisory Lock,
+Sie prueft Fresh Bootstrap, Restart, alle 46 Migrationen, den Advisory Lock,
 Health/Auth/Fachsmokes, Custom- und Betreiberbackup-Restore, dynamische
 Tabellen-/Inhalts-/Sequenz-/Constraint-Vergleiche und Media-Integritaet.
 Details und die Rollback-Grenze stehen in
@@ -132,7 +132,10 @@ Erfasst werden Login, Dashboard/Betriebsuebersicht, Organisation, Management-
 und Regulatory Reviews, Evidence Quality und Integrity, Object-Storage-Status,
 Supplier Review, Supplier/Product Security, Product Security/PSIRT, AI
 Governance, Zero Trust/Fleet, Agent-Provenance, PKI/CSR/mTLS, Cross-Domain
-Notifications, Continuous Vulnerability Intelligence und Roadmap.
+Notifications, Continuous Vulnerability Intelligence, Safety & Conformity und
+Roadmap. Die Product-Safety-Baselines halten insbesondere fest, dass
+`READY_FOR_HUMAN_REVIEW` als Warn-/Review-Zustand und nicht als grüne
+Endfreigabe erscheint.
 
 Die Pixel-Toleranz ist auf `threshold = 0.15` und maximal 0,3 Prozent
 abweichende Pixel begrenzt. Zusaetzlich schlagen 500-Seiten, leere
@@ -171,7 +174,7 @@ fehlgeschlagener Sanitization sind blockiert.
 Der Job `release-candidate-check` aggregiert die bestehenden Pflichtjobs. Er
 fuehrt die teuren Topologien nicht erneut aus, sondern scheitert, sobald ein
 benoetigter Job fehlschlaegt, abgebrochen oder uebersprungen wurde. Danach
-validiert er nur die deterministischen RC-Metadaten, 45 Migrationen, 42
+validiert er nur die deterministischen RC-Metadaten, 46 Migrationen, 46
 Baselines, Screenshot-Referenzen, Checksums und den Sensitive-Data-Scan.
 
 Bekannte Grenzen:
