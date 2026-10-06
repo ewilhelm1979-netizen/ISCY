@@ -290,7 +290,779 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_SOFTWARE_APPROVAL_EXCEPTION_POLICY_SCHEMA,
         postgres_sql: POSTGRES_SOFTWARE_APPROVAL_EXCEPTION_POLICY_SCHEMA,
     },
+    Migration {
+        version: "0046_rust_machinery_cra_safety_security_foundation",
+        sqlite_sql: SQLITE_MACHINERY_CRA_SAFETY_SECURITY_SCHEMA,
+        postgres_sql: POSTGRES_MACHINERY_CRA_SAFETY_SECURITY_SCHEMA,
+    },
 ];
+
+const SQLITE_MACHINERY_CRA_SAFETY_SECURITY_SCHEMA: &str = r#"
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_product_tenant_object
+    ON product_security_product(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_component_tenant_object
+    ON product_security_component(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_import_component_tenant_object
+    ON product_security_importcomponent(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_vulnerability_tenant_object
+    ON product_security_vulnerability(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_observation_tenant_object
+    ON security_observation(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_risk_tenant_object
+    ON risks_risk(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_correlation_tenant_object
+    ON product_security_cvecorrelation(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_threat_scenario_tenant_object
+    ON product_security_threatscenario(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_tara_tenant_object
+    ON product_security_tara(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_evidence_tenant_object
+    ON evidence_evidenceitem(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_requirement_catalog_object
+    ON requirements_app_requirement(id);
+INSERT INTO requirements_app_requirement (
+    framework, code, title, domain, description, guidance, is_active, evidence_required,
+    evidence_guidance, evidence_examples, sector_package, legal_reference, mapped_controls,
+    mapping_rationale, coverage_level, created_at, updated_at
+)
+SELECT 'MACHINERY_REGULATION', 'EU-2023-1230-ANNEX-III-1.1.9',
+       'Protection against corruption', 'Product Safety / Cybersecurity',
+       'Official-reference metadata for Machinery Regulation Annex III section 1.1.9.',
+       'Perform and document a human technical and legal review.', 1, 1,
+       'Link bounded evidence metadata; do not copy evidence bytes.', '', '',
+       'Annex III 1.1.9', '', 'Reference only; no automatic coverage or conformity claim.',
+       'SUPPORTING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+WHERE NOT EXISTS (
+    SELECT 1 FROM requirements_app_requirement
+    WHERE framework='MACHINERY_REGULATION' AND code='EU-2023-1230-ANNEX-III-1.1.9'
+);
+INSERT INTO requirements_app_requirement (
+    framework, code, title, domain, description, guidance, is_active, evidence_required,
+    evidence_guidance, evidence_examples, sector_package, legal_reference, mapped_controls,
+    mapping_rationale, coverage_level, created_at, updated_at
+)
+SELECT 'MACHINERY_REGULATION', 'EU-2023-1230-ANNEX-III-1.2.1',
+       'Safety and reliability of control systems', 'Product Safety / Cybersecurity',
+       'Official-reference metadata for Machinery Regulation Annex III section 1.2.1.',
+       'Perform and document a human technical and legal review.', 1, 1,
+       'Link bounded evidence metadata; do not copy evidence bytes.', '', '',
+       'Annex III 1.2.1', '', 'Reference only; no automatic coverage or conformity claim.',
+       'SUPPORTING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+WHERE NOT EXISTS (
+    SELECT 1 FROM requirements_app_requirement
+    WHERE framework='MACHINERY_REGULATION' AND code='EU-2023-1230-ANNEX-III-1.2.1'
+);
+
+CREATE TABLE IF NOT EXISTS product_regulatory_applicability (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    legal_act varchar(32) NOT NULL,
+    applicability_status varchar(24) NOT NULL DEFAULT 'NOT_ASSESSED',
+    product_role varchar(32) NOT NULL DEFAULT 'REVIEW_REQUIRED',
+    reasoning TEXT NOT NULL,
+    assessed_by_id INTEGER NOT NULL,
+    assessed_at TEXT NOT NULL,
+    reviewed_at TEXT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, product_id, legal_act),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE CASCADE,
+    CHECK(legal_act IN ('CRA','MACHINERY_REGULATION')),
+    CHECK(applicability_status IN ('NOT_ASSESSED','REVIEW_REQUIRED','IN_SCOPE','OUT_OF_SCOPE')),
+    CHECK(product_role IN ('MACHINERY','RELATED_PRODUCT','SAFETY_COMPONENT','SAFETY_RELATED_SOFTWARE','OTHER','REVIEW_REQUIRED')),
+    CHECK(length(reasoning) BETWEEN 1 AND 4000),
+    CHECK(revision > 0),
+    CHECK(assessed_by_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_regulatory_applicability_product
+    ON product_regulatory_applicability(tenant_id, product_id, legal_act);
+
+CREATE TABLE IF NOT EXISTS machinery_product_profile (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    product_role varchar(32) NOT NULL DEFAULT 'REVIEW_REQUIRED',
+    intended_purpose TEXT NOT NULL,
+    reasonably_foreseeable_use TEXT NOT NULL DEFAULT '',
+    reasonably_foreseeable_misuse TEXT NOT NULL DEFAULT '',
+    operational_environment TEXT NOT NULL DEFAULT '',
+    lifecycle_phase varchar(32) NOT NULL DEFAULT 'REVIEW_REQUIRED',
+    human_interaction TEXT NOT NULL DEFAULT '',
+    network_connectivity_context TEXT NOT NULL DEFAULT '',
+    remote_access_context TEXT NOT NULL DEFAULT '',
+    safety_related_software_present bool NOT NULL DEFAULT 0,
+    programmable_control_system_present bool NOT NULL DEFAULT 0,
+    external_communication_interfaces_present bool NOT NULL DEFAULT 0,
+    updated_by_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, product_id),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE CASCADE,
+    CHECK(product_role IN ('MACHINERY','RELATED_PRODUCT','SAFETY_COMPONENT','SAFETY_RELATED_SOFTWARE','OTHER','REVIEW_REQUIRED')),
+    CHECK(length(intended_purpose) BETWEEN 1 AND 4000),
+    CHECK(length(reasonably_foreseeable_use) <= 4000),
+    CHECK(length(reasonably_foreseeable_misuse) <= 4000),
+    CHECK(length(operational_environment) <= 4000),
+    CHECK(length(human_interaction) <= 4000),
+    CHECK(length(network_connectivity_context) <= 4000),
+    CHECK(length(remote_access_context) <= 4000),
+    CHECK(length(lifecycle_phase) BETWEEN 1 AND 32),
+    CHECK(revision > 0),
+    CHECK(updated_by_id > 0)
+);
+
+CREATE TABLE IF NOT EXISTS product_safety_function (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    name varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    function_identifier varchar(100) NOT NULL,
+    criticality varchar(24) NOT NULL DEFAULT 'REVIEW_REQUIRED',
+    status varchar(16) NOT NULL DEFAULT 'ACTIVE',
+    owner_id INTEGER NULL,
+    created_by_id INTEGER NOT NULL,
+    updated_by_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, product_id, function_identifier),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE CASCADE,
+    CHECK(length(name) BETWEEN 1 AND 255),
+    CHECK(length(description) <= 4000),
+    CHECK(length(function_identifier) BETWEEN 1 AND 100),
+    CHECK(criticality IN ('LOW','MEDIUM','HIGH','CRITICAL','REVIEW_REQUIRED')),
+    CHECK(status IN ('ACTIVE','ARCHIVED')),
+    CHECK(revision > 0),
+    CHECK(owner_id IS NULL OR owner_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_function_product
+    ON product_safety_function(tenant_id, product_id, status, id);
+
+CREATE TABLE IF NOT EXISTS product_safety_hazard (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    title varchar(255) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    hazard_category varchar(64) NOT NULL,
+    affected_safety_function_id INTEGER NULL,
+    operational_phase varchar(64) NOT NULL,
+    potential_consequence TEXT NOT NULL,
+    risk_estimation_method TEXT NOT NULL,
+    initial_risk varchar(64) NOT NULL,
+    residual_risk varchar(64) NOT NULL DEFAULT 'NOT_ASSESSED',
+    status varchar(24) NOT NULL DEFAULT 'OPEN',
+    owner_id INTEGER NULL,
+    created_by_id INTEGER NOT NULL,
+    updated_by_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, affected_safety_function_id)
+        REFERENCES product_safety_function(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(length(title) BETWEEN 1 AND 255),
+    CHECK(length(description) <= 4000),
+    CHECK(length(hazard_category) BETWEEN 1 AND 64),
+    CHECK(length(operational_phase) BETWEEN 1 AND 64),
+    CHECK(length(potential_consequence) BETWEEN 1 AND 4000),
+    CHECK(length(risk_estimation_method) BETWEEN 1 AND 2000),
+    CHECK(length(initial_risk) BETWEEN 1 AND 64),
+    CHECK(length(residual_risk) BETWEEN 1 AND 64),
+    CHECK(status IN ('OPEN','UNDER_REVIEW','MITIGATION_REQUIRED','ACCEPTED_FOR_REVIEW','CLOSED')),
+    CHECK(revision > 0),
+    CHECK(owner_id IS NULL OR owner_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_hazard_product
+    ON product_safety_hazard(tenant_id, product_id, status, id);
+
+CREATE TABLE IF NOT EXISTS product_safety_assessment (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    hazard_id INTEGER NOT NULL,
+    assessment_revision INTEGER NOT NULL,
+    lifecycle_operating_state varchar(255) NOT NULL,
+    existing_safeguards TEXT NOT NULL DEFAULT '',
+    risk_estimation_method TEXT NOT NULL,
+    initial_assessment TEXT NOT NULL,
+    additional_measures TEXT NOT NULL DEFAULT '',
+    residual_assessment TEXT NOT NULL,
+    reviewer_id INTEGER NOT NULL,
+    review_date TEXT NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, hazard_id, assessment_revision),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, hazard_id)
+        REFERENCES product_safety_hazard(tenant_id, id) ON DELETE CASCADE,
+    CHECK(assessment_revision > 0),
+    CHECK(length(lifecycle_operating_state) BETWEEN 1 AND 255),
+    CHECK(length(existing_safeguards) <= 4000),
+    CHECK(length(risk_estimation_method) BETWEEN 1 AND 2000),
+    CHECK(length(initial_assessment) BETWEEN 1 AND 2000),
+    CHECK(length(additional_measures) <= 4000),
+    CHECK(length(residual_assessment) BETWEEN 1 AND 2000),
+    CHECK(reviewer_id > 0 AND created_by_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_assessment_hazard
+    ON product_safety_assessment(tenant_id, hazard_id, assessment_revision DESC);
+
+CREATE TABLE IF NOT EXISTS safety_security_interaction (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    hazard_id INTEGER NOT NULL,
+    safety_function_id INTEGER NOT NULL,
+    vulnerability_id INTEGER NULL,
+    security_observation_id INTEGER NULL,
+    cyber_risk_id INTEGER NULL,
+    sbom_component_id INTEGER NULL,
+    cve_correlation_id INTEGER NULL,
+    threat_scenario_id INTEGER NULL,
+    tara_id INTEGER NULL,
+    interaction_type varchar(64) NOT NULL,
+    status varchar(24) NOT NULL DEFAULT 'OPEN',
+    security_consequence TEXT NOT NULL,
+    measures TEXT NOT NULL DEFAULT '',
+    rationale TEXT NOT NULL DEFAULT '',
+    deduplication_key varchar(64) NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    updated_by_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    closed_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, deduplication_key),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, hazard_id)
+        REFERENCES product_safety_hazard(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, safety_function_id)
+        REFERENCES product_safety_function(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, vulnerability_id)
+        REFERENCES product_security_vulnerability(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, security_observation_id)
+        REFERENCES security_observation(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, cyber_risk_id)
+        REFERENCES risks_risk(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, sbom_component_id)
+        REFERENCES product_security_importcomponent(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, cve_correlation_id)
+        REFERENCES product_security_cvecorrelation(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, threat_scenario_id)
+        REFERENCES product_security_threatscenario(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, tara_id)
+        REFERENCES product_security_tara(tenant_id, id) ON DELETE RESTRICT,
+    CHECK(interaction_type IN ('CYBER_CAN_TRIGGER_HAZARD','CYBER_CAN_DEGRADE_SAFETY_FUNCTION','SAFETY_CONTROL_DEPENDS_ON_CYBER_CONTROL','SECURITY_CONTROL_CAN_AFFECT_SAFETY','SHARED_COMPONENT','REVIEW_REQUIRED')),
+    CHECK(status IN ('OPEN','UNDER_REVIEW','MITIGATION_REQUIRED','ACCEPTED_FOR_REVIEW','CLOSED')),
+    CHECK((vulnerability_id IS NOT NULL) + (security_observation_id IS NOT NULL) + (cyber_risk_id IS NOT NULL) + (sbom_component_id IS NOT NULL) + (cve_correlation_id IS NOT NULL) + (threat_scenario_id IS NOT NULL) + (tara_id IS NOT NULL) = 1),
+    CHECK(length(security_consequence) BETWEEN 1 AND 4000),
+    CHECK(length(measures) <= 4000),
+    CHECK(length(rationale) <= 4000),
+    CHECK(length(deduplication_key) = 64),
+    CHECK(revision > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_interaction_product
+    ON safety_security_interaction(tenant_id, product_id, status, id);
+
+CREATE TABLE IF NOT EXISTS product_regulatory_requirement (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    requirement_id INTEGER NOT NULL,
+    requirement_code varchar(64) NOT NULL,
+    legal_act varchar(32) NOT NULL,
+    citation varchar(255) NOT NULL,
+    title varchar(255) NOT NULL,
+    source_classification varchar(32) NOT NULL DEFAULT 'OFFICIAL_PRIMARY',
+    source_reference varchar(500) NOT NULL,
+    implementation_status varchar(24) NOT NULL DEFAULT 'NOT_ASSESSED',
+    reasoning TEXT NOT NULL DEFAULT '',
+    reviewed_by_id INTEGER NULL,
+    reviewed_at TEXT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, product_id, requirement_code),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (requirement_id)
+        REFERENCES requirements_app_requirement(id) ON DELETE RESTRICT,
+    CHECK(requirement_code IN ('EU-2023-1230-ANNEX-III-1.1.9','EU-2023-1230-ANNEX-III-1.2.1')),
+    CHECK(legal_act = 'MACHINERY_REGULATION'),
+    CHECK(source_classification = 'OFFICIAL_PRIMARY'),
+    CHECK(implementation_status IN ('NOT_ASSESSED','REVIEW_REQUIRED','ASSESSMENT_IN_PROGRESS','READY_FOR_HUMAN_REVIEW','EVIDENCE_GAPS')),
+    CHECK(length(reasoning) <= 4000),
+    CHECK(revision > 0)
+);
+
+CREATE TABLE IF NOT EXISTS product_regulatory_requirement_relation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    requirement_link_id INTEGER NOT NULL,
+    safety_function_id INTEGER NULL,
+    hazard_id INTEGER NULL,
+    control_id INTEGER NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, requirement_link_id, safety_function_id, hazard_id, control_id),
+    FOREIGN KEY (tenant_id, requirement_link_id)
+        REFERENCES product_regulatory_requirement(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, safety_function_id)
+        REFERENCES product_safety_function(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, hazard_id)
+        REFERENCES product_safety_hazard(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (control_id)
+        REFERENCES iscy_control_control(id) ON DELETE RESTRICT,
+    CHECK((safety_function_id IS NOT NULL) + (hazard_id IS NOT NULL) + (control_id IS NOT NULL) = 1)
+);
+
+CREATE TABLE IF NOT EXISTS product_safety_standard_reference (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    standard_identifier varchar(64) NOT NULL,
+    edition varchar(64) NOT NULL DEFAULT '',
+    title varchar(255) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'UNKNOWN',
+    reference_scope TEXT NOT NULL DEFAULT '',
+    source_reference varchar(500) NOT NULL,
+    reviewed_at TEXT NULL,
+    updated_by_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, product_id, standard_identifier, edition),
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE CASCADE,
+    CHECK(status IN ('DRAFT','PUBLISHED','HARMONISED','WITHDRAWN','SUPERSEDED','UNKNOWN')),
+    CHECK(length(standard_identifier) BETWEEN 1 AND 64),
+    CHECK(length(title) BETWEEN 1 AND 255),
+    CHECK(length(reference_scope) <= 2000),
+    CHECK(length(source_reference) BETWEEN 1 AND 500),
+    CHECK(revision > 0)
+);
+
+CREATE TABLE IF NOT EXISTS product_component_safety_context (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    component_id INTEGER NOT NULL,
+    safety_relevance varchar(24) NOT NULL DEFAULT 'UNKNOWN',
+    configuration_baseline_reference varchar(500) NOT NULL DEFAULT '',
+    integrity_evidence_reference varchar(500) NOT NULL DEFAULT '',
+    modification_monitoring_status varchar(24) NOT NULL DEFAULT 'REVIEW_REQUIRED',
+    last_reviewed_at TEXT NULL,
+    updated_by_id INTEGER NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, id),
+    UNIQUE(tenant_id, component_id),
+    FOREIGN KEY (tenant_id, product_id)
+        REFERENCES product_security_product(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, component_id)
+        REFERENCES product_security_component(tenant_id, id) ON DELETE CASCADE,
+    CHECK(safety_relevance IN ('UNKNOWN','NOT_SAFETY_RELEVANT','SAFETY_RELEVANT','REVIEW_REQUIRED')),
+    CHECK(modification_monitoring_status IN ('NOT_ASSESSED','REVIEW_REQUIRED','ASSESSMENT_IN_PROGRESS','READY_FOR_HUMAN_REVIEW','EVIDENCE_GAPS')),
+    CHECK(length(configuration_baseline_reference) <= 500),
+    CHECK(length(integrity_evidence_reference) <= 500),
+    CHECK(revision > 0)
+);
+
+CREATE TABLE IF NOT EXISTS product_component_safety_function_link (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    component_context_id INTEGER NOT NULL,
+    safety_function_id INTEGER NOT NULL,
+    created_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, component_context_id, safety_function_id),
+    FOREIGN KEY (tenant_id, component_context_id)
+        REFERENCES product_component_safety_context(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, safety_function_id)
+        REFERENCES product_safety_function(tenant_id, id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS product_safety_evidence_link (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    evidence_id INTEGER NOT NULL,
+    safety_function_id INTEGER NULL,
+    hazard_id INTEGER NULL,
+    assessment_id INTEGER NULL,
+    interaction_id INTEGER NULL,
+    requirement_link_id INTEGER NULL,
+    target_key varchar(96) NOT NULL,
+    linked_by_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, evidence_id, target_key),
+    FOREIGN KEY (tenant_id, evidence_id)
+        REFERENCES evidence_evidenceitem(tenant_id, id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id, safety_function_id)
+        REFERENCES product_safety_function(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, hazard_id)
+        REFERENCES product_safety_hazard(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, assessment_id)
+        REFERENCES product_safety_assessment(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, interaction_id)
+        REFERENCES safety_security_interaction(tenant_id, id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id, requirement_link_id)
+        REFERENCES product_regulatory_requirement(tenant_id, id) ON DELETE CASCADE,
+    CHECK((safety_function_id IS NOT NULL) + (hazard_id IS NOT NULL) + (assessment_id IS NOT NULL) + (interaction_id IS NOT NULL) + (requirement_link_id IS NOT NULL) = 1),
+    CHECK(length(target_key) BETWEEN 3 AND 96),
+    CHECK(linked_by_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_evidence_object
+    ON product_safety_evidence_link(tenant_id, evidence_id, id);
+
+CREATE TABLE IF NOT EXISTS product_safety_audit_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    object_type varchar(32) NOT NULL,
+    object_id INTEGER NOT NULL,
+    event_type varchar(48) NOT NULL,
+    actor_id INTEGER NOT NULL,
+    previous_state varchar(64) NOT NULL DEFAULT '',
+    new_state varchar(64) NOT NULL DEFAULT '',
+    reason varchar(1000) NOT NULL DEFAULT '',
+    revision INTEGER NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    CHECK(object_type IN ('APPLICABILITY','PROFILE','SAFETY_FUNCTION','HAZARD','ASSESSMENT','INTERACTION','REQUIREMENT','STANDARD','COMPONENT_CONTEXT','EVIDENCE_LINK')),
+    CHECK(length(event_type) BETWEEN 1 AND 48),
+    CHECK(length(reason) <= 1000),
+    CHECK(length(detail_json) <= 4096),
+    CHECK(actor_id > 0 AND revision > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_product_safety_audit_object
+    ON product_safety_audit_event(tenant_id, object_type, object_id, created_at DESC, id DESC);
+
+INSERT OR IGNORE INTO django_content_type (app_label, model) VALUES
+    ('product_safety', 'productsafety'),
+    ('product_safety', 'safetysecurityinteraction');
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can view product safety and conformity', id, 'view_product_safety' FROM django_content_type WHERE app_label='product_safety' AND model='productsafety';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can manage product regulatory applicability', id, 'manage_product_applicability' FROM django_content_type WHERE app_label='product_safety' AND model='productsafety';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can manage product safety records', id, 'manage_product_safety' FROM django_content_type WHERE app_label='product_safety' AND model='productsafety';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can review product safety assessments', id, 'review_product_safety' FROM django_content_type WHERE app_label='product_safety' AND model='productsafety';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can manage safety security interactions', id, 'manage_safety_security_interaction' FROM django_content_type WHERE app_label='product_safety' AND model='safetysecurityinteraction';
+INSERT OR IGNORE INTO auth_permission (name, content_type_id, codename)
+SELECT 'Can link product safety evidence', id, 'link_product_safety_evidence' FROM django_content_type WHERE app_label='product_safety' AND model='productsafety';
+"#;
+
+const POSTGRES_MACHINERY_CRA_SAFETY_SECURITY_SCHEMA: &str = r#"
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_product_tenant_object ON product_security_product(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_component_tenant_object ON product_security_component(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_import_component_tenant_object ON product_security_importcomponent(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_vulnerability_tenant_object ON product_security_vulnerability(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_observation_tenant_object ON security_observation(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_risk_tenant_object ON risks_risk(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_correlation_tenant_object ON product_security_cvecorrelation(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_threat_scenario_tenant_object ON product_security_threatscenario(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_tara_tenant_object ON product_security_tara(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_evidence_tenant_object ON evidence_evidenceitem(tenant_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_safety_requirement_catalog_object ON requirements_app_requirement(id);
+INSERT INTO requirements_app_requirement (
+    framework, code, title, domain, description, guidance, is_active, evidence_required,
+    evidence_guidance, evidence_examples, sector_package, legal_reference, mapped_controls,
+    mapping_rationale, coverage_level, created_at, updated_at
+)
+SELECT 'MACHINERY_REGULATION', 'EU-2023-1230-ANNEX-III-1.1.9',
+       'Protection against corruption', 'Product Safety / Cybersecurity',
+       'Official-reference metadata for Machinery Regulation Annex III section 1.1.9.',
+       'Perform and document a human technical and legal review.', TRUE, TRUE,
+       'Link bounded evidence metadata; do not copy evidence bytes.', '', '',
+       'Annex III 1.1.9', '', 'Reference only; no automatic coverage or conformity claim.',
+       'SUPPORTING', (CURRENT_TIMESTAMP)::text, (CURRENT_TIMESTAMP)::text
+WHERE NOT EXISTS (
+    SELECT 1 FROM requirements_app_requirement
+    WHERE framework='MACHINERY_REGULATION' AND code='EU-2023-1230-ANNEX-III-1.1.9'
+);
+INSERT INTO requirements_app_requirement (
+    framework, code, title, domain, description, guidance, is_active, evidence_required,
+    evidence_guidance, evidence_examples, sector_package, legal_reference, mapped_controls,
+    mapping_rationale, coverage_level, created_at, updated_at
+)
+SELECT 'MACHINERY_REGULATION', 'EU-2023-1230-ANNEX-III-1.2.1',
+       'Safety and reliability of control systems', 'Product Safety / Cybersecurity',
+       'Official-reference metadata for Machinery Regulation Annex III section 1.2.1.',
+       'Perform and document a human technical and legal review.', TRUE, TRUE,
+       'Link bounded evidence metadata; do not copy evidence bytes.', '', '',
+       'Annex III 1.2.1', '', 'Reference only; no automatic coverage or conformity claim.',
+       'SUPPORTING', (CURRENT_TIMESTAMP)::text, (CURRENT_TIMESTAMP)::text
+WHERE NOT EXISTS (
+    SELECT 1 FROM requirements_app_requirement
+    WHERE framework='MACHINERY_REGULATION' AND code='EU-2023-1230-ANNEX-III-1.2.1'
+);
+
+CREATE TABLE IF NOT EXISTS product_regulatory_applicability (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, product_id BIGINT NOT NULL,
+    legal_act varchar(32) NOT NULL, applicability_status varchar(24) NOT NULL DEFAULT 'NOT_ASSESSED',
+    product_role varchar(32) NOT NULL DEFAULT 'REVIEW_REQUIRED', reasoning TEXT NOT NULL,
+    assessed_by_id BIGINT NOT NULL, assessed_at TEXT NOT NULL, reviewed_at TEXT NULL,
+    revision BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,id), UNIQUE(tenant_id,product_id,legal_act),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,product_id) REFERENCES product_security_product(tenant_id,id) ON DELETE CASCADE,
+    CHECK(legal_act IN ('CRA','MACHINERY_REGULATION')),
+    CHECK(applicability_status IN ('NOT_ASSESSED','REVIEW_REQUIRED','IN_SCOPE','OUT_OF_SCOPE')),
+    CHECK(product_role IN ('MACHINERY','RELATED_PRODUCT','SAFETY_COMPONENT','SAFETY_RELATED_SOFTWARE','OTHER','REVIEW_REQUIRED')),
+    CHECK(length(reasoning) BETWEEN 1 AND 4000), CHECK(revision > 0), CHECK(assessed_by_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_regulatory_applicability_product ON product_regulatory_applicability(tenant_id,product_id,legal_act);
+
+CREATE TABLE IF NOT EXISTS machinery_product_profile (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, product_id BIGINT NOT NULL,
+    product_role varchar(32) NOT NULL DEFAULT 'REVIEW_REQUIRED', intended_purpose TEXT NOT NULL,
+    reasonably_foreseeable_use TEXT NOT NULL DEFAULT '', reasonably_foreseeable_misuse TEXT NOT NULL DEFAULT '',
+    operational_environment TEXT NOT NULL DEFAULT '', lifecycle_phase varchar(32) NOT NULL DEFAULT 'REVIEW_REQUIRED',
+    human_interaction TEXT NOT NULL DEFAULT '', network_connectivity_context TEXT NOT NULL DEFAULT '',
+    remote_access_context TEXT NOT NULL DEFAULT '', safety_related_software_present BOOLEAN NOT NULL DEFAULT FALSE,
+    programmable_control_system_present BOOLEAN NOT NULL DEFAULT FALSE,
+    external_communication_interfaces_present BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_by_id BIGINT NOT NULL, revision BIGINT NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text, updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,id), UNIQUE(tenant_id,product_id),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,product_id) REFERENCES product_security_product(tenant_id,id) ON DELETE CASCADE,
+    CHECK(product_role IN ('MACHINERY','RELATED_PRODUCT','SAFETY_COMPONENT','SAFETY_RELATED_SOFTWARE','OTHER','REVIEW_REQUIRED')),
+    CHECK(length(intended_purpose) BETWEEN 1 AND 4000), CHECK(length(reasonably_foreseeable_use) <= 4000),
+    CHECK(length(reasonably_foreseeable_misuse) <= 4000), CHECK(length(operational_environment) <= 4000),
+    CHECK(length(human_interaction) <= 4000), CHECK(length(network_connectivity_context) <= 4000),
+    CHECK(length(remote_access_context) <= 4000), CHECK(length(lifecycle_phase) BETWEEN 1 AND 32),
+    CHECK(revision > 0), CHECK(updated_by_id > 0)
+);
+
+CREATE TABLE IF NOT EXISTS product_safety_function (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, product_id BIGINT NOT NULL,
+    name varchar(255) NOT NULL, description TEXT NOT NULL DEFAULT '', function_identifier varchar(100) NOT NULL,
+    criticality varchar(24) NOT NULL DEFAULT 'REVIEW_REQUIRED', status varchar(16) NOT NULL DEFAULT 'ACTIVE',
+    owner_id BIGINT NULL, created_by_id BIGINT NOT NULL, updated_by_id BIGINT NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,id), UNIQUE(tenant_id,product_id,function_identifier),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,product_id) REFERENCES product_security_product(tenant_id,id) ON DELETE CASCADE,
+    CHECK(length(name) BETWEEN 1 AND 255), CHECK(length(description) <= 4000),
+    CHECK(length(function_identifier) BETWEEN 1 AND 100),
+    CHECK(criticality IN ('LOW','MEDIUM','HIGH','CRITICAL','REVIEW_REQUIRED')),
+    CHECK(status IN ('ACTIVE','ARCHIVED')), CHECK(revision > 0), CHECK(owner_id IS NULL OR owner_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_function_product ON product_safety_function(tenant_id,product_id,status,id);
+
+CREATE TABLE IF NOT EXISTS product_safety_hazard (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, product_id BIGINT NOT NULL,
+    title varchar(255) NOT NULL, description TEXT NOT NULL DEFAULT '', hazard_category varchar(64) NOT NULL,
+    affected_safety_function_id BIGINT NULL, operational_phase varchar(64) NOT NULL,
+    potential_consequence TEXT NOT NULL, risk_estimation_method TEXT NOT NULL,
+    initial_risk varchar(64) NOT NULL, residual_risk varchar(64) NOT NULL DEFAULT 'NOT_ASSESSED',
+    status varchar(24) NOT NULL DEFAULT 'OPEN', owner_id BIGINT NULL,
+    created_by_id BIGINT NOT NULL, updated_by_id BIGINT NOT NULL, revision BIGINT NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text, updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,id), FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,product_id) REFERENCES product_security_product(tenant_id,id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,affected_safety_function_id) REFERENCES product_safety_function(tenant_id,id) ON DELETE RESTRICT,
+    CHECK(length(title) BETWEEN 1 AND 255), CHECK(length(description) <= 4000),
+    CHECK(length(hazard_category) BETWEEN 1 AND 64), CHECK(length(operational_phase) BETWEEN 1 AND 64),
+    CHECK(length(potential_consequence) BETWEEN 1 AND 4000), CHECK(length(risk_estimation_method) BETWEEN 1 AND 2000),
+    CHECK(length(initial_risk) BETWEEN 1 AND 64), CHECK(length(residual_risk) BETWEEN 1 AND 64),
+    CHECK(status IN ('OPEN','UNDER_REVIEW','MITIGATION_REQUIRED','ACCEPTED_FOR_REVIEW','CLOSED')),
+    CHECK(revision > 0), CHECK(owner_id IS NULL OR owner_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_hazard_product ON product_safety_hazard(tenant_id,product_id,status,id);
+
+CREATE TABLE IF NOT EXISTS product_safety_assessment (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, hazard_id BIGINT NOT NULL,
+    assessment_revision BIGINT NOT NULL, lifecycle_operating_state varchar(255) NOT NULL,
+    existing_safeguards TEXT NOT NULL DEFAULT '', risk_estimation_method TEXT NOT NULL,
+    initial_assessment TEXT NOT NULL, additional_measures TEXT NOT NULL DEFAULT '', residual_assessment TEXT NOT NULL,
+    reviewer_id BIGINT NOT NULL, review_date TEXT NOT NULL, created_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,id), UNIQUE(tenant_id,hazard_id,assessment_revision),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,hazard_id) REFERENCES product_safety_hazard(tenant_id,id) ON DELETE CASCADE,
+    CHECK(assessment_revision > 0), CHECK(length(lifecycle_operating_state) BETWEEN 1 AND 255),
+    CHECK(length(existing_safeguards) <= 4000), CHECK(length(risk_estimation_method) BETWEEN 1 AND 2000),
+    CHECK(length(initial_assessment) BETWEEN 1 AND 2000), CHECK(length(additional_measures) <= 4000),
+    CHECK(length(residual_assessment) BETWEEN 1 AND 2000), CHECK(reviewer_id > 0 AND created_by_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_assessment_hazard ON product_safety_assessment(tenant_id,hazard_id,assessment_revision DESC);
+
+CREATE TABLE IF NOT EXISTS safety_security_interaction (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, product_id BIGINT NOT NULL,
+    hazard_id BIGINT NOT NULL, safety_function_id BIGINT NOT NULL, vulnerability_id BIGINT NULL,
+    security_observation_id BIGINT NULL, cyber_risk_id BIGINT NULL, sbom_component_id BIGINT NULL,
+    cve_correlation_id BIGINT NULL, threat_scenario_id BIGINT NULL, tara_id BIGINT NULL,
+    interaction_type varchar(64) NOT NULL, status varchar(24) NOT NULL DEFAULT 'OPEN',
+    security_consequence TEXT NOT NULL, measures TEXT NOT NULL DEFAULT '', rationale TEXT NOT NULL DEFAULT '',
+    deduplication_key varchar(64) NOT NULL, created_by_id BIGINT NOT NULL, updated_by_id BIGINT NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1, closed_at TEXT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text, updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,id), UNIQUE(tenant_id,deduplication_key),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,product_id) REFERENCES product_security_product(tenant_id,id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,hazard_id) REFERENCES product_safety_hazard(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id,safety_function_id) REFERENCES product_safety_function(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id,vulnerability_id) REFERENCES product_security_vulnerability(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id,security_observation_id) REFERENCES security_observation(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id,cyber_risk_id) REFERENCES risks_risk(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id,sbom_component_id) REFERENCES product_security_importcomponent(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id,cve_correlation_id) REFERENCES product_security_cvecorrelation(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id,threat_scenario_id) REFERENCES product_security_threatscenario(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id,tara_id) REFERENCES product_security_tara(tenant_id,id) ON DELETE RESTRICT,
+    CHECK(interaction_type IN ('CYBER_CAN_TRIGGER_HAZARD','CYBER_CAN_DEGRADE_SAFETY_FUNCTION','SAFETY_CONTROL_DEPENDS_ON_CYBER_CONTROL','SECURITY_CONTROL_CAN_AFFECT_SAFETY','SHARED_COMPONENT','REVIEW_REQUIRED')),
+    CHECK(status IN ('OPEN','UNDER_REVIEW','MITIGATION_REQUIRED','ACCEPTED_FOR_REVIEW','CLOSED')),
+    CHECK((vulnerability_id IS NOT NULL)::int + (security_observation_id IS NOT NULL)::int + (cyber_risk_id IS NOT NULL)::int + (sbom_component_id IS NOT NULL)::int + (cve_correlation_id IS NOT NULL)::int + (threat_scenario_id IS NOT NULL)::int + (tara_id IS NOT NULL)::int = 1),
+    CHECK(length(security_consequence) BETWEEN 1 AND 4000), CHECK(length(measures) <= 4000),
+    CHECK(length(rationale) <= 4000), CHECK(length(deduplication_key)=64), CHECK(revision > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_interaction_product ON safety_security_interaction(tenant_id,product_id,status,id);
+
+CREATE TABLE IF NOT EXISTS product_regulatory_requirement (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, product_id BIGINT NOT NULL,
+    requirement_id BIGINT NOT NULL,
+    requirement_code varchar(64) NOT NULL, legal_act varchar(32) NOT NULL, citation varchar(255) NOT NULL,
+    title varchar(255) NOT NULL, source_classification varchar(32) NOT NULL DEFAULT 'OFFICIAL_PRIMARY',
+    source_reference varchar(500) NOT NULL, implementation_status varchar(24) NOT NULL DEFAULT 'NOT_ASSESSED',
+    reasoning TEXT NOT NULL DEFAULT '', reviewed_by_id BIGINT NULL, reviewed_at TEXT NULL,
+    revision BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,id), UNIQUE(tenant_id,product_id,requirement_code),
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,product_id) REFERENCES product_security_product(tenant_id,id) ON DELETE CASCADE,
+    FOREIGN KEY (requirement_id) REFERENCES requirements_app_requirement(id) ON DELETE RESTRICT,
+    CHECK(requirement_code IN ('EU-2023-1230-ANNEX-III-1.1.9','EU-2023-1230-ANNEX-III-1.2.1')),
+    CHECK(legal_act='MACHINERY_REGULATION'), CHECK(source_classification='OFFICIAL_PRIMARY'),
+    CHECK(implementation_status IN ('NOT_ASSESSED','REVIEW_REQUIRED','ASSESSMENT_IN_PROGRESS','READY_FOR_HUMAN_REVIEW','EVIDENCE_GAPS')),
+    CHECK(length(reasoning) <= 4000), CHECK(revision > 0)
+);
+
+CREATE TABLE IF NOT EXISTS product_regulatory_requirement_relation (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, requirement_link_id BIGINT NOT NULL,
+    safety_function_id BIGINT NULL, hazard_id BIGINT NULL, control_id BIGINT NULL,
+    created_by_id BIGINT NOT NULL, created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,requirement_link_id,safety_function_id,hazard_id,control_id),
+    FOREIGN KEY (tenant_id,requirement_link_id) REFERENCES product_regulatory_requirement(tenant_id,id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,safety_function_id) REFERENCES product_safety_function(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id,hazard_id) REFERENCES product_safety_hazard(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (control_id) REFERENCES iscy_control_control(id) ON DELETE RESTRICT,
+    CHECK((safety_function_id IS NOT NULL)::int + (hazard_id IS NOT NULL)::int + (control_id IS NOT NULL)::int = 1)
+);
+
+CREATE TABLE IF NOT EXISTS product_safety_standard_reference (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, product_id BIGINT NOT NULL,
+    standard_identifier varchar(64) NOT NULL, edition varchar(64) NOT NULL DEFAULT '', title varchar(255) NOT NULL,
+    status varchar(16) NOT NULL DEFAULT 'UNKNOWN', reference_scope TEXT NOT NULL DEFAULT '',
+    source_reference varchar(500) NOT NULL, reviewed_at TEXT NULL, updated_by_id BIGINT NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,id), UNIQUE(tenant_id,product_id,standard_identifier,edition),
+    FOREIGN KEY (tenant_id,product_id) REFERENCES product_security_product(tenant_id,id) ON DELETE CASCADE,
+    CHECK(status IN ('DRAFT','PUBLISHED','HARMONISED','WITHDRAWN','SUPERSEDED','UNKNOWN')),
+    CHECK(length(standard_identifier) BETWEEN 1 AND 64), CHECK(length(title) BETWEEN 1 AND 255),
+    CHECK(length(reference_scope) <= 2000), CHECK(length(source_reference) BETWEEN 1 AND 500), CHECK(revision > 0)
+);
+
+CREATE TABLE IF NOT EXISTS product_component_safety_context (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, product_id BIGINT NOT NULL, component_id BIGINT NOT NULL,
+    safety_relevance varchar(24) NOT NULL DEFAULT 'UNKNOWN', configuration_baseline_reference varchar(500) NOT NULL DEFAULT '',
+    integrity_evidence_reference varchar(500) NOT NULL DEFAULT '', modification_monitoring_status varchar(24) NOT NULL DEFAULT 'REVIEW_REQUIRED',
+    last_reviewed_at TEXT NULL, updated_by_id BIGINT NOT NULL, revision BIGINT NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text, updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,id), UNIQUE(tenant_id,component_id),
+    FOREIGN KEY (tenant_id,product_id) REFERENCES product_security_product(tenant_id,id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,component_id) REFERENCES product_security_component(tenant_id,id) ON DELETE CASCADE,
+    CHECK(safety_relevance IN ('UNKNOWN','NOT_SAFETY_RELEVANT','SAFETY_RELEVANT','REVIEW_REQUIRED')),
+    CHECK(modification_monitoring_status IN ('NOT_ASSESSED','REVIEW_REQUIRED','ASSESSMENT_IN_PROGRESS','READY_FOR_HUMAN_REVIEW','EVIDENCE_GAPS')),
+    CHECK(length(configuration_baseline_reference) <= 500), CHECK(length(integrity_evidence_reference) <= 500), CHECK(revision > 0)
+);
+
+CREATE TABLE IF NOT EXISTS product_component_safety_function_link (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, component_context_id BIGINT NOT NULL,
+    safety_function_id BIGINT NOT NULL, created_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,component_context_id,safety_function_id),
+    FOREIGN KEY (tenant_id,component_context_id) REFERENCES product_component_safety_context(tenant_id,id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,safety_function_id) REFERENCES product_safety_function(tenant_id,id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS product_safety_evidence_link (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, evidence_id BIGINT NOT NULL,
+    safety_function_id BIGINT NULL, hazard_id BIGINT NULL, assessment_id BIGINT NULL,
+    interaction_id BIGINT NULL, requirement_link_id BIGINT NULL, target_key varchar(96) NOT NULL,
+    linked_by_id BIGINT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    UNIQUE(tenant_id,evidence_id,target_key),
+    FOREIGN KEY (tenant_id,evidence_id) REFERENCES evidence_evidenceitem(tenant_id,id) ON DELETE RESTRICT,
+    FOREIGN KEY (tenant_id,safety_function_id) REFERENCES product_safety_function(tenant_id,id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,hazard_id) REFERENCES product_safety_hazard(tenant_id,id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,assessment_id) REFERENCES product_safety_assessment(tenant_id,id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,interaction_id) REFERENCES safety_security_interaction(tenant_id,id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id,requirement_link_id) REFERENCES product_regulatory_requirement(tenant_id,id) ON DELETE CASCADE,
+    CHECK((safety_function_id IS NOT NULL)::int + (hazard_id IS NOT NULL)::int + (assessment_id IS NOT NULL)::int + (interaction_id IS NOT NULL)::int + (requirement_link_id IS NOT NULL)::int = 1),
+    CHECK(length(target_key) BETWEEN 3 AND 96),
+    CHECK(linked_by_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_safety_evidence_object ON product_safety_evidence_link(tenant_id,evidence_id,id);
+
+CREATE TABLE IF NOT EXISTS product_safety_audit_event (
+    id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, object_type varchar(32) NOT NULL,
+    object_id BIGINT NOT NULL, event_type varchar(48) NOT NULL, actor_id BIGINT NOT NULL,
+    previous_state varchar(64) NOT NULL DEFAULT '', new_state varchar(64) NOT NULL DEFAULT '',
+    reason varchar(1000) NOT NULL DEFAULT '', revision BIGINT NOT NULL, detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)::text,
+    FOREIGN KEY (tenant_id) REFERENCES organizations_tenant(id) ON DELETE CASCADE,
+    CHECK(object_type IN ('APPLICABILITY','PROFILE','SAFETY_FUNCTION','HAZARD','ASSESSMENT','INTERACTION','REQUIREMENT','STANDARD','COMPONENT_CONTEXT','EVIDENCE_LINK')),
+    CHECK(length(event_type) BETWEEN 1 AND 48), CHECK(length(reason) <= 1000),
+    CHECK(length(detail_json) <= 4096), CHECK(actor_id > 0 AND revision > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_product_safety_audit_object ON product_safety_audit_event(tenant_id,object_type,object_id,created_at DESC,id DESC);
+
+INSERT INTO django_content_type (app_label,model) VALUES
+    ('product_safety','productsafety'), ('product_safety','safetysecurityinteraction')
+ON CONFLICT(app_label,model) DO NOTHING;
+INSERT INTO auth_permission (name,content_type_id,codename)
+SELECT 'Can view product safety and conformity',id,'view_product_safety' FROM django_content_type WHERE app_label='product_safety' AND model='productsafety' ON CONFLICT(content_type_id,codename) DO NOTHING;
+INSERT INTO auth_permission (name,content_type_id,codename)
+SELECT 'Can manage product regulatory applicability',id,'manage_product_applicability' FROM django_content_type WHERE app_label='product_safety' AND model='productsafety' ON CONFLICT(content_type_id,codename) DO NOTHING;
+INSERT INTO auth_permission (name,content_type_id,codename)
+SELECT 'Can manage product safety records',id,'manage_product_safety' FROM django_content_type WHERE app_label='product_safety' AND model='productsafety' ON CONFLICT(content_type_id,codename) DO NOTHING;
+INSERT INTO auth_permission (name,content_type_id,codename)
+SELECT 'Can review product safety assessments',id,'review_product_safety' FROM django_content_type WHERE app_label='product_safety' AND model='productsafety' ON CONFLICT(content_type_id,codename) DO NOTHING;
+INSERT INTO auth_permission (name,content_type_id,codename)
+SELECT 'Can manage safety security interactions',id,'manage_safety_security_interaction' FROM django_content_type WHERE app_label='product_safety' AND model='safetysecurityinteraction' ON CONFLICT(content_type_id,codename) DO NOTHING;
+INSERT INTO auth_permission (name,content_type_id,codename)
+SELECT 'Can link product safety evidence',id,'link_product_safety_evidence' FROM django_content_type WHERE app_label='product_safety' AND model='productsafety' ON CONFLICT(content_type_id,codename) DO NOTHING;
+"#;
 
 const SQLITE_SOFTWARE_APPROVAL_EXCEPTION_POLICY_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS software_approval_policy (
@@ -8977,6 +9749,91 @@ INSERT OR IGNORE INTO product_security_productsecurityroadmaptask (
 ) VALUES
     (1901, 1, 1900, 1200, NULL, 'GOVERNANCE', 'Define Rust product security ownership', 'Clarify owner roles and release gates', 'HIGH', 'Product Security Lead', 30, '', 'OPEN', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'),
     (1902, 1, 1900, 1200, 1500, 'RESPONSE', 'Remediate Rust critical firmware exposure', 'Ship remediation and prepare disclosure', 'CRITICAL', 'PSIRT Lead', 14, 'Firmware patch readiness', 'PLANNED', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z');
+INSERT OR IGNORE INTO product_regulatory_applicability (
+    id,tenant_id,product_id,legal_act,applicability_status,product_role,reasoning,
+    assessed_by_id,assessed_at,reviewed_at,revision,created_at,updated_at
+) VALUES
+    (2100,1,1100,'CRA','IN_SCOPE','RELATED_PRODUCT','Synthetic human demo assessment; legal review remains required.',1,'2026-08-25T10:00:00Z',NULL,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2101,1,1100,'MACHINERY_REGULATION','REVIEW_REQUIRED','REVIEW_REQUIRED','Machinery applicability requires human technical and legal review.',1,'2026-08-25T10:00:00Z',NULL,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z');
+INSERT OR IGNORE INTO machinery_product_profile (
+    id,tenant_id,product_id,product_role,intended_purpose,reasonably_foreseeable_use,
+    reasonably_foreseeable_misuse,operational_environment,lifecycle_phase,human_interaction,
+    network_connectivity_context,remote_access_context,safety_related_software_present,
+    programmable_control_system_present,external_communication_interfaces_present,
+    updated_by_id,revision,created_at,updated_at
+) VALUES (
+    2110,1,1100,'REVIEW_REQUIRED','Industrial sensor gateway for controlled production environments.',
+    'Configured operation by trained personnel.','Unauthorized or erroneous control-logic changes.',
+    'Industrial network with maintenance access.','OPERATION','Operator and maintenance interaction.',
+    'Segmented industrial Ethernet.','Authenticated maintenance channel.',1,1,1,1,1,
+    '2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_safety_function (
+    id,tenant_id,product_id,name,description,function_identifier,criticality,status,owner_id,
+    created_by_id,updated_by_id,revision,created_at,updated_at
+) VALUES (
+    2120,1,1100,'Safe speed limitation','Synthetic safety function for visual and regression testing.',
+    'SAFE-SPEED-DEMO','HIGH','ACTIVE',1,1,1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_safety_hazard (
+    id,tenant_id,product_id,title,description,hazard_category,affected_safety_function_id,
+    operational_phase,potential_consequence,risk_estimation_method,initial_risk,residual_risk,
+    status,owner_id,created_by_id,updated_by_id,revision,created_at,updated_at
+) VALUES (
+    2130,1,1100,'Unexpected high-speed movement','Synthetic machinery hazard.','MECHANICAL',2120,
+    'OPERATION','Unexpected hazardous movement.','Documented qualitative expert assessment',
+    'HIGH','REVIEW_REQUIRED','MITIGATION_REQUIRED',1,1,1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_safety_assessment (
+    id,tenant_id,hazard_id,assessment_revision,lifecycle_operating_state,existing_safeguards,
+    risk_estimation_method,initial_assessment,additional_measures,residual_assessment,
+    reviewer_id,review_date,created_by_id,created_at
+) VALUES (
+    2140,1,2130,1,'Production operation','Authenticated update process; integrity validation.',
+    'Qualitative expert review','High; human review required.',
+    'Safety-independent protective measure.','Evidence and human review remain required.',
+    1,'2026-08-25',1,'2026-08-25T10:00:00Z'
+);
+INSERT OR IGNORE INTO safety_security_interaction (
+    id,tenant_id,product_id,hazard_id,safety_function_id,vulnerability_id,interaction_type,status,
+    security_consequence,measures,rationale,deduplication_key,created_by_id,updated_by_id,revision,
+    created_at,updated_at
+) VALUES (
+    2150,1,1100,2130,2120,1500,'CYBER_CAN_DEGRADE_SAFETY_FUNCTION','MITIGATION_REQUIRED',
+    'Control logic modified','Authenticated update process; integrity validation; safety-independent protective measure.',
+    'Unauthorized manipulation can degrade safe speed limitation.',
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,1,
+    '2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_regulatory_requirement (
+    id,tenant_id,product_id,requirement_id,requirement_code,legal_act,citation,title,
+    source_classification,source_reference,implementation_status,reasoning,revision,created_at,updated_at
+) VALUES
+    (2160,1,1100,(SELECT id FROM requirements_app_requirement WHERE framework='MACHINERY_REGULATION' AND code='EU-2023-1230-ANNEX-III-1.1.9' LIMIT 1),'EU-2023-1230-ANNEX-III-1.1.9','MACHINERY_REGULATION','Annex III 1.1.9','Protection against corruption','OFFICIAL_PRIMARY','https://eur-lex.europa.eu/eli/reg/2023/1230/oj/eng','EVIDENCE_GAPS','Human review and further evidence required.',1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2161,1,1100,(SELECT id FROM requirements_app_requirement WHERE framework='MACHINERY_REGULATION' AND code='EU-2023-1230-ANNEX-III-1.2.1' LIMIT 1),'EU-2023-1230-ANNEX-III-1.2.1','MACHINERY_REGULATION','Annex III 1.2.1','Safety and reliability of control systems','OFFICIAL_PRIMARY','https://eur-lex.europa.eu/eli/reg/2023/1230/oj/eng','ASSESSMENT_IN_PROGRESS','Human review and validation evidence required.',1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z');
+INSERT OR IGNORE INTO product_safety_standard_reference (
+    id,tenant_id,product_id,standard_identifier,edition,title,status,reference_scope,
+    source_reference,reviewed_at,updated_by_id,revision,created_at,updated_at
+) VALUES
+    (2170,1,1100,'EN ISO 12100','2010','Safety of machinery — General principles for design','PUBLISHED','Risk assessment reference metadata only.','https://www.iso.org/standard/51528.html','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2171,1,1100,'IEC 62443-3-3','2013','System security requirements and security levels','PUBLISHED','Cybersecurity reference metadata only.','https://webstore.iec.ch/en/publication/7033','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2172,1,1100,'IEC 62443-4-1','2018','Secure product development lifecycle requirements','PUBLISHED','Cybersecurity reference metadata only.','https://webstore.iec.ch/en/publication/33615','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2173,1,1100,'IEC 62443-4-2','2019','Technical security requirements for IACS components','PUBLISHED','Cybersecurity reference metadata only.','https://webstore.iec.ch/en/publication/34421','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2174,1,1100,'prEN 50742','','Protection against corruption for machinery','DRAFT','Draft reference metadata; no harmonisation or conformity claim.','https://standards.cencenelec.eu/','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z');
+INSERT OR IGNORE INTO product_component_safety_context (
+    id,tenant_id,product_id,component_id,safety_relevance,configuration_baseline_reference,
+    integrity_evidence_reference,modification_monitoring_status,last_reviewed_at,updated_by_id,
+    revision,created_at,updated_at
+) VALUES (
+    2180,1,1100,1250,'REVIEW_REQUIRED','Evidence item 1','Evidence item 1',
+    'ASSESSMENT_IN_PROGRESS','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'
+);
+INSERT OR IGNORE INTO product_component_safety_function_link (
+    id,tenant_id,component_context_id,safety_function_id,created_by_id,created_at
+) VALUES (2181,1,2180,2120,1,'2026-08-25T10:00:00Z');
+INSERT OR IGNORE INTO product_safety_evidence_link (
+    id,tenant_id,evidence_id,hazard_id,target_key,linked_by_id,created_at
+) VALUES (2190,1,1,2130,'HAZARD:2130',1,'2026-08-25T10:00:00Z');
 "#;
 
 const POSTGRES_DEMO_SEED: &str = r#"
@@ -9429,6 +10286,94 @@ INSERT INTO product_security_productsecurityroadmaptask (
     (1901, 1, 1900, 1200, NULL, 'GOVERNANCE', 'Define Rust product security ownership', 'Clarify owner roles and release gates', 'HIGH', 'Product Security Lead', 30, '', 'OPEN', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z'),
     (1902, 1, 1900, 1200, 1500, 'RESPONSE', 'Remediate Rust critical firmware exposure', 'Ship remediation and prepare disclosure', 'CRITICAL', 'PSIRT Lead', 14, 'Firmware patch readiness', 'PLANNED', '2026-04-22T10:00:00Z', '2026-04-22T10:00:00Z')
 ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_regulatory_applicability (
+    id,tenant_id,product_id,legal_act,applicability_status,product_role,reasoning,
+    assessed_by_id,assessed_at,reviewed_at,revision,created_at,updated_at
+) VALUES
+    (2100,1,1100,'CRA','IN_SCOPE','RELATED_PRODUCT','Synthetic human demo assessment; legal review remains required.',1,'2026-08-25T10:00:00Z',NULL,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2101,1,1100,'MACHINERY_REGULATION','REVIEW_REQUIRED','REVIEW_REQUIRED','Machinery applicability requires human technical and legal review.',1,'2026-08-25T10:00:00Z',NULL,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO machinery_product_profile (
+    id,tenant_id,product_id,product_role,intended_purpose,reasonably_foreseeable_use,
+    reasonably_foreseeable_misuse,operational_environment,lifecycle_phase,human_interaction,
+    network_connectivity_context,remote_access_context,safety_related_software_present,
+    programmable_control_system_present,external_communication_interfaces_present,
+    updated_by_id,revision,created_at,updated_at
+) VALUES (
+    2110,1,1100,'REVIEW_REQUIRED','Industrial sensor gateway for controlled production environments.',
+    'Configured operation by trained personnel.','Unauthorized or erroneous control-logic changes.',
+    'Industrial network with maintenance access.','OPERATION','Operator and maintenance interaction.',
+    'Segmented industrial Ethernet.','Authenticated maintenance channel.',TRUE,TRUE,TRUE,1,1,
+    '2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_safety_function (
+    id,tenant_id,product_id,name,description,function_identifier,criticality,status,owner_id,
+    created_by_id,updated_by_id,revision,created_at,updated_at
+) VALUES (
+    2120,1,1100,'Safe speed limitation','Synthetic safety function for visual and regression testing.',
+    'SAFE-SPEED-DEMO','HIGH','ACTIVE',1,1,1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_safety_hazard (
+    id,tenant_id,product_id,title,description,hazard_category,affected_safety_function_id,
+    operational_phase,potential_consequence,risk_estimation_method,initial_risk,residual_risk,
+    status,owner_id,created_by_id,updated_by_id,revision,created_at,updated_at
+) VALUES (
+    2130,1,1100,'Unexpected high-speed movement','Synthetic machinery hazard.','MECHANICAL',2120,
+    'OPERATION','Unexpected hazardous movement.','Documented qualitative expert assessment',
+    'HIGH','REVIEW_REQUIRED','MITIGATION_REQUIRED',1,1,1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_safety_assessment (
+    id,tenant_id,hazard_id,assessment_revision,lifecycle_operating_state,existing_safeguards,
+    risk_estimation_method,initial_assessment,additional_measures,residual_assessment,
+    reviewer_id,review_date,created_by_id,created_at
+) VALUES (
+    2140,1,2130,1,'Production operation','Authenticated update process; integrity validation.',
+    'Qualitative expert review','High; human review required.',
+    'Safety-independent protective measure.','Evidence and human review remain required.',
+    1,'2026-08-25',1,'2026-08-25T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO safety_security_interaction (
+    id,tenant_id,product_id,hazard_id,safety_function_id,vulnerability_id,interaction_type,status,
+    security_consequence,measures,rationale,deduplication_key,created_by_id,updated_by_id,revision,
+    created_at,updated_at
+) VALUES (
+    2150,1,1100,2130,2120,1500,'CYBER_CAN_DEGRADE_SAFETY_FUNCTION','MITIGATION_REQUIRED',
+    'Control logic modified','Authenticated update process; integrity validation; safety-independent protective measure.',
+    'Unauthorized manipulation can degrade safe speed limitation.',
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',1,1,1,
+    '2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_regulatory_requirement (
+    id,tenant_id,product_id,requirement_id,requirement_code,legal_act,citation,title,
+    source_classification,source_reference,implementation_status,reasoning,revision,created_at,updated_at
+) VALUES
+    (2160,1,1100,(SELECT id FROM requirements_app_requirement WHERE framework='MACHINERY_REGULATION' AND code='EU-2023-1230-ANNEX-III-1.1.9' LIMIT 1),'EU-2023-1230-ANNEX-III-1.1.9','MACHINERY_REGULATION','Annex III 1.1.9','Protection against corruption','OFFICIAL_PRIMARY','https://eur-lex.europa.eu/eli/reg/2023/1230/oj/eng','EVIDENCE_GAPS','Human review and further evidence required.',1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2161,1,1100,(SELECT id FROM requirements_app_requirement WHERE framework='MACHINERY_REGULATION' AND code='EU-2023-1230-ANNEX-III-1.2.1' LIMIT 1),'EU-2023-1230-ANNEX-III-1.2.1','MACHINERY_REGULATION','Annex III 1.2.1','Safety and reliability of control systems','OFFICIAL_PRIMARY','https://eur-lex.europa.eu/eli/reg/2023/1230/oj/eng','ASSESSMENT_IN_PROGRESS','Human review and validation evidence required.',1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_safety_standard_reference (
+    id,tenant_id,product_id,standard_identifier,edition,title,status,reference_scope,
+    source_reference,reviewed_at,updated_by_id,revision,created_at,updated_at
+) VALUES
+    (2170,1,1100,'EN ISO 12100','2010','Safety of machinery — General principles for design','PUBLISHED','Risk assessment reference metadata only.','https://www.iso.org/standard/51528.html','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2171,1,1100,'IEC 62443-3-3','2013','System security requirements and security levels','PUBLISHED','Cybersecurity reference metadata only.','https://webstore.iec.ch/en/publication/7033','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2172,1,1100,'IEC 62443-4-1','2018','Secure product development lifecycle requirements','PUBLISHED','Cybersecurity reference metadata only.','https://webstore.iec.ch/en/publication/33615','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2173,1,1100,'IEC 62443-4-2','2019','Technical security requirements for IACS components','PUBLISHED','Cybersecurity reference metadata only.','https://webstore.iec.ch/en/publication/34421','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'),
+    (2174,1,1100,'prEN 50742','','Protection against corruption for machinery','DRAFT','Draft reference metadata; no harmonisation or conformity claim.','https://standards.cencenelec.eu/','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z')
+ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_component_safety_context (
+    id,tenant_id,product_id,component_id,safety_relevance,configuration_baseline_reference,
+    integrity_evidence_reference,modification_monitoring_status,last_reviewed_at,updated_by_id,
+    revision,created_at,updated_at
+) VALUES (
+    2180,1,1100,1250,'REVIEW_REQUIRED','Evidence item 1','Evidence item 1',
+    'ASSESSMENT_IN_PROGRESS','2026-08-25T10:00:00Z',1,1,'2026-08-25T10:00:00Z','2026-08-25T10:00:00Z'
+) ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_component_safety_function_link (
+    id,tenant_id,component_context_id,safety_function_id,created_by_id,created_at
+) VALUES (2181,1,2180,2120,1,'2026-08-25T10:00:00Z') ON CONFLICT (id) DO NOTHING;
+INSERT INTO product_safety_evidence_link (
+    id,tenant_id,evidence_id,hazard_id,target_key,linked_by_id,created_at
+) VALUES (2190,1,1,2130,'HAZARD:2130',1,'2026-08-25T10:00:00Z') ON CONFLICT (id) DO NOTHING;
 "#;
 
 #[cfg(test)]
@@ -11018,10 +11963,10 @@ mod tests {
             .await
             .unwrap();
         let applied = run_sqlite_migrations(&pool).await.unwrap();
-        assert_eq!(applied.len(), 45);
+        assert_eq!(applied.len(), MIGRATIONS.len());
         assert_eq!(
             applied.last().copied(),
-            Some("0045_rust_software_approval_exception_policy")
+            MIGRATIONS.last().map(|migration| migration.version)
         );
         sqlx::query("PRAGMA foreign_keys=ON")
             .execute(&pool)
@@ -11369,5 +12314,141 @@ mod tests {
         .execute(&pool)
         .await;
         assert!(foreign_target.is_err());
+    }
+
+    #[tokio::test]
+    async fn sqlite_0046_is_restartable_tenant_safe_and_preserves_product_security_data() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        run_sqlite_migrations(&pool).await.unwrap();
+        for statement in [
+            "DROP TABLE product_safety_audit_event",
+            "DROP TABLE product_safety_evidence_link",
+            "DROP TABLE product_component_safety_function_link",
+            "DROP TABLE product_component_safety_context",
+            "DROP TABLE product_safety_standard_reference",
+            "DROP TABLE product_regulatory_requirement_relation",
+            "DROP TABLE product_regulatory_requirement",
+            "DROP TABLE safety_security_interaction",
+            "DROP TABLE product_safety_assessment",
+            "DROP TABLE product_safety_hazard",
+            "DROP TABLE product_safety_function",
+            "DROP TABLE machinery_product_profile",
+            "DROP TABLE product_regulatory_applicability",
+            "DELETE FROM iscy_schema_migrations WHERE version='0046_rust_machinery_cra_safety_security_foundation'",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        sqlx::query("PRAGMA foreign_keys=ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO organizations_tenant (id,name,slug) VALUES
+             (146,'Safety Migration A','safety-migration-a'),
+             (147,'Safety Migration B','safety-migration-b')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO accounts_user (id,username,tenant_id,role,is_active) VALUES
+             (14601,'safety-migration-owner',146,'COMPLIANCE_MANAGER',1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO product_security_product (id,tenant_id,name,code) VALUES
+             (14601,146,'Existing Safety Product','SAFE-146'),
+             (14701,147,'Foreign Safety Product','SAFE-147')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO product_security_vulnerability (
+                id,tenant_id,product_id,title,cve,status,vex_status,vex_justification,origin_key
+             ) VALUES (
+                14601,146,14601,'Existing safety-related finding','CVE-2026-4601','OPEN',
+                'AFFECTED','Existing data must remain unchanged','existing-safety-migration-finding'
+             )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let applied = run_sqlite_migrations(&pool).await.unwrap();
+        assert_eq!(
+            applied,
+            vec!["0046_rust_machinery_cra_safety_security_foundation"]
+        );
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
+        let automatic_records: (i64, i64, i64) = sqlx::query_as(
+            "SELECT
+             (SELECT COUNT(*) FROM product_regulatory_applicability),
+             (SELECT COUNT(*) FROM product_safety_hazard),
+             (SELECT COUNT(*) FROM safety_security_interaction)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(automatic_records, (0, 0, 0));
+        let preserved: (String, String) = sqlx::query_as(
+            "SELECT p.name,v.vex_justification
+             FROM product_security_product p
+             JOIN product_security_vulnerability v
+               ON v.tenant_id=p.tenant_id AND v.product_id=p.id
+             WHERE p.tenant_id=146 AND p.id=14601",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            preserved,
+            (
+                "Existing Safety Product".to_string(),
+                "Existing data must remain unchanged".to_string()
+            )
+        );
+        let permission_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM auth_permission WHERE codename IN (
+                'view_product_safety','manage_product_applicability','manage_product_safety',
+                'review_product_safety','manage_safety_security_interaction',
+                'link_product_safety_evidence'
+             )",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(permission_count, 6);
+
+        let foreign_product = sqlx::query(
+            "INSERT INTO product_regulatory_applicability (
+                tenant_id,product_id,legal_act,applicability_status,product_role,
+                reasoning,assessed_by_id,assessed_at
+             ) VALUES (
+                146,14701,'CRA','IN_SCOPE','MACHINERY','Must fail',14601,
+                '2026-08-25T10:00:00Z'
+             )",
+        )
+        .execute(&pool)
+        .await;
+        assert!(foreign_product.is_err());
+
+        sqlx::query(
+            "DELETE FROM iscy_schema_migrations WHERE version='0046_rust_machinery_cra_safety_security_foundation'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            run_sqlite_migrations(&pool).await.unwrap(),
+            vec!["0046_rust_machinery_cra_safety_security_foundation"]
+        );
+        assert!(run_sqlite_migrations(&pool).await.unwrap().is_empty());
     }
 }

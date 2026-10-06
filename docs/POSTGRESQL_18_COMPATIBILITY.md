@@ -18,7 +18,7 @@ automatisches Upgradeversprechen noch eine Freigabe fuer ein In-place-Upgrade.
 | PostgreSQL-18-Volumeziel | `/var/lib/postgresql` |
 | PostgreSQL-18-PGDATA | `/var/lib/postgresql/18/docker` |
 | Datenuebertragung | logischer Dump und Restore mit PostgreSQL-18-Clientwerkzeugen |
-| Migrationen | alle 45 bestehenden Migrationen, ohne eigene PG18-Migration |
+| Migrationen | alle 46 bestehenden Migrationen, ohne eigene PG18-Migration |
 
 Der am 2026-07-13 read-only gegen Docker Hub gepruefte OCI-Index fuer
 `postgres:18` war
@@ -44,7 +44,7 @@ benannte Compose-Umgebung. Er startet:
 - gehartete ISCY-Testprozesse fuer Source und Target,
 - nur an `127.0.0.1` gebundene Anwendungsports und keine Datenbankports.
 
-Der Lauf prueft Fresh Bootstrap, 45 Migrationen, einen zweiten idempotenten
+Der Lauf prueft Fresh Bootstrap, 46 Migrationen, einen zweiten idempotenten
 Migrationslauf, Restart, Health, Login, Session, 401/403, zentrale Fachbereiche,
 Risiko-Schreiben/-Lesen/-Aendern und einen synthetischen Evidence-Upload.
 Danach erzeugt der PostgreSQL-18-Client einen Custom-Dump der PG16-Quelle,
@@ -112,7 +112,7 @@ Stage-Umgebung.
 6. Den Dump mit `pg_restore --exit-on-error --no-owner --no-privileges`
    einspielen und anschliessend `ANALYZE` ausfuehren.
 7. ISCY `migrate` zweimal ausfuehren. Der zweite Lauf darf keine weitere
-   Migration anwenden; insgesamt muessen 45 Migrationen vorliegen.
+   Migration anwenden; insgesamt muessen 46 Migrationen vorliegen.
 8. Tabellen, Zeilen, Inhaltschecksummen, Sequenzen, Constraints, Tenantdaten,
    Rollen, Evidence-Metadaten und Media-Hashes gegen die eingefrorene Quelle
    vergleichen.

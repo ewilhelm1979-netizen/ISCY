@@ -211,6 +211,12 @@ async fn main() -> anyhow::Result<()> {
         Some(database_url) => Some(SoftwarePolicyStore::connect(database_url).await?),
         None => None,
     };
+    let product_safety_store = match database_url.as_deref() {
+        Some(database_url) => Some(
+            iscy_backend::product_safety_store::ProductSafetyStore::connect(database_url).await?,
+        ),
+        None => None,
+    };
     let state = AppState::with_stores(cve_store, tenant_store)
         .with_alertmanager_service_principal(alertmanager_service_principal)
         .with_account_store(account_store)
@@ -243,6 +249,7 @@ async fn main() -> anyhow::Result<()> {
         .with_ai_governance_store(ai_governance_store)
         .with_threat_intelligence_store(threat_intelligence_store)
         .with_software_policy_store(software_policy_store)
+        .with_product_safety_store(product_safety_store)
         .with_vulnerability_feed_transport(vulnerability_feed_transport.clone())
         .with_database_url(database_url)
         .with_security_config(security_config.clone());
