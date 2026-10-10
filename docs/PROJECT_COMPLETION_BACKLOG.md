@@ -63,9 +63,11 @@ fuer MinIO-basierte CI-Gates und `RUSTSEC-2026-0285` sind im aktuellen
 3. **Kryptografische Release-Signierung/Attestation.** Der aktuelle
    Release-Vertrag liefert SBOM, Checksummen und Provenance-Metadaten, ist aber
    ausdruecklich `unsigned`.
-4. **Parser-/Upload-Hardening vertiefen.** Fuer riskantere Einsatzumgebungen
-   Malware-Scanning und/oder Parser-Sandboxing als Betreiber-/Produktoption
-   evaluieren.
+4. **Parser-/Upload-Hardening vertiefen.** XLSX/XLSM-Importe besitzen
+   inzwischen fail-closed Archiv-, Entpack-, Shared-String-, Zell- und
+   Zeilenlimits sowie sparse Verarbeitung. Fuer riskantere Einsatzumgebungen
+   bleiben Malware-Scanning und/oder Parser-Sandboxing als
+   Betreiber-/Produktoption zu evaluieren.
 5. **Durables Audit fuer besonders sensitive Downloads vertiefen.** Die
    vorhandenen Runtime-Security-Events fuer Evidence-Downloads koennen um eine
    explizite persistente Auditspur erweitert werden.
