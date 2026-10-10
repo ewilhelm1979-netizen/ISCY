@@ -29,7 +29,8 @@ The application follows a local-first, privacy-conscious approach. Its productio
 
 - The Zero-Trust agent is a read-only posture/inventory collector; ISCY is not a remote-control or automatic-remediation agent.
 - Native vulnerability intelligence for NVD, CISA KEV, and FIRST EPSS is implemented, while tenant correlation is kept separate from active response.
-- Local LLM/RAG integration is scaffolded but is not yet implemented as a productive runtime client in the current Rust backend. Future AI recommendations must not bypass role, approval, or audit boundaries.
+- CVE assessments expose an optional Rust LLM-stub workflow (`run_llm`, `/api/v1/llm/generate`, and `/cves/llm-test/`). Current output is generated deterministically in Rust; no model-backed inference is executed.
+- No RAG runtime is implemented on the current `main` branch. Any future model/RAG integration must preserve tenant isolation and must not bypass role, approval, or audit boundaries.
 - Release assets include an SBOM, checksums, and reproducibility/provenance metadata; cryptographic release signing remains a hardening step.
 
 ## Quick start
