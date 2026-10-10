@@ -14,7 +14,7 @@
     "nix_development_path": "1.95.0"
   },
   "cargo_package_version": "0.3.22",
-  "cargo_lock_sha256": "41e8bcc8a3914c6b3242a55b9a819af5f7a9be6651b89f56b816f32078c2bfa7",
+  "cargo_lock_sha256": "b1c3d9b73a158b2963e461ab4de727bfb65232a514671f3de548a32904b3b6b9",
   "flake_lock_sha256": "26aca5784e077f55f7b70c4f1414348b95c0a659647fca022119d9c429740a23",
   "handbook_sha256": "936c07ac25495a2df072a887e6eb2ecd7e9f3a536468b6e8a45f8f678dae6df7",
   "migration_count": 46,
@@ -79,7 +79,7 @@
   "provenance_status": "prepared_unsigned",
   "signature_status": "unsigned",
   "sbom_status": "generated_cyclonedx_1.5",
-  "sbom_sha256": "0b8ba788aad16868f360817037cd15c129a314273a5e61bd11676282cfbfeb4e",
+  "sbom_sha256": "4fed4861def910c72984e042efc6765ddf22002e83f57c6877f3e98d0d954488",
   "vex_status": "not_generated_no_release_vulnerability_assertion",
   "known_limitations_reference": "docs/RELEASE_CANDIDATE_CHECKLIST.md#bekannte-betriebsgrenzen"
 }
