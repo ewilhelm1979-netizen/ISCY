@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MINIO_IMAGE="docker.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
-MC_IMAGE="docker.io/minio/mc:RELEASE.2025-04-16T18-13-26Z"
+# Test-only compatibility image built from the upstream MinIO release source.
+# Pin the multi-platform manifest digest so CI does not silently drift.
+MINIO_TEST_IMAGE="ghcr.io/coollabsio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a4938f37f1be1841b8e7b627ad0207b265345fd0d063e42d7410c78af0e63e68"
 CONTAINER_NAME="iscy-minio-integration-${RANDOM}-$$"
 PORT="${ISCY_TEST_S3_PORT:-19090}"
 BUCKET="iscy-integration-${RANDOM}-$$"
@@ -19,7 +20,7 @@ docker run --detach --rm \
   --publish "127.0.0.1:${PORT}:9000" \
   --env "MINIO_ROOT_USER=${ACCESS_KEY}" \
   --env "MINIO_ROOT_PASSWORD=${SECRET_KEY}" \
-  "$MINIO_IMAGE" server /data >/dev/null
+  "$MINIO_TEST_IMAGE" server /data >/dev/null
 
 for _ in $(seq 1 60); do
   if curl -fsS "http://127.0.0.1:${PORT}/minio/health/ready" >/dev/null 2>&1; then
@@ -31,7 +32,8 @@ curl -fsS "http://127.0.0.1:${PORT}/minio/health/ready" >/dev/null
 
 docker run --rm --network host \
   --env "MC_HOST_iscy=http://${ACCESS_KEY}:${SECRET_KEY}@127.0.0.1:${PORT}" \
-  "$MC_IMAGE" mb --ignore-existing "iscy/${BUCKET}" >/dev/null
+  --entrypoint /usr/bin/mc \
+  "$MINIO_TEST_IMAGE" mb --ignore-existing "iscy/${BUCKET}" >/dev/null
 
 export ISCY_TEST_S3_ENDPOINT="http://127.0.0.1:${PORT}"
 export ISCY_TEST_S3_BUCKET="$BUCKET"
@@ -43,6 +45,7 @@ cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml \
 
 docker run --rm --network host \
   --env "MC_HOST_iscy=http://${ACCESS_KEY}:${SECRET_KEY}@127.0.0.1:${PORT}" \
-  "$MC_IMAGE" rb --force "iscy/${BUCKET}" >/dev/null
+  --entrypoint /usr/bin/mc \
+  "$MINIO_TEST_IMAGE" rb --force "iscy/${BUCKET}" >/dev/null
 
 echo "Object storage integration OK"
