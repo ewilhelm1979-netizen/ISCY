@@ -916,6 +916,7 @@ dependencies = [
  "chrono",
  "getrandom 0.3.4",
  "hmac",
+ "quick-xml",
  "reqwest",
  "rust_decimal",
  "serde",
@@ -924,6 +925,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tower",
+ "zip",
 ]
 
 [[package]]
