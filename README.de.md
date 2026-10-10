@@ -19,7 +19,8 @@ Die Plattform verbindet Risiken, Controls, Assets, Incidents, Evidence, Lieferan
 
 - Der Zero-Trust-Agent arbeitet read-only und liefert Posture-/Inventarsignale; ISCY ist kein Remote-Control- oder automatischer Remediation-Agent.
 - Native Vulnerability Intelligence fuer NVD, CISA KEV und FIRST EPSS ist implementiert und tenantgebundene Korrelation bleibt von aktiven Gegenmassnahmen getrennt.
-- Eine lokale LLM-/RAG-Anbindung ist vorbereitet, aber im aktuellen Rust-Backend noch nicht als produktiver Runtime-Client implementiert. KI-Vorschlaege duerfen spaeter keine Rollen-, Freigabe- oder Audit-Grenzen umgehen.
+- CVE-Assessments besitzen einen optionalen Rust-LLM-Stub-Workflow (`run_llm`, `/api/v1/llm/generate` und `/cves/llm-test/`). Die aktuellen Ausgaben werden deterministisch in Rust erzeugt; es wird dabei kein echtes Modell ausgefuehrt.
+- Im aktuellen `main` ist keine RAG-Runtime implementiert. Eine spaetere Modell-/RAG-Anbindung muss Tenant-Isolation sowie Rollen-, Freigabe- und Audit-Grenzen erhalten.
 - Release-Artefakte enthalten SBOM, Checksummen und Reproduzierbarkeits-/Provenance-Metadaten; kryptographische Release-Signierung ist weiterhin eine offene Hardening-Stufe.
 
 ## Schnellstart
