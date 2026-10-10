@@ -174,8 +174,14 @@ established by ISCY. Independent competent review remains required.
 - tenant validation for referenced objects
 - temporary-file cleanup after failed persistence
 - import validation and error reporting
+- XLSX/XLSM archive preflight with bounded entry count, per-entry and total
+  uncompressed size, shared-string count, used-cell count and import-row count
+- sparse XLSX cell iteration to avoid materializing attacker-controlled
+  coordinate rectangles; malformed or oversized Office archives fail closed
 
-**Residual risk:** File type and extension validation are not malware detection. Operators should add malware scanning and sandboxed parsing for higher-risk environments.
+**Residual risk:** These parser and resource bounds reduce memory/decompression
+abuse but are not malware detection or a complete parser sandbox. Operators
+should add malware scanning and sandboxed parsing for higher-risk environments.
 
 ### Stored or reflected content injection
 
