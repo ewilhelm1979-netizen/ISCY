@@ -2,6 +2,14 @@
 
 ISCY fuehrt AI-Systeme als tenantgebundene Governance-Objekte. Das Modul unter `/ai-governance/` verbindet Inventar, AI-Act-Einstufung, Human Oversight, Monitoring, Evidence und fachliche Betriebsobjekte. Es unterstuetzt Governance- und Review-Arbeit, ersetzt aber weder Rechtsberatung noch eine Konformitaetsbewertung oder Zertifizierung.
 
+## Abgrenzung zur lokalen KI-/RAG-Integration
+
+Das AI-Governance-Modul verwaltet AI-Systeme als Governance-Objekte. Es ist nicht selbst die Inferenz- oder RAG-Laufzeit von ISCY.
+
+Der aktuelle Rust-Backend-Stand enthaelt keine produktive Route, keinen Worker und keinen Client, der Telemetrie, Evidence oder Vulnerability-Daten automatisch an ein lokales LLM oder eine RAG-Plattform uebergibt. Die vorhandenen `LOCAL_LLM_*`-Variablen und `docker-compose.llm.yml` sind Betriebs- beziehungsweise Integrationsvorbereitung und kein Nachweis einer aktiven Modell- oder RAG-Anbindung.
+
+Eine spaetere API-Kopplung an eine lokale RAG-/KI-Plattform muss als eigene Vertrauensgrenze umgesetzt werden. Dabei bleiben Tenant-Isolation, Least Privilege, serverseitige Autorisierung, Audit und Human Approval massgeblich. Modellvorschlaege duerfen insbesondere keine Firewall-Regeln, Endpoint-Aktionen, Incident-Abschluesse oder andere aktive Gegenmassnahmen an den bestehenden Freigabe- und Berechtigungspruefungen vorbei ausfuehren.
+
 ## Verknuepfte Objekte
 
 Ein AI-System kann mit den kanonischen ISCY-Objekten fuer Risiken, Roadmap-Tasks, Incidents und Changes verbunden werden. Die Detailansicht zeigt:
