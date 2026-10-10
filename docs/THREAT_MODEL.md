@@ -16,7 +16,7 @@ Included:
 - SBOM, CSAF, VEX, CSV, XLSX, JSON, and NVD processing
 - Zero-Trust agent enrollment, heartbeats, findings, and secret rotation
 - Alertmanager and notification webhooks
-- local LLM integration
+- AI-governance records and the configuration scaffolding for an optional local LLM; no productive LLM/RAG runtime client is implemented in the current backend
 - Docker/NixOS deployment boundaries
 - backup and restore workflows
 
@@ -351,20 +351,27 @@ separately reviewed data and semantics.
 - minimal CI permissions
 - automated dependency update review
 
-**Planned controls:** Pin GitHub Actions and container bases by immutable digest, produce release SBOMs and provenance, and sign release artifacts.
+**Implemented controls:** GitHub Actions used by the main CI are pinned to immutable commit SHAs. Release preparation produces a CycloneDX SBOM, SHA-256 checksums, a release manifest and reproducibility metadata; the current release manifest explicitly records artifacts as unsigned.
 
-### Local LLM and generated compliance content
+**Remaining controls:** Continue pinning container bases by immutable digest where applicable and add cryptographic signing/attestation before treating release provenance as publisher-authenticated.
 
-**Threat:** Prompt injection or untrusted input causes misleading regulatory text, data leakage, or unsafe automated decisions.
+### Optional local LLM/RAG integration
 
-**Controls:**
+**Current implementation boundary:** The Rust backend currently has no productive LLM or RAG client, inference route, or worker. `LOCAL_LLM_*` configuration and `docker-compose.llm.yml` are integration scaffolding only.
 
-- local-first model option
-- generated output remains advisory
-- human review and evidence workflow
+**Threat:** A future model or RAG integration could expose tenant data, accept prompt injection, over-trust retrieved content, or turn advisory output into unsafe automated actions.
+
+**Required controls for a future integration:**
+
+- explicit tenant-scoped data selection and least-privilege service credentials
+- bounded inputs/outputs, timeouts, provenance and safe error handling
+- no implicit trust in retrieved documents or model output
+- generated recommendations remain advisory until an authorized human or separately approved workflow accepts them
+- no automatic firewall rule, endpoint command, incident closure, risk acceptance, release approval or other active response solely from model output
+- complete auditability of the request context, decision boundary and approved downstream action without logging secrets or unnecessary raw telemetry
 - explicit project disclaimer that ISCY is not certification or legal advice
 
-**Residual risk:** Model output can be wrong or manipulated. Do not automatically approve risks, incidents, releases, or compliance decisions solely from generated content.
+**Residual risk:** Model and retrieval output can be wrong, stale, poisoned or manipulated. Any future integration requires a separate threat-boundary review before production use.
 
 ## Security invariants for releases
 
