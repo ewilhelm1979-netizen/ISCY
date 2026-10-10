@@ -1,4 +1,4 @@
-FROM docker.io/library/rust:1.97.0-bookworm@sha256:8fa55b2f3ddf97471ab6a767bfa3f37e6bad0986ba823e75fea57e2a2a5c3073 AS builder
+FROM docker.io/library/rust:1.98.0-bookworm@sha256:e70e2eec3d495fd5c8e0be74adda86507dfac7f51a724fbf9813ff59b2b247c7 AS builder
 WORKDIR /build/rust/iscy-backend
 
 COPY rust/iscy-backend/Cargo.toml rust/iscy-backend/Cargo.lock ./
