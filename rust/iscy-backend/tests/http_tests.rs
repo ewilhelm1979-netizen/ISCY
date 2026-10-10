@@ -13639,9 +13639,10 @@ async fn import_center_preview_rejects_malformed_xlsx_and_read_only_access() {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(error["error_code"], "invalid_import_upload");
-        assert!(error["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with("XLSX-Datei konnte nicht gelesen werden")));
+        assert_eq!(
+            error["message"],
+            "XLSX-Datei enthaelt kein gueltiges Office-Archiv."
+        );
     }
 }
 
