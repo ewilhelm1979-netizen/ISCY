@@ -38,6 +38,19 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 | `NVD_API_KEY` | Optionaler NVD API Key | nein | leer | Secret | Wird nur als `apiKey`-Header zur fest verdrahteten offiziellen NVD-API gesendet und nie protokolliert | ja, `NVD_API_KEY_FILE` |
 | `ISCY_VULNERABILITY_SYNC_INTERVAL_SECONDS` | Periodischer Vulnerability-Intelligence-Runner | nein | `0` | `0` oder 7200 bis 604800 Sekunden | `0` deaktiviert; jeder Feed laeuft isoliert, vorhandene Daten bleiben bei Ausfall erhalten | nein |
 
+## Lokale LLM-/RAG-Vorbereitung
+
+Die Environment-Beispiele und `docker-compose.llm.yml` enthalten derzeit vorbereitende Laufzeitparameter fuer eine spaetere lokale Modellintegration:
+
+| Variable | Zweck | Aktueller Implementierungsstand |
+| --- | --- | --- |
+| `LOCAL_LLM_MODEL_NAME` | Bezeichnung des vorgesehenen lokalen Modells | Konfigurations-Scaffolding; vom aktuellen Rust-Backend nicht fuer Inferenz verwendet |
+| `LOCAL_LLM_N_CTX` | vorgesehene Kontextgroesse | Konfigurations-Scaffolding |
+| `LOCAL_LLM_N_THREADS` | vorgesehene CPU-Threadzahl | Konfigurations-Scaffolding |
+| `LOCAL_LLM_GPU_LAYERS` | vorgesehene GPU-Offload-Konfiguration | Konfigurations-Scaffolding |
+
+Diese Variablen aktivieren im aktuellen Stand weder einen LLM-Client noch eine RAG-API, Modellinferenz oder automatische Remediation. Eine spaetere Integration muss eine eigene dokumentierte Vertrauensgrenze mit Tenant-Isolation, Least Privilege, Audit und expliziten Freigaben fuer nachgelagerte Aktionen erhalten.
+
 ## Secret-Dateien
 
 Fuer Container, NixOS und systemd koennen `*_FILE`-Varianten auf gemountete
