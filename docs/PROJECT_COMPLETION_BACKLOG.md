@@ -38,6 +38,12 @@ ausgefuehrt und es existiert keine RAG-/Embedding-/Retrieval-Runtime.
    MinIO-/`mc`-Image-Referenzen abhaengen. Ersatzimages muessen kontrolliert,
    nach Moeglichkeit immutable/digest-gepinnt und mit unveraenderter
    Testsemantik validiert werden.
+
+2. **Aktiven RustSec-Befund beheben.** Der am 10. Oktober 2026 gepruefte
+   `main`-Lockfile-Stand enthaelt `rustls 0.23.38`, das von
+   `RUSTSEC-2026-0285` betroffen ist. Der Fix muss auf eine nicht betroffene
+   Version (`>= 0.23.45`) aktualisieren; ein dauerhaftes Advisory-Ignore ist
+   kein akzeptierter Abschluss.
 2. **Unabhaengige Security-Pruefung.** Externer Penetrationstest beziehungsweise
    unabhaengige Security-Review fuer die produktiven Trust Boundaries.
 3. **Zielumgebung abnehmen.** TLS/HSTS, Reverse Proxy, Secret-Dateien,
@@ -57,11 +63,11 @@ ausgefuehrt und es existiert keine RAG-/Embedding-/Retrieval-Runtime.
    lokal betriebene Modellruntime mit belastbarer Provenance implementieren.
    Ein frei gesetztes `LOCAL_LLM_MODEL_NAME` darf nicht als Beweis echter
    Modellinferenz missverstanden werden.
-2. **LLM-Konfiguration vereinheitlichen.** Der Code liest derzeit
+3. **LLM-Konfiguration vereinheitlichen.** Der Code liest derzeit
    `LOCAL_LLM_N_GPU_LAYERS`, waehrend die Env-/Compose-Beispiele
    `LOCAL_LLM_GPU_LAYERS` setzen. Diese Kompatibilitaetsabweichung technisch
    bereinigen und erst danach GPU-Offload dokumentieren.
-3. **Kryptografische Release-Signierung/Attestation.** Der aktuelle
+4. **Kryptografische Release-Signierung/Attestation.** Der aktuelle
    Release-Vertrag liefert SBOM, Checksummen und Provenance-Metadaten, ist aber
    ausdruecklich `unsigned`.
 4. **Parser-/Upload-Hardening vertiefen.** Fuer riskantere Einsatzumgebungen
