@@ -79,7 +79,7 @@
   "provenance_status": "prepared_unsigned",
   "signature_status": "unsigned",
   "sbom_status": "generated_cyclonedx_1.5",
-  "sbom_sha256": "0b8ba788aad16868f360817037cd15c129a314273a5e61bd11676282cfbfeb4e",
+  "sbom_sha256": "e406c89e068798c7890033d612a9c40f0c3de1b76b9b26b4bec0ec0916e25d18",
   "vex_status": "not_generated_no_release_vulnerability_assertion",
   "known_limitations_reference": "docs/RELEASE_CANDIDATE_CHECKLIST.md#bekannte-betriebsgrenzen"
 }
