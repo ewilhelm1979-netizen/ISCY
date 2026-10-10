@@ -44,16 +44,16 @@ ausgefuehrt und es existiert keine RAG-/Embedding-/Retrieval-Runtime.
    `RUSTSEC-2026-0285` betroffen ist. Der Fix muss auf eine nicht betroffene
    Version (`>= 0.23.45`) aktualisieren; ein dauerhaftes Advisory-Ignore ist
    kein akzeptierter Abschluss.
-2. **Unabhaengige Security-Pruefung.** Externer Penetrationstest beziehungsweise
+3. **Unabhaengige Security-Pruefung.** Externer Penetrationstest beziehungsweise
    unabhaengige Security-Review fuer die produktiven Trust Boundaries.
-3. **Zielumgebung abnehmen.** TLS/HSTS, Reverse Proxy, Secret-Dateien,
+4. **Zielumgebung abnehmen.** TLS/HSTS, Reverse Proxy, Secret-Dateien,
    Netzwerksegmentierung und Betreiber-Rechte in der konkreten
    Produktionsumgebung verifizieren; vorhandene sichere Defaults ersetzen
    keine Betreiberfreigabe.
-4. **Disaster-Recovery-Nachweis fuer die Zielumgebung.** Vorhandene Backup- und
+5. **Disaster-Recovery-Nachweis fuer die Zielumgebung.** Vorhandene Backup- und
    Restore-Skripte mit echten RPO/RTO-Zielen, verschluesseltem Backup-Speicher
    und wiederholbaren Restore-Drills nachweisen.
-5. **Monitoring/Eskalation produktiv anbinden.** Prometheus, Alertmanager,
+6. **Monitoring/Eskalation produktiv anbinden.** Prometheus, Alertmanager,
    Grafana und Log-/Error-Pipeline an den realen Betreiberprozess koppeln.
 
 ## Prioritaet P1 – technische Produktreife
@@ -63,11 +63,11 @@ ausgefuehrt und es existiert keine RAG-/Embedding-/Retrieval-Runtime.
    lokal betriebene Modellruntime mit belastbarer Provenance implementieren.
    Ein frei gesetztes `LOCAL_LLM_MODEL_NAME` darf nicht als Beweis echter
    Modellinferenz missverstanden werden.
-3. **LLM-Konfiguration vereinheitlichen.** Der Code liest derzeit
+2. **LLM-Konfiguration vereinheitlichen.** Der Code liest derzeit
    `LOCAL_LLM_N_GPU_LAYERS`, waehrend die Env-/Compose-Beispiele
    `LOCAL_LLM_GPU_LAYERS` setzen. Diese Kompatibilitaetsabweichung technisch
    bereinigen und erst danach GPU-Offload dokumentieren.
-4. **Kryptografische Release-Signierung/Attestation.** Der aktuelle
+3. **Kryptografische Release-Signierung/Attestation.** Der aktuelle
    Release-Vertrag liefert SBOM, Checksummen und Provenance-Metadaten, ist aber
    ausdruecklich `unsigned`.
 4. **Parser-/Upload-Hardening vertiefen.** Fuer riskantere Einsatzumgebungen
