@@ -2035,100 +2035,76 @@ PostgreSQL, MinIO und nginx sind in der Testtopologie selbst jeweils
 Einzelinstanzen. ISCY behauptet damit weder Multi-Region-HA noch beliebige
 Skalierbarkeit, SLA-Erfuellung, Zertifizierung oder Rechtskonformitaet.
 
-### 6.18 Finales Hardening und Release-Vorbereitung
+### 6.18 Finales Hardening und Release-Lifecycle
 
-`V23.7.31` bleibt der unveraenderte veroeffentlichte Vorgaenger mit Tagziel
-`c595795296633ce4152aa0e817b063ee88c7028a`. Sein Metadaten- und
-Asset-Snapshot liegt unter `release/published/V23.7.31.json`. `V23.7.32` ist
-repositorykonform als `prepared_not_published` vorbereitet. Dieser Status
-erzeugt weder einen Tag noch ein GitHub Release oder einen Upload. Freigabe und
-Publikation bleiben getrennte menschliche Entscheidungen.
+Der letzte veroeffentlichte Stable Release ist `V23.7.33`. Er wurde am
+16. August 2026 veroeffentlicht und ist an den unveraenderlichen Tag-/Commit-
+Stand `2820f19f5fa33069db81e05c10949f2558948d04` gebunden. Der zugehoerige
+Published-Snapshot liegt unter `release/published/V23.7.33.json`.
 
-V23.7.32 ist ein Security-, Supply-Chain- und Maintenance-Release ohne neue
-Produktfunktion, Migration, Visual-Baseline oder aktive Response-Funktion.
-Enthalten sind file-basierte Produktionssecrets mit fail-closed
-Dateigrenzen, ein redigierter Secret-Scan, kontrollierte Rust-/nixpkgs-
-Aktualisierungen einschliesslich `event-listener 5.4.2` gegen
-`RUSTSEC-2026-0221` und minimierte, synthetische CI-Testartefakte. Die
-Lifecycle-Infrastruktur verifiziert den Vorgaenger-Tag in CI fail-closed und
-lehnt einen unerwartet bereits vorhandenen V23.7.32-Tag ab.
+Der aktuelle `main`-Lifecycle arbeitet auf `V23.7.34` mit dem Status
+`development_unreleased`. Fuer V23.7.34 existiert deshalb bewusst noch kein
+Tag und kein GitHub Release. Ein separater Release-Prep-Schritt muss spaeter
+erneut Teststatus, Artefakte, Reproduzierbarkeit und menschliche Freigabe
+binden.
 
-Die vorhandenen Pflichtpruefungen laufen in `make release-candidate-check`
-zusammen. Der GitHub-Aggregationsjob verlangt elf getrennte Jobs fuer
-Secret-Scan, Rust, MSRV, Bootstrap, Nix, MinIO, Performance,
-HA/PostgreSQL 18, Visual, Compose und portables Binary. Der Codex-
-Automationstest ist ein zusaetzlicher separater CI-Nachweis; zusammen mit der
-Aggregation sind damit dreizehn CI-Jobs zu pruefen. CodeQL prueft Actions,
-JavaScript/TypeScript und Rust separat. Lokal erzeugte Candidate-Artefakte
-bleiben unter `artifacts/release-candidate/`, sind unsigniert, ignored und
-werden weder committed noch hochgeladen.
+Das Root-Manifest `release/release-manifest.json` beschreibt aktuell unter
+anderem:
 
-Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
-Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
-und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust
-1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem
-Bootstrap, 46 Migrationen, Restart, Migrationsrennen und einem logischen
-Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der
-PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder
-ein In-place-Upgrade noch ein automatisiertes `pg_upgrade` oder einen
-Rueckwaertsrestore nach PostgreSQL 16.
+- Rust-Paket `0.3.22` und MSRV Rust 1.88,
+- PostgreSQL 16 als Standarddatenbank,
+- SQLite als Single-Instance-Kompatibilitaetspfad,
+- PostgreSQL 18.4 als zusaetzlichen logischen Forward-Restore- und
+  Anwendungskompatibilitaetspfad,
+- 46 fortlaufende Migrationen und 46 visuelle Baselines,
+- CycloneDX-1.5-SBOM,
+- einen vorbereiteten, aber noch unsignierten Provenance-Vertrag.
 
-Der Hardening-Review schliesst einen Development-Kompatibilitaetspfad: Eine
-Session nur aus `tenant_id` und `user_id` kann jetzt ausschliesslich im Modus
-`development` erstellt werden. `demo` und `production` verlangen einen
-Passwort-Login oder eine gueltige bestehende Session. Identitaetsheader sind in
-Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-
-Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder
-internen Store-Details.
+Die vorhandenen Pflichtpruefungen laufen in
+`make release-candidate-check` zusammen. GitHub CI aggregiert elf
+Produkt-/Betriebsjobs fuer Secret-Scan, Rust, MSRV, Bootstrap, Nix,
+Object-Storage, Performance, HA, Visual Regression, Compose und das portable
+Linux-Binary. CodeQL fuer Actions, JavaScript/TypeScript und Rust bleibt ein
+separater Pflichtnachweis. Ein fehlgeschlagener Test oder eine nicht
+verfuegbare externe Testabhaengigkeit gilt als fehlgeschlagenes Gate und darf
+nicht als erfolgreiche Release-Validierung umgedeutet werden.
 
-Die nach V23.7.31 gemergte Secret-Haertung erweitert diese Grenze: Production
-nutzt file-basierte Quellen unter `/run/secrets`, direkte Werte und
-`*_FILE`-Quellen sind gegenseitig ausgeschlossen und unsichere Dateitypen,
-Rechte, Groessen oder Wurzeln werden abgelehnt. Gitleaks scannt den aktuellen
-Repository-Baum als Pflichtjob; der History-Scan bleibt eine getrennte
-menschliche Wartungsentscheidung. Der Runner akzeptiert auch separate
-Git-Worktrees nur nach fail-closed Aufloesung ihrer Git-Metadaten. Werte und
-Treffer werden nicht in Fehlerausgaben wiedergegeben.
+Die CI-/Produkt-Toolchain verwendet Rust 1.97 fuer den regulaeren Build- und
+Testpfad, waehrend MSRV und der digest-gepinnte portable Release-Builder
+bewusst auf Rust 1.88 bleiben. Das aktuelle `flake.lock` bindet nixpkgs auf
+`8b8c811c7c2541c30382c5de7ed26be055569c60` im Kanal `nixos-26.05`.
 
-Die RC-Metadatenpruefung bestaetigt 45 fortlaufende Migrationen, 42 visuelle
-Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen
-wertredigierten Sensitive-Data-Scan. Sie verlangt lokal den exakten
-V23.7.31-Tag und weist ihn dem dokumentierten Commit zu. Das Root-Manifest
-`release/release-manifest.json` nutzt `git:HEAD` als reproduzierbaren
-Quellmarker und behaelt `source_date_epoch` sowie `binary_sha256` auf `null`;
-die lokale Artefakterzeugung loest Commit, Commit-Epoch und den verifizierten
-Binary-SHA erst im Bundle auf.
+Eine reproduzierbare CycloneDX-SBOM, SHA-256-Checksummen, Release-Manifest und
+Reproduzierbarkeitsmetadaten sind vorhanden. Sie sind keine kryptografische
+Publisher-Signatur. Der aktuelle Release-Vertrag fuehrt den Signaturstatus
+ausdruecklich als `unsigned`; produktive Signierung/Attestation bleibt ein
+offener Hardening-Schritt.
 
-Eine reproduzierbare CycloneDX-1.5-SBOM wird mit dem durch `flake.lock`
-gepinnten reinen Build-Werkzeug `cargo-cyclonedx` vorbereitet. Zufalls-Serial,
-fluechtiger Timestamp und lokaler Root-Pfad werden deterministisch durch
-Basis-Commit-Zeit und stabilen Cargo-PURL ersetzt. Die SBOM ist weder Signatur
-noch VEX-Entscheidung. Eine kryptografische Release-Signatur wird nicht
-vorgetaeuscht; `Cargo.lock`, SBOM, Manifest und Checksums bilden die
-vorbereiteten Provenance-Eingaben. Produktive Agent-Paketsignierung, CA-Ausstellung,
-Cloud-native Secret-Manager, Multi-Region-HA, automatische Zertifizierung,
-Rechtsbewertung und Behoerdenmeldung bleiben ausdruecklich ausserhalb dieses
-Release. Die vollstaendige Matrix und alle Betriebsgrenzen stehen
-in `docs/RELEASE_CANDIDATE_CHECKLIST.md`.
+Die Features bis einschliesslich Migration
+`0045_rust_software_approval_exception_policy` sind im V23.7.33-Stable-Tag
+enthalten. Migration `0046_rust_machinery_cra_safety_security_foundation`
+gehoert zum nachfolgenden V23.7.34-Development-Stand und ist noch nicht Teil
+des letzten Stable Releases.
 
-Der Funktionsumfang von `V23.7.32` ist fuer die Candidate-Pruefung eingefroren.
-Die aus V23.7.31 vorhandenen Bereiche Native Threat Intelligence, Security
-Observations, Continuous Vulnerability Intelligence sowie tenantgebundene
-Software Approval and Exception Policies bleiben passiv: Sie erzeugen keine
-aktive Reaktion, ueberschreiben keine manuelle Triage und installieren,
-blockieren oder deinstallieren keine Software. Eine Exception ist weder VEX
-noch Risk Acceptance. Fehlende Policies oder fehlende bekannte
-Schwachstellen ergeben niemals automatisch `APPROVED`.
+Native Threat Intelligence, Continuous Vulnerability Intelligence,
+Software-Hygiene und Software Approval/Exceptions bleiben bewusst von aktiver
+Response getrennt. Sie installieren oder blockieren keine Software und senden
+keine Agentenbefehle. Ebenso ist der CVE-LLM-Pfad aktuell ein deterministischer
+Rust-Stub und keine echte Modellinferenz; eine RAG-Runtime ist nicht
+implementiert.
 
 Der owner-kontrollierte ISCY Codex PR-Orchestrator bietet fuer autorisierte
 Same-Repository-Draft-PRs gegen `main` die Routen `/iscy status`,
-`/iscy review`, `/iscy fix-ci` und `/iscy verify`. Read-only Review/Verify,
-Workspace-begrenzte Korrekturen, Head-/Diff-Pruefungen und hoechstens zwei
-CI-Fix-Versuche folgen Least-Privilege- und fail-closed Grenzen. Codex erhaelt
-keine Merge-, Tag- oder Release-Berechtigung; die Merge-Grenze bleibt
-menschlich. Modellaufrufe setzen separat finanzierte OpenAI-API-Credits voraus.
-Da diese fuer die Candidate-Vorbereitung nicht vorhanden sind, wird kein
-erfolgreicher produktiver Auto-Fix-End-to-End-Lauf behauptet.
+`/iscy review`, `/iscy fix-ci` und `/iscy verify`. Read-only
+Review/Verify, Workspace-begrenzte Korrekturen, Head-/Diff-Pruefungen und
+hoechstens zwei CI-Fix-Versuche folgen Least-Privilege- und fail-closed
+Grenzen. Codex erhaelt keine Merge-, Tag- oder Release-Berechtigung; die
+Merge-Grenze bleibt menschlich.
+
+Historische Release-Candidate- und Maintenance-Details stehen im
+`CHANGELOG.md`, in `docs/releases/` und in den Published-Snapshots. Das
+laufende Handbuch verwendet dagegen den aktuellen Stable-/Development-
+Lifecycle.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
