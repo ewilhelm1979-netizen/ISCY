@@ -38,18 +38,23 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 | `NVD_API_KEY` | Optionaler NVD API Key | nein | leer | Secret | Wird nur als `apiKey`-Header zur fest verdrahteten offiziellen NVD-API gesendet und nie protokolliert | ja, `NVD_API_KEY_FILE` |
 | `ISCY_VULNERABILITY_SYNC_INTERVAL_SECONDS` | Periodischer Vulnerability-Intelligence-Runner | nein | `0` | `0` oder 7200 bis 604800 Sekunden | `0` deaktiviert; jeder Feed laeuft isoliert, vorhandene Daten bleiben bei Ausfall erhalten | nein |
 
-## Lokale LLM-/RAG-Vorbereitung
+## CVE-LLM-Kompatibilitaet und aktueller Stub
 
-Die Environment-Beispiele und `docker-compose.llm.yml` enthalten derzeit vorbereitende Laufzeitparameter fuer eine spaetere lokale Modellintegration:
+ISCY besitzt aktuell einen LLM-bezeichneten CVE-Kompatibilitaetspfad, aber keine modellgestuetzte Inferenz-Runtime. `POST /api/v1/llm/generate`, `/cves/llm-test/` und `run_llm` in CVE-Assessments erzeugen derzeit deterministische Rust-Ausgaben. Der eingebaute Runtime-Hinweis bezeichnet den Pfad als `iscy-rust-llm-stub-v1`.
 
-| Variable | Zweck | Aktueller Implementierungsstand |
+Die folgenden Variablen steuern deshalb im aktuellen Stand nur Metadaten beziehungsweise die Runtime-Anzeige; sie laden kein Modell:
+
+| Variable | Aktuelle Verwendung | Sicherheits-/Betriebshinweis |
 | --- | --- | --- |
-| `LOCAL_LLM_MODEL_NAME` | Bezeichnung des vorgesehenen lokalen Modells | Konfigurations-Scaffolding; vom aktuellen Rust-Backend nicht fuer Inferenz verwendet |
-| `LOCAL_LLM_N_CTX` | vorgesehene Kontextgroesse | Konfigurations-Scaffolding |
-| `LOCAL_LLM_N_THREADS` | vorgesehene CPU-Threadzahl | Konfigurations-Scaffolding |
-| `LOCAL_LLM_GPU_LAYERS` | vorgesehene GPU-Offload-Konfiguration | Konfigurations-Scaffolding |
+| `LOCAL_LLM_MODEL_NAME` | Modellbezeichnung in Runtime-/Assessment-Metadaten; Default ist der Stub | Ein gesetzter Name beweist keine Modellinferenz |
+| `LOCAL_LLM_MODEL_PATH` | optionale Runtime-Anzeige | Der Pfad wird aktuell nicht zum Laden eines Modells verwendet |
+| `LOCAL_LLM_N_CTX` | Runtime-Anzeige, Default 8192 | keine aktive Inferenzsteuerung |
+| `LOCAL_LLM_N_THREADS` | Runtime-Anzeige, Default 4 | keine aktive Inferenzsteuerung |
+| `LOCAL_LLM_N_GPU_LAYERS` | Runtime-Anzeige, Default 0 | keine aktive GPU-Offload-Steuerung |
 
-Diese Variablen aktivieren im aktuellen Stand weder einen LLM-Client noch eine RAG-API, Modellinferenz oder automatische Remediation. Eine spaetere Integration muss eine eigene dokumentierte Vertrauensgrenze mit Tenant-Isolation, Least Privilege, Audit und expliziten Freigaben fuer nachgelagerte Aktionen erhalten.
+Die versionierten Env-/Compose-Beispiele setzen derzeit `LOCAL_LLM_GPU_LAYERS`, waehrend die Runtime-Anzeige `LOCAL_LLM_N_GPU_LAYERS` liest. Das ist eine bekannte technische Konfigurationsabweichung. Da der aktuelle Pfad kein Modell ausfuehrt, aktiviert keiner der beiden Werte GPU-Inferenz. Diese Abweichung sollte in einer separaten technischen Aenderung bereinigt werden.
+
+Eine RAG-, Embedding- oder Retrieval-Runtime ist im aktuellen Backend nicht implementiert. Eine spaetere echte Modell-/RAG-Integration benoetigt eine eigene dokumentierte Vertrauensgrenze mit Tenant-Isolation, Least Privilege, Audit, begrenzten Ein-/Ausgaben und expliziten Freigaben fuer nachgelagerte Aktionen.
 
 ## Secret-Dateien
 
