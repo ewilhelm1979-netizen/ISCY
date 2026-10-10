@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand August 2026 (ISCY V23.7.33 Release vorbereitet / Rust 0.3.22)
+Version: Arbeitsstand Oktober 2026 (ISCY V23.7.34 `development_unreleased`; letzter Stable Release V23.7.33 / Rust 0.3.22)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -31,7 +31,7 @@ ISCY ist eine Arbeitsplattform fuer:
 - die Planung, Bewertung und Nachverfolgung von Risiken
 - die Dokumentation von Nachweisen, Audits und Management Reviews
 - die strukturierte Bearbeitung von Produkt- und Software-Sicherheitsfragen
-- die Bewertung und Korrelation von Schwachstellen und CVEs mit der nativen Vulnerability-Intelligence; eine lokale LLM-/RAG-Anbindung ist im aktuellen Backend noch nicht als produktive Runtime-Integration implementiert
+- die Bewertung und Korrelation von Schwachstellen und CVEs mit nativer Vulnerability Intelligence sowie einem optionalen Rust-LLM-Stub fuer strukturierte CVE-Zusammenfassungen; ein echtes Modell oder RAG wird im aktuellen Stand nicht ausgefuehrt
 - die Auswertung von Zero-Trust-Agent-Posture fuer Windows, macOS und Linux
 
 ISCY ist damit kein reines Ticketsystem und kein reines DMS. Es verbindet Governance, Nachweise, Risiken, Umsetzungsplanung und Produkt-Sicherheit in einem gemeinsamen Arbeitsmodell.
@@ -850,6 +850,17 @@ Dieser Bereich beantwortet: Von welchen externen Parteien haengt unser Betrieb a
 Zweck:
 Bekannte Schwachstellen fachlich und technisch bewerten.
 
+Aktueller LLM-Status:
+Der CVE-Bereich besitzt einen optionalen `run_llm`-Pfad, die Route
+`POST /api/v1/llm/generate` und die Webansicht `/cves/llm-test/`. Diese
+Funktionen sind im aktuellen Rust-Stand ein deterministischer LLM-Stub. Sie
+erzeugen strukturierte technische und Management-Zusammenfassungen,
+Massnahmenvorschlaege und Evidence-Hinweise direkt im Rust-Code; dabei wird
+kein Qwen-, llama.cpp-, Ollama- oder anderes Sprachmodell aufgerufen.
+`LOCAL_LLM_MODEL_NAME` ist derzeit eine Metadatenbezeichnung und kein
+Provenance-Nachweis fuer echte Inferenz. Eine RAG-/Embedding-/Retrieval-Runtime
+ist nicht Bestandteil des aktuellen ISCY-Backends.
+
 Was der Bereich jetzt leisten soll:
 
 - einzelne CVEs und begrenzte UTC-Deltas aus der offiziellen NVD API 2.0 laden
@@ -1057,13 +1068,13 @@ Architekturentscheidung steht in
 7. fuer exakte Produkte, Assets oder Komponenten Software-Policies pflegen
 8. `UNMANAGED` und `REVIEW_REQUIRED` fachlich pruefen
 9. befristete Ausnahmen getrennt beantragen und unabhaengig entscheiden
-7. Korrelationen fachlich akzeptieren oder ablehnen
-8. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen
-9. CVE-Risiko-Review-Queue abarbeiten
-10. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen
-11. CRA-Readiness je Produkt pruefen und Massnahmen ueber Roadmap oder Risiko-Behandlung steuern
-12. Supplier/Product-Security-Datensaetze fuer relevante Lieferantenprodukte pflegen, Advisory-/PSIRT-/CVE-Bezuege lokal dokumentieren und Evidence verknuepfen
-13. Vertrags-/Exit-Plan-Status fuer kritische Lieferantenprodukte pruefen und Review-Pakete fuer NIS2, DORA oder DSGVO vorbereiten
+10. Korrelationen fachlich akzeptieren oder ablehnen
+11. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen
+12. CVE-Risiko-Review-Queue abarbeiten
+13. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen
+14. CRA-Readiness je Produkt pruefen und Massnahmen ueber Roadmap oder Risiko-Behandlung steuern
+15. Supplier/Product-Security-Datensaetze fuer relevante Lieferantenprodukte pflegen, Advisory-/PSIRT-/CVE-Bezuege lokal dokumentieren und Evidence verknuepfen
+16. Vertrags-/Exit-Plan-Status fuer kritische Lieferantenprodukte pruefen und Review-Pakete fuer NIS2, DORA oder DSGVO vorbereiten
 
 ### 6.5 Incident- und NIS2-Meldeworkflow
 
@@ -1285,7 +1296,7 @@ Wenn du ISCY schnell und reproduzierbar starten willst, nutze Docker.
 3. Danach den gewuenschten Modus starten  
    - lokal: `make dev-up`  
    - stage: `make stage-up`  
-   - produktiv: `make prod-up` oder `make prod-up-llm`
+   - produktiv: `make prod-up`; `make prod-up-llm` legt derzeit nur das LLM-Kompatibilitaetsprofil auf und startet keine echte Modellinferenz
 
 Merksatz: Erst validieren, dann kurz testen, dann dauerhaft starten.
 
