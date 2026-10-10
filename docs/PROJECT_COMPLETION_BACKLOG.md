@@ -33,27 +33,20 @@ ausgefuehrt und es existiert keine RAG-/Embedding-/Retrieval-Runtime.
 
 ## Prioritaet P0 – vor breitem Produktivrollout
 
-1. **CI-Reproduzierbarkeit wiederherstellen.** Die Object-Storage-, HA- und
-   Performance-Gates duerfen nicht von nicht mehr abrufbaren historischen
-   MinIO-/`mc`-Image-Referenzen abhaengen. Ersatzimages muessen kontrolliert,
-   nach Moeglichkeit immutable/digest-gepinnt und mit unveraenderter
-   Testsemantik validiert werden.
+Die am 10. Oktober 2026 identifizierten repository-weiten Maintenance-Blocker
+fuer MinIO-basierte CI-Gates und `RUSTSEC-2026-0285` sind im aktuellen
+`main` behoben. Die folgenden Punkte bleiben vor breitem Produktivrollout offen:
 
-2. **Aktiven RustSec-Befund beheben.** Der am 10. Oktober 2026 gepruefte
-   `main`-Lockfile-Stand enthaelt `rustls 0.23.38`, das von
-   `RUSTSEC-2026-0285` betroffen ist. Der Fix muss auf eine nicht betroffene
-   Version (`>= 0.23.45`) aktualisieren; ein dauerhaftes Advisory-Ignore ist
-   kein akzeptierter Abschluss.
-3. **Unabhaengige Security-Pruefung.** Externer Penetrationstest beziehungsweise
+1. **Unabhaengige Security-Pruefung.** Externer Penetrationstest beziehungsweise
    unabhaengige Security-Review fuer die produktiven Trust Boundaries.
-4. **Zielumgebung abnehmen.** TLS/HSTS, Reverse Proxy, Secret-Dateien,
+2. **Zielumgebung abnehmen.** TLS/HSTS, Reverse Proxy, Secret-Dateien,
    Netzwerksegmentierung und Betreiber-Rechte in der konkreten
    Produktionsumgebung verifizieren; vorhandene sichere Defaults ersetzen
    keine Betreiberfreigabe.
-5. **Disaster-Recovery-Nachweis fuer die Zielumgebung.** Vorhandene Backup- und
+3. **Disaster-Recovery-Nachweis fuer die Zielumgebung.** Vorhandene Backup- und
    Restore-Skripte mit echten RPO/RTO-Zielen, verschluesseltem Backup-Speicher
    und wiederholbaren Restore-Drills nachweisen.
-6. **Monitoring/Eskalation produktiv anbinden.** Prometheus, Alertmanager,
+4. **Monitoring/Eskalation produktiv anbinden.** Prometheus, Alertmanager,
    Grafana und Log-/Error-Pipeline an den realen Betreiberprozess koppeln.
 
 ## Prioritaet P1 – technische Produktreife
