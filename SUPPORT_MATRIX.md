@@ -2,11 +2,13 @@
 
 ## Officially Supported Host Modes
 
-| Mode | Host OS | Runtime | Database | Local LLM | Status |
+| Mode | Host OS | Runtime | Database | CVE LLM mode | Status |
 |---|---|---|---|---|---|
-| Bare metal / Nix | NixOS or Linux with Nix flakes | Rust via `nix run .#iscy-backend` | PostgreSQL 15/16 or SQLite dev | Optional | Preferred |
-| Bare metal / Cargo | Ubuntu 24.04 LTS or current Debian derivatives | Rust stable | PostgreSQL 15/16 or SQLite dev | Optional | Supported |
-| Docker / Compose | Linux host with Docker Engine + Compose | Rust container | PostgreSQL 16 container | Optional via `docker-compose.llm.yml` | Preferred for shared envs |
+| Bare metal / Nix | NixOS or Linux with Nix flakes | Rust via `nix run .#iscy-backend` | PostgreSQL 16 standard; SQLite single-instance dev; PostgreSQL 18.4 compatibility-tested | deterministic Rust stub | Preferred |
+| Bare metal / Cargo | Ubuntu 24.04 LTS or current Debian derivatives | Rust stable | PostgreSQL 16 standard; SQLite single-instance dev; PostgreSQL 18.4 compatibility-tested | deterministic Rust stub | Supported |
+| Docker / Compose | Linux host with Docker Engine + Compose | Rust container | PostgreSQL 16 standard | deterministic Rust stub; optional compatibility overlay | Preferred for shared envs |
+
+PostgreSQL 15 is not part of the current release validation contract. PostgreSQL 18.4 is a tested logical forward-restore/application-compatibility path, not the production default and not an in-place upgrade promise.
 
 ## Deployment Profiles
 
@@ -15,7 +17,7 @@
 | Development | `docker-compose.yml` + `docker-compose.override.yml` | no | db, media | local dev |
 | Stage | `docker-compose.yml` + `docker-compose.stage.yml` | nginx | db, media | shared test / UAT |
 | Production | `docker-compose.yml` + `docker-compose.prod.yml` | nginx | db, media | controlled production |
-| Production + local LLM | `docker-compose.yml` + `docker-compose.prod.yml` + `docker-compose.llm.yml` | nginx | db, media | product security / CVE enrichment |
+| Production + LLM compatibility overlay | `docker-compose.yml` + `docker-compose.prod.yml` + `docker-compose.llm.yml` | nginx | db, media | CVE LLM-stub/runtime metadata only; no model service is started |
 
 ## Product-Security Support
 
@@ -32,12 +34,13 @@
 
 | Component | Supported baseline | Status |
 |---|---|---|
-| Backend intake | Rust API under `/api/v1/agents/...` | Supported in ISCY Rust `0.2.0` |
-| Web overview | `/zero-trust/` | Supported in ISCY Rust `0.2.0` |
+| Backend intake | Rust API under `/api/v1/agents/...` | Supported in ISCY Rust `0.3.22` |
+| Web overview | `/zero-trust/` | Supported in ISCY Rust `0.3.22` |
 | Agent binary | `nix run .#iscy-agent` or Cargo binary `iscy-agent` | MVP |
-| Windows deployment | manual, script, Intune-style wrapper | MVP target |
-| macOS deployment | manual, script, Jamf/MDM-style wrapper | MVP target |
-| Linux deployment | manual, systemd service/timer wrapper | MVP target |
+| Windows deployment | manual / Scheduled-Task example / Intune-style handoff | MVP deployment example |
+| macOS deployment | manual / LaunchDaemon example / Jamf-style handoff | MVP deployment example |
+| Linux deployment | manual / systemd service+timer example | MVP deployment example |
+| NixOS deployment | declarative module under `deploy/agent/nixos/` | MVP deployment example |
 | Automatic remediation | not enabled | Not supported |
 | Secret, browser or packet capture | intentionally excluded | Not supported |
 
@@ -47,15 +50,19 @@
 |---|---|
 | CPU arch | x86_64 |
 | ARM64 | not yet officially tested |
-| GPU offload | optional, not part of the official support baseline |
+| GPU offload | not active in the current deterministic LLM-stub path |
 
-## Local LLM Support
+## CVE LLM / Model Integration Status
 
-| Component | Supported baseline |
+| Component | Current status |
 |---|---|
-| Backend | Rust service |
-| Model family | configured through Rust runtime variables |
-| Build path | Rust stable, OpenSSL, PostgreSQL/SQLite client libs |
+| CVE `run_llm` workflow | Implemented as deterministic Rust stub |
+| `POST /api/v1/llm/generate` | Implemented; returns deterministic stub output |
+| `/cves/llm-test/` | Implemented; tests the same stub path |
+| Model-backed local inference | Not implemented in current `main` |
+| RAG / embeddings / retrieval | Not implemented in current `main` |
+| `LOCAL_LLM_MODEL_NAME` | Metadata/display label; does not prove that a model executed |
+| Historical llama-cpp/Qwen path | Legacy pre-Rust-cutover implementation; not the current runtime |
 
 ## Backup / Restore Baseline
 
@@ -67,6 +74,7 @@
 ## Not Officially Supported
 
 - Python/Django runtime deployment
+- model-backed LLM inference or RAG in the current runtime
 - unmanaged host installs without Rust toolchain or Nix
 - undocumented OS upgrades without smoke test / CI validation
 
