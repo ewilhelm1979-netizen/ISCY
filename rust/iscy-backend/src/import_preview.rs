@@ -1,15 +1,23 @@
 use std::{
-    collections::{HashMap, HashSet},
-    io::Cursor,
+    collections::{BTreeMap, HashMap, HashSet},
+    io::{BufReader, Cursor, Read},
 };
 
-use calamine::{Data, Reader, Xlsx};
+use calamine::{DataRef, Reader, Xlsx};
+use quick_xml::{events::Event, Reader as XmlReader};
 use serde::Serialize;
 use serde_json::Value;
+use zip::ZipArchive;
 
 pub const IMPORT_MAX_UPLOAD_BYTES: usize = 12 * 1024 * 1024;
 pub const IMPORT_PREVIEW_MAX_ROWS: usize = 200;
 const IMPORT_ALLOWED_EXTENSIONS: &[&str] = &["csv", "xlsx", "xlsm"];
+const XLSX_MAX_ARCHIVE_ENTRIES: usize = 512;
+const XLSX_MAX_TOTAL_UNCOMPRESSED_BYTES: u64 = 64 * 1024 * 1024;
+const XLSX_MAX_ENTRY_UNCOMPRESSED_BYTES: u64 = 32 * 1024 * 1024;
+const XLSX_MAX_SHARED_STRINGS: usize = 250_000;
+const XLSX_MAX_USED_CELLS: usize = 1_000_000;
+const XLSX_MAX_IMPORT_ROWS: usize = 50_000;
 
 const BUSINESS_UNIT_COLUMNS: &[&str] = &["name", "owner_email"];
 const PROCESS_COLUMNS: &[&str] = &[
@@ -240,6 +248,7 @@ fn parse_import_file(
 }
 
 fn parse_xlsx_file(data: &[u8]) -> Result<(Vec<String>, ImportRows), String> {
+    validate_xlsx_archive(data)?;
     let mut workbook = Xlsx::new(Cursor::new(data.to_vec()))
         .map_err(|err| format!("XLSX-Datei konnte nicht gelesen werden: {err}"))?;
     let sheet_name = workbook
@@ -247,30 +256,62 @@ fn parse_xlsx_file(data: &[u8]) -> Result<(Vec<String>, ImportRows), String> {
         .first()
         .cloned()
         .ok_or_else(|| "XLSX-Datei enthaelt kein Tabellenblatt.".to_string())?;
-    let range = workbook
-        .worksheet_range(&sheet_name)
+    let mut reader = workbook
+        .worksheet_cells_reader(&sheet_name)
         .map_err(|err| format!("XLSX-Tabelle konnte nicht geoeffnet werden: {err}"))?;
-    let mut iter = range.rows();
-    let header_row = iter
-        .next()
-        .ok_or_else(|| "XLSX-Datei braucht eine Kopfzeile.".to_string())?;
-    let header_indexes = xlsx_header_indexes(header_row)?;
+    let mut sparse_rows = BTreeMap::<u32, BTreeMap<u32, String>>::new();
+    let mut used_cells = 0_usize;
+
+    while let Some(cell) = reader
+        .next_cell()
+        .map_err(|err| format!("XLSX-Tabelle konnte nicht sicher gelesen werden: {err}"))?
+    {
+        used_cells = used_cells
+            .checked_add(1)
+            .ok_or_else(|| "XLSX-Datei enthaelt zu viele verwendete Zellen.".to_string())?;
+        if used_cells > XLSX_MAX_USED_CELLS {
+            return Err("XLSX-Datei enthaelt zu viele verwendete Zellen.".to_string());
+        }
+        let value = xlsx_cell_to_string(cell.get_value());
+        if value.is_empty() {
+            continue;
+        }
+        let (row, column) = cell.get_position();
+        sparse_rows.entry(row).or_default().insert(column, value);
+        if sparse_rows.len() > XLSX_MAX_IMPORT_ROWS + 1 {
+            return Err("XLSX-Datei enthaelt zu viele Importzeilen.".to_string());
+        }
+    }
+
+    xlsx_rows_from_sparse(sparse_rows)
+}
+
+fn xlsx_rows_from_sparse(
+    mut sparse_rows: BTreeMap<u32, BTreeMap<u32, String>>,
+) -> Result<(Vec<String>, ImportRows), String> {
+    let Some((_header_row, header_row)) = sparse_rows.pop_first() else {
+        return Err("XLSX-Datei braucht eine Kopfzeile.".to_string());
+    };
+    let header_indexes = xlsx_header_indexes(&header_row)?;
     if header_indexes.is_empty() {
         return Err("XLSX-Datei braucht mindestens eine benannte Spalte.".to_string());
     }
 
     let mut rows = Vec::new();
-    for row in iter {
+    for row in sparse_rows.into_values() {
         let mut mapped = HashMap::new();
         let mut saw_value = false;
-        for (index, header) in &header_indexes {
-            let value = row.get(*index).map(xlsx_cell_to_string).unwrap_or_default();
+        for (column, header) in &header_indexes {
+            let value = row.get(column).cloned().unwrap_or_default();
             if !value.is_empty() {
                 saw_value = true;
             }
             mapped.insert(header.clone(), Value::String(value));
         }
         if saw_value {
+            if rows.len() >= XLSX_MAX_IMPORT_ROWS {
+                return Err("XLSX-Datei enthaelt zu viele Importzeilen.".to_string());
+            }
             rows.push(mapped);
         }
     }
@@ -284,12 +325,11 @@ fn parse_xlsx_file(data: &[u8]) -> Result<(Vec<String>, ImportRows), String> {
     ))
 }
 
-fn xlsx_header_indexes(header_row: &[Data]) -> Result<Vec<(usize, String)>, String> {
+fn xlsx_header_indexes(header_row: &BTreeMap<u32, String>) -> Result<Vec<(u32, String)>, String> {
     let mut indexes = Vec::new();
     let mut seen = HashSet::new();
-    for (index, cell) in header_row.iter().enumerate() {
-        let header = xlsx_cell_to_string(cell);
-        let header = header.trim().trim_start_matches('\u{feff}').to_string();
+    for (column, value) in header_row {
+        let header = value.trim().trim_start_matches('\u{feff}').to_string();
         if header.is_empty() {
             continue;
         }
@@ -297,34 +337,184 @@ fn xlsx_header_indexes(header_row: &[Data]) -> Result<Vec<(usize, String)>, Stri
         if !seen.insert(lowered) {
             return Err(format!("XLSX-Spalte kommt mehrfach vor: {header}"));
         }
-        indexes.push((index, header));
+        indexes.push((*column, header));
     }
     Ok(indexes)
 }
 
-fn xlsx_cell_to_string(cell: &Data) -> String {
+fn xlsx_cell_to_string(cell: &DataRef<'_>) -> String {
     match cell {
-        Data::Empty | Data::Error(_) => String::new(),
-        Data::String(value) => value.trim().to_string(),
-        Data::Int(value) => value.to_string(),
-        Data::Float(value) => {
+        DataRef::Empty | DataRef::Error(_) => String::new(),
+        DataRef::String(value) => value.trim().to_string(),
+        DataRef::SharedString(value) => value.trim().to_string(),
+        DataRef::Int(value) => value.to_string(),
+        DataRef::Float(value) => {
             if value.fract() == 0.0 {
                 (*value as i64).to_string()
             } else {
                 value.to_string()
             }
         }
-        Data::Bool(value) => {
+        DataRef::Bool(value) => {
             if *value {
                 "true".to_string()
             } else {
                 "false".to_string()
             }
         }
-        Data::DateTime(value) => value.to_string(),
-        Data::DateTimeIso(value) => value.trim().to_string(),
-        Data::DurationIso(value) => value.trim().to_string(),
+        DataRef::DateTime(value) => value.to_string(),
+        DataRef::DateTimeIso(value) => value.trim().to_string(),
+        DataRef::DurationIso(value) => value.trim().to_string(),
     }
+}
+
+fn validate_xlsx_archive(data: &[u8]) -> Result<(), String> {
+    let mut archive = ZipArchive::new(Cursor::new(data))
+        .map_err(|_| "XLSX-Datei enthaelt kein gueltiges Office-Archiv.".to_string())?;
+    if archive.len() > XLSX_MAX_ARCHIVE_ENTRIES {
+        return Err("XLSX-Datei enthaelt zu viele Archiv-Eintraege.".to_string());
+    }
+
+    let mut total_uncompressed = 0_u64;
+    let mut shared_string_indices = Vec::new();
+    for index in 0..archive.len() {
+        let file = archive
+            .by_index(index)
+            .map_err(|_| "XLSX-Archiv konnte nicht sicher gelesen werden.".to_string())?;
+        if !file.is_file() {
+            continue;
+        }
+        if file.size() > XLSX_MAX_ENTRY_UNCOMPRESSED_BYTES {
+            return Err("XLSX-Datei ueberschreitet das sichere Entpack-Limit.".to_string());
+        }
+        total_uncompressed = total_uncompressed
+            .checked_add(file.size())
+            .ok_or_else(|| "XLSX-Datei ueberschreitet das sichere Entpack-Limit.".to_string())?;
+        if total_uncompressed > XLSX_MAX_TOTAL_UNCOMPRESSED_BYTES {
+            return Err("XLSX-Datei ueberschreitet das sichere Entpack-Limit.".to_string());
+        }
+        let normalized_name = file.name().replace('\\', "/").to_ascii_lowercase();
+        if normalized_name == "sharedstrings.xml" || normalized_name.ends_with("/sharedstrings.xml")
+        {
+            shared_string_indices.push(index);
+        }
+    }
+
+    for index in shared_string_indices {
+        let file = archive
+            .by_index(index)
+            .map_err(|_| "XLSX-Shared-Strings konnten nicht sicher gelesen werden.".to_string())?;
+        validate_shared_strings_xml(file, XLSX_MAX_SHARED_STRINGS, XLSX_MAX_USED_CELLS)?;
+    }
+    Ok(())
+}
+
+fn validate_shared_strings_xml<R: Read>(
+    reader: R,
+    max_unique_strings: usize,
+    max_references: usize,
+) -> Result<(), String> {
+    let bounded = reader.take(XLSX_MAX_ENTRY_UNCOMPRESSED_BYTES + 1);
+    let mut xml = XmlReader::from_reader(BufReader::new(bounded));
+    let mut buffer = Vec::with_capacity(4096);
+    let mut saw_root = false;
+    let mut actual_unique_strings = 0_usize;
+
+    loop {
+        buffer.clear();
+        match xml.read_event_into(&mut buffer) {
+            Ok(Event::Start(element)) => {
+                let local_name = element.local_name();
+                if local_name.as_ref() == b"sst" && !saw_root {
+                    saw_root = true;
+                    validate_shared_string_root_attributes(
+                        &element,
+                        max_unique_strings,
+                        max_references,
+                    )?;
+                } else if local_name.as_ref() == b"si" {
+                    actual_unique_strings =
+                        actual_unique_strings.checked_add(1).ok_or_else(|| {
+                            "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit."
+                                .to_string()
+                        })?;
+                    if actual_unique_strings > max_unique_strings {
+                        return Err(
+                            "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit."
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+            Ok(Event::Empty(element)) => {
+                let local_name = element.local_name();
+                if local_name.as_ref() == b"sst" && !saw_root {
+                    saw_root = true;
+                    validate_shared_string_root_attributes(
+                        &element,
+                        max_unique_strings,
+                        max_references,
+                    )?;
+                } else if local_name.as_ref() == b"si" {
+                    actual_unique_strings =
+                        actual_unique_strings.checked_add(1).ok_or_else(|| {
+                            "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit."
+                                .to_string()
+                        })?;
+                    if actual_unique_strings > max_unique_strings {
+                        return Err(
+                            "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit."
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(_) => {
+                return Err("XLSX-Shared-Strings sind nicht gueltig.".to_string());
+            }
+        }
+    }
+
+    if !saw_root {
+        return Err("XLSX-Shared-Strings sind nicht gueltig.".to_string());
+    }
+    Ok(())
+}
+
+fn validate_shared_string_root_attributes(
+    element: &quick_xml::events::BytesStart<'_>,
+    max_unique_strings: usize,
+    max_references: usize,
+) -> Result<(), String> {
+    for attribute in element.attributes() {
+        let attribute =
+            attribute.map_err(|_| "XLSX-Shared-Strings sind nicht gueltig.".to_string())?;
+        let local_name = attribute.key.local_name();
+        let limit = if local_name.as_ref() == b"uniqueCount" {
+            Some(max_unique_strings)
+        } else if local_name.as_ref() == b"count" {
+            Some(max_references)
+        } else {
+            None
+        };
+        let Some(limit) = limit else {
+            continue;
+        };
+        let raw = std::str::from_utf8(attribute.value.as_ref())
+            .map_err(|_| "XLSX-Shared-Strings sind nicht gueltig.".to_string())?;
+        if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err("XLSX-Shared-Strings sind nicht gueltig.".to_string());
+        }
+        let declared = raw
+            .parse::<u64>()
+            .map_err(|_| "XLSX-Shared-Strings sind nicht gueltig.".to_string())?;
+        if declared > limit as u64 {
+            return Err("XLSX-Shared-Strings ueberschreiten das sichere Import-Limit.".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn get_mapping_preview(
@@ -497,5 +687,87 @@ fn value_to_preview_string(value: &Value) -> String {
         }
         Value::Number(value) => value.to_string(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_string_preflight_rejects_unbounded_declared_capacity() {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="{}"><si><t>Name</t></si></sst>"#,
+            XLSX_MAX_SHARED_STRINGS + 1
+        );
+        let error = validate_shared_strings_xml(
+            Cursor::new(xml.into_bytes()),
+            XLSX_MAX_SHARED_STRINGS,
+            XLSX_MAX_USED_CELLS,
+        )
+        .unwrap_err();
+        assert!(error.contains("sichere Import-Limit"));
+    }
+
+    #[test]
+    fn shared_string_preflight_counts_elements_when_metadata_understates_them() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="3" uniqueCount="1"><si><t>A</t></si><si><t>B</t></si><si><t>C</t></si></sst>"#;
+        let error = validate_shared_strings_xml(Cursor::new(xml), 2, 10).unwrap_err();
+        assert!(error.contains("sichere Import-Limit"));
+    }
+
+    #[test]
+    fn sparse_xlsx_rows_do_not_expand_the_coordinate_rectangle() {
+        let mut rows = BTreeMap::new();
+        rows.insert(
+            0,
+            BTreeMap::from([(0, "name".to_string()), (16_383, "description".to_string())]),
+        );
+        rows.insert(
+            1_048_575,
+            BTreeMap::from([
+                (0, "endpoint".to_string()),
+                (16_383, "far but sparse".to_string()),
+            ]),
+        );
+
+        let (headers, imported) = xlsx_rows_from_sparse(rows).unwrap();
+        assert_eq!(headers, vec!["name", "description"]);
+        assert_eq!(imported.len(), 1);
+        assert_eq!(imported[0]["name"], "endpoint");
+        assert_eq!(imported[0]["description"], "far but sparse");
+    }
+
+    #[test]
+    fn xlsx_archive_preflight_checks_every_shared_strings_candidate() {
+        use std::io::Write;
+
+        let mut archive_bytes = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut archive_bytes);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            writer.start_file("xl/sharedStrings.xml", options).unwrap();
+            write!(
+                writer,
+                r#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="{}"><si><t>attack</t></si></sst>"#,
+                XLSX_MAX_SHARED_STRINGS + 1
+            )
+            .unwrap();
+            writer
+                .start_file("decoy/sharedStrings.xml", options)
+                .unwrap();
+            writer.write_all(br#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1"><si><t>benign</t></si></sst>"#).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let error = validate_xlsx_archive(archive_bytes.get_ref()).unwrap_err();
+        assert!(error.contains("sichere Import-Limit"));
+    }
+
+    #[test]
+    fn ordinary_shared_strings_remain_supported() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2"><si><t>Name</t></si><si><t>Beschreibung</t></si></sst>"#;
+        validate_shared_strings_xml(Cursor::new(xml), 2, 2).unwrap();
     }
 }
