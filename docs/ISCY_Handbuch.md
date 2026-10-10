@@ -31,7 +31,7 @@ ISCY ist eine Arbeitsplattform fuer:
 - die Planung, Bewertung und Nachverfolgung von Risiken
 - die Dokumentation von Nachweisen, Audits und Management Reviews
 - die strukturierte Bearbeitung von Produkt- und Software-Sicherheitsfragen
-- die Bewertung von Schwachstellen und CVEs mit lokalem LLM-Enrichment
+- die Bewertung und Korrelation von Schwachstellen und CVEs mit der nativen Vulnerability-Intelligence; eine lokale LLM-/RAG-Anbindung ist im aktuellen Backend noch nicht als produktive Runtime-Integration implementiert
 - die Auswertung von Zero-Trust-Agent-Posture fuer Windows, macOS und Linux
 
 ISCY ist damit kein reines Ticketsystem und kein reines DMS. Es verbindet Governance, Nachweise, Risiken, Umsetzungsplanung und Produkt-Sicherheit in einem gemeinsamen Arbeitsmodell.
