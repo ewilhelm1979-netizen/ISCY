@@ -25,6 +25,13 @@ The application follows a local-first, privacy-conscious approach. Its productio
 | Zero Trust | endpoint posture, enrollment, policy evaluation, device-bound credentials |
 | Operations | audit-ready exports, health endpoints, Prometheus, Grafana, backup and restore checks |
 
+## Current implementation boundaries
+
+- The Zero-Trust agent is a read-only posture/inventory collector; ISCY is not a remote-control or automatic-remediation agent.
+- Native vulnerability intelligence for NVD, CISA KEV, and FIRST EPSS is implemented, while tenant correlation is kept separate from active response.
+- Local LLM/RAG integration is scaffolded but is not yet implemented as a productive runtime client in the current Rust backend. Future AI recommendations must not bypass role, approval, or audit boundaries.
+- Release assets include an SBOM, checksums, and reproducibility/provenance metadata; cryptographic release signing remains a hardening step.
+
 ## Quick start
 
 ### NixOS / Nix
