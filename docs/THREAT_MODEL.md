@@ -16,7 +16,7 @@ Included:
 - SBOM, CSAF, VEX, CSV, XLSX, JSON, and NVD processing
 - Zero-Trust agent enrollment, heartbeats, findings, and secret rotation
 - Alertmanager and notification webhooks
-- AI-governance records and the configuration scaffolding for an optional local LLM; no productive LLM/RAG runtime client is implemented in the current backend
+- AI-governance records and the local deterministic CVE LLM-stub compatibility path; no model-backed inference or RAG/retrieval runtime is implemented
 - Docker/NixOS deployment boundaries
 - backup and restore workflows
 
@@ -355,13 +355,21 @@ separately reviewed data and semantics.
 
 **Remaining controls:** Continue pinning container bases by immutable digest where applicable and add cryptographic signing/attestation before treating release provenance as publisher-authenticated.
 
-### Optional local LLM/RAG integration
+### CVE LLM stub and future model/RAG integration
 
-**Current implementation boundary:** The Rust backend currently has no productive LLM or RAG client, inference route, or worker. `LOCAL_LLM_*` configuration and `docker-compose.llm.yml` are integration scaffolding only.
+**Current implementation boundary:** ISCY exposes `POST /api/v1/llm/generate`, `/cves/llm-test/` and an optional `run_llm` path for CVE assessments. These paths currently generate deterministic structured output in Rust and identify the built-in implementation as `iscy-rust-llm-stub-v1`. No model file is loaded, no inference engine or external model service is called, and no RAG, embedding or retrieval runtime is present.
 
-**Threat:** A future model or RAG integration could expose tenant data, accept prompt injection, over-trust retrieved content, or turn advisory output into unsafe automated actions.
+**Current threats:** LLM-labelled metadata can be mistaken for real model provenance, especially when `LOCAL_LLM_MODEL_NAME` is customized. Prompt-derived context must also be treated as tenant data and must not contain secrets merely because the current implementation is a stub.
 
-**Required controls for a future integration:**
+**Controls:**
+
+- CVE priority remains deterministic and explainable from CVSS, EPSS, KEV, exposure, criticality and documented context
+- the current LLM-stub output is advisory and does not perform active response
+- model/RAG output is not used to bypass authorization, tenant scope, review or approval
+- project documentation explicitly distinguishes stub output from model-backed inference
+- ISCY does not treat generated text as certification, legal advice or an automatic conformity decision
+
+**Required controls before real model/RAG inference is introduced:**
 
 - explicit tenant-scoped data selection and least-privilege service credentials
 - bounded inputs/outputs, timeouts, provenance and safe error handling
@@ -369,9 +377,8 @@ separately reviewed data and semantics.
 - generated recommendations remain advisory until an authorized human or separately approved workflow accepts them
 - no automatic firewall rule, endpoint command, incident closure, risk acceptance, release approval or other active response solely from model output
 - complete auditability of the request context, decision boundary and approved downstream action without logging secrets or unnecessary raw telemetry
-- explicit project disclaimer that ISCY is not certification or legal advice
 
-**Residual risk:** Model and retrieval output can be wrong, stale, poisoned or manipulated. Any future integration requires a separate threat-boundary review before production use.
+**Residual risk:** Future model and retrieval output can be wrong, stale, poisoned or manipulated. Any real inference/RAG integration requires a separate threat-boundary review before production use.
 
 ## Security invariants for releases
 
