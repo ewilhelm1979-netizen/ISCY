@@ -44,7 +44,7 @@ jobs:
         run: |
           cargo test --locked --manifest-path rust/iscy-backend/Cargo.toml
       - name: Install verified Rust supply-chain tools
-        uses: taiki-e/install-action@ba47c86ac325773530516bb756137ac718732518 # v2
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2
         with:
           tool: cargo-audit,cargo-deny
           fallback: none
