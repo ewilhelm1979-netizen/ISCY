@@ -1,10 +1,13 @@
 # Performance-, HA- und Visual-Regression-Tests
 
-Stand: ISCY V23.7.32 Release Candidate / Rust 0.3.22
+Stand: ISCY V23.7.34 `development_unreleased` / Rust 0.3.22; Testdesign aus dem V23.7.32/V23.7.33-Zyklus
 
 Diese Tests erkennen grobe Betriebs- und UI-Regressionen vor einem spaeteren
 Release Candidate. Sie sind keine SLA-Zusage, kein Produktionslasttest und kein
 Nachweis fuer beliebige Skalierbarkeit oder vollstaendige Hochverfuegbarkeit.
+Der dokumentierte Testaufbau beschreibt die vorhandenen Gates, nicht den Erfolg
+eines beliebigen aktuellen CI-Laufs; nicht abrufbare externe Test-Images oder
+andere Infrastrukturfehler gelten ebenfalls als fehlgeschlagenes Gate.
 
 ## Architekturmatrix
 
