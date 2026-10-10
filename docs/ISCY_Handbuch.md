@@ -611,6 +611,25 @@ Importierbare Inhalte:
 - Lieferanten
 - Assets
 
+Sicherheitsgrenzen fuer Tabellenimporte:
+
+- Uploads sind auf 12 MiB begrenzt; die Vorschau zeigt maximal 200 Zeilen.
+- XLSX/XLSM-Dateien werden vor dem eigentlichen Parser als ZIP-/Office-Archiv
+  geprueft. Maximal 512 Archiveintraege, 64 MiB gesamte entpackte Daten und
+  32 MiB pro Eintrag werden akzeptiert.
+- Shared Strings sind auf 250.000 eindeutige Eintraege begrenzt; deklarierte
+  Zaehler und die tatsaechlich gelesenen Elemente werden geprueft.
+- Der XLSX-Import verarbeitet maximal 1.000.000 verwendete Zellen und 50.000
+  Importzeilen. Sparse Tabellen werden zellenweise gelesen, damit weit
+  auseinanderliegende Zellkoordinaten nicht als riesiges Rechteck materialisiert
+  werden.
+- Ungueltige oder uebergrosse Archive werden fail-closed vor der eigentlichen
+  Tabellenverarbeitung abgelehnt.
+
+Diese Grenzen reduzieren Memory-/Decompression-DoS-Risiken, ersetzen aber
+keinen Malware-Scanner und keine Parser-Sandbox fuer besonders riskante
+Einsatzumgebungen.
+
 Fachlicher Nutzen:
 
 - schneller Projektstart
