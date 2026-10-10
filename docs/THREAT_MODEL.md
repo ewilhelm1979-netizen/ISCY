@@ -16,7 +16,7 @@ Included:
 - SBOM, CSAF, VEX, CSV, XLSX, JSON, and NVD processing
 - Zero-Trust agent enrollment, heartbeats, findings, and secret rotation
 - Alertmanager and notification webhooks
-- local LLM integration
+- AI-governance records and the local deterministic CVE LLM-stub compatibility path; no model-backed inference or RAG/retrieval runtime is implemented
 - Docker/NixOS deployment boundaries
 - backup and restore workflows
 
@@ -174,8 +174,14 @@ established by ISCY. Independent competent review remains required.
 - tenant validation for referenced objects
 - temporary-file cleanup after failed persistence
 - import validation and error reporting
+- XLSX/XLSM archive preflight with bounded entry count, per-entry and total
+  uncompressed size, shared-string count, used-cell count and import-row count
+- sparse XLSX cell iteration to avoid materializing attacker-controlled
+  coordinate rectangles; malformed or oversized Office archives fail closed
 
-**Residual risk:** File type and extension validation are not malware detection. Operators should add malware scanning and sandboxed parsing for higher-risk environments.
+**Residual risk:** These parser and resource bounds reduce memory/decompression
+abuse but are not malware detection or a complete parser sandbox. Operators
+should add malware scanning and sandboxed parsing for higher-risk environments.
 
 ### Stored or reflected content injection
 
@@ -351,20 +357,34 @@ separately reviewed data and semantics.
 - minimal CI permissions
 - automated dependency update review
 
-**Planned controls:** Pin GitHub Actions and container bases by immutable digest, produce release SBOMs and provenance, and sign release artifacts.
+**Implemented controls:** GitHub Actions used by the main CI are pinned to immutable commit SHAs. Release preparation produces a CycloneDX SBOM, SHA-256 checksums, a release manifest and reproducibility metadata; the current release manifest explicitly records artifacts as unsigned.
 
-### Local LLM and generated compliance content
+**Remaining controls:** Continue pinning container bases by immutable digest where applicable and add cryptographic signing/attestation before treating release provenance as publisher-authenticated.
 
-**Threat:** Prompt injection or untrusted input causes misleading regulatory text, data leakage, or unsafe automated decisions.
+### CVE LLM stub and future model/RAG integration
+
+**Current implementation boundary:** ISCY exposes `POST /api/v1/llm/generate`, `/cves/llm-test/` and an optional `run_llm` path for CVE assessments. These paths currently generate deterministic structured output in Rust and identify the built-in implementation as `iscy-rust-llm-stub-v1`. No model file is loaded, no inference engine or external model service is called, and no RAG, embedding or retrieval runtime is present.
+
+**Current threats:** LLM-labelled metadata can be mistaken for real model provenance, especially when `LOCAL_LLM_MODEL_NAME` is customized. Prompt-derived context must also be treated as tenant data and must not contain secrets merely because the current implementation is a stub.
 
 **Controls:**
 
-- local-first model option
-- generated output remains advisory
-- human review and evidence workflow
-- explicit project disclaimer that ISCY is not certification or legal advice
+- CVE priority remains deterministic and explainable from CVSS, EPSS, KEV, exposure, criticality and documented context
+- the current LLM-stub output is advisory and does not perform active response
+- model/RAG output is not used to bypass authorization, tenant scope, review or approval
+- project documentation explicitly distinguishes stub output from model-backed inference
+- ISCY does not treat generated text as certification, legal advice or an automatic conformity decision
 
-**Residual risk:** Model output can be wrong or manipulated. Do not automatically approve risks, incidents, releases, or compliance decisions solely from generated content.
+**Required controls before real model/RAG inference is introduced:**
+
+- explicit tenant-scoped data selection and least-privilege service credentials
+- bounded inputs/outputs, timeouts, provenance and safe error handling
+- no implicit trust in retrieved documents or model output
+- generated recommendations remain advisory until an authorized human or separately approved workflow accepts them
+- no automatic firewall rule, endpoint command, incident closure, risk acceptance, release approval or other active response solely from model output
+- complete auditability of the request context, decision boundary and approved downstream action without logging secrets or unnecessary raw telemetry
+
+**Residual risk:** Future model and retrieval output can be wrong, stale, poisoned or manipulated. Any real inference/RAG integration requires a separate threat-boundary review before production use.
 
 ## Security invariants for releases
 

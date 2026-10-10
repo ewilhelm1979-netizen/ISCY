@@ -409,41 +409,43 @@ Erfolgskriterium:
 
 ## Empfohlene Umsetzungsreihenfolge
 
-1. Den vorbereiteten Release Candidate vollstaendig lokal und in GitHub-CI pruefen und danach menschlich fachlich, technisch und sicherheitsseitig reviewen.
-2. Den S3-Runtime-Client nach dieser Review in einer isolierten Betreiberumgebung pilotieren; Cloud-native Secret-Manager bleiben ein eigener spaeterer Adapter.
-3. Produktive Signierung und eine spaetere produktive CA-/PKI-Stufe erst nach Review des vorhandenen Artefakt-/Provenance- und PKI-/CSR-Governance-Modells angehen.
-4. Die getrennten Plattform-Wartungsbloecke sind einzeln validiert: nginx 1.31,
-   Rust 1.97 bei unveraenderter MSRV 1.88, nixpkgs 26.05 und PostgreSQL 18 als
-   zusaetzlicher Kompatibilitaets-/Forward-Restore-Pfad. PostgreSQL 16 bleibt
-   bis zu einer gesonderten Betreiberfreigabe der Produktionsstandard.
+1. Die aktuell blockierten MinIO-basierten CI-Gates wieder reproduzierbar
+   machen, ohne Object-Storage-, HA- oder Performance-Pruefungen abzuschwaechen.
+2. V23.7.34 als Development-Zyklus weiterfuehren; V23.7.33 bleibt der
+   unveraenderliche Stable-/Published-Baseline-Tag.
+3. Den S3-Runtime-Client nach menschlicher Security-Review in einer isolierten
+   Betreiberumgebung pilotieren; Cloud-native Secret-Manager bleiben ein
+   eigener spaeterer Adapter.
+4. CVE-LLM-Stub und LLM-Konfiguration technisch bereinigen: echte
+   Modellinferenz entweder belastbar implementieren oder Stub-/Provenance-
+   Semantik im Datenmodell eindeutig machen.
+5. Produktive Signierung und eine spaetere produktive CA-/PKI-Stufe erst nach
+   Review des vorhandenen Artefakt-/Provenance- und
+   PKI-/CSR-Governance-Modells angehen.
+6. Vor breitem Produktivrollout unabhaengigen Penetrationstest,
+   Zielumgebungs-Hardening und wiederholbare DR-/Restore-Nachweise durchfuehren.
 
 ## Verbleibende Roadmap
 
-| Horizont | Arbeitspaket | Ergebnis |
+| Status | Arbeitspaket | Ergebnis / Grenze |
 | --- | --- | --- |
-| Erledigt | Agent-State, Secret-Rotation, Offline-Queue und OS-Service-Beispiele | Agenten behalten ihre Identitaet, puffern Ausfaelle und koennen auf Linux, NixOS, Windows und macOS periodisch betrieben werden. |
-| Erledigt | Agent-Policy, erwartete Coverage und Policy-Webhooks | Flottenabweichungen werden gegen einen Sollbestand bewertet, aktiv zugestellt und auditierbar protokolliert. |
-| Erledigt | Product-Security-Evidence-Pakete und Produkt-Lifecycle | Versionierte Release-/PSIRT-Freigaben enthalten SBOM, VEX, Advisories, Support-Ende, offene Risiken, Roadmap und Evidence; Blocker-Gates und Exporte sind umgesetzt. |
-| Implementiert / Veroeffentlichung ausstehend | Machinery & CRA Safety-Security Co-Engineering – Phase 1 | Product Applicability, Maschinenprofil, Safety Functions, Hazards, versionierte Assessments und typisierte Cyber/Safety-Interactions bilden eine getrennte, tenantgebundene Foundation; Technical-Documentation-Readiness unterscheidet fail-closed Evidence-Gaps, laufende Bewertung und die nicht freigebende Human-Review-Grenze. |
-| Erledigt | AI-Governance-Verknuepfungen | AI-Systeme sind direkt mit Risiken, Roadmap-Tasks, Incidents und Changes verbunden. |
-| Erledigt | Gefuehrtes Agent-Onboarding | Enrollment-Tokens, Deployment-Artefakte und Flottenstatus sind ueber einen sicheren Admin-Assistenten bedienbar. |
-| Implementiert / Veroeffentlichung ausstehend | Fachuebergreifende Notifications | Evidence-Ablauf, CVE-Review, Incident-Entscheidung und Roadmap-Faelligkeit nutzen denselben sicheren Kanalbetrieb. |
-| Implementiert / Veroeffentlichung ausstehend | Supplier-Review-Workflow | Kritische Lieferanten erhalten Freigabehistorie, Unterauftragnehmer, Vertragsfristen, Exit-Test-Nachweise und tenantgesicherte Evidence-/Control-/Risk-Links. |
-| Implementiert / Veroeffentlichung ausstehend | Supplier/Product-Security-Deepening | Lieferanten, Produkte/Services, lokale Advisory-/PSIRT-/CVE-Metadaten, Evidence, Review-Status, Vertrags-/Exit-Plan-Historie und Regulatory Review Packs sind tenantgebunden verbunden. |
-| Implementiert / Veroeffentlichung ausstehend | Agent-Artefakte und Release-Provenance | Vorhandene Agent-Deployment-Artefakte sind als Manifest mit SHA-256, Signaturstatus, Provenance und Review-Pack-Gaps sichtbar; echte Produktionssignaturen bleiben ein separater Security-Meilenstein. |
-| Implementiert / Veroeffentlichung ausstehend | Agent-PKI, CSR und mTLS-Governance | CA-Provider, CSR-Review, Zertifikatsstatus, mTLS-Bindung, Rotation und Widerruf sind tenantgebunden als Metadata-only-Governance sichtbar; echte CA-Ausstellung bleibt ein separater Security-Meilenstein. |
-| Implementiert / Veroeffentlichung ausstehend | Agent Rollout 2.0 - Phase 1 | Feste Rollout-Ringe, tenantgebundene Targets, Preflight-/Postflight-Gates, menschliche Promotion und operatorgefuehrter Rollback steuern bestehende Agenten ohne Remote-Ausfuehrung. |
-| Implementiert / Veroeffentlichung ausstehend | Agent Rollout 2.0 - Phase 2 | Unveraenderliche Ring-Manifeste, reproduzierbare SHA-256, passive externe Handoffs und kontrollierte Result-Importe schaffen pruefbare Deployment-Evidence ohne Remote-Ausfuehrung. |
-| Umgesetzt / Vertiefung | Management-/Regulatory-Templates | Wiederholbare ISO-27001-, NIS2-, DORA-, KRITIS- und Governance-Pakete werden aus bestehenden Snapshots erzeugt; feinere Varianten koennen spaeter folgen. |
-| Implementiert / Veroeffentlichung ausstehend | Evidence Integrity & Disposition Phase 1 | Manuelle und begrenzte Batch-Re-Hash-Pruefung, Legal Hold, metadata-only Disposition und auditierbare Integritaetsereignisse sind tenantgebunden verfuegbar. |
-| Implementiert / Veroeffentlichung ausstehend | Evidence Object Storage & Restore Drill Phase 2 | Eine interne Storage-Abstraktion mit lokalem Filesystem-Backend prueft referenzierte Artefakte sicher auf Vorhandensein, Lesbarkeit und Hash-Konsistenz. |
-| Implementiert / Veroeffentlichung ausstehend | Evidence-Worker, kontrollierte physische Disposition und Object-Storage-Vorbereitung | Begrenzte Integritaets-Worker-Laeufe, Approval-gebundene physische Disposition, Tombstone-Metadaten und vorbereitete Object-Storage-Konfiguration sind tenantgebunden auditierbar. |
-| Implementiert / Veroeffentlichung ausstehend | S3-kompatibler Evidence-Storage-Runtime-Client | Explizite Secret-Referenzen, SigV4, DNS-/SSRF-Revalidierung, kanonische Object-IDs, begrenzte PUT-/HEAD-/GET-Operationen und kontrolliertes Remote-DELETE sind mit MinIO-Integrationstest umgesetzt. |
-| Implementiert / Veroeffentlichung ausstehend | Performance, HA und visuelle Regression | Grosszuegige CI-Budgets, gepruefter PostgreSQL-/S3-Zwei-Instanzen-Betrieb und 46 UI-Baselines machen grobe Regressionen sichtbar, ohne allgemeine HA oder SLA zu behaupten. |
-| Implementiert / Veroeffentlichung ausstehend | Native Threat Intelligence und Security Observations - Phase 1 | Lokal validierte Indicators, normalisierte Referenzen auf vorhandene Findings, manuelle Matches, Triage und Audit sind tenantgebunden verfuegbar, ohne Feed-, SIEM- oder Active-Response-Funktion. |
-| Implementiert / Veroeffentlichung ausstehend | Continuous Vulnerability Intelligence und Software Hygiene - Phase 1 | NVD-Deltas, CISA KEV und FIRST EPSS reichern globale CVEs an; tenantgebundene, erklaerbare CPE-/Versionsmatches aktualisieren vorhandene Vulnerability Findings ausschliesslich passiv. |
-| Phase 2 | Software-Lifecycle und Approval-Policy | Belastbare EOL/EOS-Quellen, ecosystemspezifische PURL-Semantik und eine schmale tenantgebundene Approval-/Exception-Policy werden getrennt fachlich entschieden. |
-| Release Candidate vorbereitet | Finales Hardening und Release Readiness | Zentrale RC-Pruefung, Readiness-Matrix, Release Notes, Manifest, Checksums, Sensitive-Data-Scan und CI-Aggregation sind vorbereitet; Tag und Veroeffentlichung bleiben ausstehend. |
+| Released in V23.7.33 | Agent-State, Secret-Rotation, Offline-Queue, Policy, Onboarding und Deployment-Beispiele | Read-only Agenten behalten ihre Identitaet, puffern Ausfaelle und koennen auf Linux, NixOS, Windows und macOS periodisch betrieben werden; keine Remote-Control-Funktion. |
+| Released in V23.7.33 | Fachuebergreifende Notifications | Evidence-, CVE-, Incident- und Roadmap-Signale nutzen den sicheren Kanalbetrieb mit Secret-Allowlist, Cooldown/Retry und Delivery-Audit. |
+| Released in V23.7.33 | Supplier Review und Supplier/Product Security | Freigabehistorie, Subprocessors, Vertrags-/Exit-Daten, lokale Advisory-/PSIRT-/CVE-Metadaten und Evidence sind tenantgebunden verbunden. |
+| Released in V23.7.33 | Evidence Integrity, Disposition und S3-kompatible Runtime | Re-Hash, Legal Hold, kontrollierte Disposition, Storage-Abstraktion und begrenzte SigV4-PUT/HEAD/GET/DELETE-Pfade sind vorhanden; produktiver Betreiberpilot bleibt erforderlich. |
+| Released in V23.7.33 | Agent-Artefakte, Provenance und PKI-/CSR-Governance | Manifest, SHA-256, Signaturstatus, CSR-/Zertifikatsmetadaten und mTLS-Governance sind vorhanden; echte Produktionssignierung und CA-Ausstellung sind nicht enthalten. |
+| Released in V23.7.33 | Agent Rollout 2.0 Phase 1/2 | Feste Ringe, Pre-/Postflight, menschliche Promotion, unveraenderliche Manifeste, passive Handoffs und Result-Importe ohne Remote-Ausfuehrung. |
+| Released in V23.7.33 | Native Threat Intelligence und Security Observations | Lokal validierte Indicators, Observation-Triage und Audit ohne externe Threat-Feed- oder Active-Response-Automation. |
+| Released in V23.7.33 | Continuous Vulnerability Intelligence und Software Hygiene | NVD, CISA KEV und FIRST EPSS plus konservative tenantgebundene CPE-/Versionskorrelation; keine automatische aktive Gegenmassnahme. |
+| Released in V23.7.33 | Software Approval und Exceptions | Exakte tenantgebundene Policies, restriktive Praezedenz, befristete Exceptions und getrennte Review-Rechte; keine Softwareinstallation/-blockierung. |
+| Development V23.7.34 | Machinery & CRA Safety-Security Co-Engineering – Phase 1 | Migration `0046` fuehrt Applicability, Maschinenprofil, Safety Functions, Hazards, Assessments und typisierte Cyber/Safety-Interactions ein; Human Review bleibt zwingend. |
+| P0 Maintenance | Reproduzierbare Object-Storage-/HA-/Performance-CI | Nicht mehr abrufbare externe MinIO-/`mc`-Image-Referenzen ersetzen und alle betroffenen Gates unveraendert erneut validieren. |
+| P1 | CVE-LLM-Provenance und echte Modellentscheidung | Der heutige `run_llm`-/`/api/v1/llm/generate`-Pfad ist ein deterministischer Rust-Stub. Entweder eindeutig als Stub modellieren oder eine echte lokale Modellruntime mit Provenance, Limits und Human-Gates implementieren. |
+| P1 | Release-Signierung / Attestation | CycloneDX-SBOM, Checksummen und Reproduzierbarkeitsdaten kryptografisch publisher-authentisieren. |
+| P1 | Produktions-PKI / Code Signing fuer Agenten | Vorhandene Metadata-/Governance-Schicht an reviewte produktive Provider anbinden, ohne private Schluessel in ISCY zu speichern. |
+| P2 | EOL/EOS- und erweiterte Package-Semantik | Belastbare EOL/EOS-Quellen und weitere ecosystemspezifische PURL-/Versionslogik hinzufuegen. |
+| P2 | Lokale RAG-/Modellplattform | RAG/Embeddings/Retrieval existieren im aktuellen ISCY-Runtimecode nicht. Eine spaetere Integration muss tenantgebunden, least-privilege, auditierbar und approval-gated bleiben. |
+| P2 | Groessere HA-/Performance-Nachweise | Ueber synthetische Zwei-Instanzen-Tests hinausgehende Skalierungs-, Failover- und SLO-Nachweise getrennt erbringen. |
 
 ## Abgrenzung
 

@@ -1,10 +1,13 @@
 # Performance-, HA- und Visual-Regression-Tests
 
-Stand: ISCY V23.7.32 Release Candidate / Rust 0.3.22
+Stand: ISCY V23.7.34 `development_unreleased` / Rust 0.3.22; Testdesign aus dem V23.7.32/V23.7.33-Zyklus
 
 Diese Tests erkennen grobe Betriebs- und UI-Regressionen vor einem spaeteren
 Release Candidate. Sie sind keine SLA-Zusage, kein Produktionslasttest und kein
 Nachweis fuer beliebige Skalierbarkeit oder vollstaendige Hochverfuegbarkeit.
+Der dokumentierte Testaufbau beschreibt die vorhandenen Gates, nicht den Erfolg
+eines beliebigen aktuellen CI-Laufs; nicht abrufbare externe Test-Images oder
+andere Infrastrukturfehler gelten ebenfalls als fehlgeschlagenes Gate.
 
 ## Architekturmatrix
 
@@ -74,7 +77,9 @@ sind CI-Regressionsbudgets und keine Produktions-SLOs.
 `make ha-integration` verwendet `tests/resilience/docker-compose.ha.yml`:
 
 - PostgreSQL 16
-- das bereits gepinnte MinIO und `mc`
+- ein digest-gepinntes MinIO-Testimage des geprueften Releases, das aus dem
+  offiziellen MinIO-Release-Quellcode gebaut wird; `mc` wird aus demselben
+  isolierten Testimage verwendet
 - Backend A und B aus demselben hardened Image
 - nginx 1.31 mit zwei Upstreams
 - ausschliesslich Dummy-Credentials und Loopback-veroeffentlichte Testports
