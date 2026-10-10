@@ -15,6 +15,13 @@ Die Plattform verbindet Risiken, Controls, Assets, Incidents, Evidence, Lieferan
 - AI Governance und Zero-Trust-Posture
 - Auditierbare Exporte, Monitoring und Betriebsstatus
 
+## Aktuelle Implementierungsgrenzen
+
+- Der Zero-Trust-Agent arbeitet read-only und liefert Posture-/Inventarsignale; ISCY ist kein Remote-Control- oder automatischer Remediation-Agent.
+- Native Vulnerability Intelligence fuer NVD, CISA KEV und FIRST EPSS ist implementiert und tenantgebundene Korrelation bleibt von aktiven Gegenmassnahmen getrennt.
+- Eine lokale LLM-/RAG-Anbindung ist vorbereitet, aber im aktuellen Rust-Backend noch nicht als produktiver Runtime-Client implementiert. KI-Vorschlaege duerfen spaeter keine Rollen-, Freigabe- oder Audit-Grenzen umgehen.
+- Release-Artefakte enthalten SBOM, Checksummen und Reproduzierbarkeits-/Provenance-Metadaten; kryptographische Release-Signierung ist weiterhin eine offene Hardening-Stufe.
+
 ## Schnellstart
 
 ```bash
