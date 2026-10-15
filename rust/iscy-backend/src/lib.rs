@@ -68,6 +68,7 @@ pub mod requirement_store;
 pub mod risk_store;
 pub mod roadmap_store;
 pub mod security_store;
+pub mod soa;
 pub mod software_policy_store;
 pub mod supplier_product_security_store;
 pub mod supplier_store;
@@ -19640,6 +19641,11 @@ async fn web_index(
             "Readiness-Snapshots",
         ),
         web_link_card(
+            "Statement of Applicability",
+            "/assessments/soa/",
+            "ISO27001-Controls begruendet pruefen",
+        ),
+        web_link_card(
             "Roadmap",
             &web_path_with_context("/roadmap/", context.as_ref()),
             "Plaene und offene Tasks",
@@ -33983,7 +33989,7 @@ async fn web_assessments(
         .join("");
     let body = format!(
         r#"
-        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p></section>
+        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p><a href="/assessments/soa/">Statement of Applicability</a></section>
         <section class="metrics">
           {}
           {}
@@ -47826,6 +47832,7 @@ pub fn app_router() -> Router {
 pub fn app_router_with_state(state: AppState) -> Router {
     let security_config = state.security_config.clone();
     Router::new()
+        .merge(soa::routes())
         .route("/health", get(health_live))
         .route("/health/ready", get(health_ready))
         .route("/health/live", get(health_live))
