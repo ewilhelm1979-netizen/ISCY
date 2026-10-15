@@ -22,4 +22,4 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 rust_decimal = { version = "1", default-features = false, features = ["serde", "std"] }
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["chrono", "json", "postgres", "runtime-tokio-rustls", "rust_decimal", "sqlite"] }
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
