@@ -201,3 +201,39 @@ fn pdf_escape(value: &str) -> String {
         .replace('(', "\\(")
         .replace(')', "\\)")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handbook_pdf_matches_current_markdown() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let markdown = fs::read_to_string(root.join("docs/ISCY_Handbuch.md")).unwrap();
+        let committed = fs::read(root.join("docs/ISCY_Handbuch.pdf")).unwrap();
+        let generated = pdf_document(&markdown_to_pdf_lines(&markdown, 94), 72);
+        assert!(
+            committed == generated,
+            "Handbuch-PDF ist veraltet: make docs-pdf ausfuehren, Inhalt pruefen und Release-Metadaten explizit synchronisieren."
+        );
+    }
+
+    #[test]
+    fn pdf_generation_is_reproducible_and_preserves_content() {
+        let markdown = "# Handbuch\n\n- Pruefung (lokal)\n\n```text\nPfad\\Datei\n```\n";
+        let first = pdf_document(&markdown_to_pdf_lines(markdown, 94), 2);
+        let second = pdf_document(&markdown_to_pdf_lines(markdown, 94), 2);
+        assert_eq!(first, second);
+        assert_ne!(
+            first,
+            pdf_document(&markdown_to_pdf_lines("# Geaenderter Inhalt", 94), 2)
+        );
+        let text = String::from_utf8(first).unwrap();
+        assert!(text.starts_with("%PDF-1.4\n"));
+        assert!(text.ends_with("%%EOF\n"));
+        assert!(text.contains("Pruefung \\(lokal\\)"));
+        assert!(text.contains("Pfad\\\\Datei"));
+        assert!(!text.contains("/CreationDate"));
+        assert!(!text.contains("/ModDate"));
+    }
+}
