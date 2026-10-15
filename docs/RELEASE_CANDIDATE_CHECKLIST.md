@@ -25,8 +25,9 @@ Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
   bleiben im getrackten Manifest `null`
 - internes Rust-Paket: `0.3.22`
 - Lizenz: `AGPL-3.0-only`
-- Migrationen: 45, fortlaufend `0001` bis `0045`
-- Visual Regression: 42 versionierte Baselines
+- V23.7.33-Publikationsbasis: 45 Migrationen und 42 visuelle Baselines
+- aktueller Development-Stand: 46 Migrationen, fortlaufend `0001` bis `0046`,
+  und 46 versionierte visuelle Baselines
 
 Der Tag `V23.7.33` muss exakt auf den oben dokumentierten Commit zeigen. Ein
 fehlender oder abweichender Basis-Tag sowie ein unerwartet vorhandener
@@ -79,14 +80,15 @@ Erst ein separater Release-Prep-PR darf V23.7.34 auf
 | Produkt-Build/Test/Clippy | Rust `1.97.0` | getrennt von MSRV und Nix |
 | portabler Builder | digest-gepinntes Rust `1.88` Bookworm | zwei cachefreie Builds bei Release-Prep |
 | Nix-Entwicklung | Rust `1.95.0` aus `nixos-26.05` | Build-/Testpfad |
-| nixpkgs Lock | Commit `8b8c811c7c2541c30382c5de7ed26be055569c60` | `nixos-26.05` bleibt Kanalgrenze |
+| aktueller nixpkgs Lock | Commit `2efa67fd26b6df417c33e4603185c701f260dd83` | `nixos-26.05` bleibt Kanalgrenze |
 | direkte Runtime-Dependencies | `base64 0.23.1`, `calamine 0.36.1` | kontrollierte Patch-Updates |
 | Actions Checkout | `actions/checkout 7.0.1` per Commit-SHA | unveraenderlicher Pin |
-| Rust Tool Action | `taiki-e/install-action 2.85.10` per Commit-SHA | unveraenderlicher Pin |
+| Rust Tool Action | `taiki-e/install-action 2.87.22` per Commit-SHA | unveraenderlicher Pin |
 | Quellen/Lizenzen | Cargo-Deny-/Audit-Gates | keine unbekannten Quellen oder stillen Ausnahmen |
 
-Die dokumentierte `RUSTSEC-2023-0071`-Ausnahme bleibt auf den deaktivierten
-optionalen Dependency-Pfad begrenzt. Ihre Existenz ist keine Aussage ueber
+Die dokumentierten Ausnahmen `RUSTSEC-2023-0071` fuer `rsa` und
+`RUSTSEC-2026-0235` fuer `rkyv` bleiben auf ihre deaktivierten optionalen
+Dependency-Pfade begrenzt. Ihre Existenz ist keine Aussage ueber
 Schwachstellenfreiheit; eine unbeabsichtigte Aktivierung muss fail-closed
 blockiert werden.
 
@@ -107,7 +109,9 @@ Der Release-Candidate-Aggregator hat exakt elf Pflichtabhaengigkeiten:
 11. `release-binary-portability`
 
 Zusaetzlich werden CodeQL fuer Actions, JavaScript/TypeScript und Rust sowie
-der Aggregationsjob `release-candidate-check` erwartet.
+der Aggregationsjob `release-candidate-check` erwartet. Der unabhaengige
+`codex-automation-tests`-Job bleibt ebenfalls erforderlich; er ist keine der
+elf Produkt-/Betriebsabhaengigkeiten dieses Aggregators.
 
 ## Datenbank- und Betriebsgrenzen
 
@@ -159,6 +163,19 @@ Wegwerf-Datenbank ist ein Blocker und darf nicht als erfolgreicher Test
 umgedeutet werden.
 
 ## Deterministische Release-Artefakte
+
+Das Development-Handbuch ist kein unveraenderliches Published-Artefakt. Nach
+Markdownaenderungen zuerst `make docs-pdf` ausfuehren und den erzeugten Inhalt
+pruefen, danach `./scripts/update_release_dependency_metadata.sh --include-handbook`.
+Nur diese ausdrueckliche Option aktualisiert auch `handbook_sha256`; der
+normale Dependency-Abgleich behaelt dessen bisherigen Wert bei. Manifest und
+Pruefsummen werden gemeinsam und bei Fehlern mit Rollback aktualisiert.
+Die Option ist auf `development_unreleased` und `prepared_not_published`
+begrenzt; Release-Lifecycle, historische Assets und Published-SBOM bleiben
+unveraendert. Ein nativer Rust-Test vergleicht Markdown-Erzeugung und
+versioniertes PDF bytegenau, damit CI eine erneute Quellen-/PDF-Drift erkennt.
+Der unveraenderte vollstaendige Release-Candidate-Check muss danach bestehen
+und darf bei erneuter Erzeugung keine versionierten Dateien veraendern.
 
 Im aktuellen Status `development_unreleased` muss
 `make release-candidate-artifacts` abbrechen und darf kein Bundle erzeugen.
