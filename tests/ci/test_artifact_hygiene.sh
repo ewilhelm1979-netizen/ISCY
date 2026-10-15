@@ -580,7 +580,7 @@ if grep -Eq 'path:[[:space:]]*artifacts/' "$workflow" \
     || grep -Fq 'path: **' "$workflow"; then
     die raw_upload_path
 fi
-upload_v7='uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1'
+upload_v7='uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2'
 [[ "$(grep -Fc "$upload_v7" "$workflow")" == '2' ]] || die upload_action_pin
 [[ "$(grep -Fc 'if-no-files-found: error' "$workflow")" == '2' ]] \
     || die upload_missing_file_policy
