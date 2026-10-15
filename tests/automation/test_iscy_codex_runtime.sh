@@ -34,6 +34,19 @@ diagnose = step_by_name.fetch("Diagnose Codex action runtime")
 fix_codex = fix_steps.find { |step| step["id"] == "codex" }
 abort("Fix-agent Codex step missing") unless fix_codex
 fix_codex_with = fix_codex.fetch("with")
+codex_pin = "openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675"
+codex_steps = workflow.fetch("jobs").values.flat_map do |job|
+  job.fetch("steps", []).select { |step| step.fetch("uses", "").start_with?("openai/codex-action@") }
+end
+abort("Codex action scope or pin changed") unless
+  codex_steps.size == 2 && codex_steps.all? { |step| step["uses"] == codex_pin }
+abort("Codex action version comments drifted") unless
+  File.read(ARGV.fetch(0)).scan("uses: #{codex_pin} # v1.13 verified 2026-10-15").size == 2
+documentation = File.read("docs/CODEX_AUTOMATION.md")
+abort("documented Codex action pin drifted") unless documentation.include?(
+  "`openai/codex-action` v1.13 (verified 2026-10-15):\n  `bdf19a4a223ec2549a3e2274a0cf61556bc07675`")
+abort("documented CLI is not the unchanged runtime pin") unless
+  documentation.include?("The Codex CLI is pinned to `0.144.4`.")
 validate = step_by_name.fetch("Validate structured result")
 upload = step_by_name.fetch("Upload bounded result").fetch("with")
 
