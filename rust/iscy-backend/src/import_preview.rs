@@ -1,10 +1,14 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    io::{BufReader, Cursor, Read},
+    io::{BufRead, BufReader, Cursor, Read},
 };
 
 use calamine::{DataRef, Reader, Xlsx};
-use quick_xml::{events::Event, Reader as XmlReader};
+use quick_xml::{
+    encoding::{detect_encoding, DecodingReader, DetectedEncoding},
+    events::Event,
+    Reader as XmlReader,
+};
 use serde::Serialize;
 use serde_json::Value;
 use zip::ZipArchive;
@@ -414,8 +418,68 @@ fn validate_shared_strings_xml<R: Read>(
     max_unique_strings: usize,
     max_references: usize,
 ) -> Result<(), String> {
-    let bounded = reader.take(XLSX_MAX_ENTRY_UNCOMPRESSED_BYTES + 1);
-    let mut xml = XmlReader::from_reader(BufReader::new(bounded));
+    let invalid = || "XLSX-Shared-Strings sind nicht gueltig.".to_string();
+    let mut bounded = BufReader::new(reader.take(XLSX_MAX_ENTRY_UNCOMPRESSED_BYTES + 1));
+    let mut prefix = Vec::with_capacity(64);
+    Read::by_ref(&mut bounded)
+        .take(9)
+        .read_to_end(&mut prefix)
+        .map_err(|_| invalid())?;
+    // Preserve the existing ASCII-compatible encoding contract; UTF-16 was
+    // not supported by the previous reader or downstream workbook reader.
+    if matches!(
+        detect_encoding(&prefix),
+        Some(
+            DetectedEncoding::Utf16LeLike
+                | DetectedEncoding::Utf16LeBom
+                | DetectedEncoding::Utf16BeLike
+                | DetectedEncoding::Utf16BeBom
+        )
+    ) {
+        return Err(invalid());
+    }
+    let declaration_start = prefix.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&prefix);
+    let has_declaration = declaration_start.starts_with(b"<?xml")
+        && declaration_start
+            .get(5)
+            .is_some_and(|byte| matches!(*byte, b' ' | b'\t' | b'\r' | b'\n'));
+    let encoding = if has_declaration {
+        // Select the encoding before DecodingReader's first fill_buf. Its
+        // fixed look-ahead may include text after a short declaration, while
+        // switching after a long declaration can panic. The original raw
+        // entry byte bound still covers every byte read and replayed here.
+        while !prefix.ends_with(b"?>") {
+            if bounded
+                .read_until(b'>', &mut prefix)
+                .map_err(|_| invalid())?
+                == 0
+            {
+                return Err(invalid());
+            }
+        }
+        let declaration = prefix.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&prefix);
+        let mut declaration_reader = XmlReader::from_reader(declaration);
+        match declaration_reader.read_event().map_err(|_| invalid())? {
+            Event::Decl(declaration) => match declaration.encoding() {
+                None => None,
+                Some(_) => {
+                    let encoding = declaration.encoder().ok_or_else(invalid)?;
+                    if !encoding.is_ascii_compatible() {
+                        return Err(invalid());
+                    }
+                    Some(encoding)
+                }
+            },
+            _ => return Err(invalid()),
+        }
+    } else {
+        None
+    };
+    let mut decoded = DecodingReader::new(BufReader::new(Cursor::new(prefix).chain(bounded)));
+    if let Some(encoding) = encoding {
+        decoded.set_encoding(encoding);
+    }
+    let mut xml = XmlReader::from_reader(decoded);
     let mut buffer = Vec::with_capacity(4096);
     let mut saw_root = false;
     let mut actual_unique_strings = 0_usize;
@@ -425,14 +489,14 @@ fn validate_shared_strings_xml<R: Read>(
         match xml.read_event_into(&mut buffer) {
             Ok(Event::Start(element)) => {
                 let local_name = element.local_name();
-                if local_name.as_ref() == b"sst" && !saw_root {
+                if local_name.as_ref() == "sst" && !saw_root {
                     saw_root = true;
                     validate_shared_string_root_attributes(
                         &element,
                         max_unique_strings,
                         max_references,
                     )?;
-                } else if local_name.as_ref() == b"si" {
+                } else if local_name.as_ref() == "si" {
                     actual_unique_strings =
                         actual_unique_strings.checked_add(1).ok_or_else(|| {
                             "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit."
@@ -448,14 +512,14 @@ fn validate_shared_strings_xml<R: Read>(
             }
             Ok(Event::Empty(element)) => {
                 let local_name = element.local_name();
-                if local_name.as_ref() == b"sst" && !saw_root {
+                if local_name.as_ref() == "sst" && !saw_root {
                     saw_root = true;
                     validate_shared_string_root_attributes(
                         &element,
                         max_unique_strings,
                         max_references,
                     )?;
-                } else if local_name.as_ref() == b"si" {
+                } else if local_name.as_ref() == "si" {
                     actual_unique_strings =
                         actual_unique_strings.checked_add(1).ok_or_else(|| {
                             "XLSX-Shared-Strings ueberschreiten das sichere Import-Limit."
@@ -492,9 +556,9 @@ fn validate_shared_string_root_attributes(
         let attribute =
             attribute.map_err(|_| "XLSX-Shared-Strings sind nicht gueltig.".to_string())?;
         let local_name = attribute.key.local_name();
-        let limit = if local_name.as_ref() == b"uniqueCount" {
+        let limit = if local_name.as_ref() == "uniqueCount" {
             Some(max_unique_strings)
-        } else if local_name.as_ref() == b"count" {
+        } else if local_name.as_ref() == "count" {
             Some(max_references)
         } else {
             None
@@ -502,8 +566,7 @@ fn validate_shared_string_root_attributes(
         let Some(limit) = limit else {
             continue;
         };
-        let raw = std::str::from_utf8(attribute.value.as_ref())
-            .map_err(|_| "XLSX-Shared-Strings sind nicht gueltig.".to_string())?;
+        let raw = attribute.value.as_ref();
         if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err("XLSX-Shared-Strings sind nicht gueltig.".to_string());
         }
@@ -769,5 +832,106 @@ mod tests {
     fn ordinary_shared_strings_remain_supported() {
         let xml = br#"<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2"><si><t>Name</t></si><si><t>Beschreibung</t></si></sst>"#;
         validate_shared_strings_xml(Cursor::new(xml), 2, 2).unwrap();
+    }
+
+    #[test]
+    fn shared_string_declared_legacy_encoding_remains_supported() {
+        for padding in [0, 128] {
+            let mut xml = format!(
+                "<?xml version='1.0'{} encoding='windows-1252'?><sst><si><t>",
+                " ".repeat(padding)
+            )
+            .into_bytes();
+            xml.extend_from_slice(b"Gr\xfc\xdfe</t></si></sst>");
+            validate_shared_strings_xml(Cursor::new(xml), 1, 1).unwrap();
+        }
+    }
+
+    #[test]
+    fn shared_string_prefixed_names_keep_declared_and_actual_limits() {
+        let ordinary = br#"<x:sst xmlns:x='urn:spreadsheet' x:count='2' x:uniqueCount='2'><x:si/><x:si><x:t>Gruesse</x:t></x:si></x:sst>"#;
+        validate_shared_strings_xml(Cursor::new(ordinary), 2, 2).unwrap();
+        for xml in [
+            br#"<x:sst xmlns:x='urn:spreadsheet' x:uniqueCount='3'/>"#.as_slice(),
+            br#"<x:sst xmlns:x='urn:spreadsheet' x:count='3'/>"#.as_slice(),
+            br#"<x:sst xmlns:x='urn:spreadsheet' x:uniqueCount='1'><x:si/><x:si/><x:si/></x:sst>"#
+                .as_slice(),
+        ] {
+            let error = validate_shared_strings_xml(Cursor::new(xml), 2, 2).unwrap_err();
+            assert!(error.contains("sichere Import-Limit"));
+        }
+    }
+
+    #[test]
+    fn shared_string_invalid_utf8_and_numeric_attributes_are_rejected() {
+        for xml in [
+            b"<sst><si><t>\xff</t></si></sst>".as_slice(),
+            b"<sst uniqueCount='\xff'/>".as_slice(),
+            b"<sst uniqueCount='&#49;'/>".as_slice(),
+            b"<sst count='+1'/>".as_slice(),
+            b"<sst uniqueCount='18446744073709551616'/>".as_slice(),
+            b"<sst uniqueCount='1' uniqueCount='2'/>".as_slice(),
+        ] {
+            assert!(validate_shared_strings_xml(Cursor::new(xml), 2, 2).is_err());
+        }
+    }
+
+    #[test]
+    fn shared_string_encoding_errors_fail_closed_without_panics() {
+        for xml in [
+            b"<?xml version='1.0' encoding='unknown-encoding'?><sst/>".as_slice(),
+            b"<?xml version='1.0' encoding='UTF-8'?><sst><si><t>\xff</t></si></sst>".as_slice(),
+            b"<?xml version='1.0' encoding='windows-1252'".as_slice(),
+        ] {
+            let error = validate_shared_strings_xml(Cursor::new(xml), 2, 2).unwrap_err();
+            assert!(error.contains("nicht gueltig"));
+        }
+        let mut utf16 = vec![0xff, 0xfe];
+        for unit in "<?xml version='1.0' encoding='UTF-16'?><sst/>".encode_utf16() {
+            utf16.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert!(validate_shared_strings_xml(Cursor::new(utf16), 2, 2).is_err());
+    }
+
+    #[test]
+    fn shared_string_legacy_encoding_cannot_bypass_capacity_limits() {
+        for padding in [0, 128] {
+            let mut xml = format!(
+                "<?xml version='1.0'{} encoding='windows-1252'?><sst count='3'><si><t>",
+                " ".repeat(padding)
+            )
+            .into_bytes();
+            xml.extend_from_slice(b"\xfc</t></si></sst>");
+            let error = validate_shared_strings_xml(Cursor::new(xml), 2, 2).unwrap_err();
+            assert!(error.contains("sichere Import-Limit"));
+        }
+    }
+
+    #[test]
+    fn shared_string_decoding_handles_fragmented_reads_and_read_errors() {
+        struct OneByte<'a>(&'a [u8]);
+        impl Read for OneByte<'_> {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                let count = output.len().min(self.0.len()).min(1);
+                output[..count].copy_from_slice(&self.0[..count]);
+                self.0 = &self.0[count..];
+                Ok(count)
+            }
+        }
+        for xml in [
+            "\u{feff}<?xml version='1.0' encoding='UTF-8'?><sst><si><t>Grüße</t></si></sst>"
+                .as_bytes(),
+            b"<?xml version='1.0' encoding='windows-1252'?><sst><si><t>Gr\xfc\xdfe</t></si></sst>"
+                .as_slice(),
+        ] {
+            validate_shared_strings_xml(OneByte(xml), 1, 1).unwrap();
+        }
+        struct ReadError;
+        impl Read for ReadError {
+            fn read(&mut self, _output: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("synthetic read failure"))
+            }
+        }
+        assert!(validate_shared_strings_xml(ReadError, 1, 1).is_err());
     }
 }
