@@ -108,8 +108,8 @@ The automation was reviewed against the official upstream repositories on
   `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0`
 - `actions/github-script` v9.0.0:
   `3a2844b7e9c422d3c10d287c895573f7108da1b3`
-- `actions/upload-artifact` v7.0.0:
-  `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`
+- `actions/upload-artifact` v7.0.2 (verified 2026-10-15):
+  `cf430e030ddbb5b0abf93d22962f4752f3646cd9`
 - `actions/download-artifact` v8.0.0:
   `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c`
 
