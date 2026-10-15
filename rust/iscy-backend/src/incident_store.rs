@@ -12,6 +12,23 @@ use crate::cve_store::normalize_database_url;
 const MAX_RUNBOOK_TEMPLATE_BYTES: usize = 64 * 1024;
 const MAX_RUNBOOK_STEPS: usize = 100;
 
+#[derive(Debug)]
+pub(crate) enum IncidentDeadlineAnchorError {
+    Removal,
+    Missing,
+}
+
+impl std::fmt::Display for IncidentDeadlineAnchorError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Removal => "Der Erkennungszeitpunkt eines als signifikant eingestuften Incidents darf nicht entfernt werden.",
+            Self::Missing => "Fuer neue Meldefristen ist ein gueltiger Erkennungszeitpunkt erforderlich.",
+        })
+    }
+}
+
+impl std::error::Error for IncidentDeadlineAnchorError {}
+
 #[derive(Clone)]
 pub enum IncidentStore {
     Postgres(PgPool),
@@ -3144,6 +3161,12 @@ impl ExistingIncident {
         current: IncidentSummary,
         payload: IncidentWriteRequest,
     ) -> anyhow::Result<Self> {
+        let previous_detected_at = current.detected_at.clone();
+        let previous_deadlines = NIS2Deadlines {
+            early_warning_due_at: current.early_warning_due_at.clone(),
+            notification_due_at: current.notification_due_at.clone(),
+            final_report_due_at: current.final_report_due_at.clone(),
+        };
         let now = Utc::now().to_rfc3339();
         let title = match payload.title {
             Some(title) => normalize_required_text(Some(&title), "Incident-Titel")?,
@@ -3191,6 +3214,14 @@ impl ExistingIncident {
             &current.nis2_significance_status,
         );
         let nis2_reportable = nis2_significance_status == "SIGNIFICANT";
+        if previous_detected_at.is_some()
+            && detected_at.is_none()
+            && (current.nis2_reportable
+                || current.nis2_significance_status == "SIGNIFICANT"
+                || nis2_reportable)
+        {
+            return Err(IncidentDeadlineAnchorError::Removal.into());
+        }
         let nis2_significance_criteria = payload
             .nis2_significance_criteria
             .map(|value| normalize_nis2_significance_text(Some(&value)))
@@ -3220,7 +3251,27 @@ impl ExistingIncident {
             None if nis2_significance_status == "NOT_ASSESSED" => None,
             None => current.nis2_significance_assessed_at,
         };
-        let deadlines = nis2_deadlines(nis2_reportable, detected_at.as_deref());
+        let same_anchor = detected_at == previous_detected_at
+            || matches!(
+                (
+                    detected_at.as_deref().and_then(parse_datetime),
+                    previous_detected_at.as_deref().and_then(parse_datetime),
+                ),
+                (Some(proposed), Some(previous)) if proposed == previous
+            );
+        let deadlines = if same_anchor
+            && nis2_significance_status == current.nis2_significance_status
+            && nis2_reportable == current.nis2_reportable
+        {
+            // Unrelated updates must not invent a new anchor for legacy NULLs
+            // or replace already persisted deadlines with the current clock.
+            previous_deadlines
+        } else {
+            if nis2_reportable && detected_at.as_deref().and_then(parse_datetime).is_none() {
+                return Err(IncidentDeadlineAnchorError::Missing.into());
+            }
+            nis2_deadlines(nis2_reportable, detected_at.as_deref())
+        };
         let review_state = review_state_for_significance_decision(
             &nis2_significance_status,
             Some(&current.nis2_significance_status),
@@ -3368,16 +3419,18 @@ struct NIS2Deadlines {
 }
 
 fn nis2_deadlines(nis2_reportable: bool, detected_at: Option<&str>) -> NIS2Deadlines {
-    if !nis2_reportable {
+    let base = if nis2_reportable {
+        detected_at.and_then(parse_datetime)
+    } else {
+        None
+    };
+    let Some(base) = base else {
         return NIS2Deadlines {
             early_warning_due_at: None,
             notification_due_at: None,
             final_report_due_at: None,
         };
-    }
-    let base = detected_at
-        .and_then(parse_datetime)
-        .unwrap_or_else(Utc::now);
+    };
     NIS2Deadlines {
         early_warning_due_at: Some((base + Duration::hours(24)).to_rfc3339()),
         notification_due_at: Some((base + Duration::hours(72)).to_rfc3339()),
