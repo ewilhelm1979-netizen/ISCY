@@ -20,6 +20,33 @@ ruby - "$workflow" "$tmp_dir" <<'RUBY'
 require "yaml"
 
 workflow = YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)
+download_pin = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
+downloads = workflow.fetch("jobs").flat_map do |job_name, job|
+  job.fetch("steps", []).filter_map do |step|
+    [job_name, step] if step.fetch("uses", "").start_with?("actions/download-artifact@")
+  end
+end
+expected_downloads = {
+  "publish-review-or-verify" => ["iscy-codex-result-", "result"],
+  "push-fix" => ["iscy-codex-fix-", "fix-result"],
+  "publish-fix-result" => ["iscy-codex-fix-", "result"]
+}
+abort("artifact download job scope changed") unless
+  downloads.map(&:first).sort == expected_downloads.keys.sort
+downloads.each do |job_name, step|
+  prefix, path = expected_downloads.fetch(job_name)
+  expected_name = prefix + '${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pr_number }}'
+  abort("download action pin changed: #{job_name}") unless step["uses"] == download_pin
+  # Exact input set keeps the action on this repository and workflow run;
+  # no injected token, cross-run lookup, wildcard or merged extraction.
+  abort("artifact download inputs changed: #{job_name}") unless
+    step.fetch("with") == {"name" => expected_name, "path" => path}
+end
+abort("download action version comments drifted") unless
+  File.read(ARGV.fetch(0)).scan("uses: #{download_pin} # v8.0.2").size == 3
+abort("documented download action pin drifted") unless
+  File.read("docs/CODEX_AUTOMATION.md").include?(
+    "`actions/download-artifact` v8.0.2 (geprueft 2026-10-15):\n  `9000827ccba6bdab643e8b6fd33ac0654aef8333`")
 steps = workflow.fetch("jobs").fetch("review-or-verify").fetch("steps")
 step_by_name = steps.to_h { |step| [step.fetch("name"), step] }
 fix_steps = workflow.fetch("jobs").fetch("fix-agent").fetch("steps")
