@@ -80,7 +80,7 @@ Erst ein separater Release-Prep-PR darf V23.7.34 auf
 | portabler Builder | digest-gepinntes Rust `1.88` Bookworm | zwei cachefreie Builds bei Release-Prep |
 | Nix-Entwicklung | Rust `1.95.0` aus `nixos-26.05` | Build-/Testpfad |
 | nixpkgs Lock | Commit `8b8c811c7c2541c30382c5de7ed26be055569c60` | `nixos-26.05` bleibt Kanalgrenze |
-| direkte Runtime-Dependencies | `base64 0.23.1`, `calamine 0.36.1` | kontrollierte Patch-Updates |
+| direkte Runtime-Dependencies | `base64 0.23.1`, `calamine 0.37.0` | kontrollierte Security-Updates |
 | Actions Checkout | `actions/checkout 7.0.1` per Commit-SHA | unveraenderlicher Pin |
 | Rust Tool Action | `taiki-e/install-action 2.85.10` per Commit-SHA | unveraenderlicher Pin |
 | Quellen/Lizenzen | Cargo-Deny-/Audit-Gates | keine unbekannten Quellen oder stillen Ausnahmen |
