@@ -10,6 +10,17 @@ fail() {
     exit 1
 }
 
+include_handbook=false
+case "$#" in
+    0) ;;
+    1)
+        [[ "$1" == '--include-handbook' ]] \
+            || fail arguments 'Erlaubt ist nur die optionale Angabe --include-handbook.'
+        include_handbook=true
+        ;;
+    *) fail arguments 'Erlaubt ist nur die optionale Angabe --include-handbook.' ;;
+esac
+
 for command in cmp cp cut git install jq mktemp mv realpath rm sha256sum; do
     command -v "$command" >/dev/null 2>&1 || fail prerequisite "$command fehlt."
 done
@@ -106,6 +117,11 @@ validate_metadata_pair() {
         and .sbom_sha256 == $sbom_sha256' \
         "$manifest_candidate" >/dev/null \
         || fail validation "$phase: Dependency-Hashes im Manifest stimmen nicht."
+    if [[ "$include_handbook" == 'true' ]]; then
+        jq -e --arg hash "$(hash_file docs/ISCY_Handbuch.pdf)" \
+            '.handbook_sha256 == $hash' "$manifest_candidate" >/dev/null \
+            || fail validation "$phase: Handbuch-Hash im Manifest stimmt nicht."
+    fi
 
     while IFS= read -r line || [[ -n "$line" ]]; do
         [[ "$index" -lt "${#checksum_paths[@]}" ]] \
@@ -155,6 +171,11 @@ inject_test_failure() {
 for path in "${checksum_paths[@]}" "$checksums_path"; do
     assert_regular_repo_file "$path"
 done
+if [[ "$include_handbook" == 'true' ]]; then
+    jq -e '.release_status == "development_unreleased"
+        or .release_status == "prepared_not_published"' "$manifest_path" >/dev/null \
+        || fail release_status 'Handbuch-Abgleich ist nur fuer unveroeffentlichte Staende erlaubt.'
+fi
 
 tmp_dir="$(mktemp -d "$repo_root/release/.dependency-metadata.XXXXXX")"
 case "$(realpath -e -- "$tmp_dir")" in
@@ -273,9 +294,12 @@ jq \
     --arg cargo_lock_sha256 "$cargo_lock_sha256" \
     --arg flake_lock_sha256 "$flake_lock_sha256" \
     --arg sbom_sha256 "$sbom_sha256" \
+    --arg handbook_sha256 "$(hash_file docs/ISCY_Handbuch.pdf)" \
+    --argjson include_handbook "$include_handbook" \
     '.cargo_lock_sha256 = $cargo_lock_sha256
     | .flake_lock_sha256 = $flake_lock_sha256
-    | .sbom_sha256 = $sbom_sha256' \
+    | .sbom_sha256 = $sbom_sha256
+    | if $include_handbook then .handbook_sha256 = $handbook_sha256 else . end' \
     "$manifest_path" >"$manifest_tmp"
 
 : >"$checksums_tmp"

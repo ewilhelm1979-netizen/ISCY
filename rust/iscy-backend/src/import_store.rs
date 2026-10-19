@@ -497,8 +497,8 @@ async fn import_suppliers_postgres(
                     exit_dependency = $8,
                     regulatory_scope = $9,
                     review_status = $10,
-                    last_reviewed_at = $11,
-                    next_review_due_at = $12,
+                    last_reviewed_at = $11::date,
+                    next_review_due_at = $12::date,
                     evidence_required = $13,
                     notes = $14,
                     updated_at = NOW()
@@ -545,7 +545,7 @@ async fn import_suppliers_postgres(
                     created_at,
                     updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, NOW(), NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::date, $13::date, $14, $15, NULL, NOW(), NOW())
                 "#,
             )
             .bind(tenant_id)
