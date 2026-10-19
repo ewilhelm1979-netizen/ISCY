@@ -13503,6 +13503,16 @@ async fn incident_update(
             }),
         )
             .into_response(),
+        Err(err) if err.is::<incident_store::IncidentDeadlineAnchorError>() => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "incident_deadline_anchor_invalid",
+                message: err.to_string(),
+            }),
+        )
+            .into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiErrorResponse {
