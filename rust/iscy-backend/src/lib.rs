@@ -19240,16 +19240,19 @@ async fn management_review_status_update(
             }),
         )
             .into_response(),
-        Err(err) => (
+        Err(err) if err.is::<report_store::ManagementReviewStatusValidationError>() => (
             StatusCode::BAD_REQUEST,
             Json(ApiErrorResponse {
                 accepted: false,
                 api_version: "v1",
                 error_code: "management_review_invalid",
-                message: format!("Management-Review konnte nicht aktualisiert werden: {err}"),
+                message: err.to_string(),
             }),
         )
             .into_response(),
+        Err(_) => {
+            api_database_error("Management-Review konnte nicht aktualisiert werden.".to_string())
+        }
     }
 }
 
@@ -29336,13 +29339,25 @@ async fn web_management_review_status_submit(
             "Management-Review wurde nicht gefunden.",
         )
         .into_response(),
-        Err(err) => web_error_page(
-            "Management Review",
-            "/management-reviews/",
-            &context,
-            &err.to_string(),
+        Err(err) if err.is::<report_store::ManagementReviewStatusValidationError>() => {
+            web_error_page(
+                "Management Review",
+                "/management-reviews/",
+                &context,
+                &err.to_string(),
+            )
+            .into_response()
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            web_error_page(
+                "Management Review",
+                "/management-reviews/",
+                &context,
+                "Management-Review konnte nicht aktualisiert werden.",
+            ),
         )
-        .into_response(),
+            .into_response(),
     }
 }
 
