@@ -13580,6 +13580,49 @@ async fn import_center_preview_reads_xlsx_upload_and_builds_mapping() {
 }
 
 #[tokio::test]
+async fn import_center_preview_accepts_xlsm_extension_with_same_xlsx_parser() {
+    let app = app_router();
+    let boundary = "iscy-import-preview-xlsm-boundary";
+    let xlsx_bytes = import_preview_xlsx_fixture();
+    let body = multipart_body(
+        boundary,
+        &[("import_type", "processes"), ("replace_existing", "0")],
+        Some((
+            "file",
+            "processes.xlsm",
+            "application/vnd.ms-excel.sheet.macroEnabled.12",
+            xlsx_bytes.as_slice(),
+        )),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/preview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["preview"]["file_kind"], "xlsx");
+    assert_eq!(payload["preview"]["total_row_count"], 2);
+    assert_eq!(payload["preview"]["selected_mapping"]["name"], "Name");
+}
+
+#[tokio::test]
 async fn import_center_preview_rejects_malformed_xlsx_and_read_only_access() {
     let app = app_router();
     let request = |roles: Option<&str>, file: &[u8]| {
