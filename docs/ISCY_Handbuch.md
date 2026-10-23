@@ -11,9 +11,11 @@ ISCY wurde in dieser Codebasis mit Unterstuetzung von OpenAI Codex entwickelt, n
 Der Development-Stand ist keine vollstaendige Funktions-, Security- oder
 Produktionsfreigabe. Fachliche Begriffe und historische Ausbaustufen sind von
 tatsaechlich vorhandenen Rust-Schreibablaeufen zu unterscheiden. Insbesondere
-ist `/` derzeit eine Linkuebersicht. Die bestaetigte Migrationsluecke beim
-Assessment-Wizard und bei der SoA-Erzeugung steht in 5.2 und 5.10; sie bedeutet
-keine Aufhebung dieser bestehenden Produktfunktionen. Die historischen
+ist `/` derzeit eine Linkuebersicht. Die Migrationsluecke beim Assessment-Wizard
+besteht weiterhin (5.2). Die eigenstaendige SoA-Erzeugung und Control-Bearbeitung
+sind mit einer verbindlichen DRAFT-Schreibgrenze wiederhergestellt; ein
+Nachfolgeversions-/Freigabeablauf fehlt noch (5.10). Das bedeutet keine Aufhebung
+der weitergehenden bestehenden Produktanforderungen. Die historischen
 Evidence-Ausbaustufen in 6.12 bis 6.15 werden durch den Runtime-Stand in 6.16
 ergaenzt und sind keine alternative aktuelle Support-Matrix.
 
@@ -471,11 +473,31 @@ Aktueller Rust-Umfang und Grenzen:
   eine SoA-Erzeugung aus aktiven ISO27001-Requirements an, mit Detailansicht
   und anschliessender Bearbeitung je Control. `SoAGenerateView`, `SoADocument`
   und `SoAEntry` sind im Elterncommit des oben genannten Rust-Cutovers belegt.
-  Diese Implementierung wurde entfernt und hat im aktuellen Rust-Store,
-  Initialisierungsschema und Router keinen entsprechenden Ersatz. Das ist
-  eine wiederherzustellende Migrationsluecke, kein ersatzlos gestrichener
-  Funktionsumfang. Die Erzeugung war ein eigener Schreibaufruf, keine
-  automatische Konformitaetsentscheidung und kein impliziter Wizard-Abschluss.
+  Die eigenstaendige Erzeugung, Detailansicht und Control-Bearbeitung sind in
+  Rust wiederhergestellt: Webliste unter `/assessments/soa/`, Erzeugung ueber
+  `POST /assessments/soa/generate/`, API-Liste/Erzeugung ueber
+  `GET/POST /api/v1/assessments/soa` und Control-Bearbeitung ueber
+  `PUT /api/v1/assessments/soa/entries/{id}`. Migration
+  `0047_rust_soa_cutover_restoration` ergaenzt das benoetigte Schema und laesst
+  bestehende Dokumente und Eintraege unveraendert. Neue Erstentwuerfe enthalten
+  aktive ISO27001-Requirements als anwendbare Controls mit `NOT_STARTED`.
+  Das ist keine automatische Konformitaetsentscheidung und kein impliziter
+  Wizard-Abschluss.
+- Nur der exakt gespeicherte Status `DRAFT` ist bearbeitbar. `IN_REVIEW`,
+  `APPROVED` und unbekannte Statuswerte sind auch fuer Administratoren
+  schreibgeschuetzt; die Ablehnung laesst Inhalte, Freigaben und Auditspur
+  unveraendert. Statusentscheidung, Control-Aenderung und verpflichtender
+  Auditeintrag erfolgen in einer gemeinsamen Transaktion. Rollen- und
+  Tenant-Grenzen gelten fuer API und Web; Webformulare benoetigen zusaetzlich
+  einen sessiongebundenen CSRF-Token. Das Import-Center bietet keinen SoA-Import
+  an und weist SoA-Aliasse auch bei Replace-Importen zurueck.
+- Aenderungen an geprueften/freigegebenen Dokumenten erfordern fachlich einen
+  neuen, eindeutig zugeordneten Entwurf mit erneuter Pruefung/Freigabe. Dieser
+  Nachfolgeprozess, historische Inhaltssnapshots und die Vorgaengerzuordnung
+  sind noch nicht implementiert. Die vorhandene Erzeugung ist nur ein neuer
+  unabhaengiger Erstentwurf und darf nicht als Nachfolgeversion eines gesperrten
+  Dokuments verwendet werden. Die sichere Schreibsperre ersetzt keinen
+  vollstaendigen Versionsworkflow; Details in `docs/SOA_RESTORATION_CONTRACT.md`.
 - Management Reviews und Regulatory Review-Pakete aus 5.12 besitzen eigene
   Rust-Erzeugungs-, Review- und Exportpfade. Sie ersetzen keinen fehlenden
   Assessment-Wizard.
@@ -1091,9 +1113,11 @@ Architekturentscheidung steht in
 
 ### 6.1 Erstaufbau eines ISMS
 
-Der vorgesehene Ablauf bleibt bestehen. Die Schritte mit Wizard und SoA sind
-wegen der in 5.2 und 5.10 beschriebenen Migrationsluecken derzeit blockiert;
-sie sind nicht durch einen externen Ersatzprozess abgenommen.
+Der vorgesehene Ablauf bleibt bestehen. Der Wizard-Schritt ist wegen der in
+5.2 beschriebenen Migrationsluecke derzeit blockiert und nicht durch einen
+externen Ersatzprozess abgenommen. Ein eigenstaendiger SoA-Erstentwurf und die
+Control-Bearbeitung im Status DRAFT sind verfuegbar. Der in 5.10 abgegrenzte
+Nachfolgeversions-/Freigabeablauf fuer gesperrte SoA-Dokumente bleibt offen.
 
 1. Tenant anlegen beziehungsweise Organisationsprofil pflegen
 2. Wizard durchlaufen
@@ -1109,7 +1133,9 @@ sie sind nicht durch einen externen Ersatzprozess abgenommen.
 1. offene Findings und Reviews sichten
 2. Evidence Needs synchronisieren
 3. Nachweise aktualisieren
-4. SoA pruefen (die integrierte Erzeugung und Bearbeitung ist derzeit blockiert)
+4. SoA fachlich pruefen; Erstentwuerfe und Control-Bearbeitung sind im Status
+   DRAFT verfuegbar. Fuer gesperrte Dokumente bleibt der Nachfolgeversions- und
+   Freigabeablauf offen (siehe 5.10).
 5. Audit-Report erzeugen
 
 ### 6.3 NIS2-orientierte Arbeitsweise
