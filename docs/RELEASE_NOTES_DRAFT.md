@@ -22,6 +22,20 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## SoA-Rust-Wiederherstellung und Schreibschutz
+
+- additive Migration `0047_rust_soa_cutover_restoration` fuer SQLite und PostgreSQL;
+  bestehende SoA-Dokumente, Controls und Freigabeinformationen bleiben erhalten
+- eigenstaendige Erstentwuerfe aus aktiven ISO27001-Requirements, tenantgebundene
+  API-/Webansichten und transaktional auditierte Control-Bearbeitung
+- nur exaktes `DRAFT` ist bearbeitbar; `IN_REVIEW`, `APPROVED` und unbekannte
+  Zustaende sind auch bei veralteten Formularen und parallelen Schreibern gesperrt
+- keine SoA-Importart und keine privilegierte Ausnahme; kein neuer Entwurf darf
+  als implementierte Nachfolgeversion ausgegeben werden
+- Vorgaengerzuordnung, historische Snapshots und der vollstaendige erneute
+  SoA-Pruef-/Freigabeablauf bleiben gesonderte Arbeit gemaess
+  `docs/SOA_RESTORATION_CONTRACT.md`; keine automatische Konformitaetsentscheidung
+
 ## TLS-Dependency-Sicherheitskorrektur
 
 - minimale Lockfile-Updates auf `rustls-webpki 0.103.16` und
