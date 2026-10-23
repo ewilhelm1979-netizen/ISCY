@@ -36,6 +36,15 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
   SoA-Pruef-/Freigabeablauf bleiben gesonderte Arbeit gemaess
   `docs/SOA_RESTORATION_CONTRACT.md`; keine automatische Konformitaetsentscheidung
 
+## JSON-Dependency-Wartung
+
+- gezieltes Lockfile-Update von `serde_json 1.0.151` auf `1.0.154` ohne
+  zusaetzliche transitive Pakete oder Cargo-Featureaenderungen
+- aktive Features bleiben `std` und `raw_value`; ungueltiges UTF-8 wird
+  weiterhin abgewiesen, seine gemeldete Fehlerposition wurde upstream korrigiert
+- Handbuch, Migrationen und freigegebener SBOM-Snapshot bleiben unveraendert;
+  Development-Manifest und Pruefsummen werden zum Lockfile abgeglichen
+
 ## TLS-Dependency-Sicherheitskorrektur
 
 - minimale Lockfile-Updates auf `rustls-webpki 0.103.16` und

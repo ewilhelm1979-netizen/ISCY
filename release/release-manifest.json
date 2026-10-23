@@ -14,7 +14,7 @@
     "nix_development_path": "1.95.0"
   },
   "cargo_package_version": "0.3.22",
-  "cargo_lock_sha256": "ce60e76290d84260eda0b066e132ce83762d21b279688ffba524a98247aabbf9",
+  "cargo_lock_sha256": "bad24e6bd2ef0cbb71ca8133fbbcfad1db205da7c906aea8dbbf0e0eeeb8475c",
   "flake_lock_sha256": "1924a2dca3174b9da0d56c54533ba39fd703265c04a347b43d8b306270a7e1ec",
   "handbook_sha256": "0babb2467d4bf011ff1d88622bec3bcb78dba2aeef5f490d4237a4b57a3dd751",
   "migration_count": 47,
