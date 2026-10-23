@@ -36,6 +36,21 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
   SoA-Pruef-/Freigabeablauf bleiben gesonderte Arbeit gemaess
   `docs/SOA_RESTORATION_CONTRACT.md`; keine automatische Konformitaetsentscheidung
 
+## TLS-Dependency-Sicherheitskorrektur
+
+- minimale Lockfile-Updates auf `rustls-webpki 0.103.16` und
+  `webpki-roots 1.0.10` fuer `RUSTSEC-2026-0382` und `RUSTSEC-2026-0381`
+  (beide `CVE-2026-111943`): zurueckgezogene emSign-Zertifikatsketten werden
+  im aktualisierten Verifier abgewiesen und der betroffene gebuendelte Root
+  entfernt
+- Reqwest-/SQLx-Versionen, Cargo-Features und die inaktive Quinn-/HTTP3-Kante
+  unveraendert; keine neuen Security-Ausnahmen
+- betrifft zertifikatsvalidierende TLS-Clients; deaktivierte Zertifikatspruefung
+  oder unverschluesselte Verbindungen werden dadurch nicht abgesichert
+- der minimale gepatchte Root-Stand uebernimmt auch die upstream entfernten
+  `SecureSign Root CA12` und `Atos TrustedRoot 2011` sowie vier neue Roots;
+  spezifische betriebliche Zertifikatsketten benoetigen eine gesonderte Pruefung
+
 ## Machinery & CRA Safety-Security Co-Engineering – Phase 1
 
 - additive Migration `0046_rust_machinery_cra_safety_security_foundation` für

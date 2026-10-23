@@ -8,6 +8,17 @@ ISCY ist eine selbst gehostete, lokale und datenschutzbewusste Open-Source-Platt
 
 ISCY wurde in dieser Codebasis mit Unterstuetzung von OpenAI Codex entwickelt, nach Rust migriert und technisch/fachlich plausibilisiert. Die fachliche Ausrichtung wurde mit offiziellen EU-Quellen zu NIS2, der NIS2-Durchfuehrungsverordnung (EU) 2024/2690, DORA, Cyber Resilience Act und EU AI Act sowie mit gaengigen ISMS-, Product-Security-, CVE-/SBOM-/CSAF-, Evidence- und Incident-Response-Praktiken abgeglichen. Das ist keine unabhaengige fachliche Pruefung, externe Zertifizierung oder Rechtsberatung. Regulatorische Unterstuetzung muss fuer Organisation, Rechtsraum und Einsatzkontext eigenstaendig bewertet werden.
 
+Der Development-Stand ist keine vollstaendige Funktions-, Security- oder
+Produktionsfreigabe. Fachliche Begriffe und historische Ausbaustufen sind von
+tatsaechlich vorhandenen Rust-Schreibablaeufen zu unterscheiden. Insbesondere
+ist `/` derzeit eine Linkuebersicht. Die Migrationsluecke beim Assessment-Wizard
+besteht weiterhin (5.2). Die eigenstaendige SoA-Erzeugung und Control-Bearbeitung
+sind mit einer verbindlichen DRAFT-Schreibgrenze wiederhergestellt; ein
+Nachfolgeversions-/Freigabeablauf fehlt noch (5.10). Das bedeutet keine Aufhebung
+der weitergehenden bestehenden Produktanforderungen. Die historischen
+Evidence-Ausbaustufen in 6.12 bis 6.15 werden durch den Runtime-Stand in 6.16
+ergaenzt und sind keine alternative aktuelle Support-Matrix.
+
 ## Inhalt
 
 1. Was ISCY ist
@@ -100,7 +111,7 @@ ISCY folgt fachlich einem roten Faden:
 
 Die wichtigsten Bereiche sind:
 
-- Start-Wizard unter `/`
+- Start-/Linkuebersicht unter `/`
 - Guidance Navigator unter `/navigator/`
 - Dashboard unter `/dashboard/`
 - Zero Trust unter `/zero-trust/`
@@ -172,15 +183,26 @@ Schritte:
 - Maturity
 - Results
 
-Fachlicher Nutzen:
+Der schreibende Wizard war in der frueheren Django-Anwendung implementiert:
+`WizardStartView`, die vier Schrittansichten und `WizardService.generate_results`
+legten Sessions, Antworten, Bewertungen, Massnahmen, Reports und Roadmaps an.
+Der damalige Stand vor dem Rust-Cutover ist ueber den Elterncommit von
+`b12db820ebac1c633873193eb7507ecc96d41319` nachvollziehbar.
 
-- strukturiertes Onboarding in das Thema
-- erste regulatorische Einordnung
-- erste Reifegrad-Sicht
-- Grundlage fuer Reports und Roadmap
+Aktueller Integrationsbefund, keine geaenderte Produktanforderung:
 
-Fuer Nicht-Sicherheitsleute:
-Der Wizard ist der gefuehrte Fragebogen, der aus Eingaben verwertbare Ergebnisse macht.
+Die Startseite `/` zeigt Linkkarten. Vorhandene Session-/Ergebnisdaten koennen
+ueber `GET /api/v1/wizard/sessions` und
+`GET /api/v1/wizard/sessions/{session_id}/results` gelesen werden, soweit der
+entsprechende Datenbestand vorhanden ist. Diese Pfade bieten keinen POST zur
+Anlage eines Wizard-Durchlaufs. Die Rust-Schreiblogik und Teile des benoetigten
+Schemas fehlen ebenfalls; allein das Eintragen eines POST-Handlers behebt diese
+Migrationsluecke nicht. Bis zur separat zu pruefenden Wiederherstellung ist der
+gefuhrte Bewertungsablauf nicht verfuegbar. Die Organisationsprofil-Pflege unter
+`/organizations/` ist vorhanden, ersetzt den Wizard aber nicht.
+
+Der gefuehrte Agent-Onboarding-Assistent unter `/zero-trust/` ist eine andere,
+tatsaechlich implementierte Funktion und kein Assessment-Wizard.
 
 ### 5.3 Guidance Navigator
 
@@ -423,7 +445,7 @@ Ein Risiko ist in ISCY kein Technikfehler, sondern eine moegliche negative Gesch
 Zweck:
 Umsetzungs- und Nachweisstand strukturiert dokumentieren.
 
-Teilfunktionen:
+Teilfunktionen des bestehenden Assessment-Modells:
 
 - Applicability
   fachliche Frage: Gilt eine Anforderung fuer uns?
@@ -439,6 +461,46 @@ Teilfunktionen:
   fachliche Frage: Wie bewertet die Leitung den Gesamtstand?
 - Review Actions
   fachliche Frage: Welche Folgeaktionen beschliesst die Organisation?
+
+Aktueller Rust-Umfang und Grenzen:
+
+- `/api/v1/assessments`, `/api/v1/assessments/applicability` und
+  `/api/v1/assessments/measures` sind GET-Leseregister, keine Assessment-
+  Schreib-API. Nach reiner Rust-Demo-Initialisierung sind dort gegenwaertig
+  Datenbankfehler bekannt; die Register gelten damit nicht als vollstaendig
+  abgenommener Bewertungsablauf.
+- Die fruehere Django-Anwendung bot unter `POST /assessments/soa/generate/`
+  eine SoA-Erzeugung aus aktiven ISO27001-Requirements an, mit Detailansicht
+  und anschliessender Bearbeitung je Control. `SoAGenerateView`, `SoADocument`
+  und `SoAEntry` sind im Elterncommit des oben genannten Rust-Cutovers belegt.
+  Die eigenstaendige Erzeugung, Detailansicht und Control-Bearbeitung sind in
+  Rust wiederhergestellt: Webliste unter `/assessments/soa/`, Erzeugung ueber
+  `POST /assessments/soa/generate/`, API-Liste/Erzeugung ueber
+  `GET/POST /api/v1/assessments/soa` und Control-Bearbeitung ueber
+  `PUT /api/v1/assessments/soa/entries/{id}`. Migration
+  `0047_rust_soa_cutover_restoration` ergaenzt das benoetigte Schema und laesst
+  bestehende Dokumente und Eintraege unveraendert. Neue Erstentwuerfe enthalten
+  aktive ISO27001-Requirements als anwendbare Controls mit `NOT_STARTED`.
+  Das ist keine automatische Konformitaetsentscheidung und kein impliziter
+  Wizard-Abschluss.
+- Nur der exakt gespeicherte Status `DRAFT` ist bearbeitbar. `IN_REVIEW`,
+  `APPROVED` und unbekannte Statuswerte sind auch fuer Administratoren
+  schreibgeschuetzt; die Ablehnung laesst Inhalte, Freigaben und Auditspur
+  unveraendert. Statusentscheidung, Control-Aenderung und verpflichtender
+  Auditeintrag erfolgen in einer gemeinsamen Transaktion. Rollen- und
+  Tenant-Grenzen gelten fuer API und Web; Webformulare benoetigen zusaetzlich
+  einen sessiongebundenen CSRF-Token. Das Import-Center bietet keinen SoA-Import
+  an und weist SoA-Aliasse auch bei Replace-Importen zurueck.
+- Aenderungen an geprueften/freigegebenen Dokumenten erfordern fachlich einen
+  neuen, eindeutig zugeordneten Entwurf mit erneuter Pruefung/Freigabe. Dieser
+  Nachfolgeprozess, historische Inhaltssnapshots und die Vorgaengerzuordnung
+  sind noch nicht implementiert. Die vorhandene Erzeugung ist nur ein neuer
+  unabhaengiger Erstentwurf und darf nicht als Nachfolgeversion eines gesperrten
+  Dokuments verwendet werden. Die sichere Schreibsperre ersetzt keinen
+  vollstaendigen Versionsworkflow; Details in `docs/SOA_RESTORATION_CONTRACT.md`.
+- Management Reviews und Regulatory Review-Pakete aus 5.12 besitzen eigene
+  Rust-Erzeugungs-, Review- und Exportpfade. Sie ersetzen keinen fehlenden
+  Assessment-Wizard.
 
 Fachlicher Nutzen:
 
@@ -520,7 +582,7 @@ Management-Review-Pakete:
 - koennen als generisches Security-Governance-Paket oder ueber Templates fuer ISO 27001, NIS2, DORA, DSGVO und KRITIS vorbereitet werden
 - speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Evidence-Integrity-/Storage-Aggregate, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage, Supplier-Review-Summary, Supplier/Product-Security-Lage, Agent-Posture, AI-Governance, Quellenzaehlung, Gap-Summary, Management-Hinweise und regulatorischen Kontext als Snapshot
 - verlinken Snapshot-Zeilen zurueck zu Risiko, Control, Evidence, Incident und Roadmap
-- koennen von Draft ueber In Review bis Approved oder Archived gefuehrt werden
+- unterstuetzen die Statuswechsel Draft, In Review und Approved; ein Archived-Statuswechsel wird vom aktuellen Management-Review-Store nicht angeboten
 - dokumentieren Entscheidung, naechste Massnahmen, freigebenden User und Freigabezeitpunkt
 - erlauben eine Template-Vorschau, ohne bereits ein Review-Paket einzufrieren
 
@@ -1051,13 +1113,19 @@ Architekturentscheidung steht in
 
 ### 6.1 Erstaufbau eines ISMS
 
-1. Tenant anlegen
+Der vorgesehene Ablauf bleibt bestehen. Der Wizard-Schritt ist wegen der in
+5.2 beschriebenen Migrationsluecke derzeit blockiert und nicht durch einen
+externen Ersatzprozess abgenommen. Ein eigenstaendiger SoA-Erstentwurf und die
+Control-Bearbeitung im Status DRAFT sind verfuegbar. Der in 5.10 abgegrenzte
+Nachfolgeversions-/Freigabeablauf fuer gesperrte SoA-Dokumente bleibt offen.
+
+1. Tenant anlegen beziehungsweise Organisationsprofil pflegen
 2. Wizard durchlaufen
 3. Prozesse, Assets und Lieferanten importieren
 4. Requirements und Applicability sichten
 5. erste Risiken erfassen
 6. Evidence aufbauen
-7. SoA generieren
+7. SoA generieren und fachlich pruefen
 8. Report und Roadmap erzeugen
 
 ### 6.2 Auditvorbereitung
@@ -1065,7 +1133,9 @@ Architekturentscheidung steht in
 1. offene Findings und Reviews sichten
 2. Evidence Needs synchronisieren
 3. Nachweise aktualisieren
-4. SoA pruefen
+4. SoA fachlich pruefen; Erstentwuerfe und Control-Bearbeitung sind im Status
+   DRAFT verfuegbar. Fuer gesperrte Dokumente bleibt der Nachfolgeversions- und
+   Freigabeablauf offen (siehe 5.10).
 5. Audit-Report erzeugen
 
 ### 6.3 NIS2-orientierte Arbeitsweise
@@ -1918,16 +1988,21 @@ Home-Verzeichnis-Credentials sowie EC2-/ECS-Metadata-Credentials sind nicht
 aktiviert. TLS wird ueber das bestehende Rustls-Backend von `reqwest`
 bereitgestellt.
 
-Unterstuetzte Secret-Referenzen:
+Backend-Konfigurationen akzeptieren ausschliesslich die zum jeweiligen Feld
+gehoerige Referenz `env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY`,
+`env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY` oder
+`env:ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN`, jeweils wahlweise mit
+`_FILE`-Suffix. Andere Prozessvariablen und freie `file:`-Pfade sind keine
+zulaessigen tenantgesteuerten Referenzen. Persistierte Werte werden vor der
+Netzwerkoperation erneut gegen dieselbe Grenze geprueft.
 
-- `env:VARIABLE_NAME` mit strengem Variablennamen und ohne Shell-Auswertung
-- `file:/absoluter/pfad` nur unter Pfaden aus `ISCY_EVIDENCE_SECRET_ROOTS`
-
-`file:` prueft kanonische Pfadgrenzen, Symlink-Flucht, regulaere Datei,
+Der Betreiber kann den zugehoerigen Dateipfad ueber die jeweilige `_FILE`-
+Umgebungsvariable konfigurieren. Der Dateileser prueft kanonische Pfadgrenzen
+unter `/run/secrets` oder expliziten `ISCY_EVIDENCE_SECRET_ROOTS`, Symlink-Flucht, regulaere Datei,
 Maximalgroesse von 16 KiB, NUL-/UTF-8-Inhalt und unter Unix unsichere
 Schreibrechte fuer Gruppe/Andere. Abschliessende Zeilenumbrueche werden im
-Speicher entfernt. `vault:`, `external:` und `secret:` bleiben in diesem Stand
-bewusst nicht aufloesbar. Secretwerte werden weder persistiert noch in API,
+Speicher entfernt. `vault:`, `external:`, `secret:` und freie `file:`-Referenzen
+werden in Backend-Konfigurationen abgelehnt. Secretwerte werden weder persistiert noch in API,
 Audit, Logs, Screenshots oder Dokumentation ausgegeben und nach der jeweiligen
 Operation im Speicher ueberschrieben.
 
@@ -2091,7 +2166,7 @@ nicht als erfolgreiche Release-Validierung umgedeutet werden.
 Die CI-/Produkt-Toolchain verwendet Rust 1.97 fuer den regulaeren Build- und
 Testpfad, waehrend MSRV und der digest-gepinnte portable Release-Builder
 bewusst auf Rust 1.88 bleiben. Das aktuelle `flake.lock` bindet nixpkgs auf
-`8b8c811c7c2541c30382c5de7ed26be055569c60` im Kanal `nixos-26.05`.
+`2efa67fd26b6df417c33e4603185c701f260dd83` im Kanal `nixos-26.05`.
 
 Eine reproduzierbare CycloneDX-SBOM, SHA-256-Checksummen, Release-Manifest und
 Reproduzierbarkeitsmetadaten sind vorhanden. Sie sind keine kryptografische
@@ -2256,3 +2331,18 @@ Das PDF-Handbuch `docs/ISCY_Handbuch.pdf` wird reproduzierbar aus Markdown erzeu
 ```bash
 make docs-pdf
 ```
+
+Nach einer bewussten Handbuchaenderung werden zuerst Markdown und erzeugtes
+PDF inhaltlich geprueft. Anschliessend aktualisiert der explizite, auf
+unveroeffentlichte Staende begrenzte Abgleich das Root-Manifest und
+`release/SHA256SUMS` transaktional:
+
+```bash
+./scripts/update_release_dependency_metadata.sh --include-handbook
+```
+
+Ohne diese Option aktualisiert der Dependency-Abgleich den Handbuchhash nicht
+stillschweigend. Der PDF-Snapshot-Test vergleicht das versionierte PDF bytegenau
+mit der Ausgabe des aktuellen Generators aus diesem Markdown. Wiederholte
+Erzeugung darf keine Drift erzeugen. Historische Releases, Tags,
+Published-Snapshots und der freigegebene SBOM-Snapshot bleiben unveraendert.
