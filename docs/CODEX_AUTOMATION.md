@@ -102,8 +102,8 @@ markers, and an attempt number outside the range do not increase the count.
 The automation was reviewed against the official upstream repositories on
 2026-07-18 and pins complete commits:
 
-- `openai/codex-action` v1:
-  `52fe01ec70a42f454c9d2ebd47598f9fd6893d56`
+- `openai/codex-action` v1.13 (verified 2026-10-15):
+  `bdf19a4a223ec2549a3e2274a0cf61556bc07675`
 - `actions/checkout` v7.0.0:
   `9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0`
 - `actions/github-script` v9.0.0:
@@ -113,8 +113,29 @@ The automation was reviewed against the official upstream repositories on
 - `actions/download-artifact` v8.0.2 (geprueft 2026-10-15):
   `9000827ccba6bdab643e8b6fd33ac0654aef8333`
 
-The Codex CLI is pinned to `0.144.5`. Moving tags such as `@v1`, `@main`, or
+The Codex CLI is pinned to `0.144.4`. Moving tags such as `@v1`, `@main`, or
 `@master` are rejected by the focused automation check.
+
+The targeted v1.13 action update does not change the CLI/model pins, permission
+profiles, owner/bot allow-list, step-scoped API-key input, or separate push job.
+Its Linux `drop-sudo` path additionally requires `/usr/bin/setfacl` (the `acl`
+package), `/usr/bin/setpriv`, an unprivileged `nobody` account and ACL support
+on `/run`. Missing prerequisites and unsupported empty socket ACL masks fail
+closed; do not fall back to `unsafe`, restore sudo, or grant capabilities to
+make the action pass. Use disposable runners, especially for self-hosted setups.
+
+The version-bound review exercised the committed upstream `dist/main.js` on
+Node24 in a new, network-isolated disposable container with no host mounts,
+no host Docker socket and no credentials. A synthetic root-owned Unix socket
+and fake Codex enabled real UID/group, ACL, `no_new_privs`, capability and
+output-drain regressions without model calls. All 34 targeted upstream tests
+passed without skips. This is not a live OpenAI-proxy or self-hosted-runner
+certification. Never run upstream account/socket-mutating isolation tests on
+an existing workstation; preserve the existing read-only/mock local checks.
+
+The general privilege and trigger boundaries follow the
+[official Codex GitHub Action guidance](https://learn.chatgpt.com/docs/github-action).
+Version-specific behavior is bound to the full commit above, not a moving tag.
 
 ## Testing
 
