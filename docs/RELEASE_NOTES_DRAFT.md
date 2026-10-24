@@ -45,6 +45,17 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 - Handbuch, Migrationen und freigegebener SBOM-Snapshot bleiben unveraendert;
   Development-Manifest und Pruefsummen werden zum Lockfile abgeglichen
 
+## Tokio-Runtime-Wartung
+
+- gezieltes Lockfile-Update von `tokio 1.53.1` auf `1.53.3` mit upstream
+  korrigierter Timer-, Task-, Channel- und I/O-Sicherheitsabwicklung;
+  `1.53.2` wird wegen `RUSTSEC-2026-0386` nicht als Zielstand verwendet
+- keine weiteren Dependency- oder Cargo-Featureaenderungen; MSRV und
+  bestehende Tenant-, Authentifizierungs- und Audit-Grenzen bleiben unveraendert
+- Development-Metadaten und Pruefsummen zum Lockfile abgeglichen;
+  Handbuch, Migrationen, freigegebener SBOM-Snapshot und Published-Artefakte
+  bleiben unveraendert
+
 ## TLS-Dependency-Sicherheitskorrektur
 
 - minimale Lockfile-Updates auf `rustls-webpki 0.103.16` und
