@@ -62,7 +62,7 @@ rust-init:
 	cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-backend -- init-demo
 
 docs-pdf:
-	cargo run --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-doc-pdf -- docs/ISCY_Handbuch.md docs/ISCY_Handbuch.pdf
+	cargo run --locked --manifest-path $(RUST_BACKEND_MANIFEST) --bin iscy-doc-pdf -- docs/ISCY_Handbuch.md docs/ISCY_Handbuch.pdf
 
 rust-smoke:
 	@tmpdir=$$(mktemp -d); \
