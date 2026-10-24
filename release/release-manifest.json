@@ -14,10 +14,10 @@
     "nix_development_path": "1.95.0"
   },
   "cargo_package_version": "0.3.22",
-  "cargo_lock_sha256": "28f23b15202ea0bb1b680b2c094beeb9fa3c3f5c7ca630f87c010aeeb82d8577",
+  "cargo_lock_sha256": "f55ef214e202ee8630df2070d55b8528fc383c833f34c2f59785773b3ae679b0",
   "flake_lock_sha256": "1924a2dca3174b9da0d56c54533ba39fd703265c04a347b43d8b306270a7e1ec",
-  "handbook_sha256": "936c07ac25495a2df072a887e6eb2ecd7e9f3a536468b6e8a45f8f678dae6df7",
-  "migration_count": 46,
+  "handbook_sha256": "0babb2467d4bf011ff1d88622bec3bcb78dba2aeef5f490d4237a4b57a3dd751",
+  "migration_count": 47,
   "platform_versions": {
     "nginx": "1.31-alpine",
     "nixpkgs": "nixos-26.05"

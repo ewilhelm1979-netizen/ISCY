@@ -397,7 +397,7 @@ fn validate_xlsx_archive(data: &[u8]) -> Result<(), String> {
         if total_uncompressed > XLSX_MAX_TOTAL_UNCOMPRESSED_BYTES {
             return Err("XLSX-Datei ueberschreitet das sichere Entpack-Limit.".to_string());
         }
-        let normalized_name = file.name().replace('\\', "/").to_ascii_lowercase();
+        let normalized_name = normalized_xlsx_entry_name(file.name())?;
         if normalized_name == "sharedstrings.xml" || normalized_name.ends_with("/sharedstrings.xml")
         {
             shared_string_indices.push(index);
@@ -411,6 +411,13 @@ fn validate_xlsx_archive(data: &[u8]) -> Result<(), String> {
         validate_shared_strings_xml(file, XLSX_MAX_SHARED_STRINGS, XLSX_MAX_USED_CELLS)?;
     }
     Ok(())
+}
+
+fn normalized_xlsx_entry_name(
+    name: zip::result::ZipResult<std::borrow::Cow<'_, str>>,
+) -> Result<String, String> {
+    name.map(|name| name.replace('\\', "/").to_ascii_lowercase())
+        .map_err(|_| "XLSX-Archiv konnte nicht sicher gelesen werden.".to_string())
 }
 
 fn validate_shared_strings_xml<R: Read>(
@@ -862,6 +869,87 @@ mod tests {
         }
     }
 
+    fn xlsx_archive_fixture(
+        entries: &[(&str, &[u8])],
+        compression: zip::CompressionMethod,
+    ) -> Vec<u8> {
+        use std::io::Write;
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(compression);
+        for (name, data) in entries {
+            archive.start_file(name, options).unwrap();
+            archive.write_all(data).unwrap();
+        }
+        archive.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn xlsx_fallible_name_boundary_normalizes_or_rejects_without_fallback() {
+        use std::borrow::Cow;
+        for name in [
+            Cow::Borrowed("XL\\SHAREDSTRINGS.XML"),
+            Cow::Owned("XL/SHAREDSTRINGS.XML".to_string()),
+        ] {
+            assert_eq!(
+                normalized_xlsx_entry_name(Ok(name)).unwrap(),
+                "xl/sharedstrings.xml"
+            );
+        }
+        // Inject the new fallible API result: no empty-name/skip fallback and
+        // no dependency error details or raw paths reach the public message.
+        assert_eq!(
+            normalized_xlsx_entry_name(Err(zip::result::ZipError::FileNotFound)).unwrap_err(),
+            "XLSX-Archiv konnte nicht sicher gelesen werden."
+        );
+    }
+
+    #[test]
+    fn xlsx_archive_stored_deflated_and_cp437_names_remain_supported() {
+        let xml = br#"<sst count='1' uniqueCount='1'><si><t>Name</t></si></sst>"#;
+        for compression in [
+            zip::CompressionMethod::Stored,
+            zip::CompressionMethod::Deflated,
+        ] {
+            let archive = xlsx_archive_fixture(&[("xl/sharedStrings.xml", xml)], compression);
+            validate_xlsx_archive(&archive).unwrap();
+        }
+        let name = b"X/sharedStrings.xml";
+        let mut archive = xlsx_archive_fixture(
+            &[("X/sharedStrings.xml", xml)],
+            zip::CompressionMethod::Stored,
+        );
+        let positions = archive
+            .windows(name.len())
+            .enumerate()
+            .filter_map(|(index, value)| (value == name).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(positions.len(), 2); // local and central-directory names
+        for index in positions {
+            archive[index] = 0x84; // CP437 ae; ASCII writer set no UTF-8 flag
+        }
+        let mut parsed = ZipArchive::new(Cursor::new(&archive)).unwrap();
+        assert_eq!(
+            parsed.by_index(0).unwrap().name().unwrap(),
+            "ä/sharedStrings.xml"
+        );
+        validate_xlsx_archive(&archive).unwrap();
+    }
+
+    #[test]
+    fn xlsx_name_variants_cannot_skip_shared_string_preflight() {
+        let xml = format!("<sst uniqueCount='{}'/>", XLSX_MAX_SHARED_STRINGS + 1);
+        for name in [
+            "XL/SHAREDSTRINGS.XML",
+            "XL\\SHAREDSTRINGS.XML",
+            "Ä/sharedStrings.xml",
+        ] {
+            let archive =
+                xlsx_archive_fixture(&[(name, xml.as_bytes())], zip::CompressionMethod::Deflated);
+            let error = validate_xlsx_archive(&archive).unwrap_err();
+            assert!(error.contains("sichere Import-Limit"));
+        }
+    }
+
     #[test]
     fn shared_string_invalid_utf8_and_numeric_attributes_are_rejected() {
         for xml in [
@@ -933,5 +1021,52 @@ mod tests {
             }
         }
         assert!(validate_shared_strings_xml(ReadError, 1, 1).is_err());
+    }
+
+    #[test]
+    fn xlsx_zip_api_keeps_archive_entry_and_expansion_budgets() {
+        let names = (0..=XLSX_MAX_ARCHIVE_ENTRIES)
+            .map(|index| format!("entry-{index}"))
+            .collect::<Vec<_>>();
+        let entries = names
+            .iter()
+            .map(|name| (name.as_str(), b"".as_slice()))
+            .collect::<Vec<_>>();
+        let archive = xlsx_archive_fixture(&entries, zip::CompressionMethod::Stored);
+        assert!(validate_xlsx_archive(&archive)
+            .unwrap_err()
+            .contains("zu viele Archiv-Eintraege"));
+
+        for (entries, declared_size) in [
+            (
+                vec![("one", b"x".as_slice())],
+                XLSX_MAX_ENTRY_UNCOMPRESSED_BYTES + 1,
+            ),
+            (
+                vec![
+                    ("one", b"x".as_slice()),
+                    ("two", b"y".as_slice()),
+                    ("three", b"z".as_slice()),
+                ],
+                XLSX_MAX_ENTRY_UNCOMPRESSED_BYTES,
+            ),
+        ] {
+            // Change only synthetic central-directory size metadata. No
+            // payload of the declared size is allocated or decompressed.
+            let mut archive = xlsx_archive_fixture(&entries, zip::CompressionMethod::Stored);
+            let headers = archive
+                .windows(4)
+                .enumerate()
+                .filter_map(|(index, bytes)| (bytes == b"PK\x01\x02").then_some(index))
+                .collect::<Vec<_>>();
+            assert_eq!(headers.len(), entries.len());
+            for offset in headers {
+                archive[offset + 24..offset + 28]
+                    .copy_from_slice(&(declared_size as u32).to_le_bytes());
+            }
+            assert!(validate_xlsx_archive(&archive)
+                .unwrap_err()
+                .contains("sichere Entpack-Limit"));
+        }
     }
 }

@@ -295,6 +295,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: SQLITE_MACHINERY_CRA_SAFETY_SECURITY_SCHEMA,
         postgres_sql: POSTGRES_MACHINERY_CRA_SAFETY_SECURITY_SCHEMA,
     },
+    Migration {
+        version: "0047_rust_soa_cutover_restoration",
+        sqlite_sql: crate::soa::SQLITE_SCHEMA,
+        postgres_sql: crate::soa::POSTGRES_SCHEMA,
+    },
 ];
 
 const SQLITE_MACHINERY_CRA_SAFETY_SECURITY_SCHEMA: &str = r#"
