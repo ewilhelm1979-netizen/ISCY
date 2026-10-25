@@ -69,8 +69,10 @@ separately reviewed authentication design is approved.
   `permission-profile: :workspace`.
 - Every Codex invocation uses `safety-strategy: drop-sudo`, the explicit owner
   allow-list, and `allow-bots: false`.
-- The OpenAI key is passed only to the official action input. It is never
-  written to context, output, logs, comments, or prompts.
+- The OpenAI key remains step-scoped: the existing `/v1/models` authentication
+  preflight uses its dedicated environment, and Codex receives the key through
+  the official action input. It is not a job-level environment variable and
+  must never be written to context, output, logs, comments, or prompts.
 - Checkout credentials are never persisted. The GitHub token is exposed as a
   push credential only in the separate commit/push step.
 - Remote head equality is checked before Codex, before patch application,
@@ -124,14 +126,21 @@ on `/run`. Missing prerequisites and unsupported empty socket ACL masks fail
 closed; do not fall back to `unsafe`, restore sudo, or grant capabilities to
 make the action pass. Use disposable runners, especially for self-hosted setups.
 
-The version-bound review exercised the committed upstream `dist/main.js` on
-Node24 in a new, network-isolated disposable container with no host mounts,
-no host Docker socket and no credentials. A synthetic root-owned Unix socket
-and fake Codex enabled real UID/group, ACL, `no_new_privs`, capability and
-output-drain regressions without model calls. All 34 targeted upstream tests
-passed without skips. This is not a live OpenAI-proxy or self-hosted-runner
-certification. Never run upstream account/socket-mutating isolation tests on
-an existing workstation; preserve the existing read-only/mock local checks.
+A preserved historical review from 2026-10-15 exercised the committed upstream
+`dist/main.js` on Node24.21.0 in a network-isolated, non-privileged disposable
+container with no host mounts or host Docker socket. Its logs bind the bundle
+to SHA-256 `24b4bb0de44d67b2c2ed15f9e780f93887c5bfe688445e00d0bd5de4b380a232`,
+also independently rechecked against the pinned published bytes. A synthetic
+root-owned Unix socket and fake Codex enabled real UID/group, ACL,
+`no_new_privs`, capability and output-drain regressions without model calls.
+The successful historical run has 34 passed, zero failed and zero skipped;
+the separate earlier 16-pass/18-fail fixture attempt remains failed.
+These tests were not rerun on the workstation. The archived isolation receipt
+omits `Config.Env` and separate entrypoint/test-source hashes, so credential
+absence and fixture-source byte identity were not independently revalidated.
+This is not a live OpenAI-proxy or self-hosted-runner certification. Never run
+upstream account/socket-mutating isolation tests on an existing workstation;
+preserve the existing read-only/mock local checks.
 
 The general privilege and trigger boundaries follow the
 [official Codex GitHub Action guidance](https://learn.chatgpt.com/docs/github-action).
