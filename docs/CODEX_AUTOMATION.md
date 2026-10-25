@@ -110,8 +110,8 @@ The automation was reviewed against the official upstream repositories on
   `3a2844b7e9c422d3c10d287c895573f7108da1b3`
 - `actions/upload-artifact` v7.0.2 (verified 2026-10-15):
   `cf430e030ddbb5b0abf93d22962f4752f3646cd9`
-- `actions/download-artifact` v8.0.0:
-  `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c`
+- `actions/download-artifact` v8.0.2 (geprueft 2026-10-15):
+  `9000827ccba6bdab643e8b6fd33ac0654aef8333`
 
 The Codex CLI is pinned to `0.144.5`. Moving tags such as `@v1`, `@main`, or
 `@master` are rejected by the focused automation check.

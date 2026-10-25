@@ -22,6 +22,55 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## SoA-Rust-Wiederherstellung und Schreibschutz
+
+- additive Migration `0047_rust_soa_cutover_restoration` fuer SQLite und PostgreSQL;
+  bestehende SoA-Dokumente, Controls und Freigabeinformationen bleiben erhalten
+- eigenstaendige Erstentwuerfe aus aktiven ISO27001-Requirements, tenantgebundene
+  API-/Webansichten und transaktional auditierte Control-Bearbeitung
+- nur exaktes `DRAFT` ist bearbeitbar; `IN_REVIEW`, `APPROVED` und unbekannte
+  Zustaende sind auch bei veralteten Formularen und parallelen Schreibern gesperrt
+- keine SoA-Importart und keine privilegierte Ausnahme; kein neuer Entwurf darf
+  als implementierte Nachfolgeversion ausgegeben werden
+- Vorgaengerzuordnung, historische Snapshots und der vollstaendige erneute
+  SoA-Pruef-/Freigabeablauf bleiben gesonderte Arbeit gemaess
+  `docs/SOA_RESTORATION_CONTRACT.md`; keine automatische Konformitaetsentscheidung
+
+## JSON-Dependency-Wartung
+
+- gezieltes Lockfile-Update von `serde_json 1.0.151` auf `1.0.154` ohne
+  zusaetzliche transitive Pakete oder Cargo-Featureaenderungen
+- aktive Features bleiben `std` und `raw_value`; ungueltiges UTF-8 wird
+  weiterhin abgewiesen, seine gemeldete Fehlerposition wurde upstream korrigiert
+- Handbuch, Migrationen und freigegebener SBOM-Snapshot bleiben unveraendert;
+  Development-Manifest und Pruefsummen werden zum Lockfile abgeglichen
+
+## Tokio-Runtime-Wartung
+
+- gezieltes Lockfile-Update von `tokio 1.53.1` auf `1.53.3` mit upstream
+  korrigierter Timer-, Task-, Channel- und I/O-Sicherheitsabwicklung;
+  `1.53.2` wird wegen `RUSTSEC-2026-0386` nicht als Zielstand verwendet
+- keine weiteren Dependency- oder Cargo-Featureaenderungen; MSRV und
+  bestehende Tenant-, Authentifizierungs- und Audit-Grenzen bleiben unveraendert
+- Development-Metadaten und Pruefsummen zum Lockfile abgeglichen;
+  Handbuch, Migrationen, freigegebener SBOM-Snapshot und Published-Artefakte
+  bleiben unveraendert
+
+## TLS-Dependency-Sicherheitskorrektur
+
+- minimale Lockfile-Updates auf `rustls-webpki 0.103.16` und
+  `webpki-roots 1.0.10` fuer `RUSTSEC-2026-0382` und `RUSTSEC-2026-0381`
+  (beide `CVE-2026-111943`): zurueckgezogene emSign-Zertifikatsketten werden
+  im aktualisierten Verifier abgewiesen und der betroffene gebuendelte Root
+  entfernt
+- Reqwest-/SQLx-Versionen, Cargo-Features und die inaktive Quinn-/HTTP3-Kante
+  unveraendert; keine neuen Security-Ausnahmen
+- betrifft zertifikatsvalidierende TLS-Clients; deaktivierte Zertifikatspruefung
+  oder unverschluesselte Verbindungen werden dadurch nicht abgesichert
+- der minimale gepatchte Root-Stand uebernimmt auch die upstream entfernten
+  `SecureSign Root CA12` und `Atos TrustedRoot 2011` sowie vier neue Roots;
+  spezifische betriebliche Zertifikatsketten benoetigen eine gesonderte Pruefung
+
 ## Machinery & CRA Safety-Security Co-Engineering – Phase 1
 
 - additive Migration `0046_rust_machinery_cra_safety_security_foundation` für
