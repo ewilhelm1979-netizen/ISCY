@@ -68,6 +68,7 @@ pub mod requirement_store;
 pub mod risk_store;
 pub mod roadmap_store;
 pub mod security_store;
+pub mod soa;
 pub mod software_policy_store;
 pub mod supplier_product_security_store;
 pub mod supplier_store;
@@ -13503,6 +13504,16 @@ async fn incident_update(
             }),
         )
             .into_response(),
+        Err(err) if err.is::<incident_store::IncidentDeadlineAnchorError>() => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "incident_deadline_anchor_invalid",
+                message: err.to_string(),
+            }),
+        )
+            .into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiErrorResponse {
@@ -19230,16 +19241,19 @@ async fn management_review_status_update(
             }),
         )
             .into_response(),
-        Err(err) => (
+        Err(err) if err.is::<report_store::ManagementReviewStatusValidationError>() => (
             StatusCode::BAD_REQUEST,
             Json(ApiErrorResponse {
                 accepted: false,
                 api_version: "v1",
                 error_code: "management_review_invalid",
-                message: format!("Management-Review konnte nicht aktualisiert werden: {err}"),
+                message: err.to_string(),
             }),
         )
             .into_response(),
+        Err(_) => {
+            api_database_error("Management-Review konnte nicht aktualisiert werden.".to_string())
+        }
     }
 }
 
@@ -19638,6 +19652,11 @@ async fn web_index(
             "Reports",
             &web_path_with_context("/reports/", context.as_ref()),
             "Readiness-Snapshots",
+        ),
+        web_link_card(
+            "Statement of Applicability",
+            "/assessments/soa/",
+            "ISO27001-Controls begruendet pruefen",
         ),
         web_link_card(
             "Roadmap",
@@ -29326,13 +29345,25 @@ async fn web_management_review_status_submit(
             "Management-Review wurde nicht gefunden.",
         )
         .into_response(),
-        Err(err) => web_error_page(
-            "Management Review",
-            "/management-reviews/",
-            &context,
-            &err.to_string(),
+        Err(err) if err.is::<report_store::ManagementReviewStatusValidationError>() => {
+            web_error_page(
+                "Management Review",
+                "/management-reviews/",
+                &context,
+                &err.to_string(),
+            )
+            .into_response()
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            web_error_page(
+                "Management Review",
+                "/management-reviews/",
+                &context,
+                "Management-Review konnte nicht aktualisiert werden.",
+            ),
         )
-        .into_response(),
+            .into_response(),
     }
 }
 
@@ -33983,7 +34014,7 @@ async fn web_assessments(
         .join("");
     let body = format!(
         r#"
-        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p></section>
+        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p><a href="/assessments/soa/">Statement of Applicability</a></section>
         <section class="metrics">
           {}
           {}
@@ -47826,6 +47857,7 @@ pub fn app_router() -> Router {
 pub fn app_router_with_state(state: AppState) -> Router {
     let security_config = state.security_config.clone();
     Router::new()
+        .merge(soa::routes())
         .route("/health", get(health_live))
         .route("/health/ready", get(health_ready))
         .route("/health/live", get(health_live))
