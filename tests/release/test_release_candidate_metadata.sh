@@ -150,15 +150,15 @@ candidate="$(mutate_manifest root_binary_claim '
 ')"
 expect_rejected root_binary_claim "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" manifest
 
-candidate="$(mutate_manifest migration_count_low '.migration_count = 45')"
+candidate="$(mutate_manifest migration_count_low '.migration_count -= 1')"
 expect_rejected migration_count_low "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" migration_count
 
-candidate="$(mutate_manifest migration_count_high '.migration_count = 47')"
+candidate="$(mutate_manifest migration_count_high '.migration_count += 1')"
 expect_rejected migration_count_high "$candidate" "$source_snapshot" "$source_db_admin" "$source_notes" migration_count
 
 gap_db_admin="$tmp_dir/gap-db-admin.rs"
 sed '/version: "0020_/d' "$source_db_admin" >"$gap_db_admin"
-gap_manifest="$(mutate_manifest migration_gap '.migration_count = 45')"
+gap_manifest="$(mutate_manifest migration_gap '.migration_count -= 1')"
 expect_rejected migration_gap "$gap_manifest" "$source_snapshot" "$gap_db_admin" "$source_notes" migration_sequence
 
 duplicate_db_admin="$tmp_dir/duplicate-db-admin.rs"
