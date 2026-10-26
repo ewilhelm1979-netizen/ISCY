@@ -15,7 +15,7 @@
   },
   "cargo_package_version": "0.3.22",
   "cargo_lock_sha256": "5a4cc1a9ce7045b354eb9a47d2729d2b65eebcb79e53155645f85cf0fc6fad53",
-  "flake_lock_sha256": "4230dce487c53cb675db29ae01dae635dfeb7a3cefd06566e5c1dc6720b95459",
+  "flake_lock_sha256": "1d10ae61c8e7f4ee352b1cf81932dca27f7e0f8d9b7a19392203e25695f52c39",
   "handbook_sha256": "0babb2467d4bf011ff1d88622bec3bcb78dba2aeef5f490d4237a4b57a3dd751",
   "migration_count": 47,
   "platform_versions": {
