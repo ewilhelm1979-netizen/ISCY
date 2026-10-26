@@ -1777,7 +1777,7 @@ fn now_timestamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::hex_encode_bytes(&Sha256::digest(bytes))
 }
 
 fn ensure_same_indicator_provenance(

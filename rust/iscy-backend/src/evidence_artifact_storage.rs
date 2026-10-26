@@ -174,7 +174,7 @@ impl FilesystemEvidenceArtifactStorage {
                 };
             }
         };
-        let calculated = format!("{:x}", Sha256::digest(&bytes));
+        let calculated = crate::hex_encode_bytes(&Sha256::digest(&bytes));
         if !expected_present {
             return EvidenceArtifactDrill {
                 backend: Self::BACKEND,
@@ -355,7 +355,7 @@ mod tests {
         let storage = FilesystemEvidenceArtifactStorage::new(root.clone());
         let empty = storage.drill(
             &EvidenceArtifactRef::new(Some("empty.txt".to_string())),
-            &format!("{:x}", Sha256::digest(b"")),
+            &crate::hex_encode_bytes(&Sha256::digest(b"")),
         );
         assert_eq!(empty.status, "valid");
         assert!(empty.empty);

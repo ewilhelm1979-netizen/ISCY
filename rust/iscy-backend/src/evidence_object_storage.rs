@@ -422,7 +422,7 @@ pub fn redacted_object_key(object_key: &str) -> String {
 }
 
 pub fn full_sha256(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
+    crate::hex_encode_bytes(&Sha256::digest(value.as_bytes()))
 }
 
 pub fn short_sha256(value: &str) -> String {
