@@ -41,7 +41,7 @@ pub async fn download_evidence(
         Ok(context) => context,
         Err(response) => {
             audit_download(None, evidence_id, None, "deny", "authentication_failed");
-            return response;
+            return *response;
         }
     };
 
@@ -51,34 +51,34 @@ pub async fn download_evidence(
 async fn authenticated_context(
     state: &AppState,
     headers: &HeaderMap,
-) -> Result<AuthenticatedTenantContext, Response> {
+) -> Result<AuthenticatedTenantContext, Box<Response>> {
     let Some(token) = session_token_from_headers(headers) else {
-        return Err(error_response(
+        return Err(Box::new(error_response(
             StatusCode::UNAUTHORIZED,
             "authentication_required",
             "Evidence-Downloads benoetigen eine gueltige ISCY-Session.",
-        ));
+        )));
     };
     let Some(store) = state.auth_store.as_ref() else {
-        return Err(error_response(
+        return Err(Box::new(error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "authentication_unavailable",
             "Rust-Authentifizierung ist nicht konfiguriert.",
-        ));
+        )));
     };
 
     match store.resolve_session(&token).await {
         Ok(Some(session)) => Ok(session.tenant_context()),
-        Ok(None) => Err(error_response(
+        Ok(None) => Err(Box::new(error_response(
             StatusCode::UNAUTHORIZED,
             "invalid_session",
             "ISCY-Session ist ungueltig oder abgelaufen.",
-        )),
-        Err(_) => Err(error_response(
+        ))),
+        Err(_) => Err(Box::new(error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "authentication_error",
             "ISCY-Session konnte nicht sicher validiert werden.",
-        )),
+        ))),
     }
 }
 

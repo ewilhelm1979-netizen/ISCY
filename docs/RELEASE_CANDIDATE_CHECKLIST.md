@@ -77,14 +77,17 @@ Erst ein separater Release-Prep-PR darf V23.7.34 auf
 | --- | --- | --- |
 | Rust-Paket | `iscy-backend 0.3.22`, Edition 2021 | keine Versionsanhebung |
 | MSRV | Rust `1.88.0` | eigener Locked-Check |
-| Produkt-Build/Test/Clippy | Rust `1.97.0` | getrennt von MSRV und Nix |
-| portabler Builder | digest-gepinntes Rust `1.88` Bookworm | zwei cachefreie Builds bei Release-Prep |
+| Produkt-Build/Test/Clippy | Rust `1.98.1` | getrennt von MSRV und Nix |
+| portabler Builder | digest-gepinntes Rust `1.98.1` Bookworm | zwei cachefreie Builds bei Release-Prep |
 | Nix-Entwicklung | Rust `1.95.0` aus `nixos-26.05` | Build-/Testpfad |
 | aktueller nixpkgs Lock | Commit `2efa67fd26b6df417c33e4603185c701f260dd83` | `nixos-26.05` bleibt Kanalgrenze |
 | direkte Runtime-Dependencies | `base64 0.23.1`, `calamine 0.37.0` | kontrollierte Security-Updates |
 | Actions Checkout | `actions/checkout 7.0.1` per Commit-SHA | unveraenderlicher Pin |
 | Rust Tool Action | `taiki-e/install-action 2.87.31` per Commit-SHA | unveraenderlicher Pin |
 | Quellen/Lizenzen | Cargo-Deny-/Audit-Gates | keine unbekannten Quellen oder stillen Ausnahmen |
+
+Die Rust-1.98.1-Eintraege beschreiben die Build-Vorgabe, nicht bereits
+bestandene CI-, Reproduzierbarkeits- oder Portabilitaetspruefungen.
 
 Die dokumentierten Ausnahmen `RUSTSEC-2023-0071` fuer `rsa` und
 `RUSTSEC-2026-0235` fuer `rkyv` bleiben auf ihre deaktivierten optionalen

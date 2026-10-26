@@ -6,9 +6,24 @@ fn from_hex(value: &str) -> Vec<u8> {
     assert_eq!(value.len() % 2, 0);
     value
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect()
+}
+
+#[test]
+fn hex_fixture_decoder_preserves_valid_bytes() {
+    assert!(from_hex("").is_empty());
+    assert_eq!(from_hex("00ffA5"), [0x00, 0xff, 0xa5]);
+}
+
+#[test]
+fn hex_fixture_decoder_rejects_odd_lengths_and_invalid_hex() {
+    for invalid in ["0", "001", "gg", "0g", "é"] {
+        assert!(std::panic::catch_unwind(|| from_hex(invalid)).is_err());
+    }
 }
 
 fn new_mac(key: &[u8]) -> Hmac<Sha256> {

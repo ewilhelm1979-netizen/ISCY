@@ -255,13 +255,15 @@ Ausfuehrung und Grenzen sind in
 ## Rust-Toolchain-Pfade
 
 Die aktuelle CI-, Clippy-, Test- und Produkt-Build-Spur verwendet exakt Rust
-`1.97.0`. Der gehärtete Produkt-Builder prueft die Compiler-Version vor dem
+`1.98.1`. Der gehärtete Produkt-Builder prueft die Compiler-Version vor dem
 Locked Release-Build fail-closed. Die deklarierte MSRV bleibt Rust `1.88.0`
 und wird in der verpflichtenden CI-Aggregation durch `cargo check --all-targets`
 sowie `cargo test --no-run` mit Rust 1.88 abgesichert.
 
-Der portable Release-Builder bleibt bewusst auf dem bestehenden
-digest-gepinnten Rust-1.88-Bookworm-Image. Die Nix-Toolchain stammt aus dem auf
+Der portable Release-Builder verwendet ebenfalls ein digest-gepinntes
+Rust-1.98.1-Bookworm-Image. Die Build-Vorgabe allein ist kein Nachweis
+bestandener CI-, Reproduzierbarkeits- oder Portabilitaetspruefungen.
+Die Nix-Toolchain stammt aus dem auf
 Commit `8b8c811c7c2541c30382c5de7ed26be055569c60` gepinnten
 `nixos-26.05`-Flake und liefert Rust `1.95.0`. Die Maintenance-Historie seit V23.7.32 aktualisiert
 kontrolliert die direkte `base64`-Abhaengigkeit und einzelne Lockfile-
@@ -285,7 +287,7 @@ Scan und den exakten Published-Baseline-Tag V23.7.33. Ein V23.7.34-Tag darf im a
 JavaScript/TypeScript und Rust bleibt ein separater Pflichtnachweis.
 
 `make release-binary-gate` erzeugt das Release-Binary zweimal cachefrei in
-einem digest-gepinnten Rust-1.88-Bookworm-Builder unter `/usr/src/iscy`.
+einem digest-gepinnten Rust-1.98.1-Bookworm-Builder unter `/usr/src/iscy`.
 Cargo-Registry-Pfade werden auf neutrale Praefixe abgebildet, Release-Debuginfo
 und inkrementeller Build sind deaktiviert und Symbole werden kontrolliert
 gestrippt. Beide Builds muessen byteidentisch sein. Das finale

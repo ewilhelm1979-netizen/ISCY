@@ -73,8 +73,10 @@ case "$release_status" in
             'Der veroeffentlichte Vorgaenger V23.7.33 fehlt.'
         require_phrase nginx 'nginx:1.31-alpine' \
             'Die nginx-1.31-Maintenance fehlt.'
-        require_phrase rust_toolchain "Rust ${backtick}1.97.0${backtick}" \
-            'Die Rust-1.97-Produkttoolchain fehlt.'
+        require_phrase rust_toolchain "Produkt-/CI-Builder Rust ${backtick}1.98.1${backtick}" \
+            'Die Rust-1.98.1-Produkttoolchain fehlt.'
+        require_phrase portable_rust_toolchain "Portabler Release-Builder Rust ${backtick}1.98.1${backtick}" \
+            'Die Rust-1.98.1-Release-Toolchain fehlt.'
         require_phrase msrv "MSRV bleibt Rust ${backtick}1.88.0${backtick}" \
             'Die unveraenderte MSRV 1.88 fehlt.'
         require_phrase nixpkgs 'nixos-26.05' \

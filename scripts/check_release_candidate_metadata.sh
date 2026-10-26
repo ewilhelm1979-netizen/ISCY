@@ -86,6 +86,7 @@ if [[ "$release_status" == 'prepared_not_published' \
 fi
 if [[ "${ISCY_SKIP_RELEASE_REGRESSION_TESTS:-false}" != 'true' ]]; then
     ./tests/release/test_release_notes_completeness.sh
+    ./tests/release/test_rust_toolchain_contract.sh
     ./tests/release/test_release_candidate_metadata.sh
     ./tests/release/test_release_lifecycle.sh
     ./tests/release/test_release_sbom_lifecycle.sh
@@ -101,9 +102,9 @@ jq -e '
     .migration_count == (.migration_count | floor) and
     .cargo_package_version == "0.3.22" and
     .rust_version.package_msrv == "1.88" and
-    .rust_version.ci_product_builder == "1.97.0" and
-    .rust_version.product_container_builder == "1.97.0" and
-    .rust_version.portable_release_builder == "1.88" and
+    .rust_version.ci_product_builder == "1.98.1" and
+    .rust_version.product_container_builder == "1.98.1" and
+    .rust_version.portable_release_builder == "1.98.1" and
     .rust_version.nix_development_path == "1.95.0" and
     .platform_versions.nginx == "1.31-alpine" and
     .platform_versions.nixpkgs == "nixos-26.05" and
@@ -127,6 +128,9 @@ jq -e '
     .release_artifact.binary_sha256 == null
 ' "$manifest_path" >/dev/null \
     || fail manifest 'Pflichtfelder oder sichere Plattformwerte sind ungueltig.'
+
+ISCY_RELEASE_MANIFEST_PATH="$manifest_path" ./scripts/check_rust_toolchain_contract.sh \
+    || fail toolchain 'Rust-Builder, Compiler-Guards, CI und Manifest sind inkonsistent.'
 
 jq -e '
     .bomFormat == "CycloneDX" and
