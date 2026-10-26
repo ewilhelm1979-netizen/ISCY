@@ -111,7 +111,12 @@ git -C "$tag_fixture" fetch --quiet --no-tags "$repo_root" HEAD
 git -C "$tag_fixture" checkout --quiet --detach FETCH_HEAD
 git -C "$tag_fixture" tag "$published_version" "$published_commit"
 cp -- "$guard" "$tag_fixture/scripts/check_release_candidate_metadata.sh"
+cp -- scripts/check_rust_toolchain_contract.sh "$tag_fixture/scripts/check_rust_toolchain_contract.sh"
 cp -- scripts/check_release_notes_completeness.sh "$tag_fixture/scripts/check_release_notes_completeness.sh"
+cp -- .github/workflows/ci.yml "$tag_fixture/.github/workflows/ci.yml"
+cp -- rust/iscy-backend/Dockerfile "$tag_fixture/rust/iscy-backend/Dockerfile"
+cp -- rust/iscy-backend/Dockerfile.release "$tag_fixture/rust/iscy-backend/Dockerfile.release"
+cp -- rust/iscy-backend/Cargo.toml "$tag_fixture/rust/iscy-backend/Cargo.toml"
 cp -- "$source_manifest" "$tag_fixture/$source_manifest"
 cp -- "$source_snapshot" "$tag_fixture/$source_snapshot"
 cp -- "$source_notes" "$tag_fixture/$source_notes"
@@ -207,7 +212,8 @@ cat >"$candidate_notes" <<'EOF'
 # ISCY V23.7.34 - Release Notes
 Status: Stabiler Release.
 Vorgänger: `V23.7.33`.
-nginx:1.31-alpine, Rust `1.97.0`, MSRV bleibt Rust `1.88.0`, nixos-26.05.
+nginx:1.31-alpine, Produkt-/CI-Builder Rust `1.98.1`, MSRV bleibt Rust `1.88.0`, nixos-26.05.
+Portabler Release-Builder Rust `1.98.1` bleibt vom MSRV-Nachweis getrennt.
 PostgreSQL 16 bleibt der Standard; PostgreSQL 18.4 ist zusaetzlich geprueft.
 Der NIS2-Relevanz-Wizard erzeugt eine Applicability-Begruendung im NIS2- und
 KRITIS-Kontext, aber keine rechtsverbindliche Einstufung. Eine

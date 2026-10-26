@@ -3544,7 +3544,7 @@ async fn operations_alertmanager_webhook(
         Err(response) => return *response,
     };
     if let Err(response) = alertmanager_hmac_valid(&state, &headers, &body).await {
-        return response;
+        return *response;
     }
     let payload = match serde_json::from_slice::<AlertmanagerWebhookPayload>(&body) {
         Ok(payload) => payload,
@@ -3703,12 +3703,12 @@ async fn alertmanager_hmac_valid(
     state: &AppState,
     headers: &HeaderMap,
     body: &[u8],
-) -> Result<(), Response> {
+) -> Result<(), Box<Response>> {
     let Ok(current_secret) = hardening::secret_value("ISCY_ALERTMANAGER_HMAC_SECRET") else {
-        return Err(alertmanager_auth_response(
+        return Err(Box::new(alertmanager_auth_response(
             "invalid_alertmanager_hmac_config",
             "Alertmanager-HMAC-Secret konnte nicht gelesen werden.",
-        ));
+        )));
     };
     let Some(current_secret) = current_secret else {
         return Ok(());
@@ -3745,10 +3745,10 @@ async fn alertmanager_hmac_valid(
         consume_alertmanager_hmac_nonce(state, &nonce, max_age).await?;
         return Ok(());
     }
-    Err(alertmanager_auth_response(
+    Err(Box::new(alertmanager_auth_response(
         "invalid_alertmanager_hmac_signature",
         "Alertmanager-HMAC-Signatur ist ungueltig.",
-    ))
+    )))
 }
 
 fn alertmanager_hmac_max_age() -> Duration {
@@ -3784,7 +3784,7 @@ async fn consume_alertmanager_hmac_nonce(
     state: &AppState,
     nonce: &str,
     max_age: Duration,
-) -> Result<(), Response> {
+) -> Result<(), Box<Response>> {
     let Some(store) = state.security_store.as_ref() else {
         return Ok(());
     };
@@ -3793,14 +3793,14 @@ async fn consume_alertmanager_hmac_nonce(
         .await
     {
         Ok(true) => Ok(()),
-        Ok(false) => Err(alertmanager_auth_response(
+        Ok(false) => Err(Box::new(alertmanager_auth_response(
             "replayed_alertmanager_hmac_nonce",
             "Alertmanager-HMAC-Nonce wurde im Replay-Fenster bereits verwendet.",
-        )),
-        Err(_) => Err(alertmanager_auth_response(
+        ))),
+        Err(_) => Err(Box::new(alertmanager_auth_response(
             "invalid_alertmanager_hmac_nonce_store",
             "Alertmanager-HMAC-Nonce konnte nicht persistiert werden.",
-        )),
+        ))),
     }
 }
 
@@ -4668,12 +4668,12 @@ async fn product_safety_access(
     state: &AppState,
     headers: &HeaderMap,
     permission: &str,
-) -> Result<(AuthenticatedTenantContext, ProductSafetyStore), Response> {
+) -> Result<(AuthenticatedTenantContext, ProductSafetyStore), Box<Response>> {
     let context = authenticated_tenant_context(state, headers)
         .await
         .map_err(api_context_error)?;
     if let Some(response) = product_safety_permission_error(&context, permission) {
-        return Err(response);
+        return Err(Box::new(response));
     }
     let store = state.product_safety_store.clone().ok_or_else(|| {
         api_database_not_configured("Rust-Product-Safety-Store ist nicht konfiguriert.")
@@ -4689,7 +4689,7 @@ async fn product_conformity_detail(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.product_detail(context.tenant_id, product_id).await {
         Ok(detail) => (
@@ -4709,7 +4709,7 @@ async fn product_applicability_list(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.list_applicability(context.tenant_id, product_id).await {
         Ok(applicability) => (
@@ -4735,7 +4735,7 @@ async fn product_applicability_upsert(
     .await
     {
         Ok(access) => access,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match store
         .upsert_applicability(context.tenant_id, product_id, context.user_id, payload)
@@ -4758,7 +4758,7 @@ async fn machinery_profile_get(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.machinery_profile(context.tenant_id, product_id).await {
         Ok(Some(profile)) => (
@@ -4782,7 +4782,7 @@ async fn machinery_profile_upsert(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_MANAGE_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .upsert_machinery_profile(context.tenant_id, product_id, context.user_id, payload)
@@ -4805,7 +4805,7 @@ async fn safety_functions_list(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.list_safety_functions(context.tenant_id, product_id).await {
         Ok(functions) => (
@@ -4826,7 +4826,7 @@ async fn safety_function_create(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_MANAGE_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .create_safety_function(context.tenant_id, product_id, context.user_id, payload)
@@ -4854,7 +4854,7 @@ async fn safety_function_update(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_MANAGE_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .update_safety_function(context.tenant_id, function_id, context.user_id, payload)
@@ -4879,7 +4879,7 @@ async fn safety_hazards_list(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.list_hazards(context.tenant_id, product_id).await {
         Ok(hazards) => (
@@ -4900,7 +4900,7 @@ async fn safety_hazard_create(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_MANAGE_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .create_hazard(context.tenant_id, product_id, context.user_id, payload)
@@ -4923,7 +4923,7 @@ async fn safety_hazard_detail(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.get_hazard(context.tenant_id, hazard_id).await {
         Ok(hazard) => (
@@ -4944,7 +4944,7 @@ async fn safety_hazard_update(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_MANAGE_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .update_hazard(context.tenant_id, hazard_id, context.user_id, payload)
@@ -4967,7 +4967,7 @@ async fn safety_assessments_list(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.list_assessments(context.tenant_id, hazard_id).await {
         Ok(assessments) => (
@@ -4988,7 +4988,7 @@ async fn safety_assessment_create(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_REVIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .create_assessment(context.tenant_id, hazard_id, context.user_id, payload)
@@ -5011,7 +5011,7 @@ async fn safety_interactions_list(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.list_interactions(context.tenant_id, product_id).await {
         Ok(interactions) => (
@@ -5037,7 +5037,7 @@ async fn safety_interaction_create(
     .await
     {
         Ok(access) => access,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if context.has_role("SOC_ANALYST")
         && matches!(
@@ -5082,7 +5082,7 @@ async fn safety_interaction_update(
     .await
     {
         Ok(access) => access,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if context.has_role("SOC_ANALYST")
         && matches!(payload.status.as_str(), "ACCEPTED_FOR_REVIEW" | "CLOSED")
@@ -5114,7 +5114,7 @@ async fn product_requirements_list(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.list_requirements(context.tenant_id, product_id).await {
         Ok(requirements) => (
@@ -5134,7 +5134,7 @@ async fn product_safety_readiness(
     let (context, store) =
         match product_safety_access(&state, &headers, PERMISSION_VIEW_PRODUCT_SAFETY).await {
             Ok(access) => access,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.readiness(context.tenant_id, product_id).await {
         Ok(readiness) => (
@@ -5160,7 +5160,7 @@ async fn product_safety_evidence_link(
     .await
     {
         Ok(access) => access,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match store
         .link_evidence(context.tenant_id, product_id, context.user_id, payload)
@@ -5193,7 +5193,7 @@ async fn product_safety_evidence_unlink(
     .await
     {
         Ok(access) => access,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match store
         .unlink_evidence(context.tenant_id, product_id, context.user_id, payload)
@@ -6270,7 +6270,7 @@ async fn agent_rollout_access(
     state: &AppState,
     headers: &HeaderMap,
     permission: AgentRolloutPermission,
-) -> Result<(AuthenticatedTenantContext, AgentRolloutStore), Response> {
+) -> Result<(AuthenticatedTenantContext, AgentRolloutStore), Box<Response>> {
     let context = authenticated_tenant_context(state, headers)
         .await
         .map_err(required_context_error_response)?;
@@ -6280,7 +6280,7 @@ async fn agent_rollout_access(
         AgentRolloutPermission::Admin => admin_permission_error(&context),
     };
     if let Some(response) = denied {
-        return Err(response);
+        return Err(Box::new(response));
     }
     let store = state.agent_rollout_store.clone().ok_or_else(|| {
         api_database_not_configured("Rust-Agent-Rollout-Store ist nicht konfiguriert.")
@@ -6335,7 +6335,7 @@ async fn agent_rollouts_list(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.list(context.tenant_id, filter).await {
         Ok(rollouts) => agent_rollout_response(StatusCode::OK, rollouts),
@@ -6351,7 +6351,7 @@ async fn agent_rollout_create(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .create_rollout(context.tenant_id, context.user_id, payload)
@@ -6370,7 +6370,7 @@ async fn agent_rollout_detail(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.detail(context.tenant_id, rollout_id).await {
         Ok(detail) => agent_rollout_response(StatusCode::OK, detail),
@@ -6387,7 +6387,7 @@ async fn agent_rollout_update(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .update_rollout(context.tenant_id, rollout_id, context.user_id, payload)
@@ -6407,7 +6407,7 @@ async fn agent_rollout_target_preview(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .target_preview(context.tenant_id, rollout_id, payload)
@@ -6426,7 +6426,7 @@ async fn agent_rollout_targets(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.detail(context.tenant_id, rollout_id).await {
         Ok(detail) => agent_rollout_response(StatusCode::OK, detail.targets),
@@ -6443,7 +6443,7 @@ async fn agent_rollout_targets_assign(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .assign_targets(context.tenant_id, rollout_id, context.user_id, payload)
@@ -6462,7 +6462,7 @@ async fn agent_rollout_validate(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .validate_rollout(context.tenant_id, rollout_id, context.user_id)
@@ -6481,7 +6481,7 @@ async fn agent_rollout_preflight(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .run_preflight(context.tenant_id, rollout_id, &ring_name, context.user_id)
@@ -6501,7 +6501,7 @@ async fn agent_rollout_ring_start(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .start_ring(
@@ -6527,7 +6527,7 @@ async fn agent_rollout_deployment_result(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .record_deployment_result(
@@ -6552,7 +6552,7 @@ async fn agent_rollout_manifest_preview(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .manifest_preview(context.tenant_id, rollout_id, &ring_name)
@@ -6572,7 +6572,7 @@ async fn agent_rollout_manifest_freeze(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .freeze_manifest(
@@ -6597,7 +6597,7 @@ async fn agent_rollout_manifest_get(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .manifest(context.tenant_id, rollout_id, &manifest_id)
@@ -6638,7 +6638,7 @@ async fn agent_rollout_manifest_export(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .manifest(context.tenant_id, rollout_id, &manifest_id)
@@ -6670,7 +6670,7 @@ async fn agent_rollout_handoffs(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.detail(context.tenant_id, rollout_id).await {
         Ok(detail) => agent_rollout_response(StatusCode::OK, detail.handoffs),
@@ -6687,7 +6687,7 @@ async fn agent_rollout_handoff_create(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .create_handoff(context.tenant_id, rollout_id, context.user_id, payload)
@@ -6706,7 +6706,7 @@ async fn agent_rollout_handoff_get(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .handoff(context.tenant_id, rollout_id, &handoff_id)
@@ -6725,7 +6725,7 @@ async fn agent_rollout_handoff_export(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .export_handoff(context.tenant_id, rollout_id, &handoff_id, context.user_id)
@@ -6749,7 +6749,7 @@ async fn agent_rollout_handoff_action(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     if !matches!(action.as_str(), "acknowledge" | "invalidate" | "complete") {
         return (
@@ -6788,7 +6788,7 @@ async fn agent_rollout_result_import(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     let is_json = headers
         .get(CONTENT_TYPE)
@@ -6851,7 +6851,7 @@ async fn agent_rollout_postflight(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .run_postflight(context.tenant_id, rollout_id, &ring_name, context.user_id)
@@ -6870,7 +6870,7 @@ async fn agent_rollout_evaluate(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Write).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .evaluate_ring(context.tenant_id, rollout_id, &ring_name, context.user_id)
@@ -6890,7 +6890,7 @@ async fn agent_rollout_promote(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .promote_ring(
@@ -6916,7 +6916,7 @@ async fn agent_rollout_pause(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .pause(context.tenant_id, rollout_id, context.user_id, payload)
@@ -6936,7 +6936,7 @@ async fn agent_rollout_resume(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .resume(context.tenant_id, rollout_id, context.user_id, payload)
@@ -6956,7 +6956,7 @@ async fn agent_rollout_abort(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .abort(context.tenant_id, rollout_id, context.user_id, payload)
@@ -6976,7 +6976,7 @@ async fn agent_rollout_rollback(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .request_rollback(context.tenant_id, rollout_id, context.user_id, payload)
@@ -6996,7 +6996,7 @@ async fn agent_rollout_rollback_complete(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Admin).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store
         .complete_rollback(context.tenant_id, rollout_id, context.user_id, payload)
@@ -7015,7 +7015,7 @@ async fn agent_rollout_events(
     let (context, store) =
         match agent_rollout_access(&state, &headers, AgentRolloutPermission::Read).await {
             Ok(value) => value,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
     match store.detail(context.tenant_id, rollout_id).await {
         Ok(detail) => agent_rollout_response(StatusCode::OK, detail.events),

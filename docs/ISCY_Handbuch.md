@@ -2163,9 +2163,11 @@ separater Pflichtnachweis. Ein fehlgeschlagener Test oder eine nicht
 verfuegbare externe Testabhaengigkeit gilt als fehlgeschlagenes Gate und darf
 nicht als erfolgreiche Release-Validierung umgedeutet werden.
 
-Die CI-/Produkt-Toolchain verwendet Rust 1.97 fuer den regulaeren Build- und
-Testpfad, waehrend MSRV und der digest-gepinnte portable Release-Builder
-bewusst auf Rust 1.88 bleiben. Das aktuelle `flake.lock` bindet nixpkgs auf
+Die CI-/Produkt-Toolchain und der digest-gepinnte portable Release-Builder
+verwenden Rust 1.98.1. Die MSRV bleibt Rust 1.88; die davon getrennte
+Nix-Toolchain verwendet weiterhin Rust 1.95.0. Die Build-Vorgabe allein ist
+kein Nachweis bestandener CI-, Reproduzierbarkeits- oder Portabilitaetspruefungen.
+Das aktuelle `flake.lock` bindet nixpkgs auf
 `2efa67fd26b6df417c33e4603185c701f260dd83` im Kanal `nixos-26.05`.
 
 Eine reproduzierbare CycloneDX-SBOM, SHA-256-Checksummen, Release-Manifest und

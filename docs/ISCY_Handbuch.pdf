@@ -5350,7 +5350,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 73 0 R >>
 endobj
 73 0 obj
-<< /Length 4212 >>
+<< /Length 4238 >>
 stream
 BT
 /F1 9 Tf
@@ -5374,11 +5374,15 @@ T*
 T*
 () Tj
 T*
-(Die CI-/Produkt-Toolchain verwendet Rust 1.97 fuer den regulaeren Build- und) Tj
+(Die CI-/Produkt-Toolchain und der digest-gepinnte portable Release-Builder) Tj
 T*
-(Testpfad, waehrend MSRV und der digest-gepinnte portable Release-Builder) Tj
+(verwenden Rust 1.98.1. Die MSRV bleibt Rust 1.88; die davon getrennte) Tj
 T*
-(bewusst auf Rust 1.88 bleiben. Das aktuelle flake.lock bindet nixpkgs auf) Tj
+(Nix-Toolchain verwendet weiterhin Rust 1.95.0. Die Build-Vorgabe allein ist) Tj
+T*
+(kein Nachweis bestandener CI-, Reproduzierbarkeits- oder Portabilitaetspruefungen.) Tj
+T*
+(Das aktuelle flake.lock bindet nixpkgs auf) Tj
 T*
 (2efa67fd26b6df417c33e4603185c701f260dd83 im Kanal nixos-26.05.) Tj
 T*
@@ -5496,10 +5500,6 @@ T*
 T*
 (- operative Patch- oder Deployment-Tools) Tj
 T*
-(- ein SIEM oder SOC) Tj
-T*
-(- ein vollwertiges Projektmanagement-Werkzeug fuer alle Unternehmensbereiche) Tj
-T*
 ET
 endstream
 endobj
@@ -5507,12 +5507,16 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 75 0 R >>
 endobj
 75 0 obj
-<< /Length 5523 >>
+<< /Length 5549 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+(- ein SIEM oder SOC) Tj
+T*
+(- ein vollwertiges Projektmanagement-Werkzeug fuer alle Unternehmensbereiche) Tj
+T*
 () Tj
 T*
 (ISCY strukturiert, dokumentiert, priorisiert und verbindet. Entscheidungen muessen trotzdem) Tj
@@ -5653,10 +5657,6 @@ T*
 T*
 (Remote-Ausfuehrung oder automatische Verteilung.) Tj
 T*
-() Tj
-T*
-(Migration 0042rustnativethreatintelligenceobservations ergaenzt lokal) Tj
-T*
 ET
 endstream
 endobj
@@ -5664,12 +5664,16 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 77 0 R >>
 endobj
 77 0 obj
-<< /Length 5015 >>
+<< /Length 5053 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+() Tj
+T*
+(Migration 0042rustnativethreatintelligenceobservations ergaenzt lokal) Tj
+T*
 (validierte Indicators, normalisierte Referenzen auf vorhandene Agent- und) Tj
 T*
 (Vulnerability-Findings, manuelle Indicator-Links, Triage und Audit. Der) Tj
@@ -5810,10 +5814,6 @@ T*
 T*
 (Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.) Tj
 T*
-() Tj
-T*
-(11. Git-Bezug dieses Handbuchs:) Tj
-T*
 ET
 endstream
 endobj
@@ -5821,12 +5821,16 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 79 0 R >>
 endobj
 79 0 obj
-<< /Length 1184 >>
+<< /Length 1233 >>
 stream
 BT
 /F1 9 Tf
 42 800 Td
 10 TL
+() Tj
+T*
+(11. Git-Bezug dieses Handbuchs:) Tj
+T*
 () Tj
 T*
 (Dieses Handbuch ist bewusst als Markdown-Datei im Repository abgelegt, damit es:) Tj
@@ -5952,14 +5956,14 @@ xref
 0000138814 00000 n
 0000143309 00000 n
 0000143437 00000 n
-0000147701 00000 n
-0000147829 00000 n
-0000153404 00000 n
-0000153532 00000 n
-0000158599 00000 n
-0000158727 00000 n
+0000147727 00000 n
+0000147855 00000 n
+0000153456 00000 n
+0000153584 00000 n
+0000158689 00000 n
+0000158817 00000 n
 trailer
 << /Size 80 /Root 1 0 R >>
 startxref
-159963
+160102
 %%EOF

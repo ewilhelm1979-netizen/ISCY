@@ -566,13 +566,13 @@ async fn access<'a>(
     state: &'a AppState,
     headers: &HeaderMap,
     write: bool,
-) -> Result<(AuthenticatedTenantContext, &'a AssessmentStore), Response> {
+) -> Result<(AuthenticatedTenantContext, &'a AssessmentStore), Box<Response>> {
     let context = authenticated_tenant_context(state, headers)
         .await
         .map_err(|err| error(err.status_code(), err.error_code(), err.message()))?;
     if write {
         if let Some(response) = write_permission_error(&context) {
-            return Err(response);
+            return Err(Box::new(response));
         }
     }
     let store = state.assessment_store.as_ref().ok_or_else(|| {
@@ -588,7 +588,7 @@ async fn access<'a>(
 async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let (context, store) = match access(&state, &headers, false).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match store.soa_documents(context.tenant_id).await {
         Ok(documents) => Json(json!({"api_version":"v1","tenant_id":context.tenant_id,"documents":documents,"limit":200})).into_response(),
@@ -603,7 +603,7 @@ async fn generate(
 ) -> Response {
     let (context, store) = match access(&state, &headers, true).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match store
         .generate_soa(context.tenant_id, context.user_id, request)
@@ -626,7 +626,7 @@ async fn detail(
 ) -> Response {
     let (context, store) = match access(&state, &headers, false).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match store.soa_detail(context.tenant_id, id).await {
         Ok(Some(document)) => Json(json!({"api_version":"v1","document":document})).into_response(),
@@ -643,7 +643,7 @@ async fn update_entry(
 ) -> Response {
     let (context, store) = match access(&state, &headers, true).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match store
         .update_soa_entry(context.tenant_id, context.user_id, id, request)
@@ -708,7 +708,7 @@ fn page(context: &AuthenticatedTenantContext, body: &str) -> Response {
 async fn web_list(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let (context, store) = match access(&state, &headers, false).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let documents = match store.soa_documents(context.tenant_id).await {
         Ok(documents) => documents,
@@ -754,7 +754,7 @@ async fn web_generate(
 ) -> Response {
     let (context, store) = match access(&state, &headers, true).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if !valid_form_token(&state, &headers, &form.csrf_token) {
         return csrf_error();
@@ -779,7 +779,7 @@ async fn web_detail(
 ) -> Response {
     let (context, store) = match access(&state, &headers, false).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let document = match store.soa_detail(context.tenant_id, id).await {
         Ok(Some(document)) => document,
@@ -822,7 +822,7 @@ async fn web_entry(
 ) -> Response {
     let (context, store) = match access(&state, &headers, true).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let Some(token) = form_token(&state, &headers) else {
         return csrf_error();
@@ -898,7 +898,7 @@ async fn web_update_entry(
 ) -> Response {
     let (context, store) = match access(&state, &headers, true).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if !valid_form_token(&state, &headers, &form.csrf_token) {
         return csrf_error();

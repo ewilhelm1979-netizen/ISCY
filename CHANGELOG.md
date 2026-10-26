@@ -6,6 +6,22 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Rust-1.98-Toolchain und Release-Vertrag
+
+- richtet Produktcontainer, Produkt-CI und den digest-gepinnten portablen
+  Bookworm-Release-Builder gemeinsam auf Rust `1.98.1` aus; die Patchversion
+  vermeidet den in Rust 1.98.0 dokumentierten Vtable-Miscompile
+- behaelt die Paket-MSRV Rust `1.88`, den eigenen Rust-1.88-Kompatibilitaetsjob
+  und Nix-Rust `1.95.0` bei; Cargo-/Flake-Locks und Produktfunktionen bleiben
+  unveraendert
+- bindet Builder-Images, Compiler-Guards, CI-Pins und Release-Metadaten durch
+  eine fail-closed Vertragspruefung; reproduzierbare Builds und Runtime-Gates
+  bleiben Pflicht und werden nicht durch Versionsangaben ersetzt
+- erhaelt striktes Clippy auch mit Rust 1.98 durch die Boxung unveraenderter
+  Response-Fehlerwerte in sechs privaten Helfern und die MSRV-kompatible
+  Chunk-API im Kryptografie-Testdecoder; HTTP-, Rollen- und Tenant-Verhalten
+  sowie die bekannten Kryptografie-Testvektoren bleiben unveraendert
+
 ### Kryptografie-Dependency-Kompatibilität
 
 - aktualisiert die direkten Abhängigkeiten auf `sha2` 0.11.1 und den dazu

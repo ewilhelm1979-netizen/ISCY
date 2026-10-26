@@ -7,6 +7,7 @@ cd "$repo_root"
 source_notes='docs/RELEASE_NOTES_DRAFT.md'
 source_manifest='release/release-manifest.json'
 guard='./scripts/check_release_notes_completeness.sh'
+backtick=$'\x60'
 tmp_dir="$(mktemp -d)"
 cleanup() {
     rm -rf "$tmp_dir"
@@ -49,9 +50,10 @@ Status: Stabiler Release.
 
 Vorgänger: `V23.7.33`.
 
-nginx:1.31-alpine, Rust `1.97.0`, MSRV bleibt Rust `1.88.0` und nixos-26.05
+nginx:1.31-alpine, Produkt-/CI-Builder Rust `1.98.1`, MSRV bleibt Rust `1.88.0` und nixos-26.05
 bleiben die geprueften Plattformgrenzen. PostgreSQL 16 bleibt der Standard;
 PostgreSQL 18.4 bleibt der zusaetzliche Kompatibilitaetspfad.
+Portabler Release-Builder Rust `1.98.1` bleibt vom MSRV-Nachweis getrennt.
 
 Der NIS2-Relevanz-Wizard dokumentiert eine Applicability-Begruendung im
 NIS2- und KRITIS-Kontext, liefert aber keine rechtsverbindliche Einstufung.
@@ -101,6 +103,22 @@ printf '\nStable Release veroeffentlicht.\n' >>"$development_published"
 expect_rejected development_published "$development_manifest" "$development_published" stable_published
 
 ISCY_RELEASE_MANIFEST_PATH="$candidate_manifest" "$guard" "$candidate_notes" >/dev/null
+
+candidate_wrong_rust="$tmp_dir/candidate-wrong-rust.md"
+sed "s#Produkt-/CI-Builder Rust ${backtick}1\.98\.1${backtick}#Produkt-/CI-Builder Rust ${backtick}1.97.0${backtick}#" "$candidate_notes" >"$candidate_wrong_rust"
+expect_rejected candidate_wrong_rust "$candidate_manifest" "$candidate_wrong_rust" rust_toolchain
+
+candidate_missing_product_rust="$tmp_dir/candidate-missing-product-rust.md"
+sed 's#Produkt-/CI-Builder Rust[^,]*, ##' "$candidate_notes" >"$candidate_missing_product_rust"
+expect_rejected candidate_missing_product_rust "$candidate_manifest" "$candidate_missing_product_rust" rust_toolchain
+
+candidate_wrong_portable_rust="$tmp_dir/candidate-wrong-portable-rust.md"
+sed "s#Portabler Release-Builder Rust ${backtick}1\.98\.1${backtick}#Portabler Release-Builder Rust ${backtick}1.88.0${backtick}#" "$candidate_notes" >"$candidate_wrong_portable_rust"
+expect_rejected candidate_wrong_portable_rust "$candidate_manifest" "$candidate_wrong_portable_rust" portable_rust_toolchain
+
+candidate_missing_portable_rust="$tmp_dir/candidate-missing-portable-rust.md"
+sed '/Portabler Release-Builder Rust/d' "$candidate_notes" >"$candidate_missing_portable_rust"
+expect_rejected candidate_missing_portable_rust "$candidate_manifest" "$candidate_missing_portable_rust" portable_rust_toolchain
 
 candidate_missing_regulatory="$tmp_dir/candidate-missing-regulatory.md"
 sed 's/NIS2-Relevanz-Wizard/NIS2-Arbeitsablauf/' "$candidate_notes" >"$candidate_missing_regulatory"
