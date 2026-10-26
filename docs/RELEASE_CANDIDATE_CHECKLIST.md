@@ -83,7 +83,7 @@ Erst ein separater Release-Prep-PR darf V23.7.34 auf
 | aktueller nixpkgs Lock | Commit `2efa67fd26b6df417c33e4603185c701f260dd83` | `nixos-26.05` bleibt Kanalgrenze |
 | direkte Runtime-Dependencies | `base64 0.23.1`, `calamine 0.37.0` | kontrollierte Security-Updates |
 | Actions Checkout | `actions/checkout 7.0.1` per Commit-SHA | unveraenderlicher Pin |
-| Rust Tool Action | `taiki-e/install-action 2.87.22` per Commit-SHA | unveraenderlicher Pin |
+| Rust Tool Action | `taiki-e/install-action 2.87.31` per Commit-SHA | unveraenderlicher Pin |
 | Quellen/Lizenzen | Cargo-Deny-/Audit-Gates | keine unbekannten Quellen oder stillen Ausnahmen |
 
 Die dokumentierten Ausnahmen `RUSTSEC-2023-0071` fuer `rsa` und
