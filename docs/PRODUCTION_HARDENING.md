@@ -262,8 +262,8 @@ sowie `cargo test --no-run` mit Rust 1.88 abgesichert.
 
 Der portable Release-Builder bleibt bewusst auf dem bestehenden
 digest-gepinnten Rust-1.88-Bookworm-Image. Die Nix-Toolchain stammt aus dem auf
-Commit `21ea275a7c46aef9d4d6ddc962e6d562e9d94183` gepinnten
-`nixos-26.05`-Flake und liefert Rust `1.95.0`. V23.7.32 aktualisiert
+Commit `8b8c811c7c2541c30382c5de7ed26be055569c60` gepinnten
+`nixos-26.05`-Flake und liefert Rust `1.95.0`. Die Maintenance-Historie seit V23.7.32 aktualisiert
 kontrolliert die direkte `base64`-Abhaengigkeit und einzelne Lockfile-
 Aufloesungen. Dazu gehoert `event-listener 5.4.2`, das
 `RUSTSEC-2026-0221` im vorhandenen SQLx-Graph ohne neue Ignore-Regel behebt.
@@ -281,7 +281,7 @@ Regression, Docker und das portable Linux-Binary. Codex-Automation ist ein
 zusaetzlicher separater CI-Nachweis. Der abschliessende Aggregationsjob prueft
 den Erfolg seiner Abhaengigkeiten sowie Manifest, Checksums, 46 Migrationen,
 46 Baselines, Dokumentationsreferenzen, den wertredigierten Sensitive-Data-
-Scan und den exakten V23.7.31-Tag. CodeQL fuer Actions,
+Scan und den exakten Published-Baseline-Tag V23.7.33. Ein V23.7.34-Tag darf im aktuellen `development_unreleased`-Lifecycle noch nicht existieren. CodeQL fuer Actions,
 JavaScript/TypeScript und Rust bleibt ein separater Pflichtnachweis.
 
 `make release-binary-gate` erzeugt das Release-Binary zweimal cachefrei in

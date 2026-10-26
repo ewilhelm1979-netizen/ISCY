@@ -27,7 +27,10 @@ async fn minio_put_head_get_drill_and_controlled_delete_lifecycle() {
     let object_id = "0123456789abcdef0123456789abcdef";
     let key = canonical_object_key("integration", 42, 7001, object_id).unwrap();
     let content = b"ISCY MinIO runtime integration evidence";
-    let expected_sha256 = format!("{:x}", sha2::Sha256::digest(content));
+    let expected_sha256 = sha2::Sha256::digest(content)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
 
     let put = client.put(&key, content, "text/plain").await.unwrap();
     assert!(put.completed);

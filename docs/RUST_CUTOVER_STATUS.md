@@ -1,6 +1,6 @@
 # ISCY Rust-Cutover-Status
 
-Stand: 2026-06-27
+Cutover-Basis: 2026-06-27; Aktualitaetsabgleich: Oktober 2026 / Rust 0.3.22
 
 ## Kurzfassung
 
@@ -40,6 +40,7 @@ ISCY startet produktiv und lokal ueber den Rust-Axum-Service in `rust/iscy-backe
 - Product Security inklusive CSAF-/CycloneDX-/SPDX-Importhistorie, Import-Detailseiten, VEX-Status je Schwachstelle, SBOM-Diff, CRA-Readiness, CVE-Asset-Korrelation, automatischer Risiko-/Roadmap-Ableitung, CVE-Risiko-Review-Queue, Review-Filtern, Bulk-Aktionen, Evidence-Lueckenmetriken, Trend-Dashboard, Prometheus-Trendmetriken und Grafana-Panels fuer Alert-Incidents mit konkretem Incident-Drilldown, Coverage, Review-Trend und Importvalidierung
 - Zero Trust inklusive read-only Rust-Agent, Enrollment/Secret-Rotation, Offline-Queue, Policy-Profilen, erwarteter Flottenabdeckung, sicheren Policy-Webhooks, Cooldown/Retry und Delivery-Audit
 - CVE Feed, CVE Assessments und NVD-Import
+- CVE-LLM-Kompatibilitaetspfad mit `/api/v1/llm/generate`, `/cves/llm-test/` und `run_llm`; aktuell deterministischer Rust-Stub ohne echte Modellinferenz oder RAG
 - User-Administration, Rollen, Gruppen und direkte Permissions
 
 ## Entfernte Legacy-Pfade

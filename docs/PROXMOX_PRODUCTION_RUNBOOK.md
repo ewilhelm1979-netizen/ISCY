@@ -4,7 +4,7 @@ Dieses Runbook beschreibt den empfohlenen Betriebsweg:
 
 - Proxmox VM (Debian/Ubuntu LTS)
 - Docker + Compose in der VM
-- ISCY via `docker-compose.prod.yml` (optional mit `docker-compose.llm.yml`)
+- ISCY via `docker-compose.prod.yml`; `docker-compose.llm.yml` ist derzeit nur ein optionales LLM-Kompatibilitaetsprofil und startet kein Sprachmodell
 
 ## 1. Zielbild
 
@@ -39,12 +39,13 @@ make prod-readiness
 make prod-up
 ```
 
-Mit lokalem LLM:
+Mit dem aktuellen LLM-Kompatibilitaetsprofil:
 
 ```bash
-make llm-download
 make prod-up-llm
 ```
+
+Wichtig: Dieser Pfad startet im aktuellen `main` kein Qwen-, llama.cpp-, Ollama- oder anderes Modell. Die CVE-LLM-Funktionen verwenden den integrierten deterministischen Rust-Stub. `make llm-download` ist derzeit bewusst ein No-Op und darf nicht als Modellinstallation interpretiert werden. Eine echte Modell- oder RAG-Runtime benoetigt einen separaten, reviewten Integrationspfad.
 
 ## 5. Nach dem Start pruefen
 

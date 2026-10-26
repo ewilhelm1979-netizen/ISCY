@@ -2,48 +2,98 @@
 
 ## Aktueller Produktstand
 
-- Rust-only Runtime ist abgeschlossen.
-- Das regulatorische Organisationsprofil ist als Tenant-Web-/API-Pfad umgesetzt und fuehrt NIS2, KRITIS, DORA, DSGVO, CRA, AI Act, TISAX und ISO-27001-Zielbild in einer zentralen Matrix zusammen.
-- Product Security verarbeitet CSAF-/CycloneDX-/SPDX-Importe, CVE-Asset-Korrelationen, automatisch erzeugte CVE-Risiken, Product-Security-Roadmap-Tasks, VEX-Entscheidungen, SBOM-Diffs und CRA-Readiness je Produkt.
-- AI Governance ist als eigenes Rust-Web-/API-Modul umgesetzt und fuehrt AI-Systeme mit AI-Act-Klasse, Kritikalitaet, Review-Faelligkeit, Monitoringplan, Risikosummary, Evidence-Key und berechneten Governance-Gaps.
-- Die Product-Security-Weboberflaeche zeigt offene CVE-Reviews, fehlende Evidence, CRA-Readiness, SBOM-Diff-Einstiege und eine gebuendelte CVE-Risiko-Review-Queue mit Filtern und Bulk-Aktionen.
-- Evidence-Uploads koennen direkt aus fachlichen Kontexten gestartet werden und fuehren nach dem Speichern zur Ausgangsseite zurueck; Evidence-Quality bewertet Nachweisreife, offene Issues und Evidence-Needs. Version, SHA-256, Gueltigkeit, Retention und Schutzklasse werden mit Migration `0024_rust_evidence_lifecycle` persistiert und in Incident-/Regulatory-Exporten ausgewiesen.
-- Management-Review-Pakete koennen als Markdown, HTML, PDF und JSON exportiert werden und enthalten Ruecklinks zu Risiko, Control, Evidence, Incident und Roadmap.
-- Third-Party-/Supplier-Risk ist als Rust-Web-/API-Modul umgesetzt und bewertet Lieferanten aus Kritikalitaet, Vertrags-/Security-Annex-Bezug, Datenarten, Regionen, Exit-Abhaengigkeit, regulatorischem Scope, Review-Faelligkeit, Evidence, Produktkomponenten, offenen Schwachstellen und dokumentierten Risiken.
-- Agent Fleet Governance bewertet Sollbestand, Heartbeat-Freshness, Mindestscore und Finding-Grenzwerte je Tenant-, OS-, Asset-, Business-Unit- oder Deployment-Scope. Sichere Policy-Webhooks besitzen Cooldown, transiente Retries und Delivery-Audit.
-- Product-Security-Evidence-Pakete frieren Release-/PSIRT-Nachweise versioniert ein, bewerten Readiness und Blocker, erzwingen dokumentierte Reviewentscheidungen und exportieren Markdown, HTML, PDF sowie JSON.
-- Der Rust-only-Betrieb liefert Statusseite, JSON-Drilldown, Prometheus-Metriken, Alertmanager-Webhook mit optionaler Incident-/Evidence-Persistenz, AI-Governance-Signale, Grafana-Dashboard inklusive Product-Security-Panels, Compose-Beispiel und NixOS-Modul samt Beispielhost.
+ISCY ist im aktuellen `main` eine Rust-only/Axum-Plattform in der
+V23.7.34-`development_unreleased`-Phase. Der letzte Stable Release ist
+V23.7.33; das Rust-Paket steht auf `0.3.22`.
 
-## Prioritaet P0 (vor breitem Produktivrollout)
+Bereits umgesetzt sind unter anderem:
 
-1. Secrets-Management statt Plain `.env`
-2. TLS-Absicherung und HSTS
-3. Logging-/Error-Pipeline und Alarm-Eskalation produktiv anbinden
-4. Regelmaessige Backup- und Restore-Drills
-5. Rollen-/Rechtekonzept und Admin-Hardening
-6. Legal-Hold- und dokumentierter Loesch-/Disposition-Workflow auf den vorhandenen Evidence-Retention-Metadaten
+- ISMS-/Governance-, Risk-, Control-, Assessment-, Evidence-, Incident-,
+  Roadmap-, Supplier- und Management-/Regulatory-Review-Workflows,
+- Product Security mit CSAF, CycloneDX, SPDX, VEX, SBOM-Diff,
+  CVE-Korrelation und CRA-Readiness,
+- Continuous Vulnerability Intelligence mit NVD, CISA KEV und FIRST EPSS
+  sowie passiver tenantgebundener Software-Hygiene,
+- Native Threat Intelligence und Security Observations,
+- Software Approval und befristete Exceptions mit getrennten Review-Rechten,
+- Zero-Trust-Agenten mit read-only Posture, Enrollment, Secret-Rotation,
+  Offline-Queue, Policy-Profilen, PKI-/CSR-Governance und kontrollierter
+  Rollout-Governance ohne Remote-Control,
+- Evidence Integrity, Legal Hold, kontrollierte Disposition sowie
+  S3-kompatible Evidence-Storage-Runtime,
+- PostgreSQL 16 als Standardpfad und PostgreSQL 18.4 als getesteter
+  logischer Forward-Restore-/Kompatibilitaetspfad,
+- Release-SBOM, Checksummen, Reproduzierbarkeits-/Provenance-Metadaten,
+  Secret-Scan, CodeQL und umfangreiche CI-Gates.
 
-## Prioritaet P1 (direkt danach)
+Der CVE-Bereich besitzt weiterhin einen LLM-bezeichneten Workflow
+(`run_llm`, `/api/v1/llm/generate`, `/cves/llm-test/`). Dieser ist
+aktuell ein deterministischer Rust-Stub. Es wird kein echtes Sprachmodell
+ausgefuehrt und es existiert keine RAG-/Embedding-/Retrieval-Runtime.
 
-1. CI-Gates erweitern (team-test als Pflicht)
-2. Security-Scans fuer Dependencies/Container
-3. Betriebshandbuch + Incident-Runbooks
-4. Performance-Baselines und Lasttests
-5. Product-Security-Import-Schemaabdeckung mit offiziellen CSAF/SPDX/CycloneDX-Testkorpora erweitern
+## Prioritaet P0 – vor breitem Produktivrollout
 
-## Prioritaet P2 (Reifegrad / Skalierung)
+Die am 10. Oktober 2026 identifizierten repository-weiten Maintenance-Blocker
+fuer MinIO-basierte CI-Gates und `RUSTSEC-2026-0285` sind im aktuellen
+`main` behoben. Die folgenden Punkte bleiben vor breitem Produktivrollout offen:
 
-1. UI-Designsystem modularisieren (CSS aus `base.html` extrahieren)
-2. Visuelle Regressionstests
-3. Dedizierte Review-Ansichten fuer groessere PSIRT-/Risk-Teams
-4. Optional: Rust-Nebenservice fuer Performance-kritische Teilbereiche
+1. **Unabhaengige Security-Pruefung.** Externer Penetrationstest beziehungsweise
+   unabhaengige Security-Review fuer die produktiven Trust Boundaries.
+2. **Zielumgebung abnehmen.** TLS/HSTS, Reverse Proxy, Secret-Dateien,
+   Netzwerksegmentierung und Betreiber-Rechte in der konkreten
+   Produktionsumgebung verifizieren; vorhandene sichere Defaults ersetzen
+   keine Betreiberfreigabe.
+3. **Disaster-Recovery-Nachweis fuer die Zielumgebung.** Vorhandene Backup- und
+   Restore-Skripte mit echten RPO/RTO-Zielen, verschluesseltem Backup-Speicher
+   und wiederholbaren Restore-Drills nachweisen.
+4. **Monitoring/Eskalation produktiv anbinden.** Prometheus, Alertmanager,
+   Grafana und Log-/Error-Pipeline an den realen Betreiberprozess koppeln.
+
+## Prioritaet P1 – technische Produktreife
+
+1. **CVE-LLM-Semantik bereinigen.** Entweder den aktuellen Stub explizit als
+   Stub/regelbasierte Assistenz im Datenmodell kennzeichnen oder eine echte,
+   lokal betriebene Modellruntime mit belastbarer Provenance implementieren.
+   Ein frei gesetztes `LOCAL_LLM_MODEL_NAME` darf nicht als Beweis echter
+   Modellinferenz missverstanden werden.
+2. **LLM-Konfiguration vereinheitlichen.** Der Code liest derzeit
+   `LOCAL_LLM_N_GPU_LAYERS`, waehrend die Env-/Compose-Beispiele
+   `LOCAL_LLM_GPU_LAYERS` setzen. Diese Kompatibilitaetsabweichung technisch
+   bereinigen und erst danach GPU-Offload dokumentieren.
+3. **Kryptografische Release-Signierung/Attestation.** Der aktuelle
+   Release-Vertrag liefert SBOM, Checksummen und Provenance-Metadaten, ist aber
+   ausdruecklich `unsigned`.
+4. **Parser-/Upload-Hardening vertiefen.** XLSX/XLSM-Importe besitzen
+   inzwischen fail-closed Archiv-, Entpack-, Shared-String-, Zell- und
+   Zeilenlimits sowie sparse Verarbeitung. Fuer riskantere Einsatzumgebungen
+   bleiben Malware-Scanning und/oder Parser-Sandboxing als
+   Betreiber-/Produktoption zu evaluieren.
+5. **Durables Audit fuer besonders sensitive Downloads vertiefen.** Die
+   vorhandenen Runtime-Security-Events fuer Evidence-Downloads koennen um eine
+   explizite persistente Auditspur erweitert werden.
+
+## Prioritaet P2 – Skalierung und neue Integrationen
+
+1. Groessere Last-/HA-Szenarien ueber die synthetischen Zwei-Instanzen-Tests
+   hinaus pruefen; keine allgemeine HA- oder SLA-Aussage ohne separaten Nachweis.
+2. UI-Designsystem und grosse Review-Ansichten fuer PSIRT-/SOC-/Risk-Teams
+   weiter modularisieren.
+3. Belastbare EOL/EOS-Quellen und weitere ecosystemspezifische
+   PURL-/Versionssemantik ergaenzen.
+4. Eine echte lokale Modell-/RAG-Integration nur als separaten,
+   tenantgebundenen Trust Boundary einfuehren. Retrieval und Modellvorschlaege
+   duerfen keine Firewall-, Endpoint-, Incident-, Risk-Acceptance- oder
+   Release-Aktion ohne die vorhandenen Berechtigungs-, Audit- und
+   Freigabeprozesse ausfuehren.
+5. Produktive Code-Signing-/PKI-Adapter fuer Agent-Artefakte erst nach Review
+   der vorhandenen Metadata-/Governance-Schicht anbinden.
 
 ## Strategische Produktagenda
 
-Die technische Rust-Migration ist abgeschlossen. Die fachliche Weiterentwicklung wird in `docs/ISCY_STRATEGIC_ROADMAP.md` gefuehrt.
+Die technische Rust-Migration ist abgeschlossen. Fuer die fachliche
+Weiterentwicklung ist `docs/ISCY_STRATEGIC_ROADMAP.md` massgeblich.
 
-Die dort priorisierten naechsten Produktbereiche sind:
-
-1. Zero-Trust-Agent-Onboarding als gefuehrten, sicheren Admin-Workflow vereinfachen
-2. Notifications auf Evidence, CVE-Reviews, Incident-Entscheidungen und Roadmap erweitern
-3. Supplier-Review-Workflow mit Freigabehistorie, Unterauftragnehmern und Exit-Tests
+Der aktuelle V23.7.34-Development-Schwerpunkt ist Machinery & CRA
+Safety-Security Co-Engineering (Migration `0046`). Funktionen bis
+einschliesslich Migration `0045` sind bereits im Stable-Tag V23.7.33
+enthalten.

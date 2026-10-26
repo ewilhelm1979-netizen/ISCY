@@ -1,12 +1,23 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand August 2026 (ISCY V23.7.33 Release vorbereitet / Rust 0.3.22)
+Version: Arbeitsstand Oktober 2026 (ISCY V23.7.34 `development_unreleased`; letzter Stable Release V23.7.33 / Rust 0.3.22)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
 ISCY ist eine selbst gehostete, lokale und datenschutzbewusste Open-Source-Plattform unter `AGPL-3.0-only`. Die Rust-/Axum-Anwendung wird aktiv entwickelt und befindet sich in einer fruehen Community-Adoptionsphase; Schnittstellen, Datenmodelle und Betriebsverfahren koennen sich weiterentwickeln.
 
 ISCY wurde in dieser Codebasis mit Unterstuetzung von OpenAI Codex entwickelt, nach Rust migriert und technisch/fachlich plausibilisiert. Die fachliche Ausrichtung wurde mit offiziellen EU-Quellen zu NIS2, der NIS2-Durchfuehrungsverordnung (EU) 2024/2690, DORA, Cyber Resilience Act und EU AI Act sowie mit gaengigen ISMS-, Product-Security-, CVE-/SBOM-/CSAF-, Evidence- und Incident-Response-Praktiken abgeglichen. Das ist keine unabhaengige fachliche Pruefung, externe Zertifizierung oder Rechtsberatung. Regulatorische Unterstuetzung muss fuer Organisation, Rechtsraum und Einsatzkontext eigenstaendig bewertet werden.
+
+Der Development-Stand ist keine vollstaendige Funktions-, Security- oder
+Produktionsfreigabe. Fachliche Begriffe und historische Ausbaustufen sind von
+tatsaechlich vorhandenen Rust-Schreibablaeufen zu unterscheiden. Insbesondere
+ist `/` derzeit eine Linkuebersicht. Die Migrationsluecke beim Assessment-Wizard
+besteht weiterhin (5.2). Die eigenstaendige SoA-Erzeugung und Control-Bearbeitung
+sind mit einer verbindlichen DRAFT-Schreibgrenze wiederhergestellt; ein
+Nachfolgeversions-/Freigabeablauf fehlt noch (5.10). Das bedeutet keine Aufhebung
+der weitergehenden bestehenden Produktanforderungen. Die historischen
+Evidence-Ausbaustufen in 6.12 bis 6.15 werden durch den Runtime-Stand in 6.16
+ergaenzt und sind keine alternative aktuelle Support-Matrix.
 
 ## Inhalt
 
@@ -31,7 +42,7 @@ ISCY ist eine Arbeitsplattform fuer:
 - die Planung, Bewertung und Nachverfolgung von Risiken
 - die Dokumentation von Nachweisen, Audits und Management Reviews
 - die strukturierte Bearbeitung von Produkt- und Software-Sicherheitsfragen
-- die Bewertung von Schwachstellen und CVEs mit lokalem LLM-Enrichment
+- die Bewertung und Korrelation von Schwachstellen und CVEs mit nativer Vulnerability Intelligence sowie einem optionalen Rust-LLM-Stub fuer strukturierte CVE-Zusammenfassungen; ein echtes Modell oder RAG wird im aktuellen Stand nicht ausgefuehrt
 - die Auswertung von Zero-Trust-Agent-Posture fuer Windows, macOS und Linux
 
 ISCY ist damit kein reines Ticketsystem und kein reines DMS. Es verbindet Governance, Nachweise, Risiken, Umsetzungsplanung und Produkt-Sicherheit in einem gemeinsamen Arbeitsmodell.
@@ -100,7 +111,7 @@ ISCY folgt fachlich einem roten Faden:
 
 Die wichtigsten Bereiche sind:
 
-- Start-Wizard unter `/`
+- Start-/Linkuebersicht unter `/`
 - Guidance Navigator unter `/navigator/`
 - Dashboard unter `/dashboard/`
 - Zero Trust unter `/zero-trust/`
@@ -172,15 +183,26 @@ Schritte:
 - Maturity
 - Results
 
-Fachlicher Nutzen:
+Der schreibende Wizard war in der frueheren Django-Anwendung implementiert:
+`WizardStartView`, die vier Schrittansichten und `WizardService.generate_results`
+legten Sessions, Antworten, Bewertungen, Massnahmen, Reports und Roadmaps an.
+Der damalige Stand vor dem Rust-Cutover ist ueber den Elterncommit von
+`b12db820ebac1c633873193eb7507ecc96d41319` nachvollziehbar.
 
-- strukturiertes Onboarding in das Thema
-- erste regulatorische Einordnung
-- erste Reifegrad-Sicht
-- Grundlage fuer Reports und Roadmap
+Aktueller Integrationsbefund, keine geaenderte Produktanforderung:
 
-Fuer Nicht-Sicherheitsleute:
-Der Wizard ist der gefuehrte Fragebogen, der aus Eingaben verwertbare Ergebnisse macht.
+Die Startseite `/` zeigt Linkkarten. Vorhandene Session-/Ergebnisdaten koennen
+ueber `GET /api/v1/wizard/sessions` und
+`GET /api/v1/wizard/sessions/{session_id}/results` gelesen werden, soweit der
+entsprechende Datenbestand vorhanden ist. Diese Pfade bieten keinen POST zur
+Anlage eines Wizard-Durchlaufs. Die Rust-Schreiblogik und Teile des benoetigten
+Schemas fehlen ebenfalls; allein das Eintragen eines POST-Handlers behebt diese
+Migrationsluecke nicht. Bis zur separat zu pruefenden Wiederherstellung ist der
+gefuhrte Bewertungsablauf nicht verfuegbar. Die Organisationsprofil-Pflege unter
+`/organizations/` ist vorhanden, ersetzt den Wizard aber nicht.
+
+Der gefuehrte Agent-Onboarding-Assistent unter `/zero-trust/` ist eine andere,
+tatsaechlich implementierte Funktion und kein Assessment-Wizard.
 
 ### 5.3 Guidance Navigator
 
@@ -423,7 +445,7 @@ Ein Risiko ist in ISCY kein Technikfehler, sondern eine moegliche negative Gesch
 Zweck:
 Umsetzungs- und Nachweisstand strukturiert dokumentieren.
 
-Teilfunktionen:
+Teilfunktionen des bestehenden Assessment-Modells:
 
 - Applicability
   fachliche Frage: Gilt eine Anforderung fuer uns?
@@ -439,6 +461,46 @@ Teilfunktionen:
   fachliche Frage: Wie bewertet die Leitung den Gesamtstand?
 - Review Actions
   fachliche Frage: Welche Folgeaktionen beschliesst die Organisation?
+
+Aktueller Rust-Umfang und Grenzen:
+
+- `/api/v1/assessments`, `/api/v1/assessments/applicability` und
+  `/api/v1/assessments/measures` sind GET-Leseregister, keine Assessment-
+  Schreib-API. Nach reiner Rust-Demo-Initialisierung sind dort gegenwaertig
+  Datenbankfehler bekannt; die Register gelten damit nicht als vollstaendig
+  abgenommener Bewertungsablauf.
+- Die fruehere Django-Anwendung bot unter `POST /assessments/soa/generate/`
+  eine SoA-Erzeugung aus aktiven ISO27001-Requirements an, mit Detailansicht
+  und anschliessender Bearbeitung je Control. `SoAGenerateView`, `SoADocument`
+  und `SoAEntry` sind im Elterncommit des oben genannten Rust-Cutovers belegt.
+  Die eigenstaendige Erzeugung, Detailansicht und Control-Bearbeitung sind in
+  Rust wiederhergestellt: Webliste unter `/assessments/soa/`, Erzeugung ueber
+  `POST /assessments/soa/generate/`, API-Liste/Erzeugung ueber
+  `GET/POST /api/v1/assessments/soa` und Control-Bearbeitung ueber
+  `PUT /api/v1/assessments/soa/entries/{id}`. Migration
+  `0047_rust_soa_cutover_restoration` ergaenzt das benoetigte Schema und laesst
+  bestehende Dokumente und Eintraege unveraendert. Neue Erstentwuerfe enthalten
+  aktive ISO27001-Requirements als anwendbare Controls mit `NOT_STARTED`.
+  Das ist keine automatische Konformitaetsentscheidung und kein impliziter
+  Wizard-Abschluss.
+- Nur der exakt gespeicherte Status `DRAFT` ist bearbeitbar. `IN_REVIEW`,
+  `APPROVED` und unbekannte Statuswerte sind auch fuer Administratoren
+  schreibgeschuetzt; die Ablehnung laesst Inhalte, Freigaben und Auditspur
+  unveraendert. Statusentscheidung, Control-Aenderung und verpflichtender
+  Auditeintrag erfolgen in einer gemeinsamen Transaktion. Rollen- und
+  Tenant-Grenzen gelten fuer API und Web; Webformulare benoetigen zusaetzlich
+  einen sessiongebundenen CSRF-Token. Das Import-Center bietet keinen SoA-Import
+  an und weist SoA-Aliasse auch bei Replace-Importen zurueck.
+- Aenderungen an geprueften/freigegebenen Dokumenten erfordern fachlich einen
+  neuen, eindeutig zugeordneten Entwurf mit erneuter Pruefung/Freigabe. Dieser
+  Nachfolgeprozess, historische Inhaltssnapshots und die Vorgaengerzuordnung
+  sind noch nicht implementiert. Die vorhandene Erzeugung ist nur ein neuer
+  unabhaengiger Erstentwurf und darf nicht als Nachfolgeversion eines gesperrten
+  Dokuments verwendet werden. Die sichere Schreibsperre ersetzt keinen
+  vollstaendigen Versionsworkflow; Details in `docs/SOA_RESTORATION_CONTRACT.md`.
+- Management Reviews und Regulatory Review-Pakete aus 5.12 besitzen eigene
+  Rust-Erzeugungs-, Review- und Exportpfade. Sie ersetzen keinen fehlenden
+  Assessment-Wizard.
 
 Fachlicher Nutzen:
 
@@ -520,7 +582,7 @@ Management-Review-Pakete:
 - koennen als generisches Security-Governance-Paket oder ueber Templates fuer ISO 27001, NIS2, DORA, DSGVO und KRITIS vorbereitet werden
 - speichern Top-Risiken, ISCY-27-Control-Gaps, Evidence-Luecken, Evidence-Integrity-/Storage-Aggregate, Incident-Entscheidungen, Roadmap-Fokus, Product-Security-Lage, Supplier-Review-Summary, Supplier/Product-Security-Lage, Agent-Posture, AI-Governance, Quellenzaehlung, Gap-Summary, Management-Hinweise und regulatorischen Kontext als Snapshot
 - verlinken Snapshot-Zeilen zurueck zu Risiko, Control, Evidence, Incident und Roadmap
-- koennen von Draft ueber In Review bis Approved oder Archived gefuehrt werden
+- unterstuetzen die Statuswechsel Draft, In Review und Approved; ein Archived-Statuswechsel wird vom aktuellen Management-Review-Store nicht angeboten
 - dokumentieren Entscheidung, naechste Massnahmen, freigebenden User und Freigabezeitpunkt
 - erlauben eine Template-Vorschau, ohne bereits ein Review-Paket einzufrieren
 
@@ -610,6 +672,25 @@ Importierbare Inhalte:
 - Prozesse
 - Lieferanten
 - Assets
+
+Sicherheitsgrenzen fuer Tabellenimporte:
+
+- Uploads sind auf 12 MiB begrenzt; die Vorschau zeigt maximal 200 Zeilen.
+- XLSX/XLSM-Dateien werden vor dem eigentlichen Parser als ZIP-/Office-Archiv
+  geprueft. Maximal 512 Archiveintraege, 64 MiB gesamte entpackte Daten und
+  32 MiB pro Eintrag werden akzeptiert.
+- Shared Strings sind auf 250.000 eindeutige Eintraege begrenzt; deklarierte
+  Zaehler und die tatsaechlich gelesenen Elemente werden geprueft.
+- Der XLSX-Import verarbeitet maximal 1.000.000 verwendete Zellen und 50.000
+  Importzeilen. Sparse Tabellen werden zellenweise gelesen, damit weit
+  auseinanderliegende Zellkoordinaten nicht als riesiges Rechteck materialisiert
+  werden.
+- Ungueltige oder uebergrosse Archive werden fail-closed vor der eigentlichen
+  Tabellenverarbeitung abgelehnt.
+
+Diese Grenzen reduzieren Memory-/Decompression-DoS-Risiken, ersetzen aber
+keinen Malware-Scanner und keine Parser-Sandbox fuer besonders riskante
+Einsatzumgebungen.
 
 Fachlicher Nutzen:
 
@@ -850,6 +931,17 @@ Dieser Bereich beantwortet: Von welchen externen Parteien haengt unser Betrieb a
 Zweck:
 Bekannte Schwachstellen fachlich und technisch bewerten.
 
+Aktueller LLM-Status:
+Der CVE-Bereich besitzt einen optionalen `run_llm`-Pfad, die Route
+`POST /api/v1/llm/generate` und die Webansicht `/cves/llm-test/`. Diese
+Funktionen sind im aktuellen Rust-Stand ein deterministischer LLM-Stub. Sie
+erzeugen strukturierte technische und Management-Zusammenfassungen,
+Massnahmenvorschlaege und Evidence-Hinweise direkt im Rust-Code; dabei wird
+kein Qwen-, llama.cpp-, Ollama- oder anderes Sprachmodell aufgerufen.
+`LOCAL_LLM_MODEL_NAME` ist derzeit eine Metadatenbezeichnung und kein
+Provenance-Nachweis fuer echte Inferenz. Eine RAG-/Embedding-/Retrieval-Runtime
+ist nicht Bestandteil des aktuellen ISCY-Backends.
+
 Was der Bereich jetzt leisten soll:
 
 - einzelne CVEs und begrenzte UTC-Deltas aus der offiziellen NVD API 2.0 laden
@@ -1021,13 +1113,19 @@ Architekturentscheidung steht in
 
 ### 6.1 Erstaufbau eines ISMS
 
-1. Tenant anlegen
+Der vorgesehene Ablauf bleibt bestehen. Der Wizard-Schritt ist wegen der in
+5.2 beschriebenen Migrationsluecke derzeit blockiert und nicht durch einen
+externen Ersatzprozess abgenommen. Ein eigenstaendiger SoA-Erstentwurf und die
+Control-Bearbeitung im Status DRAFT sind verfuegbar. Der in 5.10 abgegrenzte
+Nachfolgeversions-/Freigabeablauf fuer gesperrte SoA-Dokumente bleibt offen.
+
+1. Tenant anlegen beziehungsweise Organisationsprofil pflegen
 2. Wizard durchlaufen
 3. Prozesse, Assets und Lieferanten importieren
 4. Requirements und Applicability sichten
 5. erste Risiken erfassen
 6. Evidence aufbauen
-7. SoA generieren
+7. SoA generieren und fachlich pruefen
 8. Report und Roadmap erzeugen
 
 ### 6.2 Auditvorbereitung
@@ -1035,7 +1133,9 @@ Architekturentscheidung steht in
 1. offene Findings und Reviews sichten
 2. Evidence Needs synchronisieren
 3. Nachweise aktualisieren
-4. SoA pruefen
+4. SoA fachlich pruefen; Erstentwuerfe und Control-Bearbeitung sind im Status
+   DRAFT verfuegbar. Fuer gesperrte Dokumente bleibt der Nachfolgeversions- und
+   Freigabeablauf offen (siehe 5.10).
 5. Audit-Report erzeugen
 
 ### 6.3 NIS2-orientierte Arbeitsweise
@@ -1057,13 +1157,13 @@ Architekturentscheidung steht in
 7. fuer exakte Produkte, Assets oder Komponenten Software-Policies pflegen
 8. `UNMANAGED` und `REVIEW_REQUIRED` fachlich pruefen
 9. befristete Ausnahmen getrennt beantragen und unabhaengig entscheiden
-7. Korrelationen fachlich akzeptieren oder ablehnen
-8. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen
-9. CVE-Risiko-Review-Queue abarbeiten
-10. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen
-11. CRA-Readiness je Produkt pruefen und Massnahmen ueber Roadmap oder Risiko-Behandlung steuern
-12. Supplier/Product-Security-Datensaetze fuer relevante Lieferantenprodukte pflegen, Advisory-/PSIRT-/CVE-Bezuege lokal dokumentieren und Evidence verknuepfen
-13. Vertrags-/Exit-Plan-Status fuer kritische Lieferantenprodukte pruefen und Review-Pakete fuer NIS2, DORA oder DSGVO vorbereiten
+10. Korrelationen fachlich akzeptieren oder ablehnen
+11. Aus akzeptierten Korrelationen Risiko- und Roadmap-Arbeit erzeugen
+12. CVE-Risiko-Review-Queue abarbeiten
+13. Evidence direkt aus Queue, Risiko oder Roadmap-Task hochladen
+14. CRA-Readiness je Produkt pruefen und Massnahmen ueber Roadmap oder Risiko-Behandlung steuern
+15. Supplier/Product-Security-Datensaetze fuer relevante Lieferantenprodukte pflegen, Advisory-/PSIRT-/CVE-Bezuege lokal dokumentieren und Evidence verknuepfen
+16. Vertrags-/Exit-Plan-Status fuer kritische Lieferantenprodukte pruefen und Review-Pakete fuer NIS2, DORA oder DSGVO vorbereiten
 
 ### 6.5 Incident- und NIS2-Meldeworkflow
 
@@ -1285,7 +1385,7 @@ Wenn du ISCY schnell und reproduzierbar starten willst, nutze Docker.
 3. Danach den gewuenschten Modus starten  
    - lokal: `make dev-up`  
    - stage: `make stage-up`  
-   - produktiv: `make prod-up` oder `make prod-up-llm`
+   - produktiv: `make prod-up`; `make prod-up-llm` legt derzeit nur das LLM-Kompatibilitaetsprofil auf und startet keine echte Modellinferenz
 
 Merksatz: Erst validieren, dann kurz testen, dann dauerhaft starten.
 
@@ -1888,16 +1988,21 @@ Home-Verzeichnis-Credentials sowie EC2-/ECS-Metadata-Credentials sind nicht
 aktiviert. TLS wird ueber das bestehende Rustls-Backend von `reqwest`
 bereitgestellt.
 
-Unterstuetzte Secret-Referenzen:
+Backend-Konfigurationen akzeptieren ausschliesslich die zum jeweiligen Feld
+gehoerige Referenz `env:ISCY_EVIDENCE_OBJECT_STORAGE_ACCESS_KEY`,
+`env:ISCY_EVIDENCE_OBJECT_STORAGE_SECRET_KEY` oder
+`env:ISCY_EVIDENCE_OBJECT_STORAGE_SESSION_TOKEN`, jeweils wahlweise mit
+`_FILE`-Suffix. Andere Prozessvariablen und freie `file:`-Pfade sind keine
+zulaessigen tenantgesteuerten Referenzen. Persistierte Werte werden vor der
+Netzwerkoperation erneut gegen dieselbe Grenze geprueft.
 
-- `env:VARIABLE_NAME` mit strengem Variablennamen und ohne Shell-Auswertung
-- `file:/absoluter/pfad` nur unter Pfaden aus `ISCY_EVIDENCE_SECRET_ROOTS`
-
-`file:` prueft kanonische Pfadgrenzen, Symlink-Flucht, regulaere Datei,
+Der Betreiber kann den zugehoerigen Dateipfad ueber die jeweilige `_FILE`-
+Umgebungsvariable konfigurieren. Der Dateileser prueft kanonische Pfadgrenzen
+unter `/run/secrets` oder expliziten `ISCY_EVIDENCE_SECRET_ROOTS`, Symlink-Flucht, regulaere Datei,
 Maximalgroesse von 16 KiB, NUL-/UTF-8-Inhalt und unter Unix unsichere
 Schreibrechte fuer Gruppe/Andere. Abschliessende Zeilenumbrueche werden im
-Speicher entfernt. `vault:`, `external:` und `secret:` bleiben in diesem Stand
-bewusst nicht aufloesbar. Secretwerte werden weder persistiert noch in API,
+Speicher entfernt. `vault:`, `external:`, `secret:` und freie `file:`-Referenzen
+werden in Backend-Konfigurationen abgelehnt. Secretwerte werden weder persistiert noch in API,
 Audit, Logs, Screenshots oder Dokumentation ausgegeben und nach der jeweiligen
 Operation im Speicher ueberschrieben.
 
@@ -2024,100 +2129,76 @@ PostgreSQL, MinIO und nginx sind in der Testtopologie selbst jeweils
 Einzelinstanzen. ISCY behauptet damit weder Multi-Region-HA noch beliebige
 Skalierbarkeit, SLA-Erfuellung, Zertifizierung oder Rechtskonformitaet.
 
-### 6.18 Finales Hardening und Release-Vorbereitung
+### 6.18 Finales Hardening und Release-Lifecycle
 
-`V23.7.31` bleibt der unveraenderte veroeffentlichte Vorgaenger mit Tagziel
-`c595795296633ce4152aa0e817b063ee88c7028a`. Sein Metadaten- und
-Asset-Snapshot liegt unter `release/published/V23.7.31.json`. `V23.7.32` ist
-repositorykonform als `prepared_not_published` vorbereitet. Dieser Status
-erzeugt weder einen Tag noch ein GitHub Release oder einen Upload. Freigabe und
-Publikation bleiben getrennte menschliche Entscheidungen.
+Der letzte veroeffentlichte Stable Release ist `V23.7.33`. Er wurde am
+16. August 2026 veroeffentlicht und ist an den unveraenderlichen Tag-/Commit-
+Stand `2820f19f5fa33069db81e05c10949f2558948d04` gebunden. Der zugehoerige
+Published-Snapshot liegt unter `release/published/V23.7.33.json`.
 
-V23.7.32 ist ein Security-, Supply-Chain- und Maintenance-Release ohne neue
-Produktfunktion, Migration, Visual-Baseline oder aktive Response-Funktion.
-Enthalten sind file-basierte Produktionssecrets mit fail-closed
-Dateigrenzen, ein redigierter Secret-Scan, kontrollierte Rust-/nixpkgs-
-Aktualisierungen einschliesslich `event-listener 5.4.2` gegen
-`RUSTSEC-2026-0221` und minimierte, synthetische CI-Testartefakte. Die
-Lifecycle-Infrastruktur verifiziert den Vorgaenger-Tag in CI fail-closed und
-lehnt einen unerwartet bereits vorhandenen V23.7.32-Tag ab.
+Der aktuelle `main`-Lifecycle arbeitet auf `V23.7.34` mit dem Status
+`development_unreleased`. Fuer V23.7.34 existiert deshalb bewusst noch kein
+Tag und kein GitHub Release. Ein separater Release-Prep-Schritt muss spaeter
+erneut Teststatus, Artefakte, Reproduzierbarkeit und menschliche Freigabe
+binden.
 
-Die vorhandenen Pflichtpruefungen laufen in `make release-candidate-check`
-zusammen. Der GitHub-Aggregationsjob verlangt elf getrennte Jobs fuer
-Secret-Scan, Rust, MSRV, Bootstrap, Nix, MinIO, Performance,
-HA/PostgreSQL 18, Visual, Compose und portables Binary. Der Codex-
-Automationstest ist ein zusaetzlicher separater CI-Nachweis; zusammen mit der
-Aggregation sind damit dreizehn CI-Jobs zu pruefen. CodeQL prueft Actions,
-JavaScript/TypeScript und Rust separat. Lokal erzeugte Candidate-Artefakte
-bleiben unter `artifacts/release-candidate/`, sind unsigniert, ignored und
-werden weder committed noch hochgeladen.
+Das Root-Manifest `release/release-manifest.json` beschreibt aktuell unter
+anderem:
 
-Die Plattform-Maintenance verwendet nginx 1.31, Rust 1.97 fuer Build, Test,
-Clippy und Produktcontainer sowie nixpkgs 26.05 mit Nix-Rust 1.95. Die MSRV
-und der digest-gepinnte portable Release-Builder bleiben getrennt auf Rust
-1.88. PostgreSQL 16 bleibt der Standard. PostgreSQL 18.4 ist mit frischem
-Bootstrap, 46 Migrationen, Restart, Migrationsrennen und einem logischen
-Forward-Restore von PostgreSQL 16 nach 18 kompatibilitaetsgeprueft. Der
-PostgreSQL-18-Pfad oeffnet kein PostgreSQL-16-Datenvolume und verspricht weder
-ein In-place-Upgrade noch ein automatisiertes `pg_upgrade` oder einen
-Rueckwaertsrestore nach PostgreSQL 16.
+- Rust-Paket `0.3.22` und MSRV Rust 1.88,
+- PostgreSQL 16 als Standarddatenbank,
+- SQLite als Single-Instance-Kompatibilitaetspfad,
+- PostgreSQL 18.4 als zusaetzlichen logischen Forward-Restore- und
+  Anwendungskompatibilitaetspfad,
+- 46 fortlaufende Migrationen und 46 visuelle Baselines,
+- CycloneDX-1.5-SBOM,
+- einen vorbereiteten, aber noch unsignierten Provenance-Vertrag.
 
-Der Hardening-Review schliesst einen Development-Kompatibilitaetspfad: Eine
-Session nur aus `tenant_id` und `user_id` kann jetzt ausschliesslich im Modus
-`development` erstellt werden. `demo` und `production` verlangen einen
-Passwort-Login oder eine gueltige bestehende Session. Identitaetsheader sind in
-Nicht-Development-Modi nur hinter einer explizit konfigurierten Trusted-Proxy-
-Grenze zulaessig. Session-Store-Fehler liefern keine SQL-, Tabellen- oder
-internen Store-Details.
+Die vorhandenen Pflichtpruefungen laufen in
+`make release-candidate-check` zusammen. GitHub CI aggregiert elf
+Produkt-/Betriebsjobs fuer Secret-Scan, Rust, MSRV, Bootstrap, Nix,
+Object-Storage, Performance, HA, Visual Regression, Compose und das portable
+Linux-Binary. CodeQL fuer Actions, JavaScript/TypeScript und Rust bleibt ein
+separater Pflichtnachweis. Ein fehlgeschlagener Test oder eine nicht
+verfuegbare externe Testabhaengigkeit gilt als fehlgeschlagenes Gate und darf
+nicht als erfolgreiche Release-Validierung umgedeutet werden.
 
-Die nach V23.7.31 gemergte Secret-Haertung erweitert diese Grenze: Production
-nutzt file-basierte Quellen unter `/run/secrets`, direkte Werte und
-`*_FILE`-Quellen sind gegenseitig ausgeschlossen und unsichere Dateitypen,
-Rechte, Groessen oder Wurzeln werden abgelehnt. Gitleaks scannt den aktuellen
-Repository-Baum als Pflichtjob; der History-Scan bleibt eine getrennte
-menschliche Wartungsentscheidung. Der Runner akzeptiert auch separate
-Git-Worktrees nur nach fail-closed Aufloesung ihrer Git-Metadaten. Werte und
-Treffer werden nicht in Fehlerausgaben wiedergegeben.
+Die CI-/Produkt-Toolchain verwendet Rust 1.97 fuer den regulaeren Build- und
+Testpfad, waehrend MSRV und der digest-gepinnte portable Release-Builder
+bewusst auf Rust 1.88 bleiben. Das aktuelle `flake.lock` bindet nixpkgs auf
+`2efa67fd26b6df417c33e4603185c701f260dd83` im Kanal `nixos-26.05`.
 
-Die RC-Metadatenpruefung bestaetigt 45 fortlaufende Migrationen, 42 visuelle
-Baselines, Screenshot-Referenzen, SHA-256-Pruefsummen, Manifestfelder und einen
-wertredigierten Sensitive-Data-Scan. Sie verlangt lokal den exakten
-V23.7.31-Tag und weist ihn dem dokumentierten Commit zu. Das Root-Manifest
-`release/release-manifest.json` nutzt `git:HEAD` als reproduzierbaren
-Quellmarker und behaelt `source_date_epoch` sowie `binary_sha256` auf `null`;
-die lokale Artefakterzeugung loest Commit, Commit-Epoch und den verifizierten
-Binary-SHA erst im Bundle auf.
+Eine reproduzierbare CycloneDX-SBOM, SHA-256-Checksummen, Release-Manifest und
+Reproduzierbarkeitsmetadaten sind vorhanden. Sie sind keine kryptografische
+Publisher-Signatur. Der aktuelle Release-Vertrag fuehrt den Signaturstatus
+ausdruecklich als `unsigned`; produktive Signierung/Attestation bleibt ein
+offener Hardening-Schritt.
 
-Eine reproduzierbare CycloneDX-1.5-SBOM wird mit dem durch `flake.lock`
-gepinnten reinen Build-Werkzeug `cargo-cyclonedx` vorbereitet. Zufalls-Serial,
-fluechtiger Timestamp und lokaler Root-Pfad werden deterministisch durch
-Basis-Commit-Zeit und stabilen Cargo-PURL ersetzt. Die SBOM ist weder Signatur
-noch VEX-Entscheidung. Eine kryptografische Release-Signatur wird nicht
-vorgetaeuscht; `Cargo.lock`, SBOM, Manifest und Checksums bilden die
-vorbereiteten Provenance-Eingaben. Produktive Agent-Paketsignierung, CA-Ausstellung,
-Cloud-native Secret-Manager, Multi-Region-HA, automatische Zertifizierung,
-Rechtsbewertung und Behoerdenmeldung bleiben ausdruecklich ausserhalb dieses
-Release. Die vollstaendige Matrix und alle Betriebsgrenzen stehen
-in `docs/RELEASE_CANDIDATE_CHECKLIST.md`.
+Die Features bis einschliesslich Migration
+`0045_rust_software_approval_exception_policy` sind im V23.7.33-Stable-Tag
+enthalten. Migration `0046_rust_machinery_cra_safety_security_foundation`
+gehoert zum nachfolgenden V23.7.34-Development-Stand und ist noch nicht Teil
+des letzten Stable Releases.
 
-Der Funktionsumfang von `V23.7.32` ist fuer die Candidate-Pruefung eingefroren.
-Die aus V23.7.31 vorhandenen Bereiche Native Threat Intelligence, Security
-Observations, Continuous Vulnerability Intelligence sowie tenantgebundene
-Software Approval and Exception Policies bleiben passiv: Sie erzeugen keine
-aktive Reaktion, ueberschreiben keine manuelle Triage und installieren,
-blockieren oder deinstallieren keine Software. Eine Exception ist weder VEX
-noch Risk Acceptance. Fehlende Policies oder fehlende bekannte
-Schwachstellen ergeben niemals automatisch `APPROVED`.
+Native Threat Intelligence, Continuous Vulnerability Intelligence,
+Software-Hygiene und Software Approval/Exceptions bleiben bewusst von aktiver
+Response getrennt. Sie installieren oder blockieren keine Software und senden
+keine Agentenbefehle. Ebenso ist der CVE-LLM-Pfad aktuell ein deterministischer
+Rust-Stub und keine echte Modellinferenz; eine RAG-Runtime ist nicht
+implementiert.
 
 Der owner-kontrollierte ISCY Codex PR-Orchestrator bietet fuer autorisierte
 Same-Repository-Draft-PRs gegen `main` die Routen `/iscy status`,
-`/iscy review`, `/iscy fix-ci` und `/iscy verify`. Read-only Review/Verify,
-Workspace-begrenzte Korrekturen, Head-/Diff-Pruefungen und hoechstens zwei
-CI-Fix-Versuche folgen Least-Privilege- und fail-closed Grenzen. Codex erhaelt
-keine Merge-, Tag- oder Release-Berechtigung; die Merge-Grenze bleibt
-menschlich. Modellaufrufe setzen separat finanzierte OpenAI-API-Credits voraus.
-Da diese fuer die Candidate-Vorbereitung nicht vorhanden sind, wird kein
-erfolgreicher produktiver Auto-Fix-End-to-End-Lauf behauptet.
+`/iscy review`, `/iscy fix-ci` und `/iscy verify`. Read-only
+Review/Verify, Workspace-begrenzte Korrekturen, Head-/Diff-Pruefungen und
+hoechstens zwei CI-Fix-Versuche folgen Least-Privilege- und fail-closed
+Grenzen. Codex erhaelt keine Merge-, Tag- oder Release-Berechtigung; die
+Merge-Grenze bleibt menschlich.
+
+Historische Release-Candidate- und Maintenance-Details stehen im
+`CHANGELOG.md`, in `docs/releases/` und in den Published-Snapshots. Das
+laufende Handbuch verwendet dagegen den aktuellen Stable-/Development-
+Lifecycle.
 
 ## 7. Was die wichtigsten Begriffe bedeuten
 
@@ -2250,3 +2331,18 @@ Das PDF-Handbuch `docs/ISCY_Handbuch.pdf` wird reproduzierbar aus Markdown erzeu
 ```bash
 make docs-pdf
 ```
+
+Nach einer bewussten Handbuchaenderung werden zuerst Markdown und erzeugtes
+PDF inhaltlich geprueft. Anschliessend aktualisiert der explizite, auf
+unveroeffentlichte Staende begrenzte Abgleich das Root-Manifest und
+`release/SHA256SUMS` transaktional:
+
+```bash
+./scripts/update_release_dependency_metadata.sh --include-handbook
+```
+
+Ohne diese Option aktualisiert der Dependency-Abgleich den Handbuchhash nicht
+stillschweigend. Der PDF-Snapshot-Test vergleicht das versionierte PDF bytegenau
+mit der Ausgabe des aktuellen Generators aus diesem Markdown. Wiederholte
+Erzeugung darf keine Drift erzeugen. Historische Releases, Tags,
+Published-Snapshots und der freigegebene SBOM-Snapshot bleiben unveraendert.

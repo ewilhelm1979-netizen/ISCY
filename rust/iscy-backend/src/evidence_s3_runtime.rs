@@ -4,7 +4,7 @@ use crate::evidence_object_storage::{
     ObjectStorageValidationError, BACKEND_S3_COMPATIBLE,
 };
 use chrono::Utc;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::{header, Method, StatusCode, Url};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -552,7 +552,7 @@ impl S3RuntimeClient {
         }
         Ok(S3ObjectRead {
             size_bytes: bytes.len() as u64,
-            sha256: format!("{:x}", hasher.finalize()),
+            sha256: hex_lower(&hasher.finalize()),
             bytes,
         })
     }
@@ -917,7 +917,7 @@ fn host_header(url: &Url) -> Result<String, S3RuntimeError> {
 }
 
 fn full_sha256_bytes(value: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(value))
+    hex_lower(&Sha256::digest(value))
 }
 
 fn response_content_length(headers: &header::HeaderMap) -> Result<Option<u64>, S3RuntimeError> {
@@ -1090,26 +1090,38 @@ mod tests {
     }
 
     #[test]
-    fn sigv4_matches_aws_documentation_vector() {
-        let signed = sign_request(SignRequest {
-            method: "GET",
-            canonical_uri: "/test.txt",
-            host: "examplebucket.s3.amazonaws.com",
-            amz_date: "20130524T000000Z",
-            date: "20130524",
-            region: "us-east-1",
-            access_key: "AKIAIOSFODNN7EXAMPLE", // gitleaks:allow
-            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", // gitleaks:allow
-            session_token: None,
-            payload_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        })
-        .unwrap();
-        assert!(signed.authorization.starts_with(
-            "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request"
+    fn sigv4_matches_frozen_signatures_with_and_without_session_token() {
+        // Independently calculated with Node/OpenSSL. Unlike AWS's Range
+        // example, these requests sign exactly the headers ISCY supplies.
+        for (session_token, signed_headers, signature) in [
+            (
+                None,
+                "host;x-amz-content-sha256;x-amz-date",
+                "df548e2ce037944d03f3e68682813b093763996d597cf890ca3d9037fd231eb4",
+            ),
+            (
+                Some("test-session-token"),
+                "host;x-amz-content-sha256;x-amz-date;x-amz-security-token",
+                "d9f63d874d083c3218870e020e65f77ce2aafaaef2fd8bc639eaced1c7fe660c",
+            ),
+        ] {
+            let signed = sign_request(SignRequest {
+                method: "GET",
+                canonical_uri: "/test.txt",
+                host: "examplebucket.s3.amazonaws.com",
+                amz_date: "20130524T000000Z",
+                date: "20130524",
+                region: "us-east-1",
+                access_key: "AKIAIOSFODNN7EXAMPLE", // gitleaks:allow
+                secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", // gitleaks:allow
+                session_token,
+                payload_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            })
+            .unwrap();
+            assert_eq!(signed.authorization, format!(
+            "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders={signed_headers}, Signature={signature}"
         ));
-        assert!(signed
-            .authorization
-            .contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date"));
+        }
     }
 
     #[test]

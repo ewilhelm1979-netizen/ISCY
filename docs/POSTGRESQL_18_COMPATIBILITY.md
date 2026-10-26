@@ -1,6 +1,6 @@
 # PostgreSQL-18-Kompatibilitaet und Upgradepfad
 
-Stand: ISCY V23.7.31 Release Candidate
+Validierungsbasis: ISCY V23.7.31; aktueller V23.7.34-Development-Vertrag bestaetigt weiterhin PostgreSQL 16 als Standard und PostgreSQL 18.4 als zusaetzlichen Kompatibilitaetspfad
 
 ISCY verwendet weiterhin PostgreSQL 16 als Standard- und Produktionspfad.
 PostgreSQL 18 wird zusaetzlich als Anwendungskompatibilitaet und als Ziel eines

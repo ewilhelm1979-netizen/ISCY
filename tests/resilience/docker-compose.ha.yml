@@ -1,5 +1,9 @@
 name: iscy-resilience
 
+# Test-only MinIO compatibility image built from the upstream release source.
+# The digest pin prevents silent registry tag drift.
+x-minio-test-image: &minio-test-image ghcr.io/coollabsio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a4938f37f1be1841b8e7b627ad0207b265345fd0d063e42d7410c78af0e63e68
+
 x-app-environment: &app-environment
   DATABASE_URL: postgresql://iscy_test:iscy_test_password@postgres:5432/iscy_test
   RUST_BACKEND_BIND: 0.0.0.0:9000
@@ -52,7 +56,7 @@ services:
       retries: 30
 
   minio:
-    image: docker.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    image: *minio-test-image
     environment:
       MINIO_ROOT_USER: iscy_test_access
       MINIO_ROOT_PASSWORD: iscy_test_secret_only_123456789
@@ -61,7 +65,7 @@ services:
       - minio-data:/data
 
   minio-init:
-    image: docker.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+    image: *minio-test-image
     depends_on:
       minio:
         condition: service_started

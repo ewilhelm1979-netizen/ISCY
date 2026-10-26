@@ -69,6 +69,13 @@ use std::{
 };
 use tower::util::ServiceExt;
 
+fn sha256_hex(value: &[u8]) -> String {
+    Sha256::digest(value)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 type IncidentTimelineRow = (String, Option<String>, Option<String>, Option<i64>);
 
 struct NvdFixtureTransport {
@@ -1178,8 +1185,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0046_rust_machinery_cra_safety_security_foundation"));
-    assert!(html.contains("46/46 angewendet"));
+    assert!(html.contains("0047_rust_soa_cutover_restoration"));
+    assert!(html.contains("47/47 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -3938,10 +3945,7 @@ async fn agent_rollout_api_enforces_roles_tenants_and_explicit_start() {
         manifest_sha256
     );
     let exported = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(
-        format!("{:x}", sha2::Sha256::digest(&exported)),
-        manifest_sha256
-    );
+    assert_eq!(sha256_hex(&exported), manifest_sha256);
 
     let response = app
         .clone()
@@ -11650,7 +11654,7 @@ async fn evidence_upload_creates_item_writes_file_and_syncs_needs() {
     assert_eq!(payload["item"]["retention_until"], "2030-06-30");
     assert_eq!(
         payload["item"]["file_sha256"],
-        format!("{:x}", Sha256::digest(b"rust evidence file\n"))
+        sha256_hex(b"rust evidence file\n")
     );
     assert_eq!(
         payload["item"]["incident_title"],
@@ -11745,7 +11749,7 @@ async fn evidence_upload_creates_tenant_scoped_version_chain() {
     assert_eq!(payload["item"]["sensitivity"], "RESTRICTED");
     assert_eq!(
         payload["item"]["file_sha256"],
-        format!("{:x}", Sha256::digest(b"mfa evidence version two\n"))
+        sha256_hex(b"mfa evidence version two\n")
     );
 
     let duplicate = app
@@ -11932,8 +11936,8 @@ async fn evidence_integrity_legal_hold_and_disposition_are_tenant_scoped_and_met
     fs::write(evidence_dir.join("valid.txt"), b"trusted evidence\n").unwrap();
     fs::write(evidence_dir.join("changed.txt"), b"changed evidence\n").unwrap();
     fs::write(evidence_dir.join("dispose.txt"), b"dispose evidence\n").unwrap();
-    let valid_hash = format!("{:x}", Sha256::digest(b"trusted evidence\n"));
-    let dispose_hash = format!("{:x}", Sha256::digest(b"dispose evidence\n"));
+    let valid_hash = sha256_hex(b"trusted evidence\n");
+    let dispose_hash = sha256_hex(b"dispose evidence\n");
     let stale_hash = "0".repeat(64);
     sqlx::query(
         r#"
@@ -12420,9 +12424,9 @@ async fn evidence_storage_drill_uses_local_backend_and_keeps_tenant_boundaries()
     )
     .unwrap();
     fs::write(evidence_dir.join("empty.txt"), b"").unwrap();
-    let valid_hash = format!("{:x}", Sha256::digest(b"trusted storage evidence\n"));
+    let valid_hash = sha256_hex(b"trusted storage evidence\n");
     let stale_hash = "1".repeat(64);
-    let empty_hash = format!("{:x}", Sha256::digest(b""));
+    let empty_hash = sha256_hex(b"");
     let absolute_path = media_root.join("evidence/storage/valid.txt");
     sqlx::query(
         r#"
@@ -13580,6 +13584,49 @@ async fn import_center_preview_reads_xlsx_upload_and_builds_mapping() {
 }
 
 #[tokio::test]
+async fn import_center_preview_accepts_xlsm_extension_with_same_xlsx_parser() {
+    let app = app_router();
+    let boundary = "iscy-import-preview-xlsm-boundary";
+    let xlsx_bytes = import_preview_xlsx_fixture();
+    let body = multipart_body(
+        boundary,
+        &[("import_type", "processes"), ("replace_existing", "0")],
+        Some((
+            "file",
+            "processes.xlsm",
+            "application/vnd.ms-excel.sheet.macroEnabled.12",
+            xlsx_bytes.as_slice(),
+        )),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/import-center/preview")
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", "ADMIN")
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["accepted"], true);
+    assert_eq!(payload["preview"]["file_kind"], "xlsx");
+    assert_eq!(payload["preview"]["total_row_count"], 2);
+    assert_eq!(payload["preview"]["selected_mapping"]["name"], "Name");
+}
+
+#[tokio::test]
 async fn import_center_preview_rejects_malformed_xlsx_and_read_only_access() {
     let app = app_router();
     let request = |roles: Option<&str>, file: &[u8]| {
@@ -13639,9 +13686,10 @@ async fn import_center_preview_rejects_malformed_xlsx_and_read_only_access() {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(error["error_code"], "invalid_import_upload");
-        assert!(error["message"]
-            .as_str()
-            .is_some_and(|message| message.starts_with("XLSX-Datei konnte nicht gelesen werden")));
+        assert_eq!(
+            error["message"],
+            "XLSX-Datei enthaelt kein gueltiges Office-Archiv."
+        );
     }
 }
 
@@ -13765,6 +13813,224 @@ async fn rust_web_imports_confirms_uploaded_xlsx_from_preview_form() {
     .await
     .unwrap();
     assert_eq!(governance_count, 1);
+}
+
+#[tokio::test]
+async fn shared_strings_workbooks_keep_api_web_and_tenant_behavior() {
+    let strings = "<sst xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main' count='2' uniqueCount='2'><si><t>Name</t></si><si><t>Grüße</t></si></sst>";
+    for declaration in [
+        String::new(),
+        "<?xml version='1.0' encoding='UTF-8'?>".to_string(),
+        "\u{feff}<?xml version='1.0' encoding='UTF-8'?>".to_string(),
+        format!("<?xml version='1.0'{} encoding='UTF-8'?>", " ".repeat(128)),
+    ] {
+        let file = shared_strings_xlsx_fixture(format!("{declaration}{strings}").as_bytes());
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        create_import_tables(&pool).await;
+        insert_import_fixture(&pool).await;
+        let foreign_query = "SELECT id, owner_id, name, created_at, updated_at FROM organizations_businessunit WHERE tenant_id = 99";
+        let foreign_before: (i64, Option<i64>, String, String, String) =
+            sqlx::query_as(foreign_query)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let app = app_router_with_state(
+            AppState::default()
+                .with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+        );
+
+        let response = app
+            .clone()
+            .oneshot(shared_strings_import_request(&file, "api", Some("ADMIN")))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["accepted"], true);
+        assert_eq!(payload["preview"]["total_row_count"], 1);
+        assert_eq!(payload["preview"]["preview_rows"][0]["Name"], "Grüße");
+        assert_eq!(payload["preview"]["selected_mapping"]["name"], "Name");
+
+        for action in ["preview", "confirm"] {
+            let response = app
+                .clone()
+                .oneshot(shared_strings_import_request(&file, action, Some("ADMIN")))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let html = String::from_utf8(body.to_vec()).unwrap();
+            if action == "preview" {
+                assert!(html.contains("Import-Vorschau"));
+                assert!(html.contains("Grüße"));
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM organizations_businessunit WHERE tenant_id = 42",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(count, 2, "previews must not persist rows");
+            } else {
+                assert!(html.contains("Import uebernommen"));
+            }
+        }
+        let names: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM organizations_businessunit WHERE tenant_id = 42 ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(names, ["Grüße"]);
+        let foreign_after: (i64, Option<i64>, String, String, String) =
+            sqlx::query_as(foreign_query)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(foreign_after, foreign_before);
+    }
+}
+
+#[tokio::test]
+async fn shared_strings_invalid_workbooks_cannot_reach_web_confirmation() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+    let rows_query = "SELECT id, name FROM organizations_businessunit ORDER BY id";
+    let before: Vec<(i64, String)> = sqlx::query_as(rows_query).fetch_all(&pool).await.unwrap();
+    let mut utf16 = vec![0xff, 0xfe];
+    for unit in "<?xml version='1.0' encoding='UTF-16'?><sst/>".encode_utf16() {
+        utf16.extend_from_slice(&unit.to_le_bytes());
+    }
+    let invalid = [
+        b"<sst><si><t>Name</t></si><si><t>\xff</t></si></sst>".to_vec(),
+        b"<?xml version='1.0' encoding='unknown-encoding'?><sst><si><t>Name</t></si><si><t>Value</t></si></sst>".to_vec(),
+        utf16,
+        b"<sst count='2' uniqueCount='250001'><si><t>Name</t></si><si><t>Value</t></si></sst>".to_vec(),
+        b"<x:sst xmlns:x='urn:spreadsheet' x:count='1000001'><x:si><x:t>Name</x:t></x:si></x:sst>".to_vec(),
+        b"<sst uniqueCount='&#50;'><si><t>Name</t></si><si><t>Value</t></si></sst>".to_vec(),
+    ];
+    for xml in invalid {
+        let file = shared_strings_xlsx_fixture(&xml);
+        for action in ["api", "preview", "confirm"] {
+            let response = app
+                .clone()
+                .oneshot(shared_strings_import_request(&file, action, Some("ADMIN")))
+                .await
+                .unwrap();
+            if action == "api" {
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(payload["accepted"], false);
+                assert_eq!(payload["error_code"], "invalid_import_upload");
+            } else {
+                // Existing web errors are HTML pages with HTTP 200, not API errors.
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                let html = String::from_utf8(body.to_vec()).unwrap();
+                assert!(html.contains("XLSX-"));
+                assert!(html.contains("<h2>Fehler</h2>"));
+                assert!(!html.contains("Import uebernommen"));
+            }
+            let after: Vec<(i64, String)> =
+                sqlx::query_as(rows_query).fetch_all(&pool).await.unwrap();
+            assert_eq!(
+                after, before,
+                "rejected input must not change either tenant"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn shared_strings_workbooks_preserve_authentication_and_read_only_roles() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_import_tables(&pool).await;
+    insert_import_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_import_store(Some(ImportStore::from_sqlite_pool(pool.clone()))),
+    );
+    let file =
+        shared_strings_xlsx_fixture(b"<sst><si><t>Name</t></si><si><t>Unchanged</t></si></sst>");
+    for roles in [None, Some("AUDITOR")] {
+        for action in ["api", "preview", "confirm"] {
+            let response = app
+                .clone()
+                .oneshot(shared_strings_import_request(&file, action, roles))
+                .await
+                .unwrap();
+            if action == "api" {
+                assert_eq!(
+                    response.status(),
+                    if roles.is_none() {
+                        StatusCode::UNAUTHORIZED
+                    } else {
+                        StatusCode::FORBIDDEN
+                    }
+                );
+            } else {
+                let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+                let html = String::from_utf8(body.to_vec()).unwrap();
+                assert!(html.contains(if roles.is_none() {
+                    "Tenant-ID<input"
+                } else {
+                    "schreibende ISCY-Rolle"
+                }));
+                assert!(!html.contains("Import uebernommen"));
+                assert!(!html.contains("Unchanged"));
+            }
+        }
+    }
+    let rows: Vec<(i64, String)> =
+        sqlx::query_as("SELECT tenant_id, name FROM organizations_businessunit ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (42, "Security Operations".to_string()),
+            (42, "Digital Services".to_string()),
+            (99, "Foreign BU".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn shared_strings_legacy_non_utf8_workbook_retains_calamine_limitation() {
+    // Calamine 0.37 already uses quick-xml 0.42 without DecodingReader on main.
+    // Preflight decoding support is not a claim of downstream workbook support.
+    let file = shared_strings_xlsx_fixture(
+        b"<?xml version='1.0' encoding='windows-1252'?><sst><si><t>Name</t></si><si><t>Gr\xfc\xdfe</t></si></sst>",
+    );
+    let response = app_router()
+        .oneshot(shared_strings_import_request(&file, "api", Some("ADMIN")))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["error_code"], "invalid_import_upload");
+    assert!(payload["message"]
+        .as_str()
+        .unwrap()
+        .starts_with("XLSX-Datei konnte nicht gelesen werden:"));
 }
 
 #[tokio::test]
@@ -17633,7 +17899,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0043_rust_continuous_vulnerability_intelligence",
             "0044_rust_vulnerability_hygiene_lifecycle",
             "0045_rust_software_approval_exception_policy",
-            "0046_rust_machinery_cra_safety_security_foundation"
+            "0046_rust_machinery_cra_safety_security_foundation",
+            "0047_rust_soa_cutover_restoration"
         ]
     );
     assert!(
@@ -19418,6 +19685,90 @@ fn regular_file_count(path: &std::path::Path) -> usize {
 fn import_preview_xlsx_fixture() -> Vec<u8> {
     BASE64_STANDARD
         .decode("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")
+        .unwrap()
+}
+
+fn shared_strings_xlsx_fixture(shared_strings: &[u8]) -> Vec<u8> {
+    use std::io::{Cursor, Read, Write};
+
+    let mut source = zip::ZipArchive::new(Cursor::new(import_preview_xlsx_fixture())).unwrap();
+    let mut target = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    for index in 0..source.len() {
+        let mut entry = source.by_index(index).unwrap();
+        let name = entry.name().unwrap().into_owned();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        let replacement = match name.as_str() {
+            "[Content_Types].xml" => Some(String::from_utf8(bytes.clone()).unwrap().replace(
+                "</Types>",
+                "<Override PartName='/xl/sharedStrings.xml' ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml'/></Types>",
+            )),
+            "xl/_rels/workbook.xml.rels" => Some(String::from_utf8(bytes.clone()).unwrap().replace(
+                "</Relationships>",
+                "<Relationship Id='rIdSharedStrings' Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings' Target='sharedStrings.xml'/></Relationships>",
+            )),
+            "xl/worksheets/sheet1.xml" => Some(
+                "<?xml version='1.0'?><worksheet xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main'><dimension ref='A1:A2'/><sheetData><row r='1'><c r='A1' t='s'><v>0</v></c></row><row r='2'><c r='A2' t='s'><v>1</v></c></row></sheetData></worksheet>".to_string(),
+            ),
+            _ => None,
+        };
+        target.start_file(name, options).unwrap();
+        target
+            .write_all(replacement.as_deref().map(str::as_bytes).unwrap_or(&bytes))
+            .unwrap();
+    }
+    target.start_file("xl/sharedStrings.xml", options).unwrap();
+    target.write_all(shared_strings).unwrap();
+    target.finish().unwrap().into_inner()
+}
+
+fn shared_strings_import_request(file: &[u8], action: &str, roles: Option<&str>) -> Request<Body> {
+    let boundary = "iscy-shared-strings-workbook-boundary";
+    let encoded = BASE64_STANDARD.encode(file);
+    let mut fields = vec![
+        ("import_type", "business_units"),
+        ("replace_existing", "1"),
+        ("action", action),
+        ("map_name", "Name"),
+        // Form/query values must not override authenticated tenant headers.
+        ("tenant_id", "99"),
+        ("user_id", "88"),
+    ];
+    let upload = if action == "confirm" {
+        fields.extend([
+            ("file_name", "shared-strings.xlsx"),
+            ("file_data_base64", encoded.as_str()),
+        ]);
+        None
+    } else {
+        Some((
+            "file",
+            "shared-strings.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            file,
+        ))
+    };
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(if action == "api" {
+            "/api/v1/import-center/preview?tenant_id=99&user_id=88"
+        } else {
+            "/imports/preview/?tenant_id=99&user_id=88"
+        })
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        );
+    if let Some(roles) = roles {
+        request = request
+            .header("x-iscy-tenant-id", "42")
+            .header("x-iscy-user-id", "7")
+            .header("x-iscy-roles", roles);
+    }
+    request
+        .body(Body::from(multipart_body(boundary, &fields, upload)))
         .unwrap()
 }
 

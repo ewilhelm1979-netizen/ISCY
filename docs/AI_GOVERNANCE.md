@@ -2,6 +2,16 @@
 
 ISCY fuehrt AI-Systeme als tenantgebundene Governance-Objekte. Das Modul unter `/ai-governance/` verbindet Inventar, AI-Act-Einstufung, Human Oversight, Monitoring, Evidence und fachliche Betriebsobjekte. Es unterstuetzt Governance- und Review-Arbeit, ersetzt aber weder Rechtsberatung noch eine Konformitaetsbewertung oder Zertifizierung.
 
+## Abgrenzung zur lokalen KI-/RAG-Integration
+
+Das AI-Governance-Modul verwaltet AI-Systeme als Governance-Objekte. Es ist nicht selbst die Inferenz- oder RAG-Laufzeit von ISCY.
+
+Separat davon besitzt der CVE-Bereich einen LLM-bezeichneten Kompatibilitaetspfad: `POST /api/v1/llm/generate`, `/cves/llm-test/` und die Option `run_llm` in CVE-Assessments sind implementiert. Der aktuelle Stand fuehrt dabei jedoch kein lokales Sprachmodell aus. Die Antworten und CVE-Zusammenfassungen werden deterministisch im Rust-Code erzeugt; der Runtime-Hinweis bezeichnet diesen Pfad selbst als `iscy-rust-llm-stub-v1`.
+
+`LOCAL_LLM_MODEL_NAME` und weitere `LOCAL_LLM_*`-Werte sind im aktuellen Stand daher Konfigurations-/Kompatibilitaetsmetadaten und kein Nachweis, dass ein benanntes Modell die Ausgabe erzeugt hat. Eine RAG-, Embedding- oder Retrieval-Runtime ist im aktuellen Rust-Quellbaum nicht implementiert.
+
+Eine spaetere echte Modell- oder RAG-Kopplung muss als eigene Vertrauensgrenze umgesetzt werden. Tenant-Isolation, Least Privilege, serverseitige Autorisierung, Audit und Human Approval bleiben massgeblich. Modellvorschlaege duerfen insbesondere keine Firewall-Regeln, Endpoint-Aktionen, Incident-Abschluesse oder andere aktive Gegenmassnahmen an den bestehenden Freigabe- und Berechtigungspruefungen vorbei ausfuehren.
+
 ## Verknuepfte Objekte
 
 Ein AI-System kann mit den kanonischen ISCY-Objekten fuer Risiken, Roadmap-Tasks, Incidents und Changes verbunden werden. Die Detailansicht zeigt:

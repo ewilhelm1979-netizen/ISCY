@@ -5,7 +5,7 @@ use serde_json::Value;
 use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     sqlite::{SqlitePool, SqlitePoolOptions, SqliteRow},
-    Postgres, QueryBuilder, Row, Sqlite,
+    Postgres, QueryBuilder, Row, Sqlite, Transaction,
 };
 
 use crate::cve_store::normalize_database_url;
@@ -210,6 +210,17 @@ pub struct ManagementReviewStatusUpdateRequest {
     pub decision_notes: Option<String>,
     pub next_actions: Option<String>,
 }
+
+#[derive(Debug)]
+pub struct ManagementReviewStatusValidationError;
+
+impl std::fmt::Display for ManagementReviewStatusValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Nicht unterstuetzter Management-Review-Status.")
+    }
+}
+
+impl std::error::Error for ManagementReviewStatusValidationError {}
 
 impl ReportStore {
     pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
@@ -1417,15 +1428,15 @@ fn regulatory_review_snapshot_matches_gap_filters(
             .is_none_or(|expected| expected == has_critical)
 }
 
-async fn management_review_detail_postgres(
-    pool: &PgPool,
+async fn management_review_detail_postgres<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     tenant_id: i64,
     review_id: i64,
 ) -> anyhow::Result<Option<ManagementReviewPackageDetail>> {
     let row = sqlx::query(management_review_detail_postgres_sql())
         .bind(tenant_id)
         .bind(review_id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await
         .context("PostgreSQL-Management-Review konnte nicht gelesen werden")?;
     row.map(management_review_detail_from_pg_row)
@@ -1433,15 +1444,15 @@ async fn management_review_detail_postgres(
         .map_err(Into::into)
 }
 
-async fn management_review_detail_sqlite(
-    pool: &SqlitePool,
+async fn management_review_detail_sqlite<'e>(
+    executor: impl sqlx::SqliteExecutor<'e>,
     tenant_id: i64,
     review_id: i64,
 ) -> anyhow::Result<Option<ManagementReviewPackageDetail>> {
     let row = sqlx::query(management_review_detail_sqlite_sql())
         .bind(tenant_id)
         .bind(review_id)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await
         .context("SQLite-Management-Review konnte nicht gelesen werden")?;
     row.map(management_review_detail_from_sqlite_row)
@@ -1698,9 +1709,11 @@ async fn update_management_review_status_postgres(
     review_id: i64,
     request: ManagementReviewStatusUpdateRequest,
 ) -> anyhow::Result<Option<ManagementReviewPackageDetail>> {
-    let status = normalize_management_review_status(&request.status)?;
+    let status = normalize_management_review_status(&request.status)
+        .map_err(|_| ManagementReviewStatusValidationError)?;
     let decision_notes = clean_text(request.decision_notes, 4000);
     let next_actions = clean_text(request.next_actions, 4000);
+    let mut tx = pool.begin().await?;
     let result = sqlx::query(
         r#"
         UPDATE reports_managementreviewpackage
@@ -1720,25 +1733,19 @@ async fn update_management_review_status_postgres(
     .bind(decision_notes)
     .bind(next_actions)
     .bind(user_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("PostgreSQL-Management-Review-Status konnte nicht aktualisiert werden")?;
     if result.rows_affected() == 0 {
         return Ok(None);
     }
-    audit_management_review_event_postgres(
-        pool,
-        tenant_id,
-        Some(review_id),
-        "",
-        "management_review_status_changed",
-        Some(user_id),
-        &serde_json::json!({
-            "status": status
-        }),
-    )
-    .await?;
-    management_review_detail_postgres(pool, tenant_id, review_id).await
+    audit_management_review_status_postgres_tx(&mut tx, tenant_id, review_id, user_id, &status)
+        .await?;
+    let package = management_review_detail_postgres(&mut *tx, tenant_id, review_id)
+        .await?
+        .context("Aktualisiertes Management-Review wurde nicht gefunden")?;
+    tx.commit().await?;
+    Ok(Some(package))
 }
 
 async fn update_management_review_status_sqlite(
@@ -1748,9 +1755,11 @@ async fn update_management_review_status_sqlite(
     review_id: i64,
     request: ManagementReviewStatusUpdateRequest,
 ) -> anyhow::Result<Option<ManagementReviewPackageDetail>> {
-    let status = normalize_management_review_status(&request.status)?;
+    let status = normalize_management_review_status(&request.status)
+        .map_err(|_| ManagementReviewStatusValidationError)?;
     let decision_notes = clean_text(request.decision_notes, 4000);
     let next_actions = clean_text(request.next_actions, 4000);
+    let mut tx = pool.begin().await?;
     let result = sqlx::query(
         r#"
         UPDATE reports_managementreviewpackage
@@ -1772,25 +1781,67 @@ async fn update_management_review_status_sqlite(
     .bind(&status)
     .bind(tenant_id)
     .bind(review_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .context("SQLite-Management-Review-Status konnte nicht aktualisiert werden")?;
     if result.rows_affected() == 0 {
         return Ok(None);
     }
-    audit_management_review_event_sqlite(
-        pool,
-        tenant_id,
-        Some(review_id),
-        "",
-        "management_review_status_changed",
-        Some(user_id),
-        &serde_json::json!({
-            "status": status
-        }),
+    audit_management_review_status_sqlite_tx(&mut tx, tenant_id, review_id, user_id, &status)
+        .await?;
+    let package = management_review_detail_sqlite(&mut *tx, tenant_id, review_id)
+        .await?
+        .context("Aktualisiertes Management-Review wurde nicht gefunden")?;
+    tx.commit().await?;
+    Ok(Some(package))
+}
+
+async fn audit_management_review_status_postgres_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant_id: i64,
+    review_id: i64,
+    actor_id: i64,
+    status: &str,
+) -> anyhow::Result<()> {
+    let result = sqlx::query(
+        "INSERT INTO management_review_audit_event
+            (tenant_id,review_id,template_type,action,actor_id,detail,created_at)
+         VALUES ($1,$2,'','management_review_status_changed',$3,$4,NOW()::text)",
     )
+    .bind(tenant_id)
+    .bind(review_id)
+    .bind(actor_id)
+    .bind(serde_json::json!({"status": status}).to_string())
+    .execute(&mut **tx)
     .await?;
-    management_review_detail_sqlite(pool, tenant_id, review_id).await
+    if result.rows_affected() != 1 {
+        bail!("Management-Review-Audit wurde nicht geschrieben");
+    }
+    Ok(())
+}
+
+async fn audit_management_review_status_sqlite_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    tenant_id: i64,
+    review_id: i64,
+    actor_id: i64,
+    status: &str,
+) -> anyhow::Result<()> {
+    let result = sqlx::query(
+        "INSERT INTO management_review_audit_event
+            (tenant_id,review_id,template_type,action,actor_id,detail,created_at)
+         VALUES (?,?,'','management_review_status_changed',?,?,CURRENT_TIMESTAMP)",
+    )
+    .bind(tenant_id)
+    .bind(review_id)
+    .bind(actor_id)
+    .bind(serde_json::json!({"status": status}).to_string())
+    .execute(&mut **tx)
+    .await?;
+    if result.rows_affected() != 1 {
+        bail!("Management-Review-Audit wurde nicht geschrieben");
+    }
+    Ok(())
 }
 
 struct ManagementReviewSnapshot {

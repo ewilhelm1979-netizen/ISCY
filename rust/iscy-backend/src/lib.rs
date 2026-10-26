@@ -18,7 +18,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{Datelike, Duration as ChronoDuration, NaiveDate, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -68,6 +68,7 @@ pub mod requirement_store;
 pub mod risk_store;
 pub mod roadmap_store;
 pub mod security_store;
+pub mod soa;
 pub mod software_policy_store;
 pub mod supplier_product_security_store;
 pub mod supplier_store;
@@ -6644,7 +6645,7 @@ async fn agent_rollout_manifest_export(
         .await
     {
         Ok(manifest)
-            if format!("{:x}", Sha256::digest(manifest.canonical_json.as_bytes()))
+            if hex_encode_bytes(&Sha256::digest(manifest.canonical_json.as_bytes()))
                 == manifest.manifest_sha256 =>
         {
             agent_rollout_json_export_response(
@@ -6810,7 +6811,7 @@ async fn agent_rollout_result_import(
         )
             .into_response();
     }
-    let payload_sha256 = format!("{:x}", Sha256::digest(&body));
+    let payload_sha256 = hex_encode_bytes(&Sha256::digest(&body));
     let packet: AgentRolloutResultImportPacket = match serde_json::from_slice(&body) {
         Ok(packet) => packet,
         Err(_) => {
@@ -7319,7 +7320,7 @@ fn login_rate_limit_key(tenant_id: Option<i64>, username: &str) -> String {
     }
     let mut digest = Sha256::new();
     digest.update(legacy_compatible_key.as_bytes());
-    format!("login:{:x}", digest.finalize())
+    format!("login:{}", hex_encode_bytes(&digest.finalize()))
 }
 
 async fn login_rate_limit_remaining_block(state: &AppState, key: &str) -> Option<Duration> {
@@ -13503,6 +13504,16 @@ async fn incident_update(
             }),
         )
             .into_response(),
+        Err(err) if err.is::<incident_store::IncidentDeadlineAnchorError>() => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorResponse {
+                accepted: false,
+                api_version: "v1",
+                error_code: "incident_deadline_anchor_invalid",
+                message: err.to_string(),
+            }),
+        )
+            .into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiErrorResponse {
@@ -14754,7 +14765,7 @@ async fn evidence_s3_upload(
             Ok(value) => value,
             Err(error) => return s3_runtime_error_response(error),
         };
-    let sha256 = format!("{:x}", Sha256::digest(&file.data));
+    let sha256 = hex_encode_bytes(&Sha256::digest(&file.data));
     let content_type = file
         .content_type
         .as_deref()
@@ -16928,7 +16939,7 @@ fn evidence_disposition_tombstone(
 }
 
 fn evidence_tombstone_hash(tombstone: &Value) -> String {
-    format!("{:x}", Sha256::digest(tombstone.to_string().as_bytes()))
+    hex_encode_bytes(&Sha256::digest(tombstone.to_string().as_bytes()))
 }
 
 async fn run_evidence_storage_drill(
@@ -17238,7 +17249,7 @@ async fn evidence_upload(
         } else if s3_backend_id.is_some() {
             form.file
                 .as_ref()
-                .map(|file| format!("{:x}", Sha256::digest(&file.data)))
+                .map(|file| hex_encode_bytes(&Sha256::digest(&file.data)))
                 .unwrap_or_default()
         } else {
             String::new()
@@ -19230,16 +19241,19 @@ async fn management_review_status_update(
             }),
         )
             .into_response(),
-        Err(err) => (
+        Err(err) if err.is::<report_store::ManagementReviewStatusValidationError>() => (
             StatusCode::BAD_REQUEST,
             Json(ApiErrorResponse {
                 accepted: false,
                 api_version: "v1",
                 error_code: "management_review_invalid",
-                message: format!("Management-Review konnte nicht aktualisiert werden: {err}"),
+                message: err.to_string(),
             }),
         )
             .into_response(),
+        Err(_) => {
+            api_database_error("Management-Review konnte nicht aktualisiert werden.".to_string())
+        }
     }
 }
 
@@ -19638,6 +19652,11 @@ async fn web_index(
             "Reports",
             &web_path_with_context("/reports/", context.as_ref()),
             "Readiness-Snapshots",
+        ),
+        web_link_card(
+            "Statement of Applicability",
+            "/assessments/soa/",
+            "ISO27001-Controls begruendet pruefen",
         ),
         web_link_card(
             "Roadmap",
@@ -21355,7 +21374,7 @@ async fn web_agent_rollout_result_import(
         }
     };
     packet.confirmed = form.confirmed.is_some();
-    let payload_sha256 = format!("{:x}", Sha256::digest(form.result_packet.as_bytes()));
+    let payload_sha256 = hex_encode_bytes(&Sha256::digest(form.result_packet.as_bytes()));
     let result = store
         .import_handoff_results(
             context.tenant_id,
@@ -28495,7 +28514,7 @@ async fn web_evidence_upload(
                 s3_backend_id.as_ref().and_then(|_| {
                     form.file
                         .as_ref()
-                        .map(|file| format!("{:x}", Sha256::digest(&file.data)))
+                        .map(|file| hex_encode_bytes(&Sha256::digest(&file.data)))
                 })
             })
             .unwrap_or_default(),
@@ -29326,13 +29345,25 @@ async fn web_management_review_status_submit(
             "Management-Review wurde nicht gefunden.",
         )
         .into_response(),
-        Err(err) => web_error_page(
-            "Management Review",
-            "/management-reviews/",
-            &context,
-            &err.to_string(),
+        Err(err) if err.is::<report_store::ManagementReviewStatusValidationError>() => {
+            web_error_page(
+                "Management Review",
+                "/management-reviews/",
+                &context,
+                &err.to_string(),
+            )
+            .into_response()
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            web_error_page(
+                "Management Review",
+                "/management-reviews/",
+                &context,
+                "Management-Review konnte nicht aktualisiert werden.",
+            ),
         )
-        .into_response(),
+            .into_response(),
     }
 }
 
@@ -33983,7 +34014,7 @@ async fn web_assessments(
         .join("");
     let body = format!(
         r#"
-        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p></section>
+        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p><a href="/assessments/soa/">Statement of Applicability</a></section>
         <section class="metrics">
           {}
           {}
@@ -45242,7 +45273,7 @@ fn save_evidence_upload(
     Ok(SavedEvidenceFile {
         relative_path,
         absolute_path,
-        sha256: format!("{:x}", Sha256::digest(&file.data)),
+        sha256: hex_encode_bytes(&Sha256::digest(&file.data)),
     })
 }
 
@@ -47826,6 +47857,7 @@ pub fn app_router() -> Router {
 pub fn app_router_with_state(state: AppState) -> Router {
     let security_config = state.security_config.clone();
     Router::new()
+        .merge(soa::routes())
         .route("/health", get(health_live))
         .route("/health/ready", get(health_ready))
         .route("/health/live", get(health_live))
@@ -49267,7 +49299,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use hmac::Mac;
+    use hmac::{KeyInit, Mac};
 
     use super::{
         agent_installation_command, alertmanager_hmac_message, alertmanager_hmac_secret_matches,
@@ -49698,6 +49730,16 @@ mod tests {
     }
 
     #[test]
+    fn digest_hex_output_preserves_lowercase_and_leading_zeroes() {
+        use sha2::Digest;
+        assert_eq!(super::hex_encode_bytes(&[0, 1, 10, 255]), "00010aff");
+        assert_eq!(
+            super::hex_encode_bytes(&sha2::Sha256::digest(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
     fn alertmanager_hmac_matches_timestamp_and_body() {
         let message = alertmanager_hmac_message("1800000000", br#"{"status":"firing"}"#);
         let mut mac = AlertmanagerHmacSha256::new_from_slice(b"strong-alert-secret").unwrap();
@@ -49713,6 +49755,43 @@ mod tests {
             "wrong-secret",
             &message,
             &signature
+        ));
+    }
+
+    #[test]
+    fn alertmanager_hmac_matches_frozen_signature_and_rejects_mutations() {
+        // Independent Node/OpenSSL fixture, not a live credential.
+        let signature = "8da6d1290abe102c97148a84ce45f1fa6cd847501ab2713f53b3a20e82bc523e";
+        let message = alertmanager_hmac_message("1700000000", br#"{"alerts":[]}"#);
+        assert!(alertmanager_hmac_secret_matches(
+            "strong-alert-secret",
+            &message,
+            signature
+        ));
+        assert!(!alertmanager_hmac_secret_matches(
+            "wrong-secret",
+            &message,
+            signature
+        ));
+        for changed in [
+            alertmanager_hmac_message("1700000001", br#"{"alerts":[]}"#),
+            alertmanager_hmac_message("1700000000", br#"{"alerts":[{}]}"#),
+        ] {
+            assert!(!alertmanager_hmac_secret_matches(
+                "strong-alert-secret",
+                &changed,
+                signature
+            ));
+        }
+        assert!(!alertmanager_hmac_secret_matches(
+            "strong-alert-secret",
+            &message,
+            &signature[..62]
+        ));
+        assert!(!alertmanager_hmac_secret_matches(
+            "strong-alert-secret",
+            &message,
+            &format!("{signature}00")
         ));
     }
 

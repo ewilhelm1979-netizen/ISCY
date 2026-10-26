@@ -6,7 +6,7 @@ use serde_json::Value;
 use sqlx::{
     postgres::{PgPool, PgPoolOptions},
     sqlite::{SqlitePool, SqlitePoolOptions},
-    Row,
+    PgConnection, Row, SqliteConnection,
 };
 
 use crate::cve_store::normalize_database_url;
@@ -98,14 +98,32 @@ async fn apply_postgres(
     job: &ImportJobRequest,
 ) -> anyhow::Result<ImportCounter> {
     if job.replace_existing {
-        delete_existing_postgres(pool, tenant_id, import_type).await?;
+        let mut transaction = pool.begin().await?;
+        delete_existing_postgres(&mut transaction, tenant_id, import_type).await?;
+        let counter =
+            import_rows_postgres(&mut transaction, tenant_id, import_type, &job.rows).await?;
+        transaction.commit().await?;
+        return Ok(counter);
     }
 
+    // Append retains statement-by-statement autocommit and partial progress
+    // on failure. Reuse the same connection-based implementation without
+    // introducing a second pool-only write path or an implicit transaction.
+    let mut connection = pool.acquire().await?;
+    import_rows_postgres(&mut connection, tenant_id, import_type, &job.rows).await
+}
+
+async fn import_rows_postgres(
+    connection: &mut PgConnection,
+    tenant_id: i64,
+    import_type: &str,
+    rows: &[HashMap<String, Value>],
+) -> anyhow::Result<ImportCounter> {
     match import_type {
-        "business_units" => import_business_units_postgres(pool, tenant_id, &job.rows).await,
-        "processes" => import_processes_postgres(pool, tenant_id, &job.rows).await,
-        "suppliers" => import_suppliers_postgres(pool, tenant_id, &job.rows).await,
-        "assets" => import_assets_postgres(pool, tenant_id, &job.rows).await,
+        "business_units" => import_business_units_postgres(connection, tenant_id, rows).await,
+        "processes" => import_processes_postgres(connection, tenant_id, rows).await,
+        "suppliers" => import_suppliers_postgres(connection, tenant_id, rows).await,
+        "assets" => import_assets_postgres(connection, tenant_id, rows).await,
         _ => unreachable!("import_type is normalized before dispatch"),
     }
 }
@@ -117,20 +135,35 @@ async fn apply_sqlite(
     job: &ImportJobRequest,
 ) -> anyhow::Result<ImportCounter> {
     if job.replace_existing {
-        delete_existing_sqlite(pool, tenant_id, import_type).await?;
+        let mut transaction = pool.begin_with("BEGIN IMMEDIATE").await?;
+        delete_existing_sqlite(&mut transaction, tenant_id, import_type).await?;
+        let counter =
+            import_rows_sqlite(&mut transaction, tenant_id, import_type, &job.rows).await?;
+        transaction.commit().await?;
+        return Ok(counter);
     }
 
+    let mut connection = pool.acquire().await?;
+    import_rows_sqlite(&mut connection, tenant_id, import_type, &job.rows).await
+}
+
+async fn import_rows_sqlite(
+    connection: &mut SqliteConnection,
+    tenant_id: i64,
+    import_type: &str,
+    rows: &[HashMap<String, Value>],
+) -> anyhow::Result<ImportCounter> {
     match import_type {
-        "business_units" => import_business_units_sqlite(pool, tenant_id, &job.rows).await,
-        "processes" => import_processes_sqlite(pool, tenant_id, &job.rows).await,
-        "suppliers" => import_suppliers_sqlite(pool, tenant_id, &job.rows).await,
-        "assets" => import_assets_sqlite(pool, tenant_id, &job.rows).await,
+        "business_units" => import_business_units_sqlite(connection, tenant_id, rows).await,
+        "processes" => import_processes_sqlite(connection, tenant_id, rows).await,
+        "suppliers" => import_suppliers_sqlite(connection, tenant_id, rows).await,
+        "assets" => import_assets_sqlite(connection, tenant_id, rows).await,
         _ => unreachable!("import_type is normalized before dispatch"),
     }
 }
 
 async fn delete_existing_postgres(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     tenant_id: i64,
     import_type: &str,
 ) -> anyhow::Result<()> {
@@ -141,12 +174,15 @@ async fn delete_existing_postgres(
         "assets" => "DELETE FROM assets_app_informationasset WHERE tenant_id = $1",
         _ => unreachable!("import_type is normalized before dispatch"),
     };
-    sqlx::query(sql).bind(tenant_id).execute(pool).await?;
+    sqlx::query(sql)
+        .bind(tenant_id)
+        .execute(&mut *connection)
+        .await?;
     Ok(())
 }
 
 async fn delete_existing_sqlite(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     tenant_id: i64,
     import_type: &str,
 ) -> anyhow::Result<()> {
@@ -157,12 +193,15 @@ async fn delete_existing_sqlite(
         "assets" => "DELETE FROM assets_app_informationasset WHERE tenant_id = ?",
         _ => unreachable!("import_type is normalized before dispatch"),
     };
-    sqlx::query(sql).bind(tenant_id).execute(pool).await?;
+    sqlx::query(sql)
+        .bind(tenant_id)
+        .execute(&mut *connection)
+        .await?;
     Ok(())
 }
 
 async fn import_business_units_postgres(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     tenant_id: i64,
     rows: &[HashMap<String, Value>],
 ) -> anyhow::Result<ImportCounter> {
@@ -173,14 +212,14 @@ async fn import_business_units_postgres(
             counter.skipped += 1;
             continue;
         }
-        if let Some(id) = find_business_unit_postgres(pool, tenant_id, &name).await? {
+        if let Some(id) = find_business_unit_postgres(connection, tenant_id, &name).await? {
             sqlx::query("UPDATE organizations_businessunit SET updated_at = NOW() WHERE id = $1")
                 .bind(id)
-                .execute(pool)
+                .execute(&mut *connection)
                 .await?;
             counter.updated += 1;
         } else {
-            insert_business_unit_postgres(pool, tenant_id, &name).await?;
+            insert_business_unit_postgres(connection, tenant_id, &name).await?;
             counter.created += 1;
         }
     }
@@ -188,7 +227,7 @@ async fn import_business_units_postgres(
 }
 
 async fn import_business_units_sqlite(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     tenant_id: i64,
     rows: &[HashMap<String, Value>],
 ) -> anyhow::Result<ImportCounter> {
@@ -199,16 +238,16 @@ async fn import_business_units_sqlite(
             counter.skipped += 1;
             continue;
         }
-        if let Some(id) = find_business_unit_sqlite(pool, tenant_id, &name).await? {
+        if let Some(id) = find_business_unit_sqlite(connection, tenant_id, &name).await? {
             sqlx::query(
                 "UPDATE organizations_businessunit SET updated_at = datetime('now') WHERE id = ?",
             )
             .bind(id)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.updated += 1;
         } else {
-            insert_business_unit_sqlite(pool, tenant_id, &name).await?;
+            insert_business_unit_sqlite(connection, tenant_id, &name).await?;
             counter.created += 1;
         }
     }
@@ -216,7 +255,7 @@ async fn import_business_units_sqlite(
 }
 
 async fn import_processes_postgres(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     tenant_id: i64,
     rows: &[HashMap<String, Value>],
 ) -> anyhow::Result<ImportCounter> {
@@ -227,7 +266,7 @@ async fn import_processes_postgres(
             counter.skipped += 1;
             continue;
         }
-        let business_unit_id = business_unit_for_row_postgres(pool, tenant_id, row).await?;
+        let business_unit_id = business_unit_for_row_postgres(connection, tenant_id, row).await?;
         let status = process_status(&row_text(row, &["status", "Status"]));
         let documented = row_bool(row, &["documented"]);
         let approved = row_bool(row, &["approved"]);
@@ -238,7 +277,9 @@ async fn import_processes_postgres(
         let scope = row_text(row, &["scope", "Scope"]);
         let description = row_text(row, &["description", "service_description"]);
 
-        if let Some(id) = find_named_postgres(pool, "processes_process", tenant_id, &name).await? {
+        if let Some(id) =
+            find_named_postgres(connection, "processes_process", tenant_id, &name).await?
+        {
             sqlx::query(
                 r#"
                 UPDATE processes_process
@@ -267,7 +308,7 @@ async fn import_processes_postgres(
             .bind(implemented)
             .bind(effective)
             .bind(evidenced)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.updated += 1;
         } else {
@@ -306,7 +347,7 @@ async fn import_processes_postgres(
             .bind(implemented)
             .bind(effective)
             .bind(evidenced)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.created += 1;
         }
@@ -315,7 +356,7 @@ async fn import_processes_postgres(
 }
 
 async fn import_processes_sqlite(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     tenant_id: i64,
     rows: &[HashMap<String, Value>],
 ) -> anyhow::Result<ImportCounter> {
@@ -326,7 +367,7 @@ async fn import_processes_sqlite(
             counter.skipped += 1;
             continue;
         }
-        let business_unit_id = business_unit_for_row_sqlite(pool, tenant_id, row).await?;
+        let business_unit_id = business_unit_for_row_sqlite(connection, tenant_id, row).await?;
         let status = process_status(&row_text(row, &["status", "Status"]));
         let documented = row_bool(row, &["documented"]);
         let approved = row_bool(row, &["approved"]);
@@ -337,7 +378,9 @@ async fn import_processes_sqlite(
         let scope = row_text(row, &["scope", "Scope"]);
         let description = row_text(row, &["description", "service_description"]);
 
-        if let Some(id) = find_named_sqlite(pool, "processes_process", tenant_id, &name).await? {
+        if let Some(id) =
+            find_named_sqlite(connection, "processes_process", tenant_id, &name).await?
+        {
             sqlx::query(
                 r#"
                 UPDATE processes_process
@@ -366,7 +409,7 @@ async fn import_processes_sqlite(
             .bind(implemented)
             .bind(effective)
             .bind(evidenced)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.updated += 1;
         } else {
@@ -405,7 +448,7 @@ async fn import_processes_sqlite(
             .bind(implemented)
             .bind(effective)
             .bind(evidenced)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.created += 1;
         }
@@ -414,7 +457,7 @@ async fn import_processes_sqlite(
 }
 
 async fn import_suppliers_postgres(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     tenant_id: i64,
     rows: &[HashMap<String, Value>],
 ) -> anyhow::Result<ImportCounter> {
@@ -440,7 +483,7 @@ async fn import_suppliers_postgres(
         let evidence_required = supplier_evidence_required(row);
         let notes = row_text(row, &["notes", "note"]);
         if let Some(id) =
-            find_named_postgres(pool, "organizations_supplier", tenant_id, &name).await?
+            find_named_postgres(connection, "organizations_supplier", tenant_id, &name).await?
         {
             sqlx::query(
                 r#"
@@ -454,8 +497,8 @@ async fn import_suppliers_postgres(
                     exit_dependency = $8,
                     regulatory_scope = $9,
                     review_status = $10,
-                    last_reviewed_at = $11,
-                    next_review_due_at = $12,
+                    last_reviewed_at = $11::date,
+                    next_review_due_at = $12::date,
                     evidence_required = $13,
                     notes = $14,
                     updated_at = NOW()
@@ -476,7 +519,7 @@ async fn import_suppliers_postgres(
             .bind(&next_review_due_at)
             .bind(evidence_required)
             .bind(&notes)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.updated += 1;
         } else {
@@ -502,7 +545,7 @@ async fn import_suppliers_postgres(
                     created_at,
                     updated_at
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, NOW(), NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::date, $13::date, $14, $15, NULL, NOW(), NOW())
                 "#,
             )
             .bind(tenant_id)
@@ -520,7 +563,7 @@ async fn import_suppliers_postgres(
             .bind(&next_review_due_at)
             .bind(evidence_required)
             .bind(&notes)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.created += 1;
         }
@@ -529,7 +572,7 @@ async fn import_suppliers_postgres(
 }
 
 async fn import_suppliers_sqlite(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     tenant_id: i64,
     rows: &[HashMap<String, Value>],
 ) -> anyhow::Result<ImportCounter> {
@@ -555,7 +598,7 @@ async fn import_suppliers_sqlite(
         let evidence_required = supplier_evidence_required(row);
         let notes = row_text(row, &["notes", "note"]);
         if let Some(id) =
-            find_named_sqlite(pool, "organizations_supplier", tenant_id, &name).await?
+            find_named_sqlite(connection, "organizations_supplier", tenant_id, &name).await?
         {
             sqlx::query(
                 r#"
@@ -591,7 +634,7 @@ async fn import_suppliers_sqlite(
             .bind(&next_review_due_at)
             .bind(evidence_required)
             .bind(&notes)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.updated += 1;
         } else {
@@ -635,7 +678,7 @@ async fn import_suppliers_sqlite(
             .bind(&next_review_due_at)
             .bind(evidence_required)
             .bind(&notes)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.created += 1;
         }
@@ -644,7 +687,7 @@ async fn import_suppliers_sqlite(
 }
 
 async fn import_assets_postgres(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     tenant_id: i64,
     rows: &[HashMap<String, Value>],
 ) -> anyhow::Result<ImportCounter> {
@@ -655,7 +698,7 @@ async fn import_assets_postgres(
             counter.skipped += 1;
             continue;
         }
-        let business_unit_id = business_unit_for_row_postgres(pool, tenant_id, row).await?;
+        let business_unit_id = business_unit_for_row_postgres(connection, tenant_id, row).await?;
         let asset_type = asset_type(&row_text(row, &["asset_type"]));
         let criticality = asset_criticality(&row_text(row, &["criticality"]));
         let description = row_text(row, &["description", "service_description"]);
@@ -669,7 +712,7 @@ async fn import_assets_postgres(
         );
 
         if let Some(id) =
-            find_named_postgres(pool, "assets_app_informationasset", tenant_id, &name).await?
+            find_named_postgres(connection, "assets_app_informationasset", tenant_id, &name).await?
         {
             sqlx::query(
                 r#"
@@ -697,7 +740,7 @@ async fn import_assets_postgres(
             .bind(&availability)
             .bind(&lifecycle_status)
             .bind(is_in_scope)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.updated += 1;
         } else {
@@ -733,7 +776,7 @@ async fn import_assets_postgres(
             .bind(&availability)
             .bind(&lifecycle_status)
             .bind(is_in_scope)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.created += 1;
         }
@@ -742,7 +785,7 @@ async fn import_assets_postgres(
 }
 
 async fn import_assets_sqlite(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     tenant_id: i64,
     rows: &[HashMap<String, Value>],
 ) -> anyhow::Result<ImportCounter> {
@@ -753,7 +796,7 @@ async fn import_assets_sqlite(
             counter.skipped += 1;
             continue;
         }
-        let business_unit_id = business_unit_for_row_sqlite(pool, tenant_id, row).await?;
+        let business_unit_id = business_unit_for_row_sqlite(connection, tenant_id, row).await?;
         let asset_type = asset_type(&row_text(row, &["asset_type"]));
         let criticality = asset_criticality(&row_text(row, &["criticality"]));
         let description = row_text(row, &["description", "service_description"]);
@@ -767,7 +810,7 @@ async fn import_assets_sqlite(
         );
 
         if let Some(id) =
-            find_named_sqlite(pool, "assets_app_informationasset", tenant_id, &name).await?
+            find_named_sqlite(connection, "assets_app_informationasset", tenant_id, &name).await?
         {
             sqlx::query(
                 r#"
@@ -795,7 +838,7 @@ async fn import_assets_sqlite(
             .bind(&availability)
             .bind(&lifecycle_status)
             .bind(is_in_scope)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.updated += 1;
         } else {
@@ -831,7 +874,7 @@ async fn import_assets_sqlite(
             .bind(&availability)
             .bind(&lifecycle_status)
             .bind(is_in_scope)
-            .execute(pool)
+            .execute(&mut *connection)
             .await?;
             counter.created += 1;
         }
@@ -840,7 +883,7 @@ async fn import_assets_sqlite(
 }
 
 async fn business_unit_for_row_postgres(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     tenant_id: i64,
     row: &HashMap<String, Value>,
 ) -> anyhow::Result<Option<i64>> {
@@ -848,16 +891,16 @@ async fn business_unit_for_row_postgres(
     if name.is_empty() {
         return Ok(None);
     }
-    if let Some(id) = find_business_unit_postgres(pool, tenant_id, &name).await? {
+    if let Some(id) = find_business_unit_postgres(connection, tenant_id, &name).await? {
         return Ok(Some(id));
     }
-    insert_business_unit_postgres(pool, tenant_id, &name)
+    insert_business_unit_postgres(connection, tenant_id, &name)
         .await
         .map(Some)
 }
 
 async fn business_unit_for_row_sqlite(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     tenant_id: i64,
     row: &HashMap<String, Value>,
 ) -> anyhow::Result<Option<i64>> {
@@ -865,32 +908,32 @@ async fn business_unit_for_row_sqlite(
     if name.is_empty() {
         return Ok(None);
     }
-    if let Some(id) = find_business_unit_sqlite(pool, tenant_id, &name).await? {
+    if let Some(id) = find_business_unit_sqlite(connection, tenant_id, &name).await? {
         return Ok(Some(id));
     }
-    insert_business_unit_sqlite(pool, tenant_id, &name)
+    insert_business_unit_sqlite(connection, tenant_id, &name)
         .await
         .map(Some)
 }
 
 async fn find_business_unit_postgres(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     tenant_id: i64,
     name: &str,
 ) -> anyhow::Result<Option<i64>> {
-    find_named_postgres(pool, "organizations_businessunit", tenant_id, name).await
+    find_named_postgres(connection, "organizations_businessunit", tenant_id, name).await
 }
 
 async fn find_business_unit_sqlite(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     tenant_id: i64,
     name: &str,
 ) -> anyhow::Result<Option<i64>> {
-    find_named_sqlite(pool, "organizations_businessunit", tenant_id, name).await
+    find_named_sqlite(connection, "organizations_businessunit", tenant_id, name).await
 }
 
 async fn insert_business_unit_postgres(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     tenant_id: i64,
     name: &str,
 ) -> anyhow::Result<i64> {
@@ -903,13 +946,13 @@ async fn insert_business_unit_postgres(
     )
     .bind(tenant_id)
     .bind(name)
-    .fetch_one(pool)
+    .fetch_one(&mut *connection)
     .await?;
     Ok(row.try_get("id")?)
 }
 
 async fn insert_business_unit_sqlite(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     tenant_id: i64,
     name: &str,
 ) -> anyhow::Result<i64> {
@@ -921,13 +964,13 @@ async fn insert_business_unit_sqlite(
     )
     .bind(tenant_id)
     .bind(name)
-    .execute(pool)
+    .execute(&mut *connection)
     .await?;
     Ok(result.last_insert_rowid())
 }
 
 async fn find_named_postgres(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     table: &str,
     tenant_id: i64,
     name: &str,
@@ -938,7 +981,7 @@ async fn find_named_postgres(
     let row = sqlx::query(&sql)
         .bind(tenant_id)
         .bind(name)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await?;
     row.map(|row| row.try_get("id"))
         .transpose()
@@ -946,7 +989,7 @@ async fn find_named_postgres(
 }
 
 async fn find_named_sqlite(
-    pool: &SqlitePool,
+    connection: &mut SqliteConnection,
     table: &str,
     tenant_id: i64,
     name: &str,
@@ -956,7 +999,7 @@ async fn find_named_sqlite(
     let row = sqlx::query(&sql)
         .bind(tenant_id)
         .bind(name)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *connection)
         .await?;
     row.map(|row| row.try_get("id"))
         .transpose()

@@ -6,6 +6,16 @@ The project uses release tags for immutable release points. Changes under **Unre
 
 ## Unreleased
 
+### Kryptografie-Dependency-Kompatibilität
+
+- aktualisiert die direkten Abhängigkeiten auf `sha2` 0.11.1 und den dazu
+  passenden `hmac`-Companion 0.13.0; SQLx behält seinen bisherigen transitiven
+  Digest-/HMAC-Pfad, die Projekt-MSRV bleibt Rust 1.88
+- erhält SHA-256-, HMAC-SHA-256-, PBKDF2- und kleingeschriebene Hex-Ausgaben
+  durch die erforderlichen API-Anpassungen ohne neue Algorithmen oder Formate
+- ergänzt feste Referenzwerte und Negativtests für Hash-/HMAC-Ausgaben,
+  PBKDF2, S3-Signaturen, SoA-Formularbindung und Alertmanager-Signaturen
+
 ### Machinery & CRA Safety-Security Co-Engineering – Phase 1
 
 - ergänzt eine schmale, tenantgebundene Product-Safety-Domain für

@@ -20,6 +20,33 @@ ruby - "$workflow" "$tmp_dir" <<'RUBY'
 require "yaml"
 
 workflow = YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)
+download_pin = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
+downloads = workflow.fetch("jobs").flat_map do |job_name, job|
+  job.fetch("steps", []).filter_map do |step|
+    [job_name, step] if step.fetch("uses", "").start_with?("actions/download-artifact@")
+  end
+end
+expected_downloads = {
+  "publish-review-or-verify" => ["iscy-codex-result-", "result"],
+  "push-fix" => ["iscy-codex-fix-", "fix-result"],
+  "publish-fix-result" => ["iscy-codex-fix-", "result"]
+}
+abort("artifact download job scope changed") unless
+  downloads.map(&:first).sort == expected_downloads.keys.sort
+downloads.each do |job_name, step|
+  prefix, path = expected_downloads.fetch(job_name)
+  expected_name = prefix + '${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pr_number }}'
+  abort("download action pin changed: #{job_name}") unless step["uses"] == download_pin
+  # Exact input set keeps the action on this repository and workflow run;
+  # no injected token, cross-run lookup, wildcard or merged extraction.
+  abort("artifact download inputs changed: #{job_name}") unless
+    step.fetch("with") == {"name" => expected_name, "path" => path}
+end
+abort("download action version comments drifted") unless
+  File.read(ARGV.fetch(0)).scan("uses: #{download_pin} # v8.0.2").size == 3
+abort("documented download action pin drifted") unless
+  File.read("docs/CODEX_AUTOMATION.md").include?(
+    "`actions/download-artifact` v8.0.2 (geprueft 2026-10-15):\n  `9000827ccba6bdab643e8b6fd33ac0654aef8333`")
 steps = workflow.fetch("jobs").fetch("review-or-verify").fetch("steps")
 step_by_name = steps.to_h { |step| [step.fetch("name"), step] }
 fix_steps = workflow.fetch("jobs").fetch("fix-agent").fetch("steps")
@@ -34,8 +61,32 @@ diagnose = step_by_name.fetch("Diagnose Codex action runtime")
 fix_codex = fix_steps.find { |step| step["id"] == "codex" }
 abort("Fix-agent Codex step missing") unless fix_codex
 fix_codex_with = fix_codex.fetch("with")
+codex_pin = "openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675"
+codex_steps = workflow.fetch("jobs").values.flat_map do |job|
+  job.fetch("steps", []).select { |step| step.fetch("uses", "").start_with?("openai/codex-action@") }
+end
+abort("Codex action scope or pin changed") unless
+  codex_steps.size == 2 && codex_steps.all? { |step| step["uses"] == codex_pin }
+abort("Codex action version comments drifted") unless
+  File.read(ARGV.fetch(0)).scan("uses: #{codex_pin} # v1.13 verified 2026-10-15").size == 2
+documentation = File.read("docs/CODEX_AUTOMATION.md")
+abort("documented Codex action pin drifted") unless documentation.include?(
+  "`openai/codex-action` v1.13 (verified 2026-10-15):\n  `bdf19a4a223ec2549a3e2274a0cf61556bc07675`")
+abort("documented CLI is not the unchanged runtime pin") unless
+  documentation.include?("The Codex CLI is pinned to `0.144.4`.")
 validate = step_by_name.fetch("Validate structured result")
 upload = step_by_name.fetch("Upload bounded result").fetch("with")
+upload_pin = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
+upload_steps = workflow.fetch("jobs").values.flat_map do |job|
+  job.fetch("steps", []).select { |step| step.fetch("uses", "").start_with?("actions/upload-artifact@") }
+end
+abort("bounded upload scope or pin changed") unless
+  upload_steps.size == 2 && upload_steps.all? { |step| step["uses"] == upload_pin }
+abort("upload action version comments drifted") unless
+  File.read(ARGV.fetch(0)).scan("uses: #{upload_pin} # v7.0.2").size == 2
+abort("documented upload action pin drifted") unless
+  File.read("docs/CODEX_AUTOMATION.md").include?(
+    "`actions/upload-artifact` v7.0.2 (verified 2026-10-15):\n  `cf430e030ddbb5b0abf93d22962f4752f3646cd9`")
 
 abort("Codex output-file retained") if codex_with.key?("output-file")
 abort("prompt is not inside the worktree runtime") unless codex_with["prompt-file"] ==

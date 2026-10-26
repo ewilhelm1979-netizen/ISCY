@@ -14,10 +14,10 @@
     "nix_development_path": "1.95.0"
   },
   "cargo_package_version": "0.3.22",
-  "cargo_lock_sha256": "41e8bcc8a3914c6b3242a55b9a819af5f7a9be6651b89f56b816f32078c2bfa7",
-  "flake_lock_sha256": "26aca5784e077f55f7b70c4f1414348b95c0a659647fca022119d9c429740a23",
-  "handbook_sha256": "936c07ac25495a2df072a887e6eb2ecd7e9f3a536468b6e8a45f8f678dae6df7",
-  "migration_count": 46,
+  "cargo_lock_sha256": "5a4cc1a9ce7045b354eb9a47d2729d2b65eebcb79e53155645f85cf0fc6fad53",
+  "flake_lock_sha256": "1d10ae61c8e7f4ee352b1cf81932dca27f7e0f8d9b7a19392203e25695f52c39",
+  "handbook_sha256": "0babb2467d4bf011ff1d88622bec3bcb78dba2aeef5f490d4237a4b57a3dd751",
+  "migration_count": 47,
   "platform_versions": {
     "nginx": "1.31-alpine",
     "nixpkgs": "nixos-26.05"
@@ -79,7 +79,7 @@
   "provenance_status": "prepared_unsigned",
   "signature_status": "unsigned",
   "sbom_status": "generated_cyclonedx_1.5",
-  "sbom_sha256": "0b8ba788aad16868f360817037cd15c129a314273a5e61bd11676282cfbfeb4e",
+  "sbom_sha256": "4858e09ec3a71ec66ba969f6604fe2d88c2358dd699597db72dcdb29026d2911",
   "vex_status": "not_generated_no_release_vulnerability_assertion",
   "known_limitations_reference": "docs/RELEASE_CANDIDATE_CHECKLIST.md#bekannte-betriebsgrenzen"
 }
