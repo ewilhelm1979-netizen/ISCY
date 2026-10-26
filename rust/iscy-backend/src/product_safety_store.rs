@@ -1448,7 +1448,7 @@ fn normalize_interaction(
         )?,
         measures: optional_text(request.measures, 4000, "interaction_measures_too_long")?,
         rationale: optional_text(request.rationale, 4000, "interaction_rationale_too_long")?,
-        deduplication_key: format!("{:x}", digest.finalize()),
+        deduplication_key: crate::hex_encode_bytes(&digest.finalize()),
     })
 }
 

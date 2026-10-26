@@ -638,7 +638,7 @@ fn normalize_identifier(value: Option<&str>, prefix: &str, seed: &str) -> String
             let mut hasher = Sha256::new();
             hasher.update(seed.as_bytes());
             hasher.update(Utc::now().to_rfc3339().as_bytes());
-            format!("{prefix}-{:x}", hasher.finalize())
+            format!("{prefix}-{}", crate::hex_encode_bytes(&hasher.finalize()))
                 .chars()
                 .take(32)
                 .collect()
@@ -690,7 +690,7 @@ fn parse_i64_array(raw: String) -> Vec<i64> {
 fn sha256_hex(value: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value.as_bytes());
-    format!("{:x}", hasher.finalize())
+    crate::hex_encode_bytes(&hasher.finalize())
 }
 
 fn normalize_provider_payload(

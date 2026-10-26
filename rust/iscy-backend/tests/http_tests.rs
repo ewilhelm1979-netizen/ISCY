@@ -69,6 +69,13 @@ use std::{
 };
 use tower::util::ServiceExt;
 
+fn sha256_hex(value: &[u8]) -> String {
+    Sha256::digest(value)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 type IncidentTimelineRow = (String, Option<String>, Option<String>, Option<i64>);
 
 struct NvdFixtureTransport {
@@ -3938,10 +3945,7 @@ async fn agent_rollout_api_enforces_roles_tenants_and_explicit_start() {
         manifest_sha256
     );
     let exported = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    assert_eq!(
-        format!("{:x}", sha2::Sha256::digest(&exported)),
-        manifest_sha256
-    );
+    assert_eq!(sha256_hex(&exported), manifest_sha256);
 
     let response = app
         .clone()
@@ -11650,7 +11654,7 @@ async fn evidence_upload_creates_item_writes_file_and_syncs_needs() {
     assert_eq!(payload["item"]["retention_until"], "2030-06-30");
     assert_eq!(
         payload["item"]["file_sha256"],
-        format!("{:x}", Sha256::digest(b"rust evidence file\n"))
+        sha256_hex(b"rust evidence file\n")
     );
     assert_eq!(
         payload["item"]["incident_title"],
@@ -11745,7 +11749,7 @@ async fn evidence_upload_creates_tenant_scoped_version_chain() {
     assert_eq!(payload["item"]["sensitivity"], "RESTRICTED");
     assert_eq!(
         payload["item"]["file_sha256"],
-        format!("{:x}", Sha256::digest(b"mfa evidence version two\n"))
+        sha256_hex(b"mfa evidence version two\n")
     );
 
     let duplicate = app
@@ -11932,8 +11936,8 @@ async fn evidence_integrity_legal_hold_and_disposition_are_tenant_scoped_and_met
     fs::write(evidence_dir.join("valid.txt"), b"trusted evidence\n").unwrap();
     fs::write(evidence_dir.join("changed.txt"), b"changed evidence\n").unwrap();
     fs::write(evidence_dir.join("dispose.txt"), b"dispose evidence\n").unwrap();
-    let valid_hash = format!("{:x}", Sha256::digest(b"trusted evidence\n"));
-    let dispose_hash = format!("{:x}", Sha256::digest(b"dispose evidence\n"));
+    let valid_hash = sha256_hex(b"trusted evidence\n");
+    let dispose_hash = sha256_hex(b"dispose evidence\n");
     let stale_hash = "0".repeat(64);
     sqlx::query(
         r#"
@@ -12420,9 +12424,9 @@ async fn evidence_storage_drill_uses_local_backend_and_keeps_tenant_boundaries()
     )
     .unwrap();
     fs::write(evidence_dir.join("empty.txt"), b"").unwrap();
-    let valid_hash = format!("{:x}", Sha256::digest(b"trusted storage evidence\n"));
+    let valid_hash = sha256_hex(b"trusted storage evidence\n");
     let stale_hash = "1".repeat(64);
-    let empty_hash = format!("{:x}", Sha256::digest(b""));
+    let empty_hash = sha256_hex(b"");
     let absolute_path = media_root.join("evidence/storage/valid.txt");
     sqlx::query(
         r#"

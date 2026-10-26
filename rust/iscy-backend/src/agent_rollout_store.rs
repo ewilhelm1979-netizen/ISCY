@@ -821,7 +821,7 @@ fn new_stable_uuid() -> AgentRolloutResult<String> {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    crate::hex_encode_bytes(&Sha256::digest(bytes))
 }
 
 fn sort_manifest_targets(targets: &mut [AgentRolloutManifestTargetSnapshot]) {

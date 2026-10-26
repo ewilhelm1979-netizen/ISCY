@@ -16,10 +16,10 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 tower = "0.5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-hmac = "0.12"
+hmac = "0.13"
 getrandom = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rust_decimal = { version = "1", default-features = false, features = ["serde", "std"] }
-sha2 = "0.10"
+sha2 = "0.11"
 sqlx = { version = "0.8", default-features = false, features = ["chrono", "json", "postgres", "runtime-tokio-rustls", "rust_decimal", "sqlite"] }
 zip = { version = "9.0", default-features = false, features = ["deflate"] }
