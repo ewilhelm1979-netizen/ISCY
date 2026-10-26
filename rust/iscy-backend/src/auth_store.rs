@@ -3,7 +3,7 @@ use std::{cmp, fs::File, io::Read};
 use anyhow::{bail, Context};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{Duration, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Serialize;
 use sha2::Sha256;
 use sqlx::{
@@ -990,6 +990,23 @@ mod tests {
         assert_eq!(
             pbkdf2_hmac_sha256(password.as_bytes(), b"long-salt", 2, 32),
             expected
+        );
+    }
+
+    #[test]
+    fn pbkdf2_matches_rfc7914_multiblock_vector() {
+        // RFC 7914 section 11: c=1, dkLen=64 (two SHA-256 output blocks).
+        let expected = concat!(
+            "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc",
+            "49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783"
+        );
+        assert_eq!(
+            hex_encode(&pbkdf2_hmac_sha256(b"passwd", b"salt", 1, 64)),
+            expected
+        );
+        assert_eq!(
+            hex_encode(&pbkdf2_hmac_sha256(b"passwd", b"salt", 1, 33)),
+            &expected[..66]
         );
     }
 }

@@ -495,7 +495,7 @@ use axum::{
     Router,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde_json::json;
 use sha2::Sha256;
 
@@ -934,5 +934,32 @@ async fn web_update_entry(
         }
         Ok(None) => not_found(),
         Err(err) => store_error(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::header::AUTHORIZATION;
+
+    #[test]
+    fn form_mac_matches_frozen_session_vector_and_rejects_other_sessions() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            "Bearer synthetic-session-token".parse().unwrap(),
+        );
+        let expected = "GlxURPPB+ENlcnWliIbS1D83Cm+8u449zGNPM29/lbM=";
+        let mac = form_mac(&headers).unwrap();
+        assert_eq!(BASE64.encode(mac.clone().finalize().into_bytes()), expected);
+        let tag = BASE64.decode(expected).unwrap();
+        assert!(mac.clone().verify_slice(&tag).is_ok());
+        assert!(mac.clone().verify_slice(&tag[..31]).is_err());
+        let mut changed = tag.clone();
+        changed[0] ^= 1;
+        assert!(mac.verify_slice(&changed).is_err());
+        headers.insert(AUTHORIZATION, "Bearer another-session".parse().unwrap());
+        assert!(form_mac(&headers).unwrap().verify_slice(&tag).is_err());
+        assert!(form_mac(&HeaderMap::new()).is_none());
     }
 }
