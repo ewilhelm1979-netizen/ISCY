@@ -421,13 +421,13 @@ fn source_by_artifact_id(artifact_id: &str) -> Option<AgentArtifactSource> {
 fn artifact_sha256(source: AgentArtifactSource) -> String {
     let mut hasher = Sha256::new();
     hasher.update(source.content);
-    format!("{:x}", hasher.finalize())
+    crate::hex_encode_bytes(&hasher.finalize())
 }
 
 fn build_hash(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    crate::hex_encode_bytes(&hasher.finalize())
 }
 
 fn source_tree_hash() -> String {
@@ -436,7 +436,7 @@ fn source_tree_hash() -> String {
         hasher.update(source.artifact_reference.as_bytes());
         hasher.update(source.content);
     }
-    format!("{:x}", hasher.finalize())
+    crate::hex_encode_bytes(&hasher.finalize())
 }
 
 fn build_metadata(source: AgentArtifactSource) -> Value {

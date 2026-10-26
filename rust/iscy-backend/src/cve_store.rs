@@ -799,7 +799,7 @@ fn llm_assessment_result(
     cve: &CveRecordContext,
     product_name: Option<&str>,
 ) -> LlmAssessmentResult {
-    let prompt_hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+    let prompt_hash = crate::hex_encode_bytes(&Sha256::digest(prompt.as_bytes()));
     let product_display = product_name.unwrap_or("CVE-Risiko");
     let technical_summary = format!(
         "{} betrifft {} und sollte gegen reale Versionsstaende validiert werden.",

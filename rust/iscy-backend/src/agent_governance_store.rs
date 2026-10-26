@@ -2,7 +2,7 @@ use std::{env, time::Duration};
 
 use anyhow::{bail, Context};
 use chrono::{DateTime, Duration as ChronoDuration, NaiveDate, NaiveDateTime, Utc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use reqwest::{redirect::Policy as RedirectPolicy, Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1062,7 +1062,7 @@ async fn deliver_webhook(
             } else if channel.auth_type == "HMAC_SHA256" {
                 let timestamp = Utc::now().timestamp().to_string();
                 let message = format!("{timestamp}.{payload_json}");
-                let mut mac = match <HmacSha256 as Mac>::new_from_slice(secret.as_bytes()) {
+                let mut mac = match <HmacSha256 as KeyInit>::new_from_slice(secret.as_bytes()) {
                     Ok(mac) => mac,
                     Err(_) => {
                         return failed_attempt(
