@@ -22,6 +22,19 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## Vorhandene Assessment-Durchlaeufe im Web
+
+- neue authentifizierte Leseseiten `/assessments/runs/` und
+  `/assessments/runs/{id}/`, verlinkt ueber Startseite und Assessment-Register
+- Status, Fortschritt, vorhandene Bewertungen, Luecken, Massnahmen und
+  Report-/Roadmap-Verweise mit tenantgebundenen Eltern- und Detailabfragen;
+  fremde Startpersonen werden ausgeblendet, Freitext wird HTML-escaped
+- frische Datenbestaende zeigen eine ausdruecklich gekennzeichnete
+  Zusammenfassung; unvollstaendige Detailschichten bleiben Fehler
+- Rollen-/Sessionpruefung, keine URL-Identitaet oder neue Schreibfunktion;
+  keine Migration, Schemaerzeugung oder automatische Ergebnisgenerierung;
+  der schreibende Assessment-Wizard bleibt eigener offener Scope
+
 ## Dauerhafte Auditspur fuer lokale Evidence-Downloads
 
 - Dieselbe tenantgebundene Commit-Pruefung gilt jetzt auch fuer den

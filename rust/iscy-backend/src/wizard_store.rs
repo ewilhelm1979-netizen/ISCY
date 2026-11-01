@@ -146,6 +146,46 @@ impl WizardStore {
         }
     }
 
+    pub async fn session_summary(
+        &self,
+        tenant_id: i64,
+        session_id: i64,
+    ) -> anyhow::Result<Option<WizardSessionSummary>> {
+        match self {
+            Self::Postgres(pool) => sqlx::query(session_detail_postgres_sql())
+                .bind(tenant_id)
+                .bind(session_id)
+                .fetch_optional(pool)
+                .await?
+                .map(session_from_pg_row)
+                .transpose()
+                .map_err(Into::into),
+            Self::Sqlite(pool) => sqlx::query(session_detail_sqlite_sql())
+                .bind(tenant_id)
+                .bind(session_id)
+                .fetch_optional(pool)
+                .await?
+                .map(session_from_sqlite_row)
+                .transpose()
+                .map_err(Into::into),
+        }
+    }
+
+    // The Rust base schema has session metadata but no legacy score/gap tables.
+    // An entirely absent detail layer is explicit summary-only support; a
+    // partially present layer is an error, never an empty/successful result.
+    pub async fn has_detailed_results(&self) -> anyhow::Result<bool> {
+        let count: i64 = match self {
+            Self::Postgres(pool) => sqlx::query_scalar("SELECT (to_regclass('wizard_domainscore') IS NOT NULL)::int::bigint + (to_regclass('wizard_generatedgap') IS NOT NULL)::int::bigint").fetch_one(pool).await?,
+            Self::Sqlite(pool) => sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table','view') AND name IN ('wizard_domainscore','wizard_generatedgap')").fetch_one(pool).await?,
+        };
+        match count {
+            0 => Ok(false),
+            2 => Ok(true),
+            _ => bail!("wizard detail storage incomplete"),
+        }
+    }
+
     pub async fn results(
         &self,
         tenant_id: i64,
@@ -214,6 +254,7 @@ async fn results_postgres(
 
     let domain_scores = sqlx::query(domain_scores_postgres_sql())
         .bind(session_id)
+        .bind(tenant_id)
         .fetch_all(pool)
         .await
         .context("PostgreSQL-Domain-Scores konnten nicht gelesen werden")?
@@ -223,6 +264,7 @@ async fn results_postgres(
 
     let gaps = sqlx::query(gaps_postgres_sql())
         .bind(session_id)
+        .bind(tenant_id)
         .bind(20_i64)
         .fetch_all(pool)
         .await
@@ -233,6 +275,7 @@ async fn results_postgres(
 
     let measures = sqlx::query(measures_postgres_sql())
         .bind(session_id)
+        .bind(tenant_id)
         .bind(20_i64)
         .fetch_all(pool)
         .await
@@ -296,6 +339,7 @@ async fn results_sqlite(
 
     let domain_scores = sqlx::query(domain_scores_sqlite_sql())
         .bind(session_id)
+        .bind(tenant_id)
         .fetch_all(pool)
         .await
         .context("SQLite-Domain-Scores konnten nicht gelesen werden")?
@@ -305,6 +349,7 @@ async fn results_sqlite(
 
     let gaps = sqlx::query(gaps_sqlite_sql())
         .bind(session_id)
+        .bind(tenant_id)
         .bind(20_i64)
         .fetch_all(pool)
         .await
@@ -315,6 +360,7 @@ async fn results_sqlite(
 
     let measures = sqlx::query(measures_sqlite_sql())
         .bind(session_id)
+        .bind(tenant_id)
         .bind(20_i64)
         .fetch_all(pool)
         .await
@@ -705,7 +751,7 @@ fn session_list_postgres_sql() -> &'static str {
         session.updated_at::text AS updated_at
     FROM wizard_assessmentsession session
     JOIN organizations_tenant tenant ON tenant.id = session.tenant_id
-    LEFT JOIN accounts_user started_by ON started_by.id = session.started_by_id
+    LEFT JOIN accounts_user started_by ON started_by.id = session.started_by_id AND started_by.tenant_id = session.tenant_id
     WHERE session.tenant_id = $1
     ORDER BY session.updated_at DESC, session.id DESC
     LIMIT $2
@@ -735,7 +781,7 @@ fn session_list_sqlite_sql() -> &'static str {
         CAST(session.updated_at AS TEXT) AS updated_at
     FROM wizard_assessmentsession session
     JOIN organizations_tenant tenant ON tenant.id = session.tenant_id
-    LEFT JOIN accounts_user started_by ON started_by.id = session.started_by_id
+    LEFT JOIN accounts_user started_by ON started_by.id = session.started_by_id AND started_by.tenant_id = session.tenant_id
     WHERE session.tenant_id = ?
     ORDER BY session.updated_at DESC, session.id DESC
     LIMIT ?
@@ -765,7 +811,7 @@ fn session_detail_postgres_sql() -> &'static str {
         session.updated_at::text AS updated_at
     FROM wizard_assessmentsession session
     JOIN organizations_tenant tenant ON tenant.id = session.tenant_id
-    LEFT JOIN accounts_user started_by ON started_by.id = session.started_by_id
+    LEFT JOIN accounts_user started_by ON started_by.id = session.started_by_id AND started_by.tenant_id = session.tenant_id
     WHERE session.tenant_id = $1 AND session.id = $2
     "#
 }
@@ -793,7 +839,7 @@ fn session_detail_sqlite_sql() -> &'static str {
         CAST(session.updated_at AS TEXT) AS updated_at
     FROM wizard_assessmentsession session
     JOIN organizations_tenant tenant ON tenant.id = session.tenant_id
-    LEFT JOIN accounts_user started_by ON started_by.id = session.started_by_id
+    LEFT JOIN accounts_user started_by ON started_by.id = session.started_by_id AND started_by.tenant_id = session.tenant_id
     WHERE session.tenant_id = ? AND session.id = ?
     "#
 }
@@ -814,8 +860,9 @@ fn domain_scores_postgres_sql() -> &'static str {
         score.created_at::text AS created_at,
         score.updated_at::text AS updated_at
     FROM wizard_domainscore score
+    JOIN wizard_assessmentsession scope_session ON scope_session.id = score.session_id
     JOIN catalog_assessmentdomain domain ON domain.id = score.domain_id
-    WHERE score.session_id = $1
+    WHERE score.session_id = $1 AND scope_session.tenant_id = $2
     ORDER BY domain.sort_order ASC, domain.name ASC
     "#
 }
@@ -836,8 +883,9 @@ fn domain_scores_sqlite_sql() -> &'static str {
         CAST(score.created_at AS TEXT) AS created_at,
         CAST(score.updated_at AS TEXT) AS updated_at
     FROM wizard_domainscore score
+    JOIN wizard_assessmentsession scope_session ON scope_session.id = score.session_id
     JOIN catalog_assessmentdomain domain ON domain.id = score.domain_id
-    WHERE score.session_id = ?
+    WHERE score.session_id = ? AND scope_session.tenant_id = ?
     ORDER BY domain.sort_order ASC, domain.name ASC
     "#
 }
@@ -857,10 +905,11 @@ fn gaps_postgres_sql() -> &'static str {
         gap.created_at::text AS created_at,
         gap.updated_at::text AS updated_at
     FROM wizard_generatedgap gap
+    JOIN wizard_assessmentsession scope_session ON scope_session.id = gap.session_id
     JOIN catalog_assessmentdomain domain ON domain.id = gap.domain_id
-    WHERE gap.session_id = $1
+    WHERE gap.session_id = $1 AND scope_session.tenant_id = $2
     ORDER BY gap.severity ASC, domain.sort_order ASC, gap.title ASC
-    LIMIT $2
+    LIMIT $3
     "#
 }
 
@@ -879,8 +928,9 @@ fn gaps_sqlite_sql() -> &'static str {
         CAST(gap.created_at AS TEXT) AS created_at,
         CAST(gap.updated_at AS TEXT) AS updated_at
     FROM wizard_generatedgap gap
+    JOIN wizard_assessmentsession scope_session ON scope_session.id = gap.session_id
     JOIN catalog_assessmentdomain domain ON domain.id = gap.domain_id
-    WHERE gap.session_id = ?
+    WHERE gap.session_id = ? AND scope_session.tenant_id = ?
     ORDER BY gap.severity ASC, domain.sort_order ASC, gap.title ASC
     LIMIT ?
     "#
@@ -907,10 +957,11 @@ fn measures_postgres_sql() -> &'static str {
         measure.created_at::text AS created_at,
         measure.updated_at::text AS updated_at
     FROM wizard_generatedmeasure measure
+    JOIN wizard_assessmentsession scope_session ON scope_session.id = measure.session_id
     LEFT JOIN catalog_assessmentdomain domain ON domain.id = measure.domain_id
-    WHERE measure.session_id = $1
+    WHERE measure.session_id = $1 AND scope_session.tenant_id = $2
     ORDER BY measure.priority ASC, domain.sort_order ASC NULLS LAST, measure.title ASC
-    LIMIT $2
+    LIMIT $3
     "#
 }
 
@@ -935,8 +986,9 @@ fn measures_sqlite_sql() -> &'static str {
         CAST(measure.created_at AS TEXT) AS created_at,
         CAST(measure.updated_at AS TEXT) AS updated_at
     FROM wizard_generatedmeasure measure
+    JOIN wizard_assessmentsession scope_session ON scope_session.id = measure.session_id
     LEFT JOIN catalog_assessmentdomain domain ON domain.id = measure.domain_id
-    WHERE measure.session_id = ?
+    WHERE measure.session_id = ? AND scope_session.tenant_id = ?
     ORDER BY measure.priority ASC, domain.sort_order ASC, measure.title ASC
     LIMIT ?
     "#

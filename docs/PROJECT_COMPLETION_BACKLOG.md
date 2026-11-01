@@ -10,6 +10,8 @@ Bereits umgesetzt sind unter anderem:
 
 - ISMS-/Governance-, Risk-, Control-, Assessment-, Evidence-, Incident-,
   Roadmap-, Supplier- und Management-/Regulatory-Review-Workflows,
+- lesende Webansichten vorhandener Assessment-Durchlaeufe mit ausdruecklich
+  gekennzeichneter Zusammenfassung bei fehlender historischer Detailschicht,
 - Product Security mit CSAF, CycloneDX, SPDX, VEX, SBOM-Diff,
   CVE-Korrelation und CRA-Readiness,
 - Continuous Vulnerability Intelligence mit NVD, CISA KEV und FIRST EPSS
@@ -101,6 +103,7 @@ Weiterentwicklung ist `docs/ISCY_STRATEGIC_ROADMAP.md` massgeblich.
 Der aktuelle V23.7.34-Development-Schwerpunkt ist Machinery & CRA
 Safety-Security Co-Engineering (Migration `0046`) sowie die tenantgebundene
 SoA-Rust-Wiederherstellung fuer SQLite und PostgreSQL (Migration `0047`).
-Der separate Assessment-Wizard bleibt offen. Funktionen bis
+Die lesenden Assessment-Durchlaufansichten sind wieder verfuegbar; der
+separate schreibende Assessment-Wizard bleibt offen. Funktionen bis
 einschliesslich Migration `0045` sind bereits im Stable-Tag V23.7.33
 enthalten.

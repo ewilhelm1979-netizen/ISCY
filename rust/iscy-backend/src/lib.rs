@@ -41,6 +41,7 @@ pub mod agent_rollout_store;
 pub mod agent_store;
 pub mod ai_governance_store;
 pub mod assessment_store;
+mod assessment_workspace;
 pub mod asset_store;
 pub mod auth_store;
 pub mod catalog_store;
@@ -19751,6 +19752,11 @@ async fn web_index(
             "Readiness-Snapshots",
         ),
         web_link_card(
+            "Assessment-Durchlaeufe",
+            "/assessments/runs/",
+            "Vorhandene Durchlaeufe und Ergebnisse ansehen",
+        ),
+        web_link_card(
             "Statement of Applicability",
             "/assessments/soa/",
             "ISO27001-Controls begruendet pruefen",
@@ -34111,7 +34117,7 @@ async fn web_assessments(
         .join("");
     let body = format!(
         r#"
-        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p><a href="/assessments/soa/">Statement of Applicability</a></section>
+        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p><a href="/assessments/runs/">Assessment-Durchlaeufe ansehen</a><a href="/assessments/soa/">Statement of Applicability</a></section>
         <section class="metrics">
           {}
           {}
@@ -49244,6 +49250,11 @@ pub fn app_router_with_state(state: AppState) -> Router {
         .route("/risks/", get(web_risks))
         .route("/risks/{risk_id}/review", post(web_risk_review_submit))
         .route("/assessments/", get(web_assessments))
+        .route("/assessments/runs/", get(assessment_workspace::sessions))
+        .route(
+            "/assessments/runs/{session_id}/",
+            get(assessment_workspace::results),
+        )
         .route(
             "/organizations/",
             get(web_organizations).post(web_organizations_submit),
