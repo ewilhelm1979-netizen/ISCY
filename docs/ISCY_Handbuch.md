@@ -2054,6 +2054,25 @@ Read-only-Rollen sehen sichere Status-/Nachweisdaten; Runtime-Schreibaktionen
 sind gesperrt. Der Evidence-Worker verwendet fuer S3-Referenzen denselben
 begrenzten HEAD-/GET-/SHA-256-Pfad.
 
+Die lokalen Routen `GET /api/v1/evidence/{evidence_id}/download` und
+`GET /evidence/{evidence_id}/download` speichern fuer bekannte tenant-eigene
+Objekte `local_download_allowed` oder `local_download_denied` in der
+bestehenden `evidence_integrity_event`-Historie. Das INSERT selbst ist an
+Tenant und Evidence-ID gebunden. Erst genau eine eingefuegte Zeile und ein
+erfolgreicher Transaktionscommit geben die Antwort frei. Bei fehlender
+Audit-Tabelle, unterdruecktem INSERT oder Commitfehler folgt HTTP 503 ohne
+Dateibytes. Das gilt fuer alle lokalen Schutzklassen, zusaetzlich zur
+bestehenden Rollen-, Owner-, Pfad- und Cache-Pruefung.
+
+Das Ereignis dokumentiert `response_prepared`, keine bestaetigte Zustellung
+an den Client (`response_delivery_confirmed=false`). Es enthaelt nur
+Tenant/Evidence/Actor, Zeitpunkt, Entscheidung, festen Grund und bei Freigabe
+die Byteanzahl. Pfade, Dateinamen, Titel, Inhalte und Sessionwerte fehlen.
+Unauthentifizierte sowie fehlende/fremde Objekte erzeugen keine objektbezogene
+persistente Historie; ihre sicheren Runtime-Logs bleiben erhalten. Der
+S3-Runtime-Download besitzt weiterhin sein bisheriges Best-effort-Ereignis
+und ist von der neuen lokalen Commit-Garantie nicht erfasst.
+
 Remote-DELETE wird niemals als freie Object-, Prefix-, Batch- oder
 Bucket-Operation angeboten. Der bestehende Disposition-Execute-Pfad prueft
 Tenant, Evidence, Object-Referenz, dokumentierte Freigabe, Begruendung und

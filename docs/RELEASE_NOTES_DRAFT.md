@@ -22,6 +22,18 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## Dauerhafte Auditspur fuer lokale Evidence-Downloads
+
+- Beide lokalen `/evidence/{id}/download`-Routen schreiben Entscheidungen
+  fuer bekannte tenant-eigene Objekte in `evidence_integrity_event`.
+- Dateibytes werden nur nach genau einem gespeicherten und erfolgreich
+  committeten Freigabeereignis zurueckgegeben; Auditfehler liefern HTTP 503.
+- Das Ereignis belegt Antwortvorbereitung, keine Zustellbestaetigung.
+  Dateipfade, Titel, Inhalte, E-Mail-Adressen und Sessionwerte werden nicht
+  gespeichert. Tenant-/Actor-IDs stammen aus dem validierten Sessionkontext.
+- Keine Migration oder neue Abhaengigkeit. Unauthentifizierte/fremde
+  Objektzugriffe bleiben Runtime-only; S3 bleibt beim bisherigen Auditvertrag.
+
 ## Eindeutige Herkunft der regelbasierten CVE-Assistenz
 
 - feste Generatoridentitaet und versionierte Stub-Provenance fuer
