@@ -441,7 +441,7 @@ Erfolgskriterium:
 | Development V23.7.34 | Machinery & CRA Safety-Security Co-Engineering – Phase 1 | Migration `0046` fuehrt Applicability, Maschinenprofil, Safety Functions, Hazards, Assessments und typisierte Cyber/Safety-Interactions ein; Human Review bleibt zwingend. |
 | Development V23.7.34 | SoA-Rust-Wiederherstellung | Migration `0047` stellt das tenantgebundene SoA-Datenmodell fuer SQLite und PostgreSQL wieder her; der separate Assessment-Wizard und der vollstaendige SoA-Pruef-/Freigabeablauf bleiben offen. |
 | P0 Maintenance | Reproduzierbare Object-Storage-/HA-/Performance-CI | Nicht mehr abrufbare externe MinIO-/`mc`-Image-Referenzen ersetzen und alle betroffenen Gates unveraendert erneut validieren. |
-| P1 | CVE-LLM-Provenance und echte Modellentscheidung | Der heutige `run_llm`-/`/api/v1/llm/generate`-Pfad ist ein deterministischer Rust-Stub. Entweder eindeutig als Stub modellieren oder eine echte lokale Modellruntime mit Provenance, Limits und Human-Gates implementieren. |
+| Development V23.7.34 | Eindeutige CVE-Stub-Provenance | Feste Generatoridentitaet, `STUB_GENERATED`, keine behauptete Inferenz oder angewendete Modellkonfiguration; Altmetadaten bleiben erhalten. Echte lokale Modellruntime und RAG bleiben separat. |
 | P1 | Release-Signierung / Attestation | CycloneDX-SBOM, Checksummen und Reproduzierbarkeitsdaten kryptografisch publisher-authentisieren. |
 | P1 | Produktions-PKI / Code Signing fuer Agenten | Vorhandene Metadata-/Governance-Schicht an reviewte produktive Provider anbinden, ohne private Schluessel in ISCY zu speichern. |
 | P2 | EOL/EOS- und erweiterte Package-Semantik | Belastbare EOL/EOS-Quellen und weitere ecosystemspezifische PURL-/Versionslogik hinzufuegen. |

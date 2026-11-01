@@ -42,17 +42,31 @@ ISCY Community wird lokal und auf eigener Infrastruktur betrieben. Production da
 
 ISCY besitzt aktuell einen LLM-bezeichneten CVE-Kompatibilitaetspfad, aber keine modellgestuetzte Inferenz-Runtime. `POST /api/v1/llm/generate`, `/cves/llm-test/` und `run_llm` in CVE-Assessments erzeugen derzeit deterministische Rust-Ausgaben. Der eingebaute Runtime-Hinweis bezeichnet den Pfad als `iscy-rust-llm-stub-v1`.
 
-Die folgenden Variablen steuern deshalb im aktuellen Stand nur Metadaten beziehungsweise die Runtime-Anzeige; sie laden kein Modell:
+Der Stub verwendet die feste Kennung `iscy-rust-llm-stub-v1` und das Backend
+`rust_stub`. API-Ausgaben und neue Assessment-Ergebnisse tragen die
+Provenance `generation_method=deterministic_stub`, `inference_performed=false`,
+`model_configuration_applied=false` und `requires_human_review=true`.
+Neue Assessment-Ausgaben speichern `llm_status=STUB_GENERATED`; das Label ist
+`Regelbasiert (Stub)`. Historische `GENERATED`-Datensaetze werden nicht
+nachtraeglich umgeschrieben oder als echte Modellinferenz bestaetigt.
+
+Die bisherigen Modellvariablen sind fuer eine spaetere Runtime reserviert
+und werden vom aktuellen Stub weder als Herkunft noch als Betriebswerte verwendet:
 
 | Variable | Aktuelle Verwendung | Sicherheits-/Betriebshinweis |
 | --- | --- | --- |
-| `LOCAL_LLM_MODEL_NAME` | Modellbezeichnung in Runtime-/Assessment-Metadaten; Default ist der Stub | Ein gesetzter Name beweist keine Modellinferenz |
-| `LOCAL_LLM_MODEL_PATH` | optionale Runtime-Anzeige | Der Pfad wird aktuell nicht zum Laden eines Modells verwendet |
-| `LOCAL_LLM_N_CTX` | Runtime-Anzeige, Default 8192 | keine aktive Inferenzsteuerung |
-| `LOCAL_LLM_N_THREADS` | Runtime-Anzeige, Default 4 | keine aktive Inferenzsteuerung |
-| `LOCAL_LLM_N_GPU_LAYERS` | Runtime-Anzeige, Default 0 | keine aktive GPU-Offload-Steuerung |
+| `LOCAL_LLM_MODEL_NAME` | ignoriert; feste Stub-Kennung | Kein konfigurierter Modellname wird als Generator behauptet |
+| `LOCAL_LLM_MODEL_PATH` | ignoriert; Runtime-Anzeige ohne Modellpfad | Kein Modell wird geoeffnet oder geladen |
+| `LOCAL_LLM_N_CTX` | ignoriert; aktiver Wert 0 | keine aktive Inferenzsteuerung |
+| `LOCAL_LLM_N_THREADS` | ignoriert; aktiver Wert 0 | keine aktive Inferenzsteuerung |
+| `LOCAL_LLM_N_GPU_LAYERS`, `LOCAL_LLM_GPU_LAYERS` | beide ignoriert; aktiver Wert 0 | keine aktive GPU-Offload-Steuerung |
 
-Die versionierten Env-/Compose-Beispiele setzen derzeit `LOCAL_LLM_GPU_LAYERS`, waehrend die Runtime-Anzeige `LOCAL_LLM_N_GPU_LAYERS` liest. Das ist eine bekannte technische Konfigurationsabweichung. Da der aktuelle Pfad kein Modell ausfuehrt, aktiviert keiner der beiden Werte GPU-Inferenz. Diese Abweichung sollte in einer separaten technischen Aenderung bereinigt werden.
+Die Webansicht zeigt `stub_available=true`, aber `runtime_ok=false` und
+`import_ok=false`: Der Stub ist verfuegbar, keine Modellruntime initialisiert.
+Der historische API-Zaehlerschluessel `llm_generated` umfasst weiterhin
+generierte Assistenz-Ausgaben, jetzt einschliesslich `STUB_GENERATED`;
+er zaehlt keine nachgewiesenen Modellinferenzlaeufe. Ein Update mit
+`run_llm=false` erhaelt vorhandene Texte und ihre Herkunftsmetadaten.
 
 Eine RAG-, Embedding- oder Retrieval-Runtime ist im aktuellen Backend nicht implementiert. Eine spaetere echte Modell-/RAG-Integration benoetigt eine eigene dokumentierte Vertrauensgrenze mit Tenant-Isolation, Least Privilege, Audit, begrenzten Ein-/Ausgaben und expliziten Freigaben fuer nachgelagerte Aktionen.
 

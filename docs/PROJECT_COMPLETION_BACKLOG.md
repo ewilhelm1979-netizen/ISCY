@@ -51,15 +51,14 @@ fuer MinIO-basierte CI-Gates und `RUSTSEC-2026-0285` sind im aktuellen
 
 ## Prioritaet P1 – technische Produktreife
 
-1. **CVE-LLM-Semantik bereinigen.** Entweder den aktuellen Stub explizit als
-   Stub/regelbasierte Assistenz im Datenmodell kennzeichnen oder eine echte,
-   lokal betriebene Modellruntime mit belastbarer Provenance implementieren.
-   Ein frei gesetztes `LOCAL_LLM_MODEL_NAME` darf nicht als Beweis echter
-   Modellinferenz missverstanden werden.
-2. **LLM-Konfiguration vereinheitlichen.** Der Code liest derzeit
-   `LOCAL_LLM_N_GPU_LAYERS`, waehrend die Env-/Compose-Beispiele
-   `LOCAL_LLM_GPU_LAYERS` setzen. Diese Kompatibilitaetsabweichung technisch
-   bereinigen und erst danach GPU-Offload dokumentieren.
+1. **CVE-Stub-Semantik im Development umgesetzt.** Feste Generatoridentitaet,
+   `STUB_GENERATED` und explizite Provenance verhindern, dass konfigurierte
+   Modellnamen als Inferenzherkunft ausgegeben werden. Historische Ausgaben
+   bleiben erhalten; eine echte lokale Modellruntime bleibt eigener Scope.
+2. **Spaetere LLM-Konfiguration.** Der aktuelle Stub ignoriert alle
+   `LOCAL_LLM_*`-Werte einschliesslich beider GPU-Layer-Schreibweisen und
+   behauptet keine angewendeten Runtimeparameter. Eine echte Runtime muss
+   ihre Konfiguration und Alias-/Konfliktregeln separat definieren und testen.
 3. **Kryptografische Release-Signierung/Attestation.** Der aktuelle
    Release-Vertrag liefert SBOM, Checksummen und Provenance-Metadaten, ist aber
    ausdruecklich `unsigned`.
