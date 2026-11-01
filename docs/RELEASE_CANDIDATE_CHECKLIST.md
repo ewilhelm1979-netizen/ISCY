@@ -26,7 +26,7 @@ Zertifizierung, Rechtsberatung oder automatische Veroeffentlichung.
 - internes Rust-Paket: `0.3.22`
 - Lizenz: `AGPL-3.0-only`
 - V23.7.33-Publikationsbasis: 45 Migrationen und 42 visuelle Baselines
-- aktueller Development-Stand: 46 Migrationen, fortlaufend `0001` bis `0046`,
+- aktueller Development-Stand: 47 Migrationen, fortlaufend `0001` bis `0047`,
   und 46 versionierte visuelle Baselines
 
 Der Tag `V23.7.33` muss exakt auf den oben dokumentierten Commit zeigen. Ein
@@ -80,7 +80,7 @@ Erst ein separater Release-Prep-PR darf V23.7.34 auf
 | Produkt-Build/Test/Clippy | Rust `1.98.1` | getrennt von MSRV und Nix |
 | portabler Builder | digest-gepinntes Rust `1.98.1` Bookworm | zwei cachefreie Builds bei Release-Prep |
 | Nix-Entwicklung | Rust `1.95.0` aus `nixos-26.05` | Build-/Testpfad |
-| aktueller nixpkgs Lock | Commit `2efa67fd26b6df417c33e4603185c701f260dd83` | `nixos-26.05` bleibt Kanalgrenze |
+| aktueller nixpkgs Lock | Commit `da6dc0e7b26060f2f71ce3ef7088fb56ee44fa36` | `nixos-26.05` bleibt Kanalgrenze |
 | direkte Runtime-Dependencies | `base64 0.23.1`, `calamine 0.37.0` | kontrollierte Security-Updates |
 | Actions Checkout | `actions/checkout 7.0.1` per Commit-SHA | unveraenderlicher Pin |
 | Rust Tool Action | `taiki-e/install-action 2.87.31` per Commit-SHA | unveraenderlicher Pin |
