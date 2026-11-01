@@ -2150,7 +2150,7 @@ anderem:
 - SQLite als Single-Instance-Kompatibilitaetspfad,
 - PostgreSQL 18.4 als zusaetzlichen logischen Forward-Restore- und
   Anwendungskompatibilitaetspfad,
-- 46 fortlaufende Migrationen und 46 visuelle Baselines,
+- 47 fortlaufende Migrationen (`0001` bis `0047`) und 46 visuelle Baselines,
 - CycloneDX-1.5-SBOM,
 - einen vorbereiteten, aber noch unsignierten Provenance-Vertrag.
 
@@ -2168,7 +2168,7 @@ verwenden Rust 1.98.1. Die MSRV bleibt Rust 1.88; die davon getrennte
 Nix-Toolchain verwendet weiterhin Rust 1.95.0. Die Build-Vorgabe allein ist
 kein Nachweis bestandener CI-, Reproduzierbarkeits- oder Portabilitaetspruefungen.
 Das aktuelle `flake.lock` bindet nixpkgs auf
-`2efa67fd26b6df417c33e4603185c701f260dd83` im Kanal `nixos-26.05`.
+`da6dc0e7b26060f2f71ce3ef7088fb56ee44fa36` im Kanal `nixos-26.05`.
 
 Eine reproduzierbare CycloneDX-SBOM, SHA-256-Checksummen, Release-Manifest und
 Reproduzierbarkeitsmetadaten sind vorhanden. Sie sind keine kryptografische
@@ -2178,9 +2178,13 @@ offener Hardening-Schritt.
 
 Die Features bis einschliesslich Migration
 `0045_rust_software_approval_exception_policy` sind im V23.7.33-Stable-Tag
-enthalten. Migration `0046_rust_machinery_cra_safety_security_foundation`
-gehoert zum nachfolgenden V23.7.34-Development-Stand und ist noch nicht Teil
-des letzten Stable Releases.
+enthalten. Die Migrationen
+`0046_rust_machinery_cra_safety_security_foundation` und
+`0047_rust_soa_cutover_restoration` gehoeren zum nachfolgenden
+V23.7.34-Development-Stand und sind noch nicht Teil des letzten Stable
+Releases. Migration `0047` stellt das tenantgebundene SoA-Datenmodell fuer
+SQLite und PostgreSQL wieder her; der separate Assessment-Wizard bleibt
+wie in Abschnitt 5.2 beschrieben offen.
 
 Native Threat Intelligence, Continuous Vulnerability Intelligence,
 Software-Hygiene und Software Approval/Exceptions bleiben bewusst von aktiver

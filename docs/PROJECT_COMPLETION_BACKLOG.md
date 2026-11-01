@@ -94,6 +94,8 @@ Die technische Rust-Migration ist abgeschlossen. Fuer die fachliche
 Weiterentwicklung ist `docs/ISCY_STRATEGIC_ROADMAP.md` massgeblich.
 
 Der aktuelle V23.7.34-Development-Schwerpunkt ist Machinery & CRA
-Safety-Security Co-Engineering (Migration `0046`). Funktionen bis
+Safety-Security Co-Engineering (Migration `0046`) sowie die tenantgebundene
+SoA-Rust-Wiederherstellung fuer SQLite und PostgreSQL (Migration `0047`).
+Der separate Assessment-Wizard bleibt offen. Funktionen bis
 einschliesslich Migration `0045` sind bereits im Stable-Tag V23.7.33
 enthalten.

@@ -5193,7 +5193,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 71 0 R >>
 endobj
 71 0 obj
-<< /Length 4443 >>
+<< /Length 4461 >>
 stream
 BT
 /F1 9 Tf
@@ -5335,7 +5335,7 @@ T*
 T*
 (Anwendungskompatibilitaetspfad,) Tj
 T*
-(- 46 fortlaufende Migrationen und 46 visuelle Baselines,) Tj
+(- 47 fortlaufende Migrationen \(0001 bis 0047\) und 46 visuelle Baselines,) Tj
 T*
 (- CycloneDX-1.5-SBOM,) Tj
 T*
@@ -5350,7 +5350,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 73 0 R >>
 endobj
 73 0 obj
-<< /Length 4238 >>
+<< /Length 4328 >>
 stream
 BT
 /F1 9 Tf
@@ -5384,7 +5384,7 @@ T*
 T*
 (Das aktuelle flake.lock bindet nixpkgs auf) Tj
 T*
-(2efa67fd26b6df417c33e4603185c701f260dd83 im Kanal nixos-26.05.) Tj
+(da6dc0e7b26060f2f71ce3ef7088fb56ee44fa36 im Kanal nixos-26.05.) Tj
 T*
 () Tj
 T*
@@ -5404,11 +5404,19 @@ T*
 T*
 (0045rustsoftwareapprovalexceptionpolicy sind im V23.7.33-Stable-Tag) Tj
 T*
-(enthalten. Migration 0046rustmachinerycrasafetysecurityfoundation) Tj
+(enthalten. Die Migrationen) Tj
 T*
-(gehoert zum nachfolgenden V23.7.34-Development-Stand und ist noch nicht Teil) Tj
+(0046rustmachinerycrasafetysecurityfoundation und) Tj
 T*
-(des letzten Stable Releases.) Tj
+(0047rustsoacutoverrestoration gehoeren zum nachfolgenden) Tj
+T*
+(V23.7.34-Development-Stand und sind noch nicht Teil des letzten Stable) Tj
+T*
+(Releases. Migration 0047 stellt das tenantgebundene SoA-Datenmodell fuer) Tj
+T*
+(SQLite und PostgreSQL wieder her; der separate Assessment-Wizard bleibt) Tj
+T*
+(wie in Abschnitt 5.2 beschrieben offen.) Tj
 T*
 () Tj
 T*
@@ -5492,6 +5500,19 @@ T*
 T*
 (ISCY ersetzt nicht:) Tj
 T*
+ET
+endstream
+endobj
+74 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 75 0 R >>
+endobj
+75 0 obj
+<< /Length 5405 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 () Tj
 T*
 (- eine Rechtsberatung) Tj
@@ -5500,19 +5521,6 @@ T*
 T*
 (- operative Patch- oder Deployment-Tools) Tj
 T*
-ET
-endstream
-endobj
-74 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 75 0 R >>
-endobj
-75 0 obj
-<< /Length 5549 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- ein SIEM oder SOC) Tj
 T*
 (- ein vollwertiges Projektmanagement-Werkzeug fuer alle Unternehmensbereiche) Tj
@@ -5649,6 +5657,19 @@ T*
 T*
 (Migration 0041rustagentrolloutmanifesthandoff ergaenzt darauf) Tj
 T*
+ET
+endstream
+endobj
+76 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 77 0 R >>
+endobj
+77 0 obj
+<< /Length 4999 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (unveraenderliche Ring-Manifeste, reproduzierbare SHA-256, passive externe) Tj
 T*
 (Deployment-Handoffs und begrenzte transaktionale Result-Importe. ISCY bleibt) Tj
@@ -5657,19 +5678,6 @@ T*
 T*
 (Remote-Ausfuehrung oder automatische Verteilung.) Tj
 T*
-ET
-endstream
-endobj
-76 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 77 0 R >>
-endobj
-77 0 obj
-<< /Length 5053 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (Migration 0042rustnativethreatintelligenceobservations ergaenzt lokal) Tj
@@ -5806,6 +5814,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+78 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 79 0 R >>
+endobj
+79 0 obj
+<< /Length 1590 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Der Leitgedanke bleibt: ISCY soll keine Regulierungen als Silos verwalten, sondern) Tj
 T*
 (Organisation, Assets, Suppliers, Produkte, Controls, Risiken, Evidence, Incidents, Product) Tj
@@ -5814,19 +5835,6 @@ T*
 T*
 (Roadmap-Arbeit in einem gemeinsamen Steuerungsmodell verbinden.) Tj
 T*
-ET
-endstream
-endobj
-78 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 79 0 R >>
-endobj
-79 0 obj
-<< /Length 1233 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (11. Git-Bezug dieses Handbuchs:) Tj
@@ -5954,16 +5962,16 @@ xref
 0000133913 00000 n
 0000138686 00000 n
 0000138814 00000 n
-0000143309 00000 n
-0000143437 00000 n
-0000147727 00000 n
-0000147855 00000 n
-0000153456 00000 n
-0000153584 00000 n
-0000158689 00000 n
-0000158817 00000 n
+0000143327 00000 n
+0000143455 00000 n
+0000147835 00000 n
+0000147963 00000 n
+0000153420 00000 n
+0000153548 00000 n
+0000158599 00000 n
+0000158727 00000 n
 trailer
 << /Size 80 /Root 1 0 R >>
 startxref
-160102
+160369
 %%EOF
