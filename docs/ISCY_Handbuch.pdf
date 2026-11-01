@@ -5036,7 +5036,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 69 0 R >>
 endobj
 69 0 obj
-<< /Length 4895 >>
+<< /Length 4976 >>
 stream
 BT
 /F1 9 Tf
@@ -5130,6 +5130,44 @@ T*
 T*
 () Tj
 T*
+(Die lokalen Routen GET /api/v1/evidence/{evidenceid}/download und) Tj
+T*
+(GET /evidence/{evidenceid}/download speichern fuer bekannte tenant-eigene) Tj
+T*
+(Objekte localdownloadallowed oder localdownloaddenied in der) Tj
+T*
+(bestehenden evidenceintegrityevent-Historie. Das INSERT selbst ist an) Tj
+T*
+(Tenant und Evidence-ID gebunden. Erst genau eine eingefuegte Zeile und ein) Tj
+T*
+(erfolgreicher Transaktionscommit geben die Antwort frei. Bei fehlender) Tj
+T*
+(Audit-Tabelle, unterdruecktem INSERT oder Commitfehler folgt HTTP 503 ohne) Tj
+T*
+(Dateibytes. Das gilt fuer alle lokalen Schutzklassen, zusaetzlich zur) Tj
+T*
+(bestehenden Rollen-, Owner-, Pfad- und Cache-Pruefung.) Tj
+T*
+() Tj
+T*
+(Das Ereignis dokumentiert responseprepared, keine bestaetigte Zustellung) Tj
+T*
+(an den Client \(responsedeliveryconfirmed=false\). Es enthaelt nur) Tj
+T*
+(Tenant/Evidence/Actor, Zeitpunkt, Entscheidung, festen Grund und bei Freigabe) Tj
+T*
+(die Byteanzahl. Pfade, Dateinamen, Titel, Inhalte und Sessionwerte fehlen.) Tj
+T*
+(Unauthentifizierte sowie fehlende/fremde Objekte erzeugen keine objektbezogene) Tj
+T*
+(persistente Historie; ihre sicheren Runtime-Logs bleiben erhalten. Der) Tj
+T*
+(S3-Runtime-Download besitzt weiterhin sein bisheriges Best-effort-Ereignis) Tj
+T*
+(und ist von der neuen lokalen Commit-Garantie nicht erfasst.) Tj
+T*
+() Tj
+T*
 (Remote-DELETE wird niemals als freie Object-, Prefix-, Batch- oder) Tj
 T*
 (Bucket-Operation angeboten. Der bestehende Disposition-Execute-Pfad prueft) Tj
@@ -5148,6 +5186,19 @@ T*
 T*
 (Der reproduzierbare Testpfad make object-storage-integration startet eine) Tj
 T*
+ET
+endstream
+endobj
+70 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 71 0 R >>
+endobj
+71 0 obj
+<< /Length 4766 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (versionierte lokale MinIO-Instanz mit ausschliesslich Dummy-Credentials und) Tj
 T*
 (prueft PUT, HEAD, GET, SHA-256, Hash-Mismatch, Object-missing, Access-denied,) Tj
@@ -5186,19 +5237,6 @@ T*
 T*
 (0034rustsupplierproductsecuritygovernance zusaetzlich gegen eine echte) Tj
 T*
-ET
-endstream
-endobj
-70 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 71 0 R >>
-endobj
-71 0 obj
-<< /Length 4641 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (lokale temporaere PostgreSQL-Instanz geprueft. Tabellen, Supplier/Product-) Tj
 T*
 (Security-Datensatz, Statusaenderung, Evidence-Link, Events und Vertrags-/Exit-) Tj
@@ -5305,6 +5343,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+72 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 73 0 R >>
+endobj
+73 0 obj
+<< /Length 4384 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Die Testarchitektur, Budgets, Baseline-Pflege und verbleibenden Single Points) Tj
 T*
 (of Failure sind in docs/PERFORMANCEHAVISUALTESTING.md beschrieben.) Tj
@@ -5343,19 +5394,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-72 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 73 0 R >>
-endobj
-73 0 obj
-<< /Length 4346 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Das Root-Manifest release/release-manifest.json beschreibt aktuell unter) Tj
 T*
 (anderem:) Tj
@@ -5462,6 +5500,19 @@ T*
 T*
 (Same-Repository-Draft-PRs gegen main die Routen /iscy status,) Tj
 T*
+ET
+endstream
+endobj
+74 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 75 0 R >>
+endobj
+75 0 obj
+<< /Length 4477 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (/iscy review, /iscy fix-ci und /iscy verify. Read-only) Tj
 T*
 (Review/Verify, Workspace-begrenzte Korrekturen, Head-/Diff-Pruefungen und) Tj
@@ -5500,19 +5551,6 @@ T*
 T*
 (- Audit: systematische Pruefung) Tj
 T*
-ET
-endstream
-endobj
-74 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 75 0 R >>
-endobj
-75 0 obj
-<< /Length 5144 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (- Finding: Feststellung aus einer Pruefung) Tj
 T*
 (- Evidence: Nachweis) Tj
@@ -5619,6 +5657,19 @@ T*
 T*
 (Evidence-System anzulegen. Migration 0033rustevidenceintegritydisposition ergaenzt Evidence) Tj
 T*
+ET
+endstream
+endobj
+76 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 77 0 R >>
+endobj
+77 0 obj
+<< /Length 5442 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung,) Tj
 T*
 (Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen.) Tj
@@ -5657,19 +5708,6 @@ T*
 T*
 (Secret-Referenzstatus, sichere Object-Referenzen, SSRF-/Key-Validierung, Contract-Drills und) Tj
 T*
-ET
-endstream
-endobj
-76 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 77 0 R >>
-endobj
-77 0 obj
-<< /Length 4986 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Review-Pack-Signale. Migration 0039rustevidences3runtimeclient aktiviert darauf echte,) Tj
 T*
 (begrenzte S3-kompatible Runtime-Operationen mit expliziter Secret-Aufloesung,) Tj
@@ -5776,6 +5814,19 @@ T*
 T*
 () Tj
 T*
+ET
+endstream
+endobj
+78 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 79 0 R >>
+endobj
+79 0 obj
+<< /Length 3735 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Migration 0045rustsoftwareapprovalexceptionpolicy ergaenzt exakte) Tj
 T*
 (tenantgebundene Policies, befristete Exceptions, persistierte passive) Tj
@@ -5814,19 +5865,6 @@ T*
 T*
 (Die priorisierte Roadmap liegt in docs/ISCYSTRATEGICROADMAP.md und umfasst:) Tj
 T*
-ET
-endstream
-endobj
-78 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 79 0 R >>
-endobj
-79 0 obj
-<< /Length 2418 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 () Tj
 T*
 (1. Supplier/Product-Security-Workflow fachlich weiter polishen, z. B. feinere) Tj
@@ -5984,18 +6022,18 @@ xref
 0000128968 00000 n
 0000133671 00000 n
 0000133799 00000 n
-0000138746 00000 n
-0000138874 00000 n
-0000143567 00000 n
-0000143695 00000 n
-0000148093 00000 n
-0000148221 00000 n
-0000153417 00000 n
-0000153545 00000 n
-0000158583 00000 n
-0000158711 00000 n
+0000138827 00000 n
+0000138955 00000 n
+0000143773 00000 n
+0000143901 00000 n
+0000148337 00000 n
+0000148465 00000 n
+0000152994 00000 n
+0000153122 00000 n
+0000158616 00000 n
+0000158744 00000 n
 trailer
 << /Size 80 /Root 1 0 R >>
 startxref
-161181
+162531
 %%EOF

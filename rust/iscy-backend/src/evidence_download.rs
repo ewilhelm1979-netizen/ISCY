@@ -22,6 +22,21 @@ use sqlx::{postgres::PgRow, sqlite::SqliteRow, Row};
 const SESSION_COOKIE_NAME: &str = "iscy_session";
 const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
 
+#[derive(Clone, Copy)]
+enum DownloadDecision {
+    Prepared(usize),
+    Denied(&'static str),
+}
+
+impl DownloadDecision {
+    fn labels(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Prepared(_) => ("allow", "response_prepared"),
+            Self::Denied(reason) => ("deny", reason),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct EvidenceDownloadRecord {
     id: i64,
@@ -128,52 +143,62 @@ async fn download_evidence_for_context(
     };
 
     if !evidence_download_allowed(&context, &record) {
-        audit_download(
-            Some(&context),
-            record.id,
-            Some(&record.sensitivity),
-            "deny",
-            "insufficient_sensitivity_permission",
-        );
-        return error_response(
+        let response = error_response(
             StatusCode::FORBIDDEN,
             "evidence_download_forbidden",
             "Diese Evidence-Schutzklasse darf mit der aktuellen Rolle nicht heruntergeladen werden.",
         );
+        return audited_response(
+            store,
+            &context,
+            &record,
+            DownloadDecision::Denied("insufficient_sensitivity_permission"),
+            response,
+        )
+        .await;
     }
 
     let Some(media_root) = state.evidence_media_root.as_ref() else {
-        return error_response(
+        let response = error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "evidence_storage_unavailable",
             "Evidence-Dateispeicher ist nicht konfiguriert.",
         );
+        return audited_response(
+            store,
+            &context,
+            &record,
+            DownloadDecision::Denied("storage_unavailable"),
+            response,
+        )
+        .await;
     };
     let file_path = match resolve_evidence_path(media_root, &record.file_name) {
         Ok(path) => path,
         Err(PathResolutionError::NotFound | PathResolutionError::Unsafe) => {
-            audit_download(
-                Some(&context),
-                record.id,
-                Some(&record.sensitivity),
-                "deny",
-                "file_missing_or_unsafe",
-            );
-            return evidence_not_found_response();
+            return audited_response(
+                store,
+                &context,
+                &record,
+                DownloadDecision::Denied("file_missing_or_unsafe"),
+                evidence_not_found_response(),
+            )
+            .await;
         }
         Err(PathResolutionError::Storage) => {
-            audit_download(
-                Some(&context),
-                record.id,
-                Some(&record.sensitivity),
-                "deny",
-                "storage_error",
-            );
-            return error_response(
+            let response = error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "evidence_storage_error",
                 "Evidence-Datei konnte nicht sicher aufgeloest werden.",
             );
+            return audited_response(
+                store,
+                &context,
+                &record,
+                DownloadDecision::Denied("storage_error"),
+                response,
+            )
+            .await;
         }
     };
 
@@ -181,28 +206,29 @@ async fn download_evidence_for_context(
     let file_bytes = match tokio::task::spawn_blocking(move || fs::read(read_path)).await {
         Ok(Ok(bytes)) => bytes,
         Ok(Err(err)) if err.kind() == std::io::ErrorKind::NotFound => {
-            audit_download(
-                Some(&context),
-                record.id,
-                Some(&record.sensitivity),
-                "deny",
-                "file_missing",
-            );
-            return evidence_not_found_response();
+            return audited_response(
+                store,
+                &context,
+                &record,
+                DownloadDecision::Denied("file_missing"),
+                evidence_not_found_response(),
+            )
+            .await;
         }
         Ok(Err(_)) | Err(_) => {
-            audit_download(
-                Some(&context),
-                record.id,
-                Some(&record.sensitivity),
-                "deny",
-                "file_read_error",
-            );
-            return error_response(
+            let response = error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "evidence_read_error",
                 "Evidence-Datei konnte nicht sicher gelesen werden.",
             );
+            return audited_response(
+                store,
+                &context,
+                &record,
+                DownloadDecision::Denied("file_read_error"),
+                response,
+            )
+            .await;
         }
     };
 
@@ -226,14 +252,100 @@ async fn download_evidence_for_context(
         response.headers_mut().insert(CONTENT_LENGTH, value);
     }
 
+    audited_response(
+        store,
+        &context,
+        &record,
+        DownloadDecision::Prepared(file_length),
+        response,
+    )
+    .await
+}
+
+// A committed event records response preparation, not client receipt of bytes.
+// Unknown/foreign objects and unauthenticated requests remain runtime-only:
+// they must never create an event on another tenant's Evidence.
+async fn audited_response(
+    store: &EvidenceStore,
+    context: &AuthenticatedTenantContext,
+    record: &EvidenceDownloadRecord,
+    decision: DownloadDecision,
+    response: Response,
+) -> Response {
+    if !matches!(
+        persist_download_decision(store, context, record.id, decision).await,
+        Ok(true)
+    ) {
+        audit_download(
+            Some(context),
+            record.id,
+            Some(&record.sensitivity),
+            "deny",
+            "audit_persistence_failed",
+        );
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "evidence_audit_unavailable",
+            "Evidence-Download konnte nicht sicher protokolliert werden.",
+        );
+    }
+    let (label, reason) = decision.labels();
     audit_download(
-        Some(&context),
+        Some(context),
         record.id,
         Some(&record.sensitivity),
-        "allow",
-        "authorized",
+        label,
+        reason,
     );
     response
+}
+
+async fn persist_download_decision(
+    store: &EvidenceStore,
+    context: &AuthenticatedTenantContext,
+    evidence_id: i64,
+    decision: DownloadDecision,
+) -> anyhow::Result<bool> {
+    let (label, reason) = decision.labels();
+    let event_type = if label == "allow" {
+        "local_download_allowed"
+    } else {
+        "local_download_denied"
+    };
+    let mut detail = json!({
+        "schema_version": 1, "storage_backend": "local", "decision": label,
+        "reason": reason, "response_delivery_confirmed": false,
+    });
+    if let DownloadDecision::Prepared(size_bytes) = decision {
+        detail["size_bytes"] = json!(size_bytes);
+    }
+    // INSERT SELECT scopes the write itself, including when the object vanished
+    // between the lookup and this statement. A suppressed insert is not success.
+    match store {
+        EvidenceStore::Postgres(pool) => {
+            let mut tx = pool.begin().await?;
+            let result = sqlx::query(
+                "INSERT INTO evidence_integrity_event (tenant_id, evidence_id, event_type, actor_id, detail_json) \
+                 SELECT tenant_id, id, $3, $4, $5::jsonb FROM evidence_evidenceitem WHERE tenant_id = $1 AND id = $2"
+            ).bind(context.tenant_id).bind(evidence_id).bind(event_type).bind(context.user_id).bind(detail.to_string()).execute(&mut *tx).await?;
+            if result.rows_affected() != 1 {
+                return Ok(false);
+            }
+            tx.commit().await?;
+        }
+        EvidenceStore::Sqlite(pool) => {
+            let mut tx = pool.begin().await?;
+            let result = sqlx::query(
+                "INSERT INTO evidence_integrity_event (tenant_id, evidence_id, event_type, actor_id, detail_json) \
+                 SELECT tenant_id, id, ?3, ?4, ?5 FROM evidence_evidenceitem WHERE tenant_id = ?1 AND id = ?2"
+            ).bind(context.tenant_id).bind(evidence_id).bind(event_type).bind(context.user_id).bind(detail.to_string()).execute(&mut *tx).await?;
+            if result.rows_affected() != 1 {
+                return Ok(false);
+            }
+            tx.commit().await?;
+        }
+    }
+    Ok(true)
 }
 
 async fn load_evidence_record(
@@ -520,18 +632,19 @@ mod tests {
     use std::{fs, process};
 
     use axum::{
+        body::to_bytes,
         extract::{Path, State},
         http::{header::AUTHORIZATION, HeaderMap, HeaderValue, StatusCode},
     };
     use iscy_backend::{
         evidence_store::EvidenceStore, request_context::AuthenticatedTenantContext, AppState,
     };
-    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 
     use super::{
         download_evidence, download_evidence_for_context, evidence_download_allowed,
-        load_evidence_record, resolve_evidence_path, session_token_from_headers,
-        EvidenceDownloadRecord, PathResolutionError,
+        load_evidence_record, persist_download_decision, resolve_evidence_path,
+        session_token_from_headers, DownloadDecision, EvidenceDownloadRecord, PathResolutionError,
     };
 
     fn context(user_id: i64, role: &str) -> AuthenticatedTenantContext {
@@ -568,6 +681,16 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
+        fixture_store(pool, evidence_id, tenant_id, file_name, sensitivity).await
+    }
+
+    async fn fixture_store(
+        pool: SqlitePool,
+        evidence_id: i64,
+        tenant_id: i64,
+        file_name: &str,
+        sensitivity: &str,
+    ) -> EvidenceStore {
         sqlx::query(
             r#"
             CREATE TABLE evidence_evidenceitem (
@@ -594,7 +717,40 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
+        sqlx::query(
+            "CREATE TABLE evidence_integrity_event (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL,
+            evidence_id INTEGER NOT NULL, event_type TEXT NOT NULL, actor_id INTEGER,
+            integrity_status TEXT NOT NULL DEFAULT '', legal_hold_status TEXT NOT NULL DEFAULT '',
+            disposition_status TEXT NOT NULL DEFAULT '', mismatch BOOL NOT NULL DEFAULT 0,
+            error_class TEXT NOT NULL DEFAULT '', detail_json TEXT NOT NULL DEFAULT '{}',
+            note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         EvidenceStore::from_sqlite_pool(pool)
+    }
+
+    fn sqlite_pool(store: &EvidenceStore) -> &SqlitePool {
+        match store {
+            EvidenceStore::Sqlite(pool) => pool,
+            _ => unreachable!(),
+        }
+    }
+
+    fn temporary_root() -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "iscy-download-audit-{}-{}",
+            process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        root
     }
 
     #[test]
@@ -685,7 +841,7 @@ mod tests {
         fs::create_dir_all(root.join("evidence")).unwrap();
         fs::write(root.join("evidence/proof.txt"), b"proof").unwrap();
         let state = AppState::new(None)
-            .with_evidence_store(Some(store))
+            .with_evidence_store(Some(store.clone()))
             .with_evidence_media_root(Some(root.clone()));
 
         let denied =
@@ -714,6 +870,167 @@ mod tests {
             .and_then(|value| value.to_str().ok())
             .is_some_and(|value| value.contains("proof.txt")));
 
+        assert_eq!(
+            to_bytes(allowed.into_body(), 4096).await.unwrap(),
+            &b"proof"[..]
+        );
+        let events = sqlx::query("SELECT tenant_id, evidence_id, actor_id, event_type, detail_json FROM evidence_integrity_event ORDER BY id").fetch_all(sqlite_pool(&store)).await.unwrap();
+        assert_eq!(events.len(), 2);
+        for row in &events {
+            assert_eq!(row.get::<i64, _>("tenant_id"), 1);
+            assert_eq!(row.get::<i64, _>("evidence_id"), 7);
+            let detail = row.get::<String, _>("detail_json");
+            for secret in [
+                "proof.txt",
+                "Test Evidence",
+                "example.test",
+                root.to_str().unwrap(),
+            ] {
+                assert!(!detail.contains(secret));
+            }
+        }
+        assert_eq!(events[0].get::<i64, _>("actor_id"), 2);
+        assert_eq!(
+            events[0].get::<String, _>("event_type"),
+            "local_download_denied"
+        );
+        assert_eq!(events[1].get::<i64, _>("actor_id"), 3);
+        assert_eq!(
+            events[1].get::<String, _>("event_type"),
+            "local_download_allowed"
+        );
+        let detail: serde_json::Value =
+            serde_json::from_str(&events[1].get::<String, _>("detail_json")).unwrap();
+        assert_eq!(detail["reason"], "response_prepared");
+        assert_eq!(detail["size_bytes"], 5);
+        assert_eq!(detail["response_delivery_confirmed"], false);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn foreign_missing_and_forged_identity_requests_create_no_object_audit() {
+        let store = test_evidence_store(7, 2, "foreign.txt", "PUBLIC").await;
+        let state = AppState::new(None).with_evidence_store(Some(store.clone()));
+        for id in [7, 999, -1] {
+            assert_eq!(
+                download_evidence_for_context(state.clone(), id, context(3, "ADMIN"))
+                    .await
+                    .status(),
+                StatusCode::NOT_FOUND
+            );
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iscy-tenant-id", HeaderValue::from_static("2"));
+        headers.insert("x-iscy-user-id", HeaderValue::from_static("3"));
+        assert_eq!(
+            download_evidence(Path(7), State(state), headers)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(!persist_download_decision(
+            &store,
+            &context(3, "ADMIN"),
+            7,
+            DownloadDecision::Prepared(1)
+        )
+        .await
+        .unwrap());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM evidence_integrity_event")
+            .fetch_one(sqlite_pool(&store))
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn audit_insert_suppression_and_commit_failure_withhold_file_bytes() {
+        for fault in ["missing_table", "suppressed_insert", "failed_commit"] {
+            let store = test_evidence_store(7, 1, "proof.txt", "INTERNAL").await;
+            let pool = sqlite_pool(&store);
+            match fault {
+                "missing_table" => {
+                    sqlx::query("DROP TABLE evidence_integrity_event")
+                        .execute(pool)
+                        .await
+                        .unwrap();
+                }
+                "suppressed_insert" => {
+                    sqlx::query("CREATE TRIGGER suppress_audit BEFORE INSERT ON evidence_integrity_event BEGIN SELECT RAISE(IGNORE); END").execute(pool).await.unwrap();
+                }
+                _ => {
+                    sqlx::query("CREATE TABLE audit_parent(id INTEGER PRIMARY KEY)")
+                        .execute(pool)
+                        .await
+                        .unwrap();
+                    sqlx::query("CREATE TABLE audit_commit_guard(parent_id INTEGER REFERENCES audit_parent(id) DEFERRABLE INITIALLY DEFERRED)").execute(pool).await.unwrap();
+                    sqlx::query("CREATE TRIGGER fail_audit_commit AFTER INSERT ON evidence_integrity_event BEGIN INSERT INTO audit_commit_guard VALUES (999); END").execute(pool).await.unwrap();
+                }
+            }
+            let root = temporary_root();
+            fs::write(root.join("proof.txt"), b"PRIVATE EVIDENCE BYTES").unwrap();
+            let state = AppState::new(None)
+                .with_evidence_store(Some(store.clone()))
+                .with_evidence_media_root(Some(root.clone()));
+            let response = download_evidence_for_context(state, 7, context(3, "CISO")).await;
+            assert_eq!(
+                response.status(),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{fault}"
+            );
+            let body = to_bytes(response.into_body(), 4096).await.unwrap();
+            let detail: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(detail["error_code"], "evidence_audit_unavailable");
+            assert!(!String::from_utf8_lossy(&body).contains("PRIVATE EVIDENCE BYTES"));
+            if fault != "missing_table" {
+                let count: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM evidence_integrity_event")
+                        .fetch_one(pool)
+                        .await
+                        .unwrap();
+                assert_eq!(count, 0, "{fault}");
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn committed_download_audit_survives_store_reopen() {
+        let root = temporary_root();
+        let url = format!("sqlite://{}?mode=rwc", root.join("audit.sqlite3").display());
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let store = fixture_store(pool.clone(), 7, 1, "proof.txt", "INTERNAL").await;
+        assert!(persist_download_decision(
+            &store,
+            &context(3, "CISO"),
+            7,
+            DownloadDecision::Prepared(5)
+        )
+        .await
+        .unwrap());
+        pool.close().await;
+        drop(store);
+        let reopened = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .unwrap();
+        let row = sqlx::query(
+            "SELECT tenant_id,evidence_id,actor_id,event_type FROM evidence_integrity_event",
+        )
+        .fetch_one(&reopened)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<i64, _>("tenant_id"), 1);
+        assert_eq!(row.get::<i64, _>("evidence_id"), 7);
+        assert_eq!(row.get::<i64, _>("actor_id"), 3);
+        assert_eq!(row.get::<String, _>("event_type"), "local_download_allowed");
+        reopened.close().await;
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -730,11 +1047,22 @@ mod tests {
         ));
         fs::create_dir_all(&root).unwrap();
         let state = AppState::new(None)
-            .with_evidence_store(Some(store))
+            .with_evidence_store(Some(store.clone()))
             .with_evidence_media_root(Some(root.clone()));
 
         let response = download_evidence_for_context(state, 8, context(2, "CONTRIBUTOR")).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let detail: String = sqlx::query_scalar(
+            "SELECT detail_json FROM evidence_integrity_event WHERE tenant_id=1 AND evidence_id=8",
+        )
+        .fetch_one(sqlite_pool(&store))
+        .await
+        .unwrap();
+        let detail: serde_json::Value = serde_json::from_str(&detail).unwrap();
+        assert_eq!(detail["reason"], "file_missing_or_unsafe");
+        assert_eq!(detail["decision"], "deny");
+        assert!(!detail.to_string().contains("secret.txt"));
 
         fs::remove_dir_all(root).unwrap();
     }

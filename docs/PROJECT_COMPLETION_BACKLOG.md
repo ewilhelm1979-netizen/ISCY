@@ -21,6 +21,8 @@ Bereits umgesetzt sind unter anderem:
   Rollout-Governance ohne Remote-Control,
 - Evidence Integrity, Legal Hold, kontrollierte Disposition sowie
   S3-kompatible Evidence-Storage-Runtime,
+- commit-gepruefte lokale Evidence-Download-Entscheidungen in der bestehenden
+  tenantgebundenen Auditspur; Auditfehler sperren die Dateiausgabe,
 - PostgreSQL 16 als Standardpfad und PostgreSQL 18.4 als getesteter
   logischer Forward-Restore-/Kompatibilitaetspfad,
 - Release-SBOM, Checksummen, Reproduzierbarkeits-/Provenance-Metadaten,
@@ -67,9 +69,12 @@ fuer MinIO-basierte CI-Gates und `RUSTSEC-2026-0285` sind im aktuellen
    Zeilenlimits sowie sparse Verarbeitung. Fuer riskantere Einsatzumgebungen
    bleiben Malware-Scanning und/oder Parser-Sandboxing als
    Betreiber-/Produktoption zu evaluieren.
-5. **Durables Audit fuer besonders sensitive Downloads vertiefen.** Die
-   vorhandenen Runtime-Security-Events fuer Evidence-Downloads koennen um eine
-   explizite persistente Auditspur erweitert werden.
+5. **Download-Audit auf weitere Storagepfade ausdehnen.** Lokale Downloads
+   speichern Freigaben und Ablehnungen fuer bekannte tenant-eigene Objekte
+   vor der Antwort dauerhaft; fehlendes Audit bedeutet HTTP 503 ohne Datei.
+   Der S3-Runtime-Pfad besitzt weiterhin sein bisheriges Best-effort-Ereignis
+   und ist nicht durch diese neue Commit-Garantie abgedeckt. Unauthentifizierte
+   sowie fehlende/fremde Objekte bleiben ausschliesslich im Runtime-Security-Log.
 
 ## Prioritaet P2 – Skalierung und neue Integrationen
 
