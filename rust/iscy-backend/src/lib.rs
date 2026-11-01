@@ -15083,7 +15083,9 @@ async fn audited_s3_download_response(
     } else {
         ("deny", "audit_persistence_failed")
     };
-    eprintln!("security_event=evidence_download storage_backend=s3_compatible decision={label} reason={reason} tenant_id={} user_id={} evidence_id={evidence_id}", context.tenant_id, context.user_id);
+    // Object and principal attribution belongs to the protected database
+    // audit, not the process log. These labels contain only fixed metadata.
+    eprintln!("security_event=evidence_download storage_backend=s3_compatible decision={label} reason={reason}");
     if matches!(result, Ok(true)) {
         response
     } else {

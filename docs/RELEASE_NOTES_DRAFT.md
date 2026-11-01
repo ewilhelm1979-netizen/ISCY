@@ -31,6 +31,9 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
   Hash ab; historische leere Hash-Metadaten erzeugen keinen falschen PASS.
 - Die Security-Middleware erhaelt das explizite `private, no-store` dieser
   Antworten und ergaenzt weiter `max-age=0`.
+- S3-Laufzeitlogs enthalten nur Backend, Entscheidung und festen Grund.
+  Benutzer-, Mandanten- und Evidence-IDs bleiben im geschuetzten
+  Datenbank-Audit und werden nicht zusaetzlich ins Prozesslog geschrieben.
 - Beide lokalen `/evidence/{id}/download`-Routen schreiben Entscheidungen
   fuer bekannte tenant-eigene Objekte in `evidence_integrity_event`.
 - Dateibytes werden nur nach genau einem gespeicherten und erfolgreich
