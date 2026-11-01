@@ -36,6 +36,16 @@ Der Agent liefert sichere Baseline-Telemetrie und lokale read-only Posture-Signa
 - MDM-/Endpoint-Management-Signale
 - Endpoint Protection beziehungsweise EDR-Signale
 
+## Einfacher Deployment-Einstieg
+
+Der bestehende Web-Wizard `/zero-trust/onboarding/` fuehrt zum Enrollment.
+Danach prueft `iscy-agent --check` die lokale Konfiguration ohne Inventar,
+State-Schreibzugriff oder Netzwerk. Secretdateien werden ueber
+`ISCY_AGENT_ENROLLMENT_TOKEN_FILE` / `ISCY_AGENT_SECRET_FILE` oder die
+entsprechenden CLI-Optionen gelesen. Die vollstaendige Reihenfolge und
+Grenzen stehen in [deploy/agent/README.md](../deploy/agent/README.md).
+Dieser Ablauf ist unabhaengig vom Unternehmens-/Betroffenheits-Wizard.
+
 ## API
 
 Die Admin- und Lesepfade nutzen den bestehenden ISCY Tenant/User-Kontext. Produktive Agenten nutzen Enrollment-Token und danach Agent-Secrets.

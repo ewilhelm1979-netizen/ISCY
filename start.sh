@@ -9,6 +9,46 @@ info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$1"; }
 warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$1"; }
 err()  { printf '\033[1;31m[ERR ]\033[0m %s\n' "$1" >&2; }
 
+usage() {
+  cat <<'USAGE'
+ISCY lokal starten: ./start.sh [demo|run|check|--help]
+  demo   Datenbank/Demo initialisieren und starten (Standard, nur Entwicklung).
+  run    Mit exportierter Umgebung starten; keine .env-Aenderung oder Demo-Seeds.
+  check  Lokale Startvoraussetzungen lesen; keine Dateien oder Dienste aendern.
+Agenten einrichten: vorhandener Wizard unter /zero-trust/onboarding/.
+USAGE
+}
+
+if [ "$#" -gt 1 ]; then usage >&2; exit 64; fi
+case "${1:-demo}" in
+  --help|-h|help) usage; exit 0 ;;
+  check|doctor)
+    if [ -n "${ISCY_BACKEND_BIN:-}" ]; then
+      [ -x "$ISCY_BACKEND_BIN" ] || { err "ISCY_BACKEND_BIN ist nicht ausfuehrbar."; exit 1; }
+      info "Backend-Binary vorhanden."
+    elif command -v nix >/dev/null 2>&1; then
+      info "Nix vorhanden (Build/Closure bei dieser Vorpruefung nicht ausgefuehrt)."
+    elif command -v cargo >/dev/null 2>&1; then
+      info "Cargo vorhanden (Build bei dieser Vorpruefung nicht ausgefuehrt)."
+    else
+      err "Backend fehlt: ISCY_BACKEND_BIN setzen oder Nix/Cargo installieren."; exit 1
+    fi
+    if [ -e .env ] && [ ! -r .env ]; then err ".env ist nicht lesbar."; exit 1; fi
+    info "Lokale Vorpruefung bestanden. Start: ./start.sh demo oder ./start.sh run"
+    exit 0 ;;
+  run)
+    if [ -n "${ISCY_BACKEND_BIN:-}" ]; then
+      exec "$ISCY_BACKEND_BIN"
+    elif command -v nix >/dev/null 2>&1; then
+      exec nix run .#iscy-backend
+    elif command -v cargo >/dev/null 2>&1; then
+      exec cargo run --locked --manifest-path rust/iscy-backend/Cargo.toml --bin iscy-backend
+    fi
+    err "Backend fehlt: ISCY_BACKEND_BIN setzen oder Nix/Cargo installieren."; exit 1 ;;
+  demo) ;;
+  *) usage >&2; exit 64 ;;
+esac
+
 if [ ! -f ".env" ] && [ -f ".env.example" ]; then
   cp .env.example .env
   chmod 600 .env
