@@ -17448,6 +17448,9 @@ async fn rust_web_cve_llm_test_renders_stub_output() {
     assert!(html.contains("LLM-Runtime-Test"));
     assert!(html.contains("Testausgabe"));
     assert!(html.contains("Rust-LLM Stub analysed prompt excerpt: hello rust"));
+    assert!(html.contains("Nur regelbasierter Stub, keine Modellruntime"));
+    assert!(html.contains("keine aktive Modellruntime"));
+    assert!(html.contains("&quot;inference_performed&quot;: false"));
 }
 
 #[tokio::test]
@@ -17512,7 +17515,41 @@ async fn cve_assessment_create_api_persists_rust_links_and_defaults() {
     assert_eq!(payload["assessment"]["nis2_relevant"], true);
     assert_eq!(payload["assessment"]["exploit_maturity"], "ACTIVE");
     assert_eq!(payload["assessment"]["deterministic_priority"], "CRITICAL");
-    assert_eq!(payload["assessment"]["llm_status"], "GENERATED");
+    assert_eq!(payload["assessment"]["llm_status"], "STUB_GENERATED");
+    let summary = CveStore::from_sqlite_pool(pool.clone())
+        .assessment_dashboard_summary(42)
+        .await
+        .unwrap();
+    assert_eq!(summary.llm_generated, 1);
+    assert_eq!(
+        CveStore::from_sqlite_pool(pool.clone())
+            .assessment_dashboard_summary(99)
+            .await
+            .unwrap()
+            .llm_generated,
+        0
+    );
+    assert_eq!(
+        payload["assessment"]["llm_status_label"],
+        "Regelbasiert (Stub)"
+    );
+    assert_eq!(payload["assessment"]["llm_backend"], "rust_stub");
+    assert_eq!(
+        payload["assessment"]["llm_model_name"],
+        "iscy-rust-llm-stub-v1"
+    );
+    assert_eq!(
+        payload["assessment"]["raw_llm_json"]["provenance"]["generation_method"],
+        "deterministic_stub"
+    );
+    assert_eq!(
+        payload["assessment"]["raw_llm_json"]["provenance"]["inference_performed"],
+        false
+    );
+    assert_eq!(
+        payload["assessment"]["raw_llm_json"]["provenance"]["requires_human_review"],
+        true
+    );
     assert_eq!(
         payload["assessment"]["related_risk_title"]
             .as_str()
@@ -17641,6 +17678,17 @@ async fn cve_assessment_create_api_updates_existing_natural_key() {
     assert_eq!(second_payload["created"], false);
     assert_eq!(second_payload["assessment"]["id"], first_id);
     assert_eq!(second_payload["assessment"]["llm_status"], "DISABLED");
+    for field in [
+        "llm_backend",
+        "llm_model_name",
+        "raw_llm_json",
+        "prompt_hash",
+    ] {
+        assert_eq!(
+            second_payload["assessment"][field],
+            first_payload["assessment"][field]
+        );
+    }
     assert_eq!(
         second_payload["assessment"]["business_context"],
         "Updated rollout context"
@@ -19596,6 +19644,13 @@ async fn llm_generate_endpoint_returns_ok() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(payload["backend"], "rust_stub");
+    assert_eq!(payload["model"], "iscy-rust-llm-stub-v1");
+    assert_eq!(payload["provenance"]["inference_performed"], false);
+    assert_eq!(payload["provenance"]["model_configuration_applied"], false);
+    assert_eq!(payload["result"]["provenance"], payload["provenance"]);
 }
 
 #[tokio::test]

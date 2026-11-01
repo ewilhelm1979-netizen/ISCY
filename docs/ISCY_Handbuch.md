@@ -938,9 +938,21 @@ Funktionen sind im aktuellen Rust-Stand ein deterministischer LLM-Stub. Sie
 erzeugen strukturierte technische und Management-Zusammenfassungen,
 Massnahmenvorschlaege und Evidence-Hinweise direkt im Rust-Code; dabei wird
 kein Qwen-, llama.cpp-, Ollama- oder anderes Sprachmodell aufgerufen.
-`LOCAL_LLM_MODEL_NAME` ist derzeit eine Metadatenbezeichnung und kein
-Provenance-Nachweis fuer echte Inferenz. Eine RAG-/Embedding-/Retrieval-Runtime
-ist nicht Bestandteil des aktuellen ISCY-Backends.
+Neue Ausgaben besitzen die feste Kennung `iscy-rust-llm-stub-v1`, Backend
+`rust_stub` und `generation_method=deterministic_stub`. Die Herkunft bestaetigt
+ausdruecklich `inference_performed=false`,
+`model_configuration_applied=false` und `requires_human_review=true`.
+Neue CVE-Assessment-Ausgaben speichern `STUB_GENERATED` und werden als
+`Regelbasiert (Stub)` angezeigt. Historische Ausgaben werden nicht
+nachtraeglich umetikettiert; `run_llm=false` erhaelt bestehende Texte und
+Herkunftsmetadaten. Der Kompatibilitaetszaehler `llm_generated` umfasst beide
+generierten Assistenzformen und ist kein Inferenznachweis.
+
+`LOCAL_LLM_MODEL_NAME`, Modellpfad, Kontext, Threads und beide bisherigen
+GPU-Layer-Variablen werden vom Stub ignoriert. Die Runtime-Anzeige meldet
+keinen Modellimport, keine bereite Modellruntime und keine angewendeten
+Inferenzparameter. Eine RAG-/Embedding-/Retrieval-Runtime ist nicht Bestandteil
+des aktuellen ISCY-Backends.
 
 Was der Bereich jetzt leisten soll:
 

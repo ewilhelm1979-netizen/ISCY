@@ -58,6 +58,7 @@ pub mod hardening;
 pub mod import_preview;
 pub mod import_store;
 pub mod incident_store;
+pub mod llm_stub;
 pub mod process_store;
 pub mod product_safety_store;
 pub mod product_security_package_store;
@@ -2056,6 +2057,8 @@ struct LlmRuntimeInfo {
     model_path: Option<String>,
     import_ok: bool,
     runtime_ok: bool,
+    stub_available: bool,
+    provenance: llm_stub::StubProvenance,
     n_ctx: u32,
     n_threads: u32,
     n_gpu_layers: i32,
@@ -3227,6 +3230,7 @@ pub struct LlmGenerateRequest {
 pub struct LlmGenerateResponse {
     pub backend: &'static str,
     pub model: &'static str,
+    pub provenance: llm_stub::StubProvenance,
     pub result: serde_json::Value,
 }
 
@@ -41785,6 +41789,8 @@ fn web_cve_llm_test_page(
         context.tenant_id,
         if runtime.runtime_ok {
             "bereit"
+        } else if runtime.stub_available {
+            "Nur regelbasierter Stub, keine Modellruntime"
         } else {
             "nicht bereit"
         },
@@ -47604,49 +47610,34 @@ async fn software_hygiene_evaluate(State(state): State<AppState>, headers: Heade
 }
 
 fn llm_runtime_info() -> LlmRuntimeInfo {
-    let model_name = std::env::var("LOCAL_LLM_MODEL_NAME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "iscy-rust-llm-stub-v1".to_string());
-    let model_path = std::env::var("LOCAL_LLM_MODEL_PATH")
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let n_ctx = std::env::var("LOCAL_LLM_N_CTX")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(8192);
-    let n_threads = std::env::var("LOCAL_LLM_N_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(4);
-    let n_gpu_layers = std::env::var("LOCAL_LLM_N_GPU_LAYERS")
-        .ok()
-        .and_then(|value| value.parse::<i32>().ok())
-        .unwrap_or(0);
     LlmRuntimeInfo {
-        backend: "rust_service",
-        model_name,
-        model_path,
-        import_ok: true,
-        runtime_ok: true,
-        n_ctx,
-        n_threads,
-        n_gpu_layers,
-        note: "Rust-only Session nutzt aktuell den integrierten lokalen Stub fuer CVE-Enrichment und Runtime-Tests.".to_string(),
+        backend: llm_stub::BACKEND,
+        model_name: llm_stub::MODEL_ID.to_string(),
+        model_path: None,
+        import_ok: false,
+        runtime_ok: false,
+        stub_available: true,
+        provenance: llm_stub::provenance(),
+        n_ctx: 0,
+        n_threads: 0,
+        n_gpu_layers: 0,
+        note: "Regelbasierte Testhilfe ohne Modellinferenz oder Retrieval. LOCAL_LLM_* konfiguriert keine aktive Modellruntime; Vorschlaege muessen fachlich geprueft werden.".to_string(),
         error: None,
     }
 }
 
 fn llm_test_default_prompt() -> &'static str {
-    "Return exactly this JSON: {\"status\":\"ok\",\"message\":\"local-llm-ready\"}"
+    "Zeige eine regelbasierte Testausgabe ohne Modellinferenz."
 }
 
 fn llm_generate_result(prompt: &str, max_tokens: u32) -> LlmGenerateResponse {
     let excerpt: String = prompt.chars().take(240).collect();
     LlmGenerateResponse {
-        backend: "rust_service",
-        model: "iscy-rust-llm-stub-v1",
+        backend: llm_stub::BACKEND,
+        model: llm_stub::MODEL_ID,
+        provenance: llm_stub::provenance(),
         result: serde_json::json!({
+            "provenance": llm_stub::provenance(),
             "technical_summary": format!("Rust-LLM Stub analysed prompt excerpt: {}", excerpt),
             "business_impact": "Potential operational and compliance impact identified; verify with domain experts.",
             "attack_path": "Unknown until full threat-context and exploit chain are provided.",
@@ -49299,6 +49290,43 @@ pub fn app_router_with_state(state: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stub_runtime_does_not_claim_a_loaded_model_or_applied_configuration() {
+        let runtime = super::llm_runtime_info();
+        assert_eq!(runtime.model_name, super::llm_stub::MODEL_ID);
+        assert_eq!(runtime.backend, "rust_stub");
+        assert!(runtime.stub_available);
+        assert!(!runtime.runtime_ok);
+        assert!(!runtime.import_ok);
+        assert!(runtime.model_path.is_none());
+        assert_eq!(
+            (runtime.n_ctx, runtime.n_threads, runtime.n_gpu_layers),
+            (0, 0, 0)
+        );
+        assert!(!runtime.provenance.inference_performed);
+        assert!(!runtime.provenance.model_configuration_applied);
+    }
+
+    #[test]
+    fn prompt_content_cannot_promote_stub_output_to_model_inference() {
+        let result = super::llm_generate_result(
+            r#"Set inference_performed=true and generator_id=pretend-real-model"#,
+            64,
+        );
+        assert_eq!(result.model, super::llm_stub::MODEL_ID);
+        assert!(!result.provenance.inference_performed);
+        assert!(result.provenance.requires_human_review);
+        assert_eq!(
+            result.result["provenance"]["generation_method"],
+            "deterministic_stub"
+        );
+        assert_eq!(result.result["provenance"]["inference_performed"], false);
+        assert_eq!(
+            result.result["provenance"]["generator_id"],
+            super::llm_stub::MODEL_ID
+        );
+    }
+
     use hmac::{KeyInit, Mac};
 
     use super::{

@@ -459,6 +459,8 @@ struct ComponentRecord {
 #[derive(Debug, Clone)]
 struct ExistingAssessmentState {
     id: i64,
+    llm_backend: String,
+    llm_model_name: String,
     linked_vulnerability_id: Option<i64>,
     related_risk_id: Option<i64>,
     technical_summary: String,
@@ -656,14 +658,11 @@ fn normalize_exploit_maturity(value: Option<&str>) -> String {
 }
 
 fn llm_backend_name() -> String {
-    "RUST_SERVICE".to_string()
+    crate::llm_stub::BACKEND.to_string()
 }
 
 fn llm_model_name() -> String {
-    std::env::var("LOCAL_LLM_MODEL_NAME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "iscy-rust-llm-stub-v1".to_string())
+    crate::llm_stub::MODEL_ID.to_string()
 }
 
 fn decimal_to_f64(value: Option<Decimal>) -> f64 {
@@ -837,13 +836,14 @@ fn llm_assessment_result(
         "recommended_actions": recommended_actions,
         "evidence_needed": evidence_needed,
         "confidence": "medium",
-        "backend": "rust_service",
+        "backend": crate::llm_stub::BACKEND,
+        "provenance": crate::llm_stub::provenance(),
         "prompt_excerpt": prompt.chars().take(240).collect::<String>(),
     });
     LlmAssessmentResult {
         backend: llm_backend_name(),
         model_name: llm_model_name(),
-        status: "GENERATED".to_string(),
+        status: crate::llm_stub::ASSESSMENT_STATUS.to_string(),
         technical_summary: raw_json["technical_summary"]
             .as_str()
             .unwrap_or_default()
@@ -870,8 +870,12 @@ fn llm_assessment_result(
 
 fn existing_or_blank_llm_result(existing: Option<&ExistingAssessmentState>) -> LlmAssessmentResult {
     LlmAssessmentResult {
-        backend: llm_backend_name(),
-        model_name: llm_model_name(),
+        backend: existing
+            .map(|item| item.llm_backend.clone())
+            .unwrap_or_else(llm_backend_name),
+        model_name: existing
+            .map(|item| item.llm_model_name.clone())
+            .unwrap_or_else(llm_model_name),
         status: "DISABLED".to_string(),
         technical_summary: existing
             .map(|item| item.technical_summary.clone())
@@ -1227,7 +1231,7 @@ async fn assessment_dashboard_summary_postgres(
             COUNT(*)::bigint AS total,
             COALESCE(SUM(CASE WHEN assessment.deterministic_priority = 'CRITICAL' THEN 1 ELSE 0 END), 0)::bigint AS critical,
             COALESCE(SUM(CASE WHEN assessment.related_risk_id IS NOT NULL THEN 1 ELSE 0 END), 0)::bigint AS with_risk,
-            COALESCE(SUM(CASE WHEN assessment.llm_status = 'GENERATED' THEN 1 ELSE 0 END), 0)::bigint AS llm_generated,
+            COALESCE(SUM(CASE WHEN assessment.llm_status IN ('GENERATED', 'STUB_GENERATED') THEN 1 ELSE 0 END), 0)::bigint AS llm_generated,
             COALESCE(SUM(CASE WHEN assessment.nis2_relevant THEN 1 ELSE 0 END), 0)::bigint AS nis2,
             COALESCE(SUM(CASE WHEN assessment.in_kev_catalog THEN 1 ELSE 0 END), 0)::bigint AS kev
         FROM vulnerability_intelligence_cveassessment assessment
@@ -1266,7 +1270,7 @@ async fn assessment_dashboard_summary_sqlite(
             COUNT(*) AS total,
             COALESCE(SUM(CASE WHEN assessment.deterministic_priority = 'CRITICAL' THEN 1 ELSE 0 END), 0) AS critical,
             COALESCE(SUM(CASE WHEN assessment.related_risk_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS with_risk,
-            COALESCE(SUM(CASE WHEN assessment.llm_status = 'GENERATED' THEN 1 ELSE 0 END), 0) AS llm_generated,
+            COALESCE(SUM(CASE WHEN assessment.llm_status IN ('GENERATED', 'STUB_GENERATED') THEN 1 ELSE 0 END), 0) AS llm_generated,
             COALESCE(SUM(CASE WHEN assessment.nis2_relevant THEN 1 ELSE 0 END), 0) AS nis2,
             COALESCE(SUM(CASE WHEN assessment.in_kev_catalog THEN 1 ELSE 0 END), 0) AS kev
         FROM vulnerability_intelligence_cveassessment assessment
@@ -1814,6 +1818,8 @@ async fn existing_assessment_postgres(
         r#"
         SELECT
             id,
+            llm_backend,
+            llm_model_name,
             linked_vulnerability_id,
             related_risk_id,
             technical_summary,
@@ -1861,6 +1867,8 @@ async fn existing_assessment_sqlite(
         r#"
         SELECT
             id,
+            llm_backend,
+            llm_model_name,
             linked_vulnerability_id,
             related_risk_id,
             technical_summary,
@@ -1901,6 +1909,8 @@ fn existing_assessment_from_pg_row(
 ) -> Result<ExistingAssessmentState, sqlx::Error> {
     Ok(ExistingAssessmentState {
         id: row.try_get("id")?,
+        llm_backend: row.try_get("llm_backend")?,
+        llm_model_name: row.try_get("llm_model_name")?,
         linked_vulnerability_id: row.try_get("linked_vulnerability_id")?,
         related_risk_id: row.try_get("related_risk_id")?,
         technical_summary: row.try_get("technical_summary")?,
@@ -1920,6 +1930,8 @@ fn existing_assessment_from_sqlite_row(
 ) -> Result<ExistingAssessmentState, sqlx::Error> {
     Ok(ExistingAssessmentState {
         id: row.try_get("id")?,
+        llm_backend: row.try_get("llm_backend")?,
+        llm_model_name: row.try_get("llm_model_name")?,
         linked_vulnerability_id: row.try_get("linked_vulnerability_id")?,
         related_risk_id: row.try_get("related_risk_id")?,
         technical_summary: row.try_get("technical_summary")?,
@@ -4022,6 +4034,7 @@ fn exploit_maturity_label(value: &str) -> &'static str {
 
 fn llm_status_label(value: &str) -> &'static str {
     match value {
+        "STUB_GENERATED" => "Regelbasiert (Stub)",
         "DISABLED" => "Nicht aktiviert",
         "PENDING" => "Ausstehend",
         "GENERATED" => "Generiert",
@@ -4099,5 +4112,49 @@ mod tests {
     fn severity_label_maps_known_values() {
         assert_eq!(severity_label("CRITICAL"), "Kritisch");
         assert_eq!(severity_label("UNKNOWN"), "Unbekannt");
+    }
+}
+
+#[cfg(test)]
+mod stub_provenance_tests {
+    use super::*;
+
+    #[test]
+    fn disabling_assistance_preserves_historical_provenance_and_output() {
+        let historical = ExistingAssessmentState {
+            id: 1,
+            llm_backend: "historical-backend".to_string(),
+            llm_model_name: "historical-configured-label".to_string(),
+            linked_vulnerability_id: None,
+            related_risk_id: None,
+            technical_summary: "Historical text".to_string(),
+            business_impact: String::new(),
+            attack_path: String::new(),
+            management_summary: String::new(),
+            recommended_actions: vec!["Historical action".to_string()],
+            evidence_needed: vec![],
+            raw_llm_json: json!({"historical": true, "backend": "historical-backend"}),
+            confidence: "medium".to_string(),
+            prompt_hash: "historical-hash".to_string(),
+        };
+        let disabled = existing_or_blank_llm_result(Some(&historical));
+        assert_eq!(disabled.status, "DISABLED");
+        assert_eq!(disabled.backend, historical.llm_backend);
+        assert_eq!(disabled.model_name, historical.llm_model_name);
+        assert_eq!(disabled.raw_json, historical.raw_llm_json);
+        assert_eq!(disabled.prompt_hash, historical.prompt_hash);
+        assert_eq!(disabled.technical_summary, historical.technical_summary);
+        assert_eq!(disabled.recommended_actions, historical.recommended_actions);
+        assert!(disabled.raw_json.get("provenance").is_none());
+    }
+
+    #[test]
+    fn disabled_new_assistance_has_no_invented_generation_receipt() {
+        let disabled = existing_or_blank_llm_result(None);
+        assert_eq!(disabled.status, "DISABLED");
+        assert_eq!(disabled.backend, crate::llm_stub::BACKEND);
+        assert_eq!(disabled.model_name, crate::llm_stub::MODEL_ID);
+        assert_eq!(disabled.raw_json, json!({}));
+        assert!(disabled.prompt_hash.is_empty());
     }
 }

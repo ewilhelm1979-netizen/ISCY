@@ -22,6 +22,20 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## Eindeutige Herkunft der regelbasierten CVE-Assistenz
+
+- feste Generatoridentitaet und versionierte Stub-Provenance fuer
+  `POST /api/v1/llm/generate` und neue CVE-Assessments;
+  `inference_performed=false`, keine angewendete Modellkonfiguration
+- neuer Status `STUB_GENERATED` mit Anzeige `Regelbasiert (Stub)`;
+  historische `GENERATED`-Ausgaben bleiben unveraendert, der bestehende
+  `llm_generated`-Kompatibilitaetszaehler umfasst beide Assistenzformen
+- die Runtime-Anzeige unterscheidet verfuegbaren Stub und fehlende
+  Modellruntime; `LOCAL_LLM_*` kann weder Modellidentitaet noch geladene
+  Modell-/GPU-Parameter vortaeuschen
+- deaktivierte Neugenerierung erhaelt bestehende Ausgabe- und Herkunftsdaten;
+  keine neue Migration, Modellinferenz, RAG-Integration oder aktive Gegenmassnahme
+
 ## SoA-Rust-Wiederherstellung und Schreibschutz
 
 - additive Migration `0047_rust_soa_cutover_restoration` fuer SQLite und PostgreSQL;
