@@ -14,28 +14,16 @@ use axum::{
     Json,
 };
 use iscy_backend::{
-    evidence_store::EvidenceStore, request_context::AuthenticatedTenantContext, AppState,
+    evidence_download_audit::{record_download_decision, DownloadBackend, DownloadDecision},
+    evidence_store::EvidenceStore,
+    request_context::AuthenticatedTenantContext,
+    AppState,
 };
 use serde_json::json;
 use sqlx::{postgres::PgRow, sqlite::SqliteRow, Row};
 
 const SESSION_COOKIE_NAME: &str = "iscy_session";
 const X_CONTENT_TYPE_OPTIONS: HeaderName = HeaderName::from_static("x-content-type-options");
-
-#[derive(Clone, Copy)]
-enum DownloadDecision {
-    Prepared(usize),
-    Denied(&'static str),
-}
-
-impl DownloadDecision {
-    fn labels(self) -> (&'static str, &'static str) {
-        match self {
-            Self::Prepared(_) => ("allow", "response_prepared"),
-            Self::Denied(reason) => ("deny", reason),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 struct EvidenceDownloadRecord {
@@ -306,46 +294,14 @@ async fn persist_download_decision(
     evidence_id: i64,
     decision: DownloadDecision,
 ) -> anyhow::Result<bool> {
-    let (label, reason) = decision.labels();
-    let event_type = if label == "allow" {
-        "local_download_allowed"
-    } else {
-        "local_download_denied"
-    };
-    let mut detail = json!({
-        "schema_version": 1, "storage_backend": "local", "decision": label,
-        "reason": reason, "response_delivery_confirmed": false,
-    });
-    if let DownloadDecision::Prepared(size_bytes) = decision {
-        detail["size_bytes"] = json!(size_bytes);
-    }
-    // INSERT SELECT scopes the write itself, including when the object vanished
-    // between the lookup and this statement. A suppressed insert is not success.
-    match store {
-        EvidenceStore::Postgres(pool) => {
-            let mut tx = pool.begin().await?;
-            let result = sqlx::query(
-                "INSERT INTO evidence_integrity_event (tenant_id, evidence_id, event_type, actor_id, detail_json) \
-                 SELECT tenant_id, id, $3, $4, $5::jsonb FROM evidence_evidenceitem WHERE tenant_id = $1 AND id = $2"
-            ).bind(context.tenant_id).bind(evidence_id).bind(event_type).bind(context.user_id).bind(detail.to_string()).execute(&mut *tx).await?;
-            if result.rows_affected() != 1 {
-                return Ok(false);
-            }
-            tx.commit().await?;
-        }
-        EvidenceStore::Sqlite(pool) => {
-            let mut tx = pool.begin().await?;
-            let result = sqlx::query(
-                "INSERT INTO evidence_integrity_event (tenant_id, evidence_id, event_type, actor_id, detail_json) \
-                 SELECT tenant_id, id, ?3, ?4, ?5 FROM evidence_evidenceitem WHERE tenant_id = ?1 AND id = ?2"
-            ).bind(context.tenant_id).bind(evidence_id).bind(event_type).bind(context.user_id).bind(detail.to_string()).execute(&mut *tx).await?;
-            if result.rows_affected() != 1 {
-                return Ok(false);
-            }
-            tx.commit().await?;
-        }
-    }
-    Ok(true)
+    record_download_decision(
+        store,
+        context,
+        evidence_id,
+        decision,
+        DownloadBackend::Local,
+    )
+    .await
 }
 
 async fn load_evidence_record(
