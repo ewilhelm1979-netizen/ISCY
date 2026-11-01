@@ -1,5 +1,6 @@
 use std::{
     env, fs,
+    io::Read,
     path::{Path as FsPath, PathBuf},
     process::Command,
     time::Duration,
@@ -22,6 +23,7 @@ struct AgentConfig {
     queue_max_files: usize,
     dry_run: bool,
     self_test: bool,
+    check: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,6 +63,16 @@ enum ReportFailure {
 
 fn main() -> anyhow::Result<()> {
     let config = parse_config()?;
+    if config.check {
+        let report = preflight(&config)?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        if report["credentials_configured"] != true {
+            anyhow::bail!(
+                "Configure an enrollment token or existing agent state before deployment"
+            );
+        }
+        return Ok(());
+    }
     let inventory = collect_inventory();
     let heartbeat = heartbeat_payload(&inventory);
     let findings = findings_payload(&inventory);
@@ -193,31 +205,40 @@ fn enroll_agent(
 
 fn parse_config() -> anyhow::Result<AgentConfig> {
     let args = env::args().skip(1).collect::<Vec<_>>();
-    let self_test = args.iter().any(|arg| arg == "--self-test");
-    let dry_run = args.iter().any(|arg| arg == "--dry-run");
+    validate_args(&args)?;
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         print_usage();
         std::process::exit(0);
     }
+    parse_config_from(&args, |name| env::var(name).ok())
+}
 
-    let backend_url = arg_value(&args, "--backend-url")
-        .or_else(|| env::var("ISCY_BACKEND_URL").ok())
+fn parse_config_from(
+    args: &[String],
+    lookup: impl Fn(&str) -> Option<String>,
+) -> anyhow::Result<AgentConfig> {
+    validate_args(args)?;
+    let self_test = args.iter().any(|arg| arg == "--self-test");
+    let dry_run = args.iter().any(|arg| arg == "--dry-run");
+
+    let backend_url = arg_value(args, "--backend-url")
+        .or_else(|| lookup("ISCY_BACKEND_URL"))
         .unwrap_or_else(|| "http://127.0.0.1:9000".to_string());
-    let tenant_id = arg_value(&args, "--tenant-id")
-        .or_else(|| env::var("ISCY_TENANT_ID").ok())
+    let tenant_id = arg_value(args, "--tenant-id")
+        .or_else(|| lookup("ISCY_TENANT_ID"))
         .unwrap_or_else(|| "1".to_string())
         .parse::<i64>()?;
-    let user_id = arg_value(&args, "--user-id")
-        .or_else(|| env::var("ISCY_USER_ID").ok())
+    let user_id = arg_value(args, "--user-id")
+        .or_else(|| lookup("ISCY_USER_ID"))
         .unwrap_or_else(|| "1".to_string())
         .parse::<i64>()?;
-    let state_path = arg_value(&args, "--state-path")
-        .or_else(|| env::var("ISCY_AGENT_STATE_PATH").ok())
+    let state_path = arg_value(args, "--state-path")
+        .or_else(|| lookup("ISCY_AGENT_STATE_PATH"))
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(default_agent_state_path);
-    let queue_dir = arg_value(&args, "--queue-dir")
-        .or_else(|| env::var("ISCY_AGENT_QUEUE_DIR").ok())
+    let queue_dir = arg_value(args, "--queue-dir")
+        .or_else(|| lookup("ISCY_AGENT_QUEUE_DIR"))
         .filter(|value| !value.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -226,33 +247,172 @@ fn parse_config() -> anyhow::Result<AgentConfig> {
                 .unwrap_or_else(|| FsPath::new("."))
                 .join("queue")
         });
-    let queue_max_files = arg_value(&args, "--queue-max-files")
-        .or_else(|| env::var("ISCY_AGENT_QUEUE_MAX_FILES").ok())
+    let queue_max_files = arg_value(args, "--queue-max-files")
+        .or_else(|| lookup("ISCY_AGENT_QUEUE_MAX_FILES"))
         .unwrap_or_else(|| "100".to_string())
         .parse::<usize>()?;
     if !(1..=10_000).contains(&queue_max_files) {
         anyhow::bail!("ISCY_AGENT_QUEUE_MAX_FILES must be between 1 and 10000");
     }
 
+    if tenant_id <= 0 || user_id <= 0 {
+        anyhow::bail!("Tenant and user IDs must be positive");
+    }
+    let url =
+        reqwest::Url::parse(&backend_url).map_err(|_| anyhow::anyhow!("Invalid backend URL"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!("Backend URL must be HTTP(S) without credentials, query or fragment");
+    }
+
     Ok(AgentConfig {
         backend_url,
         tenant_id,
         user_id,
-        enrollment_token: arg_value(&args, "--enrollment-token")
-            .or_else(|| env::var("ISCY_AGENT_ENROLLMENT_TOKEN").ok())
-            .filter(|value| !value.trim().is_empty()),
-        agent_secret: arg_value(&args, "--agent-secret")
-            .or_else(|| env::var("ISCY_AGENT_SECRET").ok())
-            .filter(|value| !value.trim().is_empty()),
-        mtls_fingerprint: arg_value(&args, "--mtls-fingerprint")
-            .or_else(|| env::var("ISCY_AGENT_MTLS_FINGERPRINT").ok())
+        enrollment_token: secret_input(
+            args,
+            &lookup,
+            "--enrollment-token",
+            "ISCY_AGENT_ENROLLMENT_TOKEN",
+        )?,
+        agent_secret: secret_input(args, &lookup, "--agent-secret", "ISCY_AGENT_SECRET")?,
+        mtls_fingerprint: arg_value(args, "--mtls-fingerprint")
+            .or_else(|| lookup("ISCY_AGENT_MTLS_FINGERPRINT"))
             .filter(|value| !value.trim().is_empty()),
         state_path,
         queue_dir,
         queue_max_files,
         dry_run,
         self_test,
+        check: args.iter().any(|arg| arg == "--check"),
     })
+}
+
+fn validate_args(args: &[String]) -> anyhow::Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if !seen.insert(arg) {
+            anyhow::bail!("Duplicate agent option");
+        }
+        match arg.as_str() {
+            "--help" | "-h" | "--check" | "--dry-run" | "--self-test" => {}
+            "--backend-url"
+            | "--tenant-id"
+            | "--user-id"
+            | "--enrollment-token"
+            | "--enrollment-token-file"
+            | "--agent-secret"
+            | "--agent-secret-file"
+            | "--mtls-fingerprint"
+            | "--state-path"
+            | "--queue-dir"
+            | "--queue-max-files" => {
+                if iter
+                    .next()
+                    .is_none_or(|value| value.is_empty() || value.starts_with("--"))
+                {
+                    anyhow::bail!("Agent option requires a value; see --help");
+                }
+            }
+            _ => anyhow::bail!("Unknown agent option; see --help"),
+        }
+    }
+    Ok(())
+}
+
+fn secret_input(
+    args: &[String],
+    lookup: &impl Fn(&str) -> Option<String>,
+    flag: &str,
+    variable: &str,
+) -> anyhow::Result<Option<String>> {
+    let direct = arg_value(args, flag)
+        .or_else(|| lookup(variable))
+        .filter(|v| !v.trim().is_empty());
+    let file = arg_value(args, &format!("{flag}-file"))
+        .or_else(|| lookup(&format!("{variable}_FILE")))
+        .filter(|v| !v.trim().is_empty());
+    if direct.is_some() && file.is_some() {
+        anyhow::bail!("Use either a secret value or its file input");
+    }
+    file.map_or(Ok(direct), |path| {
+        read_private_secret(FsPath::new(&path)).map(Some)
+    })
+}
+
+fn read_private_secret(path: &FsPath) -> anyhow::Result<String> {
+    // Fixed diagnostics: neither file contents nor secret paths enter error logs.
+    let invalid =
+        || anyhow::anyhow!("Secret file must be a readable private regular file (1-16384 bytes)");
+    let before = fs::symlink_metadata(path).map_err(|_| invalid())?;
+    if !before.is_file()
+        || before.file_type().is_symlink()
+        || before.len() == 0
+        || before.len() > 16384
+    {
+        return Err(invalid());
+    }
+    let file = fs::File::open(path).map_err(|_| invalid())?;
+    let opened = file.metadata().map_err(|_| invalid())?;
+    if !opened.is_file() {
+        return Err(invalid());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if before.dev() != opened.dev()
+            || before.ino() != opened.ino()
+            || opened.permissions().mode() & 0o077 != 0
+        {
+            return Err(invalid());
+        }
+    }
+    let mut bytes = Vec::new();
+    file.take(16385)
+        .read_to_end(&mut bytes)
+        .map_err(|_| invalid())?;
+    if bytes.len() > 16384 {
+        return Err(invalid());
+    }
+    let value = String::from_utf8(bytes).map_err(|_| invalid())?;
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err(invalid());
+    }
+    Ok(value.to_owned())
+}
+
+fn preflight(config: &AgentConfig) -> anyhow::Result<Value> {
+    let state = load_agent_state(&config.state_path)
+        .map_err(|_| anyhow::anyhow!("Agent state is unreadable or invalid"))?;
+    if state.as_ref().is_some_and(|s| {
+        s.tenant_id != config.tenant_id || s.device_id <= 0 || s.stable_device_id.is_empty()
+    }) {
+        anyhow::bail!(
+            "Agent state does not match the configured tenant or has invalid device metadata"
+        );
+    }
+    // This checks local credentials only. No inventory collection or backend request.
+    let credentials = if let Some(state) = &state {
+        config
+            .agent_secret
+            .as_ref()
+            .or(state.agent_secret.as_ref())
+            .is_some_and(|s| !s.trim().is_empty())
+    } else {
+        config.enrollment_token.is_some()
+    };
+    Ok(
+        json!({"mode": "local_preflight", "credentials_configured": credentials,
+        "existing_state": state.is_some(), "network_checked": false,
+        "inventory_collected": false, "device_binding_checked": false}),
+    )
 }
 
 fn default_agent_state_path() -> PathBuf {
@@ -1250,7 +1410,7 @@ fn command_output(command: &str, args: &[&str]) -> Option<String> {
 
 fn print_usage() {
     println!(
-        "ISCY Agent\n\nOptions:\n  --backend-url URL          ISCY backend URL\n  --tenant-id ID             Tenant ID\n  --user-id ID               User ID for local/admin intake fallback\n  --enrollment-token TOKEN   One-time or scoped enrollment token\n  --agent-secret SECRET      Existing or newly rotated agent secret\n  --mtls-fingerprint FP      Client certificate fingerprint forwarded by mTLS proxy\n  --state-path PATH          Persisted device ID and secret state\n  --queue-dir PATH           Offline report queue directory\n  --queue-max-files COUNT    Maximum queued reports (1-10000, default 100)\n  --dry-run                  Print payloads without sending or writing state\n  --self-test                Print local inventory and exit without side effects\n\nEnvironment:\n  ISCY_BACKEND_URL, ISCY_TENANT_ID, ISCY_USER_ID, ISCY_AGENT_ENROLLMENT_TOKEN, ISCY_AGENT_SECRET, ISCY_AGENT_MTLS_FINGERPRINT, ISCY_AGENT_STATE_PATH, ISCY_AGENT_QUEUE_DIR, ISCY_AGENT_QUEUE_MAX_FILES, ISCY_AGENT_DEVICE_ID, ISCY_ASSET_ID"
+        "ISCY Agent\n\nOptions:\n  --backend-url URL          ISCY backend URL\n  --tenant-id ID             Tenant ID\n  --user-id ID               User ID for local/admin intake fallback\n  --enrollment-token TOKEN   One-time or scoped enrollment token\n  --enrollment-token-file PATH Private token file (preferred)\n  --agent-secret-file PATH    Private existing secret file (preferred)\n  --agent-secret SECRET      Existing or newly rotated agent secret\n  --mtls-fingerprint FP      Client certificate fingerprint forwarded by mTLS proxy\n  --state-path PATH          Persisted device ID and secret state\n  --queue-dir PATH           Offline report queue directory\n  --queue-max-files COUNT    Maximum queued reports (1-10000, default 100)\n  --check                    Check local configuration; no inventory, writes or network\n  --dry-run                  Print payloads without sending or writing state\n  --self-test                Print local inventory and exit without side effects\n\nEnvironment:\n  ISCY_BACKEND_URL, ISCY_TENANT_ID, ISCY_USER_ID, ISCY_AGENT_ENROLLMENT_TOKEN, ISCY_AGENT_ENROLLMENT_TOKEN_FILE, ISCY_AGENT_SECRET, ISCY_AGENT_SECRET_FILE, ISCY_AGENT_MTLS_FINGERPRINT, ISCY_AGENT_STATE_PATH, ISCY_AGENT_QUEUE_DIR, ISCY_AGENT_QUEUE_MAX_FILES, ISCY_AGENT_DEVICE_ID, ISCY_ASSET_ID"
     );
 }
 
@@ -1278,6 +1438,7 @@ mod tests {
             queue_max_files,
             dry_run: false,
             self_test: false,
+            check: false,
         }
     }
 
@@ -1301,6 +1462,107 @@ mod tests {
             agent_version: "0.3.0".to_string(),
             deployment_channel: "test".to_string(),
         }
+    }
+
+    #[test]
+    fn options_reject_typos_missing_values_and_duplicates_without_echoing_input() {
+        for raw in [
+            vec!["--chek", "private-token"],
+            vec!["--tenant-id"],
+            vec!["--tenant-id", "--check"],
+            vec!["--check", "--check"],
+        ] {
+            let args = raw.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let error = parse_config_from(&args, |_| None).unwrap_err().to_string();
+            assert!(!error.contains("private-token"));
+        }
+        for raw in [
+            vec!["--tenant-id", "0"],
+            vec!["--backend-url", "https://user:secret@example.org"],
+        ] {
+            let args = raw.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let error = parse_config_from(&args, |_| None).unwrap_err().to_string();
+            assert!(!error.contains("secret@example"));
+        }
+    }
+
+    #[test]
+    fn private_secret_file_accepts_trimmed_token_and_rejects_invalid_inputs() {
+        let root = test_runtime_dir("secret-file");
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("token");
+        fs::write(&file, "test-token\n").unwrap();
+        set_file_permissions(&file).unwrap();
+        let args = vec![
+            "--check".to_owned(),
+            "--enrollment-token-file".to_owned(),
+            file.to_string_lossy().into_owned(),
+        ];
+        let config = parse_config_from(&args, |_| None).unwrap();
+        assert_eq!(config.enrollment_token.as_deref(), Some("test-token"));
+        let config = parse_config_from(&[], |key| {
+            (key == "ISCY_AGENT_ENROLLMENT_TOKEN_FILE").then(|| file.to_string_lossy().into_owned())
+        })
+        .unwrap();
+        assert_eq!(config.enrollment_token.as_deref(), Some("test-token"));
+        assert!(
+            parse_config_from(&args, |key| (key == "ISCY_AGENT_ENROLLMENT_TOKEN")
+                .then(|| "conflict".to_owned()))
+            .is_err()
+        );
+        for content in [
+            "".to_owned(),
+            " \n".to_owned(),
+            "a\nb".to_owned(),
+            "x".repeat(16385),
+        ] {
+            fs::write(&file, content).unwrap();
+            assert!(read_private_secret(&file).is_err());
+        }
+        assert!(read_private_secret(&root).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{symlink, PermissionsExt};
+            fs::write(&file, "test-token").unwrap();
+            fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(read_private_secret(&file).is_err());
+            set_file_permissions(&file).unwrap();
+            let link = root.join("link");
+            symlink(&file, &link).unwrap();
+            assert!(read_private_secret(&link).is_err());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preflight_checks_local_credentials_without_creating_state_or_queue() {
+        let root = test_runtime_dir("preflight");
+        let mut config = test_config(&root, 100);
+        assert_eq!(preflight(&config).unwrap()["credentials_configured"], false);
+        config.enrollment_token = Some("private-token".to_owned());
+        let report = preflight(&config).unwrap();
+        assert_eq!(report["credentials_configured"], true);
+        assert_eq!(report["network_checked"], false);
+        assert_eq!(report["inventory_collected"], false);
+        assert!(!report.to_string().contains("private-token"));
+        assert!(!root.exists());
+        let mut state = AgentState {
+            tenant_id: 1,
+            stable_device_id: "fixture".to_owned(),
+            device_id: 2,
+            agent_secret: Some("private-secret".to_owned()),
+            updated_at: "fixture".to_owned(),
+        };
+        persist_agent_state(&config.state_path, &state).unwrap();
+        let before = fs::read(&config.state_path).unwrap();
+        config.enrollment_token = None;
+        assert_eq!(preflight(&config).unwrap()["credentials_configured"], true);
+        assert_eq!(fs::read(&config.state_path).unwrap(), before);
+        assert!(!config.queue_dir.exists());
+        state.tenant_id = 2;
+        persist_agent_state(&config.state_path, &state).unwrap();
+        assert!(preflight(&config).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

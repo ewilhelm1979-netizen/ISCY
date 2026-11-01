@@ -26,8 +26,21 @@ Die Plattform verbindet Risiken, Controls, Assets, Incidents, Evidence, Lieferan
 ## Schnellstart
 
 ```bash
-./start.sh
+./start.sh check   # Nur lokale Voraussetzungen lesen, keine Dienste/Builds
+./start.sh demo    # Entwicklungsdaten initialisieren und Server starten
 ```
+
+Ohne Argument bleibt der Demo-Start erhalten. `./start.sh run` startet mit der
+exportierten Laufzeitumgebung (auch `*_FILE`), ohne `.env` zu veraendern oder
+Demo-Daten anzulegen. `.env` wird dabei nicht eingelesen. Der produktive
+Backend-Preflight bleibt wirksam. `./scripts/easy_start.sh --native check`
+beziehungsweise `--compose check` waehlt die Laufzeit ausdruecklich;
+fehlgeschlagene Compose-Pruefungen brechen den Start ab.
+
+Agenten: vorhandener Wizard `/zero-trust/onboarding/`, danach
+[lokale Vorpruefung mit geschuetzter Token-Datei](deploy/agent/README.md).
+Der internationale Unternehmens-/Betroffenheits-Wizard ist ein eigener,
+[noch offener Wiederherstellungsmeilenstein](docs/COMPANY_WIZARD_RESTORATION.md).
 
 Die Weboberfläche ist anschließend unter `http://127.0.0.1:9000/login/` erreichbar.
 

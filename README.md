@@ -38,8 +38,21 @@ The application follows a local-first, privacy-conscious approach. Its productio
 ### NixOS / Nix
 
 ```bash
-./start.sh
+./start.sh check   # Read-only local prerequisites; no build or service startup
+./start.sh demo    # Development database/demo initialization, then foreground server
 ```
+
+`./start.sh` keeps the development demo default. `./start.sh run` starts the
+server using the exported runtime environment (including `*_FILE` secrets),
+without modifying `.env` or running demo initialization. It does not source
+`.env`. Production preflight remains enforced by the backend.
+Use `./scripts/easy_start.sh --native check` or `--compose check` to select a
+runtime explicitly; a failed Compose preflight stops the launch.
+Agent deployment starts with the existing `/zero-trust/onboarding/` wizard;
+[offline agent checks](deploy/agent/README.md) now accept private token files.
+The international company/applicability wizard is still being restored;
+[its status and scope](docs/COMPANY_WIZARD_RESTORATION.md) are separate from
+agent onboarding.
 
 Open `http://127.0.0.1:9000/login/` and use the development-only demo account:
 

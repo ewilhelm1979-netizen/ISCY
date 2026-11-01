@@ -4,15 +4,38 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-info() { printf '\033[1;34m[INFO]\033[0m %s\n' "$1"; }
-warn() { printf '\033[1;33m[WARN]\033[0m %s\n' "$1"; }
+usage() {
+  printf '%s\n' 'ISCY: ./scripts/easy_start.sh [--native [demo|run|check]|--compose [start|check]|--help]' \
+    'Ohne Argumente: Compose falls vorhanden, sonst nativer Demo-Start.'
+}
 
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-  info "Docker erkannt. Starte den einfachsten Compose-Flow (dev-up)."
-  make docker-check || warn "docker-check fehlgeschlagen, versuche trotzdem dev-up."
-  exec make dev-up
+engine=auto
+mode=start
+case "${1:-}" in
+  --help|-h) [ "$#" -eq 1 ] || exit 64; usage; exit 0 ;;
+  --native|--compose) engine="${1#--}"; shift; mode="${1:-start}"; [ "$#" -eq 0 ] || shift ;;
+  '') ;;
+  *) usage >&2; exit 64 ;;
+esac
+[ "$#" -eq 0 ] || { usage >&2; exit 64; }
+case "$engine:$mode" in
+  native:start|native:demo|native:run|native:check|compose:start|compose:check|auto:start) ;;
+  *) usage >&2; exit 64 ;;
+esac
+
+if [ "$engine" = auto ]; then
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    engine=compose
+  else
+    engine=native
+  fi
+fi
+if [ "$engine" = native ]; then
+  [ "$mode" != start ] || mode=demo
+  exec ./start.sh "$mode"
 fi
 
-warn "Docker nicht verfügbar. Fallback auf lokalen Rust-Start (start.sh)."
-info "Hinweis: Lokaler Start nutzt Rust-DB-Initialisierung und den Axum-Server."
-exec ./start.sh
+# A failed preflight must never be followed by startup or another engine.
+make docker-check
+[ "$mode" != check ] || exit 0
+exec make dev-up

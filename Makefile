@@ -19,7 +19,7 @@ secrets-history:
 secrets-test:
 	bash scripts/test-gitleaks.sh
 
-check: secrets
+check: secrets startup-contract-test
 	cargo fmt --manifest-path $(RUST_BACKEND_MANIFEST) -- --check
 	cargo clippy --locked --manifest-path $(RUST_BACKEND_MANIFEST) --all-targets -- -D warnings
 	cargo test --locked --manifest-path $(RUST_BACKEND_MANIFEST)
@@ -45,6 +45,10 @@ docker-smoke:
 
 easy-start:
 	./scripts/easy_start.sh
+
+.PHONY: startup-contract-test
+startup-contract-test:
+	./tests/startup/test_launchers.sh
 
 prod-readiness:
 	./scripts/production_readiness_check.sh
@@ -208,7 +212,7 @@ graceful-shutdown-smoke:
 object-storage-integration:
 	./scripts/run_object_storage_integration.sh
 
-resilience-script-tests:
+resilience-script-tests: startup-contract-test
 	./tests/resilience/test_performance_budget.sh
 
 visual-runner-lifecycle-test:
