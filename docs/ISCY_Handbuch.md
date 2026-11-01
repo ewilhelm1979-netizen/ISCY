@@ -191,10 +191,28 @@ Der damalige Stand vor dem Rust-Cutover ist ueber den Elterncommit von
 
 Aktueller Integrationsbefund, keine geaenderte Produktanforderung:
 
-Die Startseite `/` zeigt Linkkarten. Vorhandene Session-/Ergebnisdaten koennen
-ueber `GET /api/v1/wizard/sessions` und
+Die Startseite `/` und das Assessment-Register verlinken jetzt die lesenden
+Webansichten `/assessments/runs/` und `/assessments/runs/{id}/`. Sie zeigen
+bis zu 50 vorhandene Durchlaeufe mit Status, Schritt, Fortschritt und Startperson
+sowie vorhandene Zusammenfassungen, Domain-Bewertungen, Luecken, Massnahmen
+und Report-/Roadmap-Verweise. Alle Daten und Detailabfragen sind tenantgebunden.
+Verknuepfte Startpersonen eines fremden Mandanten werden nicht angezeigt.
+
+In frischen Rust-Datenbestaenden fehlen die alten Score-/Gap-Detailtabellen.
+Dort erscheint die gespeicherte Durchlauf-Zusammenfassung mit ausdruecklichem
+Hinweis auf die nicht verfuegbare Detailauswertung. Fehlende Details werden
+nicht als leere oder erfolgreiche Bewertung ausgegeben. Eine nur teilweise
+vorhandene Detailschicht bleibt ein Fehler. Die Ansichten aendern keine
+Durchlaeufe und erzeugen keine Ergebnisse oder Schemaobjekte.
+
+Zugriff erhalten schreibberechtigte Rollen, Auditoren, Read-only-/Viewer-Rollen
+oder Konten mit `wizard.view_assessmentsession`. Identitaet kommt aus der
+geprueften Session beziehungsweise dem konfigurierten vertrauenswuerdigen
+Anfragekontext; URL-Parameter stellen keine Identitaet her.
+
+Die vorhandenen JSON-Daten koennen weiter ueber `GET /api/v1/wizard/sessions` und
 `GET /api/v1/wizard/sessions/{session_id}/results` gelesen werden, soweit der
-entsprechende Datenbestand vorhanden ist. Diese Pfade bieten keinen POST zur
+entsprechende vollstaendige Datenbestand vorhanden ist. Diese Pfade bieten keinen POST zur
 Anlage eines Wizard-Durchlaufs. Die Rust-Schreiblogik und Teile des benoetigten
 Schemas fehlen ebenfalls; allein das Eintragen eines POST-Handlers behebt diese
 Migrationsluecke nicht. Bis zur separat zu pruefenden Wiederherstellung ist der

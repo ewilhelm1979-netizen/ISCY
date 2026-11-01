@@ -14512,6 +14512,232 @@ async fn roadmap_task_update_blocks_foreign_tenant_task() {
     assert_eq!(payload["error_code"], "roadmap_task_not_found");
 }
 
+async fn assessment_workspace_fixture() -> (SqlitePool, axum::Router) {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    create_wizard_tables(&pool).await;
+    insert_wizard_fixture(&pool).await;
+    let app = app_router_with_state(
+        AppState::default().with_wizard_store(Some(WizardStore::from_sqlite_pool(pool.clone()))),
+    );
+    (pool, app)
+}
+async fn assessment_workspace_get(
+    app: &axum::Router,
+    path: &str,
+    role: &str,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("x-iscy-tenant-id", "42")
+                .header("x-iscy-user-id", "7")
+                .header("x-iscy-roles", role)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+async fn assessment_workspace_body(response: axum::response::Response) -> String {
+    String::from_utf8(
+        to_bytes(response.into_body(), 1_048_576)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+}
+#[tokio::test]
+async fn assessment_workspace_requires_auth_and_a_read_role() {
+    let (_, app) = assessment_workspace_fixture().await;
+    for path in [
+        "/assessments/runs/?tenant_id=42&user_id=7&role=ADMIN",
+        "/assessments/runs/100/?tenant_id=42&user_id=7",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    for path in ["/assessments/runs/", "/assessments/runs/100/"] {
+        assert_eq!(
+            assessment_workspace_get(&app, path, "OUTSIDE_ROLE")
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+}
+#[tokio::test]
+async fn assessment_workspace_list_ignores_query_identity_and_foreign_actor_links() {
+    let (pool, app) = assessment_workspace_fixture().await;
+    sqlx::query(
+        "UPDATE wizard_assessmentsession SET started_by_id=9 WHERE tenant_id=42 AND id=100",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let response = assessment_workspace_get(
+        &app,
+        "/assessments/runs/?tenant_id=99&user_id=9",
+        "READ_ONLY",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["cache-control"],
+        "private, no-store, max-age=0"
+    );
+    let html = assessment_workspace_body(response).await;
+    assert!(html.contains("/assessments/runs/100/"));
+    assert!(html.contains("/assessments/runs/101/"));
+    assert!(!html.contains("/assessments/runs/200/"));
+    assert!(!html.contains("Foreign Tenant"));
+    assert!(!html.contains("Foreign User"));
+    assert!(html.contains("<caption>"));
+    assert!(html.contains("<progress"));
+}
+#[tokio::test]
+async fn assessment_workspace_renders_scoped_results_and_empty_sections() {
+    let (_, app) = assessment_workspace_fixture().await;
+    let response =
+        assessment_workspace_get(&app, "/assessments/runs/100/?tenant_id=99", "AUDITOR").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = assessment_workspace_body(response).await;
+    for value in [
+        "Governance",
+        "April Readiness",
+        "Security Roadmap",
+        "Zur Roadmap",
+        "Alle Durchlaeufe",
+    ] {
+        assert!(html.contains(value), "{value}");
+    }
+    let empty = assessment_workspace_get(&app, "/assessments/runs/101/", "VIEWER").await;
+    assert_eq!(empty.status(), StatusCode::OK);
+    let html = assessment_workspace_body(empty).await;
+    assert!(html.contains("Keine Domain-Bewertungen vorhanden"));
+    assert!(html.contains("Keine gespeicherten Luecken vorhanden"));
+}
+#[tokio::test]
+async fn assessment_workspace_hides_foreign_and_manipulated_ids_and_is_read_only() {
+    let (pool, app) = assessment_workspace_fixture().await;
+    let before: Vec<(i64, String, String)> =
+        sqlx::query_as("SELECT id,status,updated_at FROM wizard_assessmentsession ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    for id in [200, 999, -1, 0] {
+        let response =
+            assessment_workspace_get(&app, &format!("/assessments/runs/{id}/"), "ADMIN").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(!assessment_workspace_body(response)
+            .await
+            .contains("Foreign"));
+    }
+    for path in ["/assessments/runs/", "/assessments/runs/100/"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("x-iscy-tenant-id", "42")
+                    .header("x-iscy-user-id", "7")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+    let after: Vec<(i64, String, String)> =
+        sqlx::query_as("SELECT id,status,updated_at FROM wizard_assessmentsession ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(before, after);
+}
+#[tokio::test]
+async fn assessment_workspace_summary_only_is_explicit_without_legacy_detail_tables() {
+    let (pool, app) = assessment_workspace_fixture().await;
+    sqlx::query("DROP TABLE wizard_domainscore")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE wizard_generatedgap")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = assessment_workspace_get(&app, "/assessments/runs/100/", "AUDITOR").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = assessment_workspace_body(response).await;
+    assert!(html.contains("Die Detailauswertung ist fuer diesen Datenbestand nicht verfuegbar"));
+    assert!(html.contains("gespeicherten Angaben zum Durchlauf"));
+    assert!(!html.contains("Keine gespeicherten Luecken vorhanden"));
+}
+
+#[tokio::test]
+async fn assessment_workspace_escapes_untrusted_results_and_redacts_store_errors() {
+    let (pool, app) = assessment_workspace_fixture().await;
+    let attack = "<script>alert(42)</script>";
+    sqlx::query("UPDATE wizard_assessmentsession SET executive_summary=?1,applicability_reasoning=?1 WHERE tenant_id=42 AND id=100").bind(attack).execute(&pool).await.unwrap();
+    sqlx::query("UPDATE wizard_generatedgap SET description=?1 WHERE session_id=100")
+        .bind(attack)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE wizard_generatedmeasure SET reason=?1 WHERE session_id=100")
+        .bind(attack)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let html = assessment_workspace_body(
+        assessment_workspace_get(&app, "/assessments/runs/100/", "AUDITOR").await,
+    )
+    .await;
+    assert!(!html.contains(attack));
+    assert!(html.contains("&lt;script&gt;alert(42)&lt;/script&gt;"));
+    sqlx::query("DROP TABLE wizard_generatedgap")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let response = assessment_workspace_get(&app, "/assessments/runs/100/", "AUDITOR").await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let html = assessment_workspace_body(response).await;
+    assert!(!html.contains("wizard_generatedgap"));
+    assert!(!html.contains("no such table"));
+}
+#[tokio::test]
+async fn assessment_workspace_handles_missing_store_and_rejects_production_header_spoofing() {
+    let app = app_router();
+    assert_eq!(
+        assessment_workspace_get(&app, "/assessments/runs/", "AUDITOR")
+            .await
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let prod = app_router_with_state(AppState::default().with_security_config(
+        CommunitySecurityConfig {
+            app_mode: AppMode::Production,
+            trust_identity_headers: false,
+            ..CommunitySecurityConfig::default()
+        },
+    ));
+    let response =
+        assessment_workspace_get(&prod, "/assessments/runs/?tenant_id=42&user_id=7", "ADMIN").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = assessment_workspace_body(response).await;
+    assert!(body.contains("untrusted_identity_headers"));
+}
+
 #[tokio::test]
 async fn wizard_sessions_requires_authenticated_tenant_context() {
     let response = app_router()
