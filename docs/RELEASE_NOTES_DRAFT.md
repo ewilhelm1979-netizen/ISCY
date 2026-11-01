@@ -24,6 +24,16 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
 ## Dauerhafte Auditspur fuer lokale Evidence-Downloads
 
+- Dieselbe tenantgebundene Commit-Pruefung gilt jetzt auch fuer den
+  S3-Runtime-Download. Sein bisheriger Ereignistyp `storage_object_downloaded`
+  bleibt erhalten; `storage_object_download_denied` ergaenzt bekannte
+  Ablehnungen. `hash_verified` bildet einen echten Vergleich mit erwartetem
+  Hash ab; historische leere Hash-Metadaten erzeugen keinen falschen PASS.
+- Die Security-Middleware erhaelt das explizite `private, no-store` dieser
+  Antworten und ergaenzt weiter `max-age=0`.
+- S3-Laufzeitlogs enthalten nur Backend, Entscheidung und festen Grund.
+  Benutzer-, Mandanten- und Evidence-IDs bleiben im geschuetzten
+  Datenbank-Audit und werden nicht zusaetzlich ins Prozesslog geschrieben.
 - Beide lokalen `/evidence/{id}/download`-Routen schreiben Entscheidungen
   fuer bekannte tenant-eigene Objekte in `evidence_integrity_event`.
 - Dateibytes werden nur nach genau einem gespeicherten und erfolgreich
@@ -32,7 +42,7 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
   Dateipfade, Titel, Inhalte, E-Mail-Adressen und Sessionwerte werden nicht
   gespeichert. Tenant-/Actor-IDs stammen aus dem validierten Sessionkontext.
 - Keine Migration oder neue Abhaengigkeit. Unauthentifizierte/fremde
-  Objektzugriffe bleiben Runtime-only; S3 bleibt beim bisherigen Auditvertrag.
+  Objektzugriffe erzeugen keine objektbezogene persistente Historie.
 
 ## Eindeutige Herkunft der regelbasierten CVE-Assistenz
 

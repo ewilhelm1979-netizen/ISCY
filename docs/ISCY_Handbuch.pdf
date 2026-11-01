@@ -3,7 +3,7 @@
 << /Type /Catalog /Pages 2 0 R >>
 endobj
 2 0 obj
-<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R 40 0 R 42 0 R 44 0 R 46 0 R 48 0 R 50 0 R 52 0 R 54 0 R 56 0 R 58 0 R 60 0 R 62 0 R 64 0 R 66 0 R 68 0 R 70 0 R 72 0 R 74 0 R 76 0 R 78 0 R] /Count 38 >>
+<< /Type /Pages /Kids [4 0 R 6 0 R 8 0 R 10 0 R 12 0 R 14 0 R 16 0 R 18 0 R 20 0 R 22 0 R 24 0 R 26 0 R 28 0 R 30 0 R 32 0 R 34 0 R 36 0 R 38 0 R 40 0 R 42 0 R 44 0 R 46 0 R 48 0 R 50 0 R 52 0 R 54 0 R 56 0 R 58 0 R 60 0 R 62 0 R 64 0 R 66 0 R 68 0 R 70 0 R 72 0 R 74 0 R 76 0 R 78 0 R 80 0 R] /Count 39 >>
 endobj
 3 0 obj
 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
@@ -5036,7 +5036,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 69 0 R >>
 endobj
 69 0 obj
-<< /Length 4976 >>
+<< /Length 4994 >>
 stream
 BT
 /F1 9 Tf
@@ -5160,11 +5160,54 @@ T*
 T*
 (Unauthentifizierte sowie fehlende/fremde Objekte erzeugen keine objektbezogene) Tj
 T*
-(persistente Historie; ihre sicheren Runtime-Logs bleiben erhalten. Der) Tj
+(persistente Historie; ihre sicheren Runtime-Logs bleiben erhalten.) Tj
 T*
-(S3-Runtime-Download besitzt weiterhin sein bisheriges Best-effort-Ereignis) Tj
+() Tj
 T*
-(und ist von der neuen lokalen Commit-Garantie nicht erfasst.) Tj
+(Der S3-Runtime-Download GET /api/v1/evidence/{evidenceid}/storage/download) Tj
+T*
+(verwendet dieselbe gemeinsame tenantgebundene Commit-Pruefung. Sein) Tj
+T*
+(bisheriger Ereignistyp storageobjectdownloaded bleibt fuer Freigaben) Tj
+T*
+(erhalten; bekannte Ablehnungen werden als storageobjectdownloaddenied) Tj
+T*
+(gespeichert. Rollenfehler, fehlende/unfertige Referenzen, ungueltige kanonische) Tj
+T*
+(Keys, Backend-/GET-Fehler und Hash-Mismatches liefern keine Datei und erhalten) Tj
+T*
+(einen festen Auditgrund. Scheitert das Audit selbst, folgt HTTP 503 statt) Tj
+T*
+(Dateiausgabe. Ein erfolgter Remote-GET kann dadurch bereits stattgefunden) Tj
+T*
+(haben; das Audit ist keine transaktionale Bestaetigung des Storage-Servers.) Tj
+T*
+() Tj
+T*
+(S3-Auditdaten enthalten keine Bucketnamen, Keys, Endpoints oder Secret-Referenzen.) Tj
+T*
+ET
+endstream
+endobj
+70 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 71 0 R >>
+endobj
+71 0 obj
+<< /Length 4912 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
+(hashverified=true bedeutet einen echten Vergleich mit vorhandenem erwartetem) Tj
+T*
+(Hash. Bei historischen leeren Hash-Metadaten bleibt das bisherige Leseverhalten) Tj
+T*
+(erhalten, der Auditwert ist ausdruecklich false. Hash-Mismatches bleiben gesperrt.) Tj
+T*
+(Die Security-Middleware erhaelt private, no-store und ergaenzt max-age=0;) Tj
+T*
+(die allgemeine restriktive Cachevorgabe fuer andere Antworten bleibt erhalten.) Tj
 T*
 () Tj
 T*
@@ -5186,19 +5229,6 @@ T*
 T*
 (Der reproduzierbare Testpfad make object-storage-integration startet eine) Tj
 T*
-ET
-endstream
-endobj
-70 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 71 0 R >>
-endobj
-71 0 obj
-<< /Length 4766 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (versionierte lokale MinIO-Instanz mit ausschliesslich Dummy-Credentials und) Tj
 T*
 (prueft PUT, HEAD, GET, SHA-256, Hash-Mismatch, Object-missing, Access-denied,) Tj
@@ -5313,6 +5343,19 @@ T*
 T*
 (Storage-State, Logs, Datenbanken, .env-Dateien, Zertifikate und Schluessel) Tj
 T*
+ET
+endstream
+endobj
+72 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 73 0 R >>
+endobj
+73 0 obj
+<< /Length 4383 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (sind nicht uploadfaehig. Fremde Pull-Request-Repositories und jede) Tj
 T*
 (fehlgeschlagene Sanitization blockieren den Upload.) Tj
@@ -5343,19 +5386,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-72 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 73 0 R >>
-endobj
-73 0 obj
-<< /Length 4384 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Die Testarchitektur, Budgets, Baseline-Pflege und verbleibenden Single Points) Tj
 T*
 (of Failure sind in docs/PERFORMANCEHAVISUALTESTING.md beschrieben.) Tj
@@ -5470,6 +5500,19 @@ T*
 T*
 (0046rustmachinerycrasafetysecurityfoundation und) Tj
 T*
+ET
+endstream
+endobj
+74 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 75 0 R >>
+endobj
+75 0 obj
+<< /Length 4031 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (0047rustsoacutoverrestoration gehoeren zum nachfolgenden) Tj
 T*
 (V23.7.34-Development-Stand und sind noch nicht Teil des letzten Stable) Tj
@@ -5500,19 +5543,6 @@ T*
 T*
 (Same-Repository-Draft-PRs gegen main die Routen /iscy status,) Tj
 T*
-ET
-endstream
-endobj
-74 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 75 0 R >>
-endobj
-75 0 obj
-<< /Length 4477 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (/iscy review, /iscy fix-ci und /iscy verify. Read-only) Tj
 T*
 (Review/Verify, Workspace-begrenzte Korrekturen, Head-/Diff-Pruefungen und) Tj
@@ -5627,6 +5657,19 @@ T*
 T*
 (Rust-Web-/API-Modul um; V23.7.23 baut Product Security um VEX, SBOM-Diff und CRA-Readiness) Tj
 T*
+ET
+endstream
+endobj
+76 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 77 0 R >>
+endobj
+77 0 obj
+<< /Length 5831 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (aus; V23.7.24 fuegt AI Governance hinzu; V23.7.25 schliesst Agent-Policy-Profile, erwartete) Tj
 T*
 (Flottenabdeckung und aktive Policy-Webhooks an; V23.7.26 ergaenzt versionierte) Tj
@@ -5657,19 +5700,6 @@ T*
 T*
 (Evidence-System anzulegen. Migration 0033rustevidenceintegritydisposition ergaenzt Evidence) Tj
 T*
-ET
-endstream
-endobj
-76 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 77 0 R >>
-endobj
-77 0 obj
-<< /Length 5442 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Integrity & Disposition Phase 1 mit manueller und begrenzter Batch-Re-Hash-Pruefung,) Tj
 T*
 (Legal-Hold-Metadaten, metadata-only Disposition und auditierbaren Integritaetsereignissen.) Tj
@@ -5784,6 +5814,19 @@ T*
 T*
 (ausschliesslich unsicheren aktiven Kandidaten REVIEW und ohne aktive) Tj
 T*
+ET
+endstream
+endobj
+78 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 79 0 R >>
+endobj
+79 0 obj
+<< /Length 4512 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (Korrelation HISTORICAL. Eine spaetere belastbare Beobachtung reaktiviert) Tj
 T*
 (dieselben Datensaetze; historische Provenance bleibt erhalten.) Tj
@@ -5814,19 +5857,6 @@ T*
 T*
 () Tj
 T*
-ET
-endstream
-endobj
-78 0 obj
-<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 79 0 R >>
-endobj
-79 0 obj
-<< /Length 3735 >>
-stream
-BT
-/F1 9 Tf
-42 800 Td
-10 TL
 (Migration 0045rustsoftwareapprovalexceptionpolicy ergaenzt exakte) Tj
 T*
 (tenantgebundene Policies, befristete Exceptions, persistierte passive) Tj
@@ -5941,6 +5971,19 @@ T*
 T*
 (stillschweigend. Der PDF-Snapshot-Test vergleicht das versionierte PDF bytegenau) Tj
 T*
+ET
+endstream
+endobj
+80 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 81 0 R >>
+endobj
+81 0 obj
+<< /Length 271 >>
+stream
+BT
+/F1 9 Tf
+42 800 Td
+10 TL
 (mit der Ausgabe des aktuellen Generators aus diesem Markdown. Wiederholte) Tj
 T*
 (Erzeugung darf keine Drift erzeugen. Historische Releases, Tags,) Tj
@@ -5951,89 +5994,91 @@ ET
 endstream
 endobj
 xref
-0 80
+0 82
 0000000000 65535 f
 0000000009 00000 n
 0000000058 00000 n
-0000000373 00000 n
-0000000443 00000 n
-0000000569 00000 n
-0000004672 00000 n
-0000004798 00000 n
-0000007615 00000 n
-0000007741 00000 n
-0000010608 00000 n
-0000010736 00000 n
-0000013518 00000 n
-0000013646 00000 n
-0000015645 00000 n
-0000015773 00000 n
-0000020215 00000 n
-0000020343 00000 n
-0000023633 00000 n
-0000023761 00000 n
-0000028054 00000 n
-0000028182 00000 n
-0000032429 00000 n
-0000032557 00000 n
-0000037078 00000 n
-0000037206 00000 n
-0000039805 00000 n
-0000039933 00000 n
-0000043431 00000 n
-0000043559 00000 n
-0000047694 00000 n
-0000047822 00000 n
-0000052248 00000 n
-0000052376 00000 n
-0000057392 00000 n
-0000057520 00000 n
-0000062019 00000 n
-0000062147 00000 n
-0000066067 00000 n
-0000066195 00000 n
-0000070196 00000 n
-0000070324 00000 n
-0000074421 00000 n
-0000074549 00000 n
-0000079794 00000 n
-0000079922 00000 n
-0000083868 00000 n
-0000083996 00000 n
-0000088907 00000 n
-0000089035 00000 n
-0000092643 00000 n
-0000092771 00000 n
-0000096112 00000 n
-0000096240 00000 n
-0000100968 00000 n
-0000101096 00000 n
-0000105892 00000 n
-0000106020 00000 n
-0000110862 00000 n
-0000110990 00000 n
-0000115258 00000 n
-0000115386 00000 n
-0000119740 00000 n
-0000119868 00000 n
-0000124235 00000 n
-0000124363 00000 n
-0000128840 00000 n
-0000128968 00000 n
-0000133671 00000 n
-0000133799 00000 n
-0000138827 00000 n
-0000138955 00000 n
-0000143773 00000 n
-0000143901 00000 n
-0000148337 00000 n
-0000148465 00000 n
-0000152994 00000 n
-0000153122 00000 n
-0000158616 00000 n
-0000158744 00000 n
+0000000380 00000 n
+0000000450 00000 n
+0000000576 00000 n
+0000004679 00000 n
+0000004805 00000 n
+0000007622 00000 n
+0000007748 00000 n
+0000010615 00000 n
+0000010743 00000 n
+0000013525 00000 n
+0000013653 00000 n
+0000015652 00000 n
+0000015780 00000 n
+0000020222 00000 n
+0000020350 00000 n
+0000023640 00000 n
+0000023768 00000 n
+0000028061 00000 n
+0000028189 00000 n
+0000032436 00000 n
+0000032564 00000 n
+0000037085 00000 n
+0000037213 00000 n
+0000039812 00000 n
+0000039940 00000 n
+0000043438 00000 n
+0000043566 00000 n
+0000047701 00000 n
+0000047829 00000 n
+0000052255 00000 n
+0000052383 00000 n
+0000057399 00000 n
+0000057527 00000 n
+0000062026 00000 n
+0000062154 00000 n
+0000066074 00000 n
+0000066202 00000 n
+0000070203 00000 n
+0000070331 00000 n
+0000074428 00000 n
+0000074556 00000 n
+0000079801 00000 n
+0000079929 00000 n
+0000083875 00000 n
+0000084003 00000 n
+0000088914 00000 n
+0000089042 00000 n
+0000092650 00000 n
+0000092778 00000 n
+0000096119 00000 n
+0000096247 00000 n
+0000100975 00000 n
+0000101103 00000 n
+0000105899 00000 n
+0000106027 00000 n
+0000110869 00000 n
+0000110997 00000 n
+0000115265 00000 n
+0000115393 00000 n
+0000119747 00000 n
+0000119875 00000 n
+0000124242 00000 n
+0000124370 00000 n
+0000128847 00000 n
+0000128975 00000 n
+0000133678 00000 n
+0000133806 00000 n
+0000138852 00000 n
+0000138980 00000 n
+0000143944 00000 n
+0000144072 00000 n
+0000148507 00000 n
+0000148635 00000 n
+0000152718 00000 n
+0000152846 00000 n
+0000158729 00000 n
+0000158857 00000 n
+0000163421 00000 n
+0000163549 00000 n
 trailer
-<< /Size 80 /Root 1 0 R >>
+<< /Size 82 /Root 1 0 R >>
 startxref
-162531
+163871
 %%EOF

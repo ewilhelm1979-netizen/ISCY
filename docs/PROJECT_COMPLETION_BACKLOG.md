@@ -21,7 +21,7 @@ Bereits umgesetzt sind unter anderem:
   Rollout-Governance ohne Remote-Control,
 - Evidence Integrity, Legal Hold, kontrollierte Disposition sowie
   S3-kompatible Evidence-Storage-Runtime,
-- commit-gepruefte lokale Evidence-Download-Entscheidungen in der bestehenden
+- commit-gepruefte lokale und S3-Evidence-Download-Entscheidungen in der bestehenden
   tenantgebundenen Auditspur; Auditfehler sperren die Dateiausgabe,
 - PostgreSQL 16 als Standardpfad und PostgreSQL 18.4 als getesteter
   logischer Forward-Restore-/Kompatibilitaetspfad,
@@ -69,12 +69,13 @@ fuer MinIO-basierte CI-Gates und `RUSTSEC-2026-0285` sind im aktuellen
    Zeilenlimits sowie sparse Verarbeitung. Fuer riskantere Einsatzumgebungen
    bleiben Malware-Scanning und/oder Parser-Sandboxing als
    Betreiber-/Produktoption zu evaluieren.
-5. **Download-Audit auf weitere Storagepfade ausdehnen.** Lokale Downloads
-   speichern Freigaben und Ablehnungen fuer bekannte tenant-eigene Objekte
-   vor der Antwort dauerhaft; fehlendes Audit bedeutet HTTP 503 ohne Datei.
-   Der S3-Runtime-Pfad besitzt weiterhin sein bisheriges Best-effort-Ereignis
-   und ist nicht durch diese neue Commit-Garantie abgedeckt. Unauthentifizierte
-   sowie fehlende/fremde Objekte bleiben ausschliesslich im Runtime-Security-Log.
+5. **Durables Download-Audit im Development umgesetzt.** Lokale und
+   S3-Runtime-Downloads speichern Entscheidungen fuer bekannte tenant-eigene
+   Objekte vor der Antwort dauerhaft; fehlendes Audit bedeutet HTTP 503 ohne
+   Datei. Unauthentifizierte sowie fehlende/fremde Objekte erhalten keine
+   objektbezogene persistente Historie. Das Audit belegt Antwortvorbereitung,
+   keine Zustellung; S3 weist einen Vergleich mit erwartetem Hash nur dann
+   aus, wenn er tatsaechlich erfolgte. Zielumgebungs-/Storageabnahme bleibt P0.
 
 ## Prioritaet P2 – Skalierung und neue Integrationen
 

@@ -50,6 +50,7 @@ pub mod cve_store;
 pub mod dashboard_store;
 pub mod db_admin;
 pub mod evidence_artifact_storage;
+pub mod evidence_download_audit;
 pub mod evidence_object_storage;
 pub mod evidence_s3_runtime;
 pub mod evidence_s3_store;
@@ -128,6 +129,7 @@ use evidence_artifact_storage::{
     EvidenceArtifactDisposition, EvidenceArtifactDrill, EvidenceArtifactMetadata,
     EvidenceArtifactRef, FilesystemEvidenceArtifactStorage,
 };
+use evidence_download_audit::{record_download_decision, DownloadBackend, DownloadDecision};
 use evidence_object_storage::{
     EvidenceObjectDrillResult, EvidenceObjectReference, EvidenceObjectReferenceAttachRequest,
     EvidenceStorageBackendConfig, EvidenceStorageBackendConfigRequest, EvidenceStorageBackendEvent,
@@ -14913,14 +14915,7 @@ async fn evidence_s3_download(
         .evidence_integrity_item(context.tenant_id, evidence_id)
         .await
     {
-        Ok(Some(item)) if s3_download_allowed(&context, &item) => item,
-        Ok(Some(_)) => {
-            return evidence_api_error(
-                StatusCode::FORBIDDEN,
-                "evidence_download_forbidden",
-                "Diese Evidence-Schutzklasse darf mit der aktuellen Rolle nicht heruntergeladen werden.",
-            )
-        }
+        Ok(Some(item)) => item,
         Ok(None) => return evidence_not_found_api_response(),
         Err(_) => {
             return evidence_api_error(
@@ -14930,24 +14925,50 @@ async fn evidence_s3_download(
             )
         }
     };
+    if !s3_download_allowed(&context, &item) {
+        return audited_s3_download_response(
+            store, &context, evidence_id,
+            DownloadDecision::Denied("insufficient_sensitivity_permission"), false,
+            evidence_api_error(
+                StatusCode::FORBIDDEN, "evidence_download_forbidden",
+                "Diese Evidence-Schutzklasse darf mit der aktuellen Rolle nicht heruntergeladen werden."
+            ),
+        ).await;
+    }
     let runtime = match store
         .s3_runtime_object(context.tenant_id, evidence_id)
         .await
     {
         Ok(Some(runtime)) if runtime.upload_status == "upload_completed" => runtime,
         Ok(_) => {
-            return evidence_api_error(
-                StatusCode::NOT_FOUND,
-                "object_reference_not_found",
-                "S3-Evidence-Artefakt ist nicht verfuegbar.",
+            return audited_s3_download_response(
+                store,
+                &context,
+                evidence_id,
+                DownloadDecision::Denied("object_reference_not_found"),
+                false,
+                evidence_api_error(
+                    StatusCode::NOT_FOUND,
+                    "object_reference_not_found",
+                    "S3-Evidence-Artefakt ist nicht verfuegbar.",
+                ),
             )
+            .await;
         }
         Err(_) => {
-            return evidence_api_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "database_error",
-                "S3-Evidence-Referenz konnte nicht sicher gelesen werden.",
+            return audited_s3_download_response(
+                store,
+                &context,
+                evidence_id,
+                DownloadDecision::Denied("object_reference_error"),
+                false,
+                evidence_api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "database_error",
+                    "S3-Evidence-Referenz konnte nicht sicher gelesen werden.",
+                ),
             )
+            .await;
         }
     };
     let (backend, client) =
@@ -14955,36 +14976,61 @@ async fn evidence_s3_download(
             .await
         {
             Ok(value) => value,
-            Err(error) => return s3_runtime_error_response(error),
+            Err(error) => {
+                return audited_s3_download_response(
+                    store,
+                    &context,
+                    evidence_id,
+                    DownloadDecision::Denied("backend_unavailable"),
+                    false,
+                    s3_runtime_error_response(error),
+                )
+                .await
+            }
         };
     let object_key = match runtime.canonical_key(&backend.key_prefix) {
         Ok(key) => key,
-        Err(_) => return s3_runtime_error_response(S3RuntimeError::InvalidObjectKey),
+        Err(_) => {
+            return audited_s3_download_response(
+                store,
+                &context,
+                evidence_id,
+                DownloadDecision::Denied("invalid_object_key"),
+                false,
+                s3_runtime_error_response(S3RuntimeError::InvalidObjectKey),
+            )
+            .await
+        }
     };
     let object = match client.get(&object_key).await {
         Ok(object) => object,
-        Err(error) => return s3_runtime_error_response(error),
+        Err(error) => {
+            return audited_s3_download_response(
+                store,
+                &context,
+                evidence_id,
+                DownloadDecision::Denied("object_fetch_failed"),
+                false,
+                s3_runtime_error_response(error),
+            )
+            .await
+        }
     };
     if !runtime.object_sha256.is_empty()
         && !object.sha256.eq_ignore_ascii_case(&runtime.object_sha256)
     {
-        return s3_runtime_error_response(S3RuntimeError::HashMismatch);
-    }
-    let _ = store
-        .record_evidence_integrity_event(
-            context.tenant_id,
+        return audited_s3_download_response(
+            store,
+            &context,
             evidence_id,
-            Some(context.user_id),
-            "storage_object_downloaded",
-            serde_json::json!({
-                "storage_backend": "s3_compatible",
-                "size_bytes": object.size_bytes,
-                "hash_verified": true,
-                "object_key_exposed": false
-            }),
-            "",
+            DownloadDecision::Denied("hash_mismatch"),
+            false,
+            s3_runtime_error_response(S3RuntimeError::HashMismatch),
         )
         .await;
+    }
+    let size_bytes = object.bytes.len();
+    let hash_verified = !runtime.object_sha256.is_empty();
     let download_name = sanitize_filename(&format!("evidence-{evidence_id}-{}", item.title));
     let mut response = (StatusCode::OK, Bytes::from(object.bytes)).into_response();
     response
@@ -15001,7 +15047,54 @@ async fn evidence_s3_download(
     )) {
         response.headers_mut().insert(CONTENT_DISPOSITION, value);
     }
-    response
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    audited_s3_download_response(
+        store,
+        &context,
+        evidence_id,
+        DownloadDecision::Prepared(size_bytes),
+        hash_verified,
+        response,
+    )
+    .await
+}
+
+async fn audited_s3_download_response(
+    store: &EvidenceStore,
+    context: &AuthenticatedTenantContext,
+    evidence_id: i64,
+    decision: DownloadDecision,
+    hash_verified: bool,
+    response: Response,
+) -> Response {
+    let result = record_download_decision(
+        store,
+        context,
+        evidence_id,
+        decision,
+        DownloadBackend::S3Compatible { hash_verified },
+    )
+    .await;
+    let (label, reason) = if matches!(result, Ok(true)) {
+        decision.labels()
+    } else {
+        ("deny", "audit_persistence_failed")
+    };
+    // Object and principal attribution belongs to the protected database
+    // audit, not the process log. These labels contain only fixed metadata.
+    eprintln!("security_event=evidence_download storage_backend=s3_compatible decision={label} reason={reason}");
+    if matches!(result, Ok(true)) {
+        response
+    } else {
+        evidence_api_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "evidence_audit_unavailable",
+            "Evidence-Download konnte nicht sicher protokolliert werden.",
+        )
+    }
 }
 
 async fn evidence_s3_verify(

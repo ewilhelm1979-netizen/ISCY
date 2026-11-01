@@ -399,10 +399,17 @@ pub async fn community_security_headers(
     let headers = response.headers_mut();
     headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
-    headers.insert(
-        CACHE_CONTROL,
-        HeaderValue::from_static("no-store, max-age=0"),
-    );
+    // Keep the explicit private download contract while enforcing no-store
+    // and zero age. All other policies still receive the restrictive default.
+    let cache_control = if headers
+        .get(CACHE_CONTROL)
+        .is_some_and(|value| value == "private, no-store")
+    {
+        "private, no-store, max-age=0"
+    } else {
+        "no-store, max-age=0"
+    };
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static(cache_control));
     headers.insert(
         "permissions-policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),

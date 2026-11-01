@@ -2069,9 +2069,24 @@ an den Client (`response_delivery_confirmed=false`). Es enthaelt nur
 Tenant/Evidence/Actor, Zeitpunkt, Entscheidung, festen Grund und bei Freigabe
 die Byteanzahl. Pfade, Dateinamen, Titel, Inhalte und Sessionwerte fehlen.
 Unauthentifizierte sowie fehlende/fremde Objekte erzeugen keine objektbezogene
-persistente Historie; ihre sicheren Runtime-Logs bleiben erhalten. Der
-S3-Runtime-Download besitzt weiterhin sein bisheriges Best-effort-Ereignis
-und ist von der neuen lokalen Commit-Garantie nicht erfasst.
+persistente Historie; ihre sicheren Runtime-Logs bleiben erhalten.
+
+Der S3-Runtime-Download `GET /api/v1/evidence/{evidence_id}/storage/download`
+verwendet dieselbe gemeinsame tenantgebundene Commit-Pruefung. Sein
+bisheriger Ereignistyp `storage_object_downloaded` bleibt fuer Freigaben
+erhalten; bekannte Ablehnungen werden als `storage_object_download_denied`
+gespeichert. Rollenfehler, fehlende/unfertige Referenzen, ungueltige kanonische
+Keys, Backend-/GET-Fehler und Hash-Mismatches liefern keine Datei und erhalten
+einen festen Auditgrund. Scheitert das Audit selbst, folgt HTTP 503 statt
+Dateiausgabe. Ein erfolgter Remote-GET kann dadurch bereits stattgefunden
+haben; das Audit ist keine transaktionale Bestaetigung des Storage-Servers.
+
+S3-Auditdaten enthalten keine Bucketnamen, Keys, Endpoints oder Secret-Referenzen.
+`hash_verified=true` bedeutet einen echten Vergleich mit vorhandenem erwartetem
+Hash. Bei historischen leeren Hash-Metadaten bleibt das bisherige Leseverhalten
+erhalten, der Auditwert ist ausdruecklich false. Hash-Mismatches bleiben gesperrt.
+Die Security-Middleware erhaelt `private, no-store` und ergaenzt `max-age=0`;
+die allgemeine restriktive Cachevorgabe fuer andere Antworten bleibt erhalten.
 
 Remote-DELETE wird niemals als freie Object-, Prefix-, Batch- oder
 Bucket-Operation angeboten. Der bestehende Disposition-Execute-Pfad prueft
