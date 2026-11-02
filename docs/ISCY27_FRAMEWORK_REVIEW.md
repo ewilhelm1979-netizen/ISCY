@@ -13,6 +13,11 @@ historischen Befund der genannten Codebasis. Eigene Anpassungen, die zwei
 gemischten Begruendungen und die Kennzahl-/Vollstaendigkeitsfragen bleiben
 gesondert zu pruefen.
 
+Die [Kennzahlentrennung](ISCY27_ASSESSMENT_METRICS.md) ist inzwischen als
+additives Lesemodell umgesetzt: Selbstauskunft, Evidence-Verknuepfung,
+N/A und nicht erfasste gepruefte Wirksamkeit werden unterschieden.
+Pruefprozess, Stufenanker und begruendete Anwendbarkeit bleiben weitere Gates.
+
 ## Bewertung
 
 Die 27 Bereiche sind eine brauchbare eigene Steuerungsstruktur: Ziele,

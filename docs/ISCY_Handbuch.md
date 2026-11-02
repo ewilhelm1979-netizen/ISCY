@@ -234,7 +234,15 @@ NIS2-Referenzfehler und Kennzahlgrenzen. Migration 0049 korrigiert zehn
 unveraenderte Originalzuordnungen fuer neue und bestehende Datenbanken.
 Eigene Anpassungen bleiben erhalten und brauchen eine gesonderte Pruefung;
 Referenzkollisionen brechen die Korrektur vollstaendig ab. Operatorhinweise:
-`docs/ISCY27_REFERENCE_CORRECTION.md`. Die Kennzahlfragen bleiben offen.
+`docs/ISCY27_REFERENCE_CORRECTION.md`.
+
+Die Control-Ansicht trennt nun Umsetzung und Wirksamkeit laut Angabe von
+Evidence-Verknuepfungen. Gepruefte Wirksamkeit bleibt **nicht erfasst**,
+solange kein eigener Control-Pruefprozess vorliegt. Gruppen zeigen N/A und
+gespeicherte Reife ohne N/A; fehlende Statusstaende zaehlen nicht als
+Reife 0. Neue API-Kennzahlen und Kompatibilitaetsgrenzen:
+`docs/ISCY27_ASSESSMENT_METRICS.md`. Fachliche Stufenanker, begruendete
+Anwendbarkeit und ein ausdruecklicher Wirksamkeitsreview bleiben offen.
 
 W1: Im Assessment-Register **Unternehmens-Wizard starten / fortsetzen**
 waehlen, einen Entwurf anlegen, bekannte Angaben erfassen und **Entwurf
