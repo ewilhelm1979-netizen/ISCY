@@ -218,6 +218,20 @@ gefuhrte Bewertungsablauf bleibt offen. Sein erster Schreibschritt ist nun
 unter `/assessments/company-wizard/` separat wiederhergestellt: Die Organisationsprofil-Pflege unter
 `/organizations/` ist vorhanden, ersetzt den Wizard aber nicht.
 
+Der Unternehmens-Wizard unterstuetzt nationale Unternehmen ebenso wie
+Unternehmen mit moeglichen grenzueberschreitenden Taetigkeiten. Ein einzelnes
+Land ist ein vollwertiger Fall. Fuer einen spaeteren SoA-Entwurf kommen zu
+Profil und Betroffenheit der festgelegte ISMS-Scope, relevante Anforderungen,
+Risiken/Risikobehandlung und die begruendete Control-Auswahl hinzu. Diese
+Verbindung ist noch nicht implementiert; der heutige SoA-Generator erzeugt
+einen separaten Katalogentwurf. Recherchierter Zielpfad und Grenzen:
+`docs/COMPANY_CONTEXT_TO_SOA_RESEARCH.md`.
+
+ISCY-27 ist die eigene Arbeitsstruktur fuer 27 Steuerungsbereiche. Die
+Heatmap zaehlt deklarierte Status; sie bestaetigt keine Normkonformitaet.
+Die Fachpruefung `docs/ISCY27_FRAMEWORK_REVIEW.md` dokumentiert konkrete
+NIS2-Referenzfehler, Kennzahlgrenzen und den noch offenen Korrekturpfad.
+
 W1: Im Assessment-Register **Unternehmens-Wizard starten / fortsetzen**
 waehlen, einen Entwurf anlegen, bekannte Angaben erfassen und **Entwurf
 speichern**. Die Liste oeffnet gespeicherte Entwuerfe erneut. Erfasst werden

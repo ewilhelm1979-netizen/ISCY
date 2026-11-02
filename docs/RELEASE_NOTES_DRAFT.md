@@ -22,6 +22,19 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## Fachliche Praezisierung: Unternehmenskontext bis zur SoA
+
+- Wizard-Bezeichnung schliesst nationale Unternehmen ausdruecklich ein;
+  grenzueberschreitende Taetigkeiten sind ein Kontextmerkmal
+- primaerquellenbasierte Recherche und Codeabgleich fuer Scope,
+  Anforderungen, Risiken, Controls und SoA; fehlende Modulverbindungen,
+  Referenzkatalog-Abdeckung und naechste Abnahmefaelle dokumentiert
+- ISCY-27 mit 27 Controls / 82 Mappings inventarisiert; konkrete
+  NIS2-Referenzerrata und Grenzen der Status-/Reifegradkennzahlen samt
+  spaeterem versioniertem Reparaturpfad dokumentiert
+- keine neue Rechtsregel, SoA-Auswahlentscheidung, Migration oder Freigabe;
+  bestehende Schreib- und Tenantgrenzen erhalten
+
 ## Unternehmens-Wizard W1: Profil erfassen und fortsetzen
 
 - neuer Einstieg `/assessments/company-wizard/` fuer tenantgebundene

@@ -1,8 +1,19 @@
-# Internationaler Unternehmens- und Betroffenheits-Wizard
+# Unternehmens- und Betroffenheits-Wizard
 
-Stand: W1-Wiederherstellung auf Basis von Rust-main `3c5d349b860817f8a2a1b044400bd6f826591f8a`.
+Stand: W1-Wiederherstellung; fachliche Praezisierung vom 02.11.2026 auf Main `b18afb256219f27176ac654b084a82b978a7a3af`.
 Der urspruengliche Unternehmens-Wizard ist **nicht vollstaendig wiederhergestellt**.
 Der Agenten-Wizard `/zero-trust/onboarding/` ist ein eigenstaendiger Ablauf.
+
+Der Wizard richtet sich an nationale Unternehmen und an solche mit
+moeglichen oder bestaetigten grenzueberschreitenden Taetigkeiten. Ein
+nationaler Fall braucht keinen zweiten Rechtsraum. Unbekannte Angaben
+bleiben offen. Die fruehere Kurzbezeichnung „international“ war zu eng.
+
+Eine SoA ist das Zielartefakt des ISO-orientierten Pfads. Sie benoetigt
+zusaetzlich Scope, relevante Anforderungen, Risikobehandlung und
+begruendete Controls. Der recherchierte Zielpfad samt Codebefunden und
+W2a/W2b/W2c-Abnahmen steht in
+[Unternehmenskontext bis zur SoA](COMPANY_CONTEXT_TO_SOA_RESEARCH.md).
 
 ## Belegte Ausgangsbasis
 

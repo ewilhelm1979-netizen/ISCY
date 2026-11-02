@@ -39,9 +39,14 @@ fehlgeschlagene Compose-Pruefungen brechen den Start ab.
 
 Agenten: vorhandener Wizard `/zero-trust/onboarding/`, danach
 [lokale Vorpruefung mit geschuetzter Token-Datei](deploy/agent/README.md).
-Der internationale Unternehmens-Wizard kann unter `/assessments/company-wizard/`
+Der Unternehmens- und Betroffenheits-Wizard fuer nationale und
+grenzueberschreitende Kontexte kann unter `/assessments/company-wizard/`
 Profile als Entwurf speichern und fortsetzen. Fachliche Betroffenheit und
 Ergebnisgenerierung sind [noch offen](docs/COMPANY_WIZARD_RESTORATION.md).
+Der [recherchierte Zielpfad zur SoA](docs/COMPANY_CONTEXT_TO_SOA_RESEARCH.md)
+verbindet zusaetzlich Scope, Anforderungen, Risiken und begruendete Controls.
+Die [ISCY-27-Fachpruefung](docs/ISCY27_FRAMEWORK_REVIEW.md) dokumentiert
+konkrete Referenzkorrekturen und Grenzen der Status-/Reifegradkennzahlen.
 
 Die Weboberfläche ist anschließend unter `http://127.0.0.1:9000/login/` erreichbar.
 

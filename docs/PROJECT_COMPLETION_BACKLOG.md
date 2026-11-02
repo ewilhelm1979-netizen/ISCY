@@ -108,3 +108,25 @@ Profil-/Fortsetzen-Schritt des Unternehmens-Wizards ist als W1 wiederhergestellt
 fachliche Betroffenheit und Ergebnisgenerierung (W2/W3) bleiben offen. Funktionen bis
 einschliesslich Migration `0045` sind bereits im Stable-Tag V23.7.33
 enthalten.
+
+
+## Praezisierung 02.11.2026: nationaler Kontext und Herleitung der SoA
+
+Naechste fachliche Prioritaet ist die Verbindung der vorhandenen Module:
+W2a strukturierte Fakten/Anforderungsindikation, W2b ISMS-Scope/Risiken,
+W2c begruendete Controls/Referenzabgleich, danach W3 gebundener SoA-Entwurf
+und regulaerer Versions-/Freigabeprozess. Ein nationales Unternehmen ist
+ein vollwertiger Anwendungsfall; Auslandsaktivitaeten sind optional oder
+noch unbekannt. Die heutige SoA-Erzeugung ist noch ein separater
+Katalogentwurf. Die mitgelieferte ISO-Seed-Baseline belegt keinen
+vollstaendigen Annex-A-Abgleich.
+
+Begruendung und Quellen:
+[Recherche Unternehmenskontext bis SoA](COMPANY_CONTEXT_TO_SOA_RESEARCH.md).
+Kein neuer vollstaendiger ISMS-/Rechts-/Zertifizierungsclaim.
+
+Vor W2c: [ISCY-27-Fachpruefung](ISCY27_FRAMEWORK_REVIEW.md) abarbeiten.
+NIS2-Referenzen mit versioniertem Bestandsdaten-Upgrade korrigieren;
+deklarierte Umsetzung, Nachweis und gepruefte Wirksamkeit in den Kennzahlen
+trennen. Das 27-Bereiche-Modell bleibt die Arbeitsstruktur, der konkrete
+Referenzabgleich und die SoA bleiben gesonderte Artefakte.
