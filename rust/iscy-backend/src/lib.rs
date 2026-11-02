@@ -46,6 +46,7 @@ pub mod asset_store;
 pub mod auth_store;
 pub mod catalog_store;
 pub mod change_store;
+pub mod company_wizard;
 pub mod control_store;
 pub mod cve_store;
 pub mod dashboard_store;
@@ -34117,7 +34118,7 @@ async fn web_assessments(
         .join("");
     let body = format!(
         r#"
-        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p><a href="/assessments/runs/">Assessment-Durchlaeufe ansehen</a><a href="/assessments/soa/">Statement of Applicability</a></section>
+        <section class="hero compact"><h1>Assessments</h1><p>Tenant {} · {} Assessments · {} Measures</p><a href="/assessments/runs/">Assessment-Durchlaeufe ansehen</a><a href="/assessments/company-wizard/">Unternehmens-Wizard starten / fortsetzen</a><a href="/assessments/soa/">Statement of Applicability</a></section>
         <section class="metrics">
           {}
           {}
@@ -47948,6 +47949,7 @@ pub fn app_router_with_state(state: AppState) -> Router {
     let security_config = state.security_config.clone();
     Router::new()
         .merge(soa::routes())
+        .merge(company_wizard::routes())
         .route("/health", get(health_live))
         .route("/health/ready", get(health_ready))
         .route("/health/live", get(health_live))

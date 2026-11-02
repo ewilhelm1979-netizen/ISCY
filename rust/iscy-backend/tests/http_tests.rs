@@ -1185,8 +1185,8 @@ async fn rust_status_page_reports_database_migration_and_build_status() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let html = String::from_utf8(body.to_vec()).unwrap();
     assert!(html.contains("Datenbank-Migrationen"));
-    assert!(html.contains("0047_rust_soa_cutover_restoration"));
-    assert!(html.contains("47/47 angewendet"));
+    assert!(html.contains("0048_rust_company_wizard_profile"));
+    assert!(html.contains("48/48 angewendet"));
     assert!(html.contains("Version"));
     assert!(html.contains("Commit"));
 }
@@ -18174,7 +18174,8 @@ async fn rust_db_admin_migrates_and_seeds_demo_web_cutover_database() {
             "0044_rust_vulnerability_hygiene_lifecycle",
             "0045_rust_software_approval_exception_policy",
             "0046_rust_machinery_cra_safety_security_foundation",
-            "0047_rust_soa_cutover_restoration"
+            "0047_rust_soa_cutover_restoration",
+            "0048_rust_company_wizard_profile"
         ]
     );
     assert!(

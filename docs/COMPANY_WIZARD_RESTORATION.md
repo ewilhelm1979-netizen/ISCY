@@ -1,6 +1,6 @@
 # Internationaler Unternehmens- und Betroffenheits-Wizard
 
-Stand dieser Bestandsaufnahme: Rust-main `a4382bff90cc7c8080a3b60d8f8c208f86b6bca0`.
+Stand: W1-Wiederherstellung auf Basis von Rust-main `3c5d349b860817f8a2a1b044400bd6f826591f8a`.
 Der urspruengliche Unternehmens-Wizard ist **nicht vollstaendig wiederhergestellt**.
 Der Agenten-Wizard `/zero-trust/onboarding/` ist ein eigenstaendiger Ablauf.
 
@@ -24,14 +24,13 @@ Ein neuer Durchlauf kann darueber nicht angelegt, schrittweise beantwortet,
 fortgesetzt oder neu bewertet werden. Frische Rust-Datenbanken besitzen
 nicht alle historischen Detailtabellen; die Leseseite kennzeichnet diese
 Grenze. Bestehende Antworten/Ergebnisse muessen bei jeder Migration erhalten
-bleiben. Die bestehende Onboarding-CTA zur Betroffenheitsanalyse belegt
-keinen vorhandenen schreibenden Wizard.
+bleiben. Der neue W1-Einstieg ist davon getrennt: `/assessments/company-wizard/`.
 
 ## Naechste fachliche Meilensteine
 
 | Meilenstein | Konkretes Abnahmeziel | Status |
 | --- | --- | --- |
-| W1 Profil und Fortsetzen | Mehrere operative Laender, Niederlassungen/Marktbezug und Sektor/Unternehmensdaten erfassen; tenantgebunden speichern, Entwurf fortsetzen, unvollstaendige Angaben sichtbar halten | offen |
+| W1 Profil und Fortsetzen | Mehrere operative Laender, Niederlassungen/Marktbezug und Sektor/Unternehmensdaten erfassen; tenantgebunden speichern, Entwurf fortsetzen, unvollstaendige Angaben sichtbar halten | implementiert; Review/CI separat |
 | W2 Fachliche Betroffenheit | Je Rechtsraum/Regelwerk versionierte Kriterien und offizielle Quellen mit Gueltigkeitsdatum; Antworten, Begruendung und offene Prueffragen sichtbar; fehlende Daten ergeben keine pauschale Nichtbetroffenheit | offen |
 | W3 Ergebnis und Umsetzung | Nachvollziehbare Indikation, menschliche Pruefung, priorisierte Massnahmen und explizite Report-/Roadmap-Uebernahme; historische Ergebnisse bleiben versioniert | offen |
 
@@ -49,3 +48,47 @@ Unterbrechung/Fortsetzung und Erhalt alter Daten auf SQLite/PostgreSQL.
 Die Bedienabnahme fuehrt einen echten neuen Unternehmensdurchlauf vom
 Profil bis zum begruendeten Ergebnis aus. Die bestehende lesende Abnahme
 ersetzt das nicht.
+
+
+## W1 benutzen
+
+Voraussetzung ist die regulär angewendete Migration 0048 ueber den
+bestehenden Deployment-/Migrationsweg. Es findet keine automatische
+Produktivaktivierung durch den Wizard statt.
+
+1. Mit einer schreibberechtigten ISCY-Session unter **Assessments →
+   Unternehmens-Wizard starten / fortsetzen** einen neuen Entwurf anlegen.
+2. Die betrachtete Rechtseinheit, Hauptsitz, operative Laender, konkrete
+   Taetigkeit und bekannten Groessenangaben erfassen. Bezugsjahr/Stichtag,
+   Unternehmensverbund und gegebenenfalls Waehrungsumrechnung dokumentieren.
+3. Produkt-, KI-, OT- und Automotive-Kontext jeweils mit Ja, Nein oder
+   Noch unbekannt beantworten. Leere Zahlen bleiben unbekannt; explizite
+   Nullwerte und Nein werden davon unterschieden.
+4. **Entwurf speichern**. Die Liste zeigt maximal die letzten 50 Entwuerfe
+   dieses Mandanten und fuehrt zur gespeicherten Fassung zurueck, auch nach
+   Schliessen/Neuoefnen der Datenbank.
+
+Laendernamen beziehungsweise Laendercodes werden in W1 als deklarierte
+Angaben gespeichert. Es gibt noch keine automatische Rechtsraumzuordnung.
+Finanzwerte sind Dezimaltexte in Mio. EUR mit maximal zwei Nachkommastellen;
+W1 rechnet keine Waehrungen um und leitet keine gesetzlichen Schwellen ab.
+Unbekannte Werte nicht schaetzen. Auch voll ausgefuellte Basisangaben
+bedeuten weder eine abgeschlossene Bewertung noch Nichtbetroffenheit.
+
+Neue Entwuerfe besitzen einen eigenen Snapshot, der das Organisations-
+Stammprofil und fruehere Assessment-Ergebnisse nicht aendert. Migration
+`0048_rust_company_wizard_profile` ergaenzt Speicher und Audit fuer SQLite
+und PostgreSQL. Speichern verwendet einen Versionsvergleich und sperrt
+abgeschlossene/fremde Schritte. Validierungsfehler zeigen die eingegebenen
+Werte erneut; bei Versionskonflikten bleiben die eingereichten Werte lesbar,
+und die aktuelle gespeicherte Fassung muss bewusst neu geladen werden.
+Auditmetadaten (Akteur, Aktion, Version) werden atomar mitgeschrieben;
+ein Auditfehler rollt die Aenderung zurueck. Es entsteht damit kein
+vollstaendiges Archiv aller Zwischenfassungen eines Entwurfs.
+
+Leser/Auditoren sehen die gespeicherten Angaben ohne Schreibformular.
+Schreiben erfordert eine gueltige ISCY-Session, Schreibrolle und den
+zweckgebundenen Formulartoken. Fremde Mandanten-/Akteur-IDs aus URL oder
+Formular ersetzen den authentifizierten Kontext nicht.
+W2/W3 bleiben offen; W1 erzeugt keine Bewertungen, Massnahmen, Reports,
+Roadmap-Aufgaben oder automatische Governance-Entscheidungen.

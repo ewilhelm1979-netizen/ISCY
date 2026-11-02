@@ -22,6 +22,19 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## Unternehmens-Wizard W1: Profil erfassen und fortsetzen
+
+- neuer Einstieg `/assessments/company-wizard/` fuer tenantgebundene
+  Unternehmensentwuerfe mit Hauptsitz/operativen Laendern, Taetigkeit,
+  Groessen-/Bezugsangaben sowie Produkt-/KI-/OT-/Automotive-Kontext
+- unbekannte Zahlen/Antworten bleiben von Null/Nein unterscheidbar;
+  Fehler behalten die Eingaben, Versionskonflikte verhindern Ueberschreiben
+- additive Migration `0048_rust_company_wizard_profile` fuer SQLite und
+  PostgreSQL; transaktionale Auditmetadaten, abgeschlossene Staende gesperrt
+- Session-/Rollen-/CSRF-Pruefung; keine Aenderung des Organisations-Stammprofils
+  oder historischer Ergebnisse. Fachliche Betroffenheitsregeln und
+  Ergebnis-/Massnahmenuebernahme bleiben W2/W3 und werden nicht vorgetaeuscht.
+
 ## Vorhandene Assessment-Durchlaeufe im Web
 
 - neue authentifizierte Leseseiten `/assessments/runs/` und
