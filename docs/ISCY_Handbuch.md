@@ -230,7 +230,11 @@ einen separaten Katalogentwurf. Recherchierter Zielpfad und Grenzen:
 ISCY-27 ist die eigene Arbeitsstruktur fuer 27 Steuerungsbereiche. Die
 Heatmap zaehlt deklarierte Status; sie bestaetigt keine Normkonformitaet.
 Die Fachpruefung `docs/ISCY27_FRAMEWORK_REVIEW.md` dokumentiert konkrete
-NIS2-Referenzfehler, Kennzahlgrenzen und den noch offenen Korrekturpfad.
+NIS2-Referenzfehler und Kennzahlgrenzen. Migration 0049 korrigiert zehn
+unveraenderte Originalzuordnungen fuer neue und bestehende Datenbanken.
+Eigene Anpassungen bleiben erhalten und brauchen eine gesonderte Pruefung;
+Referenzkollisionen brechen die Korrektur vollstaendig ab. Operatorhinweise:
+`docs/ISCY27_REFERENCE_CORRECTION.md`. Die Kennzahlfragen bleiben offen.
 
 W1: Im Assessment-Register **Unternehmens-Wizard starten / fortsetzen**
 waehlen, einen Entwurf anlegen, bekannte Angaben erfassen und **Entwurf

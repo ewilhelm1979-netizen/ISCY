@@ -529,7 +529,7 @@ async fn company_migration_is_restartable_and_preserves_historical_results() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(version, "0048_rust_company_wizard_profile");
+    assert_eq!(version, "0049_rust_iscy27_nis2_reference_correction");
 }
 
 #[test]
@@ -668,7 +668,7 @@ async fn postgres_company_profile_migration_cas_and_audit_rollback() {
         .unwrap();
     assert_eq!(
         outcome.applied_migrations.last(),
-        Some(&"0048_rust_company_wizard_profile")
+        Some(&"0049_rust_iscy27_nis2_reference_correction")
     );
     sqlx::raw_sql("INSERT INTO organizations_tenant(id,name,slug) VALUES(42,'PG company','pg-company'),(99,'PG foreign','pg-foreign'); INSERT INTO accounts_user(id,tenant_id,username,role) VALUES(7,42,'writer','CONTRIBUTOR'),(8,99,'foreign','CONTRIBUTOR');").execute(&pool).await.unwrap();
     let store = WizardStore::Postgres(pool.clone());
