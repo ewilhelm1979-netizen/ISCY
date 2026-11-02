@@ -485,7 +485,7 @@ async fn index(State(state): State<AppState>, headers: HeaderMap) -> Response {
     page(
         &context,
         &format!(
-            r#"<section class="hero compact"><h1>Internationaler Unternehmens-Wizard</h1><p>1. Unternehmensprofil · 2. Betroffenheit (noch offen) · 3. Ergebnis und Massnahmen (noch offen)</p><p>Speichern Sie bekannte Unternehmensdaten und setzen Sie den Entwurf spaeter fort. Dieser Schritt erzeugt keine rechtliche Betroffenheitsentscheidung.</p><a href="/assessments/runs/">Vorhandene Assessment-Ergebnisse</a></section><section class="panel wide"><h2>Unternehmensentwuerfe</h2>{create}<p>Die letzten 50 Entwuerfe dieses Mandanten:</p><ul>{rows}</ul></section>"#
+            r#"<section class="hero compact"><h1>Unternehmens- und Betroffenheits-Wizard</h1><p>Fuer nationale Unternehmen und solche mit grenzueberschreitenden Taetigkeiten.</p><p>1. Unternehmensprofil · 2. Betroffenheit (noch offen) · 3. Ergebnis und Massnahmen (noch offen)</p><p>Speichern Sie bekannte Unternehmensdaten und setzen Sie den Entwurf spaeter fort. Dieser Schritt erzeugt keine rechtliche Betroffenheitsentscheidung.</p><a href="/assessments/runs/">Vorhandene Assessment-Ergebnisse</a></section><section class="panel wide"><h2>Unternehmensentwuerfe</h2>{create}<p>Die letzten 50 Entwuerfe dieses Mandanten:</p><ul>{rows}</ul></section>"#
         ),
     )
 }
