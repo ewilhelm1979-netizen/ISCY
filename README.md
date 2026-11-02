@@ -50,7 +50,9 @@ Use `./scripts/easy_start.sh --native check` or `--compose check` to select a
 runtime explicitly; a failed Compose preflight stops the launch.
 Agent deployment starts with the existing `/zero-trust/onboarding/` wizard;
 [offline agent checks](deploy/agent/README.md) now accept private token files.
-The international company/applicability wizard is still being restored;
+The international company wizard now supports resumable profile drafts at
+`/assessments/company-wizard/`; regulatory evaluation and results remain open.
+See
 [its status and scope](docs/COMPANY_WIZARD_RESTORATION.md) are separate from
 agent onboarding.
 

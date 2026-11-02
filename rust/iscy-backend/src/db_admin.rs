@@ -300,6 +300,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: crate::soa::SQLITE_SCHEMA,
         postgres_sql: crate::soa::POSTGRES_SCHEMA,
     },
+    Migration {
+        version: "0048_rust_company_wizard_profile",
+        sqlite_sql: crate::company_wizard::SQLITE_SCHEMA,
+        postgres_sql: crate::company_wizard::POSTGRES_SCHEMA,
+    },
 ];
 
 const SQLITE_MACHINERY_CRA_SAFETY_SECURITY_SCHEMA: &str = r#"

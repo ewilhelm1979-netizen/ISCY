@@ -39,8 +39,9 @@ fehlgeschlagene Compose-Pruefungen brechen den Start ab.
 
 Agenten: vorhandener Wizard `/zero-trust/onboarding/`, danach
 [lokale Vorpruefung mit geschuetzter Token-Datei](deploy/agent/README.md).
-Der internationale Unternehmens-/Betroffenheits-Wizard ist ein eigener,
-[noch offener Wiederherstellungsmeilenstein](docs/COMPANY_WIZARD_RESTORATION.md).
+Der internationale Unternehmens-Wizard kann unter `/assessments/company-wizard/`
+Profile als Entwurf speichern und fortsetzen. Fachliche Betroffenheit und
+Ergebnisgenerierung sind [noch offen](docs/COMPANY_WIZARD_RESTORATION.md).
 
 Die Weboberfläche ist anschließend unter `http://127.0.0.1:9000/login/` erreichbar.
 

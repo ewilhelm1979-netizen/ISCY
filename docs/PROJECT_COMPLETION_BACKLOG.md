@@ -104,6 +104,7 @@ Der aktuelle V23.7.34-Development-Schwerpunkt ist Machinery & CRA
 Safety-Security Co-Engineering (Migration `0046`) sowie die tenantgebundene
 SoA-Rust-Wiederherstellung fuer SQLite und PostgreSQL (Migration `0047`).
 Die lesenden Assessment-Durchlaufansichten sind wieder verfuegbar; der
-separate schreibende Assessment-Wizard bleibt offen. Funktionen bis
+Profil-/Fortsetzen-Schritt des Unternehmens-Wizards ist als W1 wiederhergestellt;
+fachliche Betroffenheit und Ergebnisgenerierung (W2/W3) bleiben offen. Funktionen bis
 einschliesslich Migration `0045` sind bereits im Stable-Tag V23.7.33
 enthalten.
