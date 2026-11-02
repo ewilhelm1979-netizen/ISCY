@@ -22,6 +22,15 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## ISCY-27: NIS2-Referenzkorrektur
+
+- additive Migration `0049_rust_iscy27_nis2_reference_correction` fuer
+  SQLite/PostgreSQL korrigiert zehn unveraenderte Originalzuordnungen
+- exakter Inhalts-/Control-Abgleich erhaelt eigene Anpassungen; ein
+  Konflikt verwirft alle Korrekturen und verhindert das Migrationsreceipt
+- historische Seeds und Mandantenbewertungen bleiben erhalten; Details,
+  Grenzen und Operatorhinweise in `docs/ISCY27_REFERENCE_CORRECTION.md`
+
 ## Fachliche Praezisierung: Unternehmenskontext bis zur SoA
 
 - Wizard-Bezeichnung schliesst nationale Unternehmen ausdruecklich ein;

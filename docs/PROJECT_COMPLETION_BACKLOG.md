@@ -126,7 +126,10 @@ Begruendung und Quellen:
 Kein neuer vollstaendiger ISMS-/Rechts-/Zertifizierungsclaim.
 
 Vor W2c: [ISCY-27-Fachpruefung](ISCY27_FRAMEWORK_REVIEW.md) abarbeiten.
-NIS2-Referenzen mit versioniertem Bestandsdaten-Upgrade korrigieren;
-deklarierte Umsetzung, Nachweis und gepruefte Wirksamkeit in den Kennzahlen
-trennen. Das 27-Bereiche-Modell bleibt die Arbeitsstruktur, der konkrete
+Die zehn eindeutigen NIS2-Referenzfehler sind fuer unveraenderte
+Originalzuordnungen durch [Migration 0049](ISCY27_REFERENCE_CORRECTION.md)
+korrigiert. Eigene Anpassungen und zwei gemischte Begruendungen bleiben
+gesondert offen. Naechster Schritt: deklarierte Umsetzung, Nachweis und
+gepruefte Wirksamkeit in den Kennzahlen trennen.
+Das 27-Bereiche-Modell bleibt die Arbeitsstruktur, der konkrete
 Referenzabgleich und die SoA bleiben gesonderte Artefakte.

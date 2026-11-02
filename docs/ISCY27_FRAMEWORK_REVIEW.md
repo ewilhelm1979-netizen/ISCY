@@ -6,6 +6,13 @@ Untersucht wurden die eingecheckten Control-Seeds, deren Datenmodell,
 Kennzahlen und die Verbindung zum geplanten Unternehmens-/SoA-Pfad.
 Produktive Mandantendaten wurden nicht gelesen oder veraendert.
 
+Fortschreibung: Die zehn eindeutigen NIS2-Errata werden inzwischen durch
+[Migration 0049](ISCY27_REFERENCE_CORRECTION.md) fuer unveraenderte
+Originalzuordnungen korrigiert. Die folgende Analyse dokumentiert den
+historischen Befund der genannten Codebasis. Eigene Anpassungen, die zwei
+gemischten Begruendungen und die Kennzahl-/Vollstaendigkeitsfragen bleiben
+gesondert zu pruefen.
+
 ## Bewertung
 
 Die 27 Bereiche sind eine brauchbare eigene Steuerungsstruktur: Ziele,
