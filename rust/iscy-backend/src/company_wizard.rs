@@ -424,26 +424,26 @@ async fn access(
     state: &AppState,
     headers: &HeaderMap,
     write: bool,
-) -> Result<(AuthenticatedTenantContext, WizardStore), Response> {
+) -> Result<(AuthenticatedTenantContext, WizardStore), Box<Response>> {
     let context = authenticated_tenant_context(state, headers)
         .await
-        .map_err(auth_error_response)?;
+        .map_err(|err| Box::new(auth_error_response(err)))?;
     let read = context.can_write()
         || context.has_permission("wizard.view_assessmentsession")
         || ["AUDITOR", "READ_ONLY", "VIEWER"]
             .iter()
             .any(|r| context.has_role(r));
     if (write && !context.can_write()) || (!write && !read) {
-        return Err(error(
+        return Err(Box::new(error(
             StatusCode::FORBIDDEN,
             "Diese Rolle darf den Unternehmensentwurf nicht bearbeiten beziehungsweise lesen.",
-        ));
+        )));
     }
     let store = state.wizard_store.clone().ok_or_else(|| {
-        error(
+        Box::new(error(
             StatusCode::SERVICE_UNAVAILABLE,
             "Unternehmensentwuerfe sind derzeit nicht verfuegbar.",
-        )
+        ))
     })?;
     Ok((context, store))
 }
@@ -470,7 +470,7 @@ fn valid_form_token(state: &AppState, headers: &HeaderMap, provided: &str) -> bo
 async fn index(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let (context, store) = match access(&state, &headers, false).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let drafts = match store.company_drafts(context.tenant_id).await {
         Ok(v) => v,
@@ -501,7 +501,7 @@ async fn create(
 ) -> Response {
     let (context, store) = match access(&state, &headers, true).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_form_token(&state, &headers, &form.csrf_token) {
         return error(
@@ -552,7 +552,7 @@ fn tri_state(name: &str, label: &str, value: Option<bool>) -> String {
 async fn edit(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>) -> Response {
     let (context, store) = match access(&state, &headers, false).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     let draft = match store.company_draft(context.tenant_id, id).await {
         Ok(Some(v)) => v,
@@ -801,7 +801,7 @@ async fn save(
 ) -> Response {
     let (context, store) = match access(&state, &headers, true).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err(r) => return *r,
     };
     if !valid_form_token(&state, &headers, &form.csrf_token) {
         return error(
