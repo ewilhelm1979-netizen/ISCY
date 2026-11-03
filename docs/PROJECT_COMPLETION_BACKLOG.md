@@ -134,5 +134,10 @@ trennen nun deklarierte Umsetzung, Nachweisangabe, Evidence-Verknuepfung
 und nicht erfasste gepruefte Wirksamkeit. Naechste Gates sind ein eigener
 belegter Wirksamkeitsreview, begruendete Anwendbarkeit und die W2a-Fakten-
 und Anforderungsindikation.
+
+W2a-Faktenbaustein (03.11.2026): Ziel und geografischen Kontext im Profil
+erfassen und [gespeicherte Kontextfakten pruefen](COMPANY_CONTEXT_REVIEW.md).
+Regelwerksbezogene Anforderungen/Quellen, begruendete Indikation und
+fachliche Freigabe bleiben offen; dies ist keine vollstaendige W2a-Abnahme.
 Das 27-Bereiche-Modell bleibt die Arbeitsstruktur, der konkrete
 Referenzabgleich und die SoA bleiben gesonderte Artefakte.

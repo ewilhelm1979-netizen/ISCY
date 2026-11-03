@@ -4,6 +4,11 @@ Stand: W1-Wiederherstellung; fachliche Praezisierung vom 02.11.2026 auf Main `b1
 Der urspruengliche Unternehmens-Wizard ist **nicht vollstaendig wiederhergestellt**.
 Der Agenten-Wizard `/zero-trust/onboarding/` ist ein eigenstaendiger Ablauf.
 
+Fortschreibung 03.11.2026: Ziel und geografischer Kontext werden jetzt
+ausdruecklich erfasst; eine revisionsbezogene lesende
+[Kontextpruefung](COMPANY_CONTEXT_REVIEW.md) zeigt Fakten und offene Angaben.
+Dies ist ein erster W2a-Faktenbaustein, keine Betroffenheitsregel oder SoA-Ableitung.
+
 Der Wizard richtet sich an nationale Unternehmen und an solche mit
 moeglichen oder bestaetigten grenzueberschreitenden Taetigkeiten. Ein
 nationaler Fall braucht keinen zweiten Rechtsraum. Unbekannte Angaben

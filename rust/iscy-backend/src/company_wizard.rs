@@ -23,6 +23,10 @@ pub const ROOT: &str = "/assessments/company-wizard/";
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CompanyProfile {
+    #[serde(default)]
+    pub assessment_goal: String,
+    #[serde(default)]
+    pub activity_context: String,
     pub company_name: String,
     pub headquarters_country: String,
     pub operation_countries: Vec<String>,
@@ -65,6 +69,20 @@ impl std::error::Error for DraftError {}
 
 impl CompanyProfile {
     pub fn normalize(mut self) -> anyhow::Result<Self> {
+        self.assessment_goal = self.assessment_goal.trim().to_ascii_uppercase();
+        self.activity_context = self.activity_context.trim().to_ascii_uppercase();
+        if !GOALS
+            .iter()
+            .any(|(value, _)| *value == self.assessment_goal)
+            || !ACTIVITY_CONTEXTS
+                .iter()
+                .any(|(value, _)| *value == self.activity_context)
+        {
+            return Err(DraftError::Invalid(
+                "Ungueltiges Ziel oder ungueltige geografische Einordnung.",
+            )
+            .into());
+        }
         for (text, max) in [
             (&mut self.company_name, 255),
             (&mut self.headquarters_country, 80),
@@ -384,6 +402,10 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route(ROOT, get(index).post(create))
         .route("/assessments/company-wizard/{id}/", get(edit).post(save))
+        .route(
+            "/assessments/company-wizard/{id}/context/",
+            get(context_review),
+        )
         .layer(DefaultBodyLimit::max(65536))
 }
 
@@ -549,6 +571,152 @@ fn tri_state(name: &str, label: &str, value: Option<bool>) -> String {
         .collect::<String>();
     format!(r#"<label>{label}<select name="{name}">{options}</select></label>"#)
 }
+
+const GOALS: &[(&str, &str)] = &[
+    ("", "Noch offen"),
+    ("ORIENTATION", "Betroffenheitsorientierung"),
+    ("ISO_READINESS", "ISO-Readiness"),
+    ("ISMS", "ISMS-Aufbau / Weiterentwicklung"),
+];
+const ACTIVITY_CONTEXTS: &[(&str, &str)] = &[
+    ("", "Noch unbekannt"),
+    ("NATIONAL", "Nationale Taetigkeit"),
+    ("CROSS_BORDER", "Grenzueberschreitende Taetigkeit"),
+];
+fn selection(name: &str, label: &str, selected: &str, choices: &[(&str, &str)]) -> String {
+    let options = choices
+        .iter()
+        .map(|(value, caption)| {
+            format!(
+                "<option value=\"{}\"{}>{}</option>",
+                html_escape(value),
+                if *value == selected { " selected" } else { "" },
+                html_escape(caption)
+            )
+        })
+        .collect::<String>();
+    format!(
+        "<label>{}<select name=\"{}\">{options}</select></label>",
+        html_escape(label),
+        html_escape(name)
+    )
+}
+
+async fn context_review(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> Response {
+    let (context, store) = match access(&state, &headers, false).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let draft = match store.company_draft(context.tenant_id, id).await {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return error(
+                StatusCode::NOT_FOUND,
+                "Unternehmensentwurf wurde nicht gefunden.",
+            )
+        }
+        Err(err) => return store_error(err),
+    };
+    let p = &draft.profile;
+    let caption = |value: &str, choices: &[(&str, &str)]| {
+        choices
+            .iter()
+            .find(|(key, _)| *key == value && !key.is_empty())
+            .map(|(_, text)| (*text).to_string())
+            .unwrap_or_default()
+    };
+    let flag = |value: Option<bool>| {
+        value
+            .map(|value| if value { "Ja" } else { "Nein" }.to_string())
+            .unwrap_or_default()
+    };
+    let facts = [
+        ("Ziel des Durchlaufs", caption(&p.assessment_goal, GOALS)),
+        (
+            "Geografische Einordnung laut Angabe",
+            caption(&p.activity_context, ACTIVITY_CONTEXTS),
+        ),
+        ("Betrachtete Rechtseinheit", p.company_name.clone()),
+        ("Hauptsitz", p.headquarters_country.clone()),
+        ("Operative Laender", p.operation_countries.join(", ")),
+        (
+            "Niederlassungen / Maerkte / Einheitenbezug",
+            p.geographic_scope.clone(),
+        ),
+        ("Sektor und konkrete Taetigkeit", p.sector.clone()),
+        (
+            "Mitarbeiterzahl",
+            p.employee_count
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+        ),
+        (
+            "Umsatz in Mio. EUR",
+            p.annual_revenue_million.clone().unwrap_or_default(),
+        ),
+        (
+            "Bilanz in Mio. EUR",
+            p.balance_sheet_million.clone().unwrap_or_default(),
+        ),
+        (
+            "Bezugsjahr / Verbund / Umrechnung",
+            p.size_reference.clone(),
+        ),
+        (
+            "Kritische Dienste / Leistungen",
+            p.critical_services.clone(),
+        ),
+        (
+            "Lieferkettenrolle / verbundene Unternehmen",
+            p.supply_chain_role.clone(),
+        ),
+        (
+            "Digitale Produkte / Software",
+            flag(p.develops_digital_products),
+        ),
+        ("KI-Systeme", flag(p.uses_ai_systems)),
+        ("OT-/IACS-Kontext", flag(p.ot_iacs_scope)),
+        ("Automotive-Kontext", flag(p.automotive_scope)),
+    ];
+    let mut open = 0;
+    let rows = facts
+        .iter()
+        .map(|(label, value)| {
+            let missing = value.trim().is_empty();
+            open += usize::from(missing);
+            format!(
+                "<tr><th scope=\"row\">{}</th><td>{}</td><td>{}</td></tr>",
+                html_escape(label),
+                if missing {
+                    "Unbekannt / noch offen".to_string()
+                } else {
+                    html_escape(value)
+                },
+                if missing {
+                    "Offen"
+                } else {
+                    "Erfasst laut Angabe"
+                }
+            )
+        })
+        .collect::<String>();
+    let next = match p.assessment_goal.as_str() {
+        "ISO_READINESS" | "ISMS" => "Fuer den ISO-/ISMS-Pfad: Scope, relevante Anforderungen und Risikobehandlung festlegen; erst daraus notwendige Controls und den SoA-Entwurf ableiten.",
+        "ORIENTATION" => "Fuer die Orientierung: Rechtsraeume, konkrete Taetigkeiten, Groessen-/Gruppenbezug und Ausnahmen je Regelwerk fachlich pruefen.",
+        _ => "Zunaechst das Ziel des Durchlaufs festlegen: Orientierung, ISO-Readiness oder ISMS-Aufbau.",
+    };
+    page(
+        &context,
+        &format!(
+            r#"<section class="hero compact"><h1>Unternehmenskontext pruefen</h1><p>Entwurf {id} · gespeicherte Profilrevision {} · {open} offene Angaben</p><p>Ziel und geografische Einordnung sind Angaben des Mandanten. Ein nationales Unternehmen ist ein vollwertiger Fall; unbekannte Auslandsaktivitaet bedeutet nicht Nein.</p><a href="{ROOT}{id}/">Profil ergaenzen / fortsetzen</a> · <a href="{ROOT}">Alle Entwuerfe</a></section><section class="panel wide"><h2>Gespeicherte Kontextfakten</h2><table><caption>Faktenstand dieser Profilrevision</caption><thead><tr><th>Angabe</th><th>Wert</th><th>Erfassungsstand</th></tr></thead><tbody>{rows}</tbody></table><p>Erfasst bedeutet weder fachlich bestaetigt noch vollstaendig fuer eine Betroffenheitsentscheidung. Null und Nein sind eigenstaendige Angaben; leere Werte bleiben offen. Laenderangaben werden nicht automatisch einem Rechtsraum zugeordnet.</p></section><section class="panel wide"><h2>Naechste fachliche Pruefung</h2><p>{next}</p><p>Gesetzliche, vertragliche und geschaeftliche Anforderungen mit Quelle, Geltungsstand, Einheitenbezug und Begruendung erfassen. Bei grenzueberschreitender Taetigkeit Niederlassungen und Zielmaerkte je Rechtsraum betrachten. Produkt-/KI-/OT-/Automotive-Angaben brauchen die konkrete Rolle und Taetigkeit.</p><p>Diese Ansicht erzeugt keine Betroffenheitsentscheidung, Freigabe, SoA oder Massnahme und veraendert keinen gespeicherten Stand.</p></section>"#,
+            draft.revision
+        ),
+    )
+}
 async fn edit(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<i64>) -> Response {
     let (context, store) = match access(&state, &headers, false).await {
         Ok(v) => v,
@@ -579,6 +747,18 @@ fn render_editor(
     let stored = ProfileForm::from_draft(draft);
     let f = submitted.unwrap_or(&stored);
     let mut fields = String::new();
+    fields += &selection(
+        "assessment_goal",
+        "Ziel des Durchlaufs",
+        &f.assessment_goal,
+        GOALS,
+    );
+    fields += &selection(
+        "activity_context",
+        "Geografische Einordnung laut Angabe",
+        &f.activity_context,
+        ACTIVITY_CONTEXTS,
+    );
     fields += &input(
         "company_name",
         "Unternehmen / betrachtete Rechtseinheit",
@@ -693,7 +873,7 @@ fn render_editor(
     page(
         context,
         &format!(
-            r#"<section class="hero compact"><h1>Unternehmensprofil · Entwurf {id}</h1><p>Gespeicherte Version {} · Schritt 1: Profil</p><a href="{ROOT}">Alle Unternehmensentwuerfe</a></section><section class="panel wide">{notice}<p role="status">Im gespeicherten Entwurf noch offene Basisangaben: {}. Leere Werte und „Noch unbekannt“ ergeben keine Nichtbetroffenheit.</p><p>Laenderangaben werden als Ihre Eingaben gespeichert. Rechtsraumzuordnung, Groessen-/Gruppenregeln und konkrete Pflichten sind noch fachlich zu pruefen. Das Organisations-Stammprofil und fruehere Ergebnisse werden nicht veraendert.</p>{form}</section>"#,
+            r#"<section class="hero compact"><h1>Unternehmensprofil · Entwurf {id}</h1><p>Gespeicherte Version {} · Schritt 1: Profil</p><a href="{ROOT}">Alle Unternehmensentwuerfe</a> · <a href="{ROOT}{id}/context/">Gespeicherten Unternehmenskontext pruefen</a></section><section class="panel wide">{notice}<p role="status">Im gespeicherten Entwurf noch offene Basisangaben: {}. Leere Werte und „Noch unbekannt“ ergeben keine Nichtbetroffenheit.</p><p>Laenderangaben werden als Ihre Eingaben gespeichert. Rechtsraumzuordnung, Groessen-/Gruppenregeln und konkrete Pflichten sind noch fachlich zu pruefen. Das Organisations-Stammprofil und fruehere Ergebnisse werden nicht veraendert.</p>{form}</section>"#,
             draft.revision,
             if missing.is_empty() {
                 "keine; fachliche Einordnung steht noch aus".to_owned()
@@ -708,6 +888,10 @@ fn render_editor(
 struct ProfileForm {
     csrf_token: String,
     revision: i64,
+    #[serde(default)]
+    assessment_goal: String,
+    #[serde(default)]
+    activity_context: String,
     company_name: String,
     headquarters_country: String,
     operation_countries: String,
@@ -746,6 +930,8 @@ impl ProfileForm {
         Self {
             csrf_token: String::new(),
             revision: draft.revision,
+            assessment_goal: p.assessment_goal.clone(),
+            activity_context: p.activity_context.clone(),
             company_name: p.company_name.clone(),
             headquarters_country: p.headquarters_country.clone(),
             operation_countries: p.operation_countries.join("\n"),
@@ -765,6 +951,8 @@ impl ProfileForm {
     }
     fn profile(&self) -> anyhow::Result<CompanyProfile> {
         Ok(CompanyProfile {
+            assessment_goal: self.assessment_goal.clone(),
+            activity_context: self.activity_context.clone(),
             company_name: self.company_name.clone(),
             headquarters_country: self.headquarters_country.clone(),
             operation_countries: self

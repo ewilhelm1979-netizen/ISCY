@@ -22,6 +22,16 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## Unternehmens-Wizard: Ziel und Kontextpruefung
+
+- validierte optionale Profilangaben fuer Orientierung/ISO-Readiness/ISMS
+  und noch unbekannte/nationale/grenzueberschreitende Taetigkeit
+- neue lesende tenantgebundene Kontextpruefung an der gespeicherten Revision;
+  offene Angaben, 0 und Nein bleiben unterscheidbar
+- vorhandene Profil-CAS-/CSRF-/Auditgrenzen erhalten; keine Migration oder
+  neue Rechtsentscheidung; aeltere JSON-Profile lesbar, Downgradegrenze dokumentiert
+- Bedienung und Grenzen in `docs/COMPANY_CONTEXT_REVIEW.md`
+
 ## ISCY-27: Aussagekraeftige Bewertungskennzahlen
 
 - additive `assessment_metrics` fuer Library und Gruppen trennen deklarierte

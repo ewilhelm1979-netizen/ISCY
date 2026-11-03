@@ -674,6 +674,8 @@ async fn postgres_company_profile_migration_cas_and_audit_rollback() {
     let store = WizardStore::Postgres(pool.clone());
     let id = store.create_company_draft(42, 7).await.unwrap().unwrap();
     let profile = CompanyProfile {
+        assessment_goal: "ISO_READINESS".to_owned(),
+        activity_context: "CROSS_BORDER".to_owned(),
         operation_countries: vec!["DE".to_owned(), "CH".to_owned()],
         annual_revenue_million: Some("1.20".to_owned()),
         ..CompanyProfile::default()
@@ -731,4 +733,214 @@ async fn postgres_company_profile_migration_cas_and_audit_rollback() {
         .is_err());
     drop(store);
     pool.close().await;
+}
+
+#[tokio::test]
+async fn national_iso_context_roundtrips_and_review_keeps_zero_no_and_unknown_distinct() {
+    let (app, pool, token) = fixture().await;
+    let (id, csrf) = create(&app, &pool, &token).await;
+    let mut fields = payload(&csrf, 1);
+    for (key, value) in &mut fields {
+        match *key {
+            "operation_countries" | "headquarters_country" => *value = "DE".into(),
+            "employee_count" => *value = "0".into(),
+            "uses_ai_systems" => *value = "no".into(),
+            _ => {}
+        }
+    }
+    fields.push(("assessment_goal", "ISO_READINESS".into()));
+    fields.push(("activity_context", "NATIONAL".into()));
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &format!("{ROOT}{id}/"),
+            Some(&token),
+            encode(&fields)
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    let store = WizardStore::from_sqlite_pool(pool.clone());
+    let draft = store.company_draft(42, id).await.unwrap().unwrap();
+    assert_eq!(draft.profile.assessment_goal, "ISO_READINESS");
+    assert_eq!(draft.profile.activity_context, "NATIONAL");
+    assert_eq!(draft.profile.operation_countries, vec!["DE"]);
+    let before = snapshot(&pool).await;
+    let (status, html) = request(
+        &app,
+        "GET",
+        &format!("{ROOT}{id}/context/"),
+        Some(&token),
+        String::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    for text in [
+        "Profilrevision 2",
+        "ISO-Readiness",
+        "Nationale Taetigkeit",
+        "<th scope=\"row\">Mitarbeiterzahl</th><td>0</td>",
+        "<th scope=\"row\">KI-Systeme</th><td>Nein</td>",
+        "<th scope=\"row\">Digitale Produkte / Software</th><td>Unbekannt / noch offen</td>",
+        "Scope, relevante Anforderungen und Risikobehandlung",
+        "&lt;script&gt;unsafe&lt;/script&gt;",
+    ] {
+        assert!(html.contains(text), "missing {text}");
+    }
+    assert!(!html.contains("<script>unsafe</script>"));
+    assert_eq!(snapshot(&pool).await, before);
+}
+
+#[tokio::test]
+async fn context_review_enforces_real_sessions_roles_tenants_and_read_only_methods() {
+    let (app, pool, token) = fixture().await;
+    let (id, _) = create(&app, &pool, &token).await;
+    let path = format!("{ROOT}{id}/context/");
+    let auth = AuthStore::from_sqlite_pool(pool.clone());
+    let foreign = auth.create_session(99, 8).await.unwrap().unwrap().token;
+    let forbidden = auth.create_session(42, 10).await.unwrap().unwrap().token;
+    let reader = auth.create_session(42, 9).await.unwrap().unwrap().token;
+    let before = snapshot(&pool).await;
+    assert_eq!(
+        request(&app, "GET", &path, None, String::new()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(&app, "GET", &path, Some(&forbidden), String::new())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(&app, "GET", &path, Some(&foreign), String::new())
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{path}?tenant_id=99&user_id=8"))
+                .header("authorization", format!("Bearer {reader}"))
+                .header("x-iscy-tenant-id", "99")
+                .header("x-iscy-user-id", "8")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{path}?tenant_id=99&user_id=8"))
+                .header("authorization", format!("Bearer {reader}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cache_control = response.headers()["cache-control"].to_str().unwrap();
+    for required in ["private", "no-store"] {
+        assert!(cache_control
+            .split(',')
+            .map(str::trim)
+            .any(|value| value == required));
+    }
+    assert_eq!(
+        request(&app, "POST", &path, Some(&token), String::new())
+            .await
+            .0,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            &format!("{ROOT}999999/context/"),
+            Some(&token),
+            String::new()
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(snapshot(&pool).await, before);
+    sqlx::query(
+        "UPDATE wizard_assessmentsession SET status='COMPLETED',current_step='results' WHERE id=?1",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        request(&app, "GET", &path, Some(&reader), String::new())
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn legacy_profiles_default_to_open_context_and_invalid_choices_never_change_a_draft() {
+    let legacy = serde_json::to_value(CompanyProfile::default()).unwrap();
+    let mut old = legacy.as_object().unwrap().clone();
+    old.remove("assessment_goal");
+    old.remove("activity_context");
+    let restored: CompanyProfile = serde_json::from_value(Value::Object(old.clone())).unwrap();
+    assert_eq!(restored.assessment_goal, "");
+    assert_eq!(restored.activity_context, "");
+    let normalized = CompanyProfile {
+        assessment_goal: " iso_readiness ".into(),
+        activity_context: " national ".into(),
+        ..CompanyProfile::default()
+    }
+    .normalize()
+    .unwrap();
+    assert_eq!(normalized.assessment_goal, "ISO_READINESS");
+    assert_eq!(normalized.activity_context, "NATIONAL");
+    let (app, pool, token) = fixture().await;
+    let (id, csrf) = create(&app, &pool, &token).await;
+    sqlx::query("UPDATE wizard_companyprofile SET profile_json=?1 WHERE session_id=?2")
+        .bind(Value::Object(old).to_string())
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = snapshot(&pool).await;
+    let (status, body) = request(
+        &app,
+        "GET",
+        &format!("{ROOT}{id}/context/"),
+        Some(&token),
+        String::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Zunaechst das Ziel des Durchlaufs festlegen"));
+    for (key, value) in [
+        ("assessment_goal", "CERTIFIED"),
+        ("activity_context", "GLOBAL"),
+    ] {
+        let mut fields = payload(&csrf, 1);
+        fields.push((key, value.into()));
+        assert_eq!(
+            request(
+                &app,
+                "POST",
+                &format!("{ROOT}{id}/"),
+                Some(&token),
+                encode(&fields)
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(snapshot(&pool).await, before);
+    }
 }
