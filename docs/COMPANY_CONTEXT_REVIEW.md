@@ -1,7 +1,8 @@
 # Unternehmens-Wizard: Ziel und Kontext pruefen
 
-Stand: 03.11.2026. Dies ist der erste Faktenbaustein von W2a; die
-regelwerksbezogene Betroffenheitsindikation bleibt ein weiterer Meilenstein.
+Stand: 03.11.2026. Der W2a-Faktenbaustein enthaelt nun zusaetzlich
+[versionierte Anforderungs-Pruefhinweise](COMPANY_REQUIREMENT_SCREENING.md).
+Die bestaetigte fallbezogene Betroffenheitsentscheidung bleibt ein weiterer Meilenstein.
 
 ## Bedienung
 

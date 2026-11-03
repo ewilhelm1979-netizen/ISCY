@@ -9,6 +9,10 @@ ausdruecklich erfasst; eine revisionsbezogene lesende
 [Kontextpruefung](COMPANY_CONTEXT_REVIEW.md) zeigt Fakten und offene Angaben.
 Dies ist ein erster W2a-Faktenbaustein, keine Betroffenheitsregel oder SoA-Ableitung.
 
+Die Kontextansicht ergaenzt jetzt drei [versionierte Pruefhinweise mit Quellen](COMPANY_REQUIREMENT_SCREENING.md).
+Sie unterscheiden Planung, positive Hinweise und offene Sachverhalte;
+fallbezogene Rechtsraum-/Rollenpruefung und bestaetigte Entscheidungen bleiben offen.
+
 Der Wizard richtet sich an nationale Unternehmen und an solche mit
 moeglichen oder bestaetigten grenzueberschreitenden Taetigkeiten. Ein
 nationaler Fall braucht keinen zweiten Rechtsraum. Unbekannte Angaben
