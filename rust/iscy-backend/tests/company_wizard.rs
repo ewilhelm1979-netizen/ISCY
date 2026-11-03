@@ -785,11 +785,67 @@ async fn national_iso_context_roundtrips_and_review_keeps_zero_no_and_unknown_di
         "<th scope=\"row\">KI-Systeme</th><td>Nein</td>",
         "<th scope=\"row\">Digitale Produkte / Software</th><td>Unbekannt / noch offen</td>",
         "Scope, relevante Anforderungen und Risikobehandlung",
+        "Versionierte Anforderungs-Pruefhinweise",
+        "Kriterienversion W2A-2026-11-03.1",
+        "data-screening-rule=\"ISO_ISMS_GOAL_V1\" data-screening-status=\"PLANNING_CHOICE\"",
+        "data-screening-rule=\"DE_BSIG_SIZE_SIGNAL_V1\" data-screening-status=\"OPEN\"",
+        "data-screening-rule=\"EU_CRA_PRODUCT_SIGNAL_V1\" data-screening-status=\"OPEN\"",
+        "https://www.gesetze-im-internet.de/bsig_2025/__28.html",
+        "Quellenabruf 2026-11-03",
         "&lt;script&gt;unsafe&lt;/script&gt;",
     ] {
         assert!(html.contains(text), "missing {text}");
     }
     assert!(!html.contains("<script>unsafe</script>"));
+    assert_eq!(snapshot(&pool).await, before);
+}
+
+#[tokio::test]
+async fn requirement_hints_follow_the_saved_revision_without_writing_decisions() {
+    let (app, pool, token) = fixture().await;
+    let (id, _) = create(&app, &pool, &token).await;
+    let store = WizardStore::from_sqlite_pool(pool.clone());
+    let profile = CompanyProfile {
+        employee_count: Some(50),
+        develops_digital_products: Some(true),
+        ..Default::default()
+    };
+    assert!(store
+        .save_company_draft(42, 7, id, 1, profile)
+        .await
+        .unwrap());
+    let before = snapshot(&pool).await;
+    let (status, body) = request(
+        &app,
+        "GET",
+        &format!("{ROOT}{id}/context/"),
+        Some(&token),
+        String::new(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Profilrevision 2"));
+    for rule in ["DE_BSIG_SIZE_SIGNAL_V1", "EU_CRA_PRODUCT_SIGNAL_V1"] {
+        assert!(body.contains(&format!(
+            "data-screening-rule=\"{rule}\" data-screening-status=\"REVIEW_HINT\""
+        )));
+    }
+    assert_eq!(snapshot(&pool).await, before);
+    assert!(store
+        .save_company_draft(42, 7, id, 2, CompanyProfile::default())
+        .await
+        .unwrap());
+    let before = snapshot(&pool).await;
+    let (_, body) = request(
+        &app,
+        "GET",
+        &format!("{ROOT}{id}/context/"),
+        Some(&token),
+        String::new(),
+    )
+    .await;
+    assert!(body.contains("Profilrevision 3"));
+    assert!(!body.contains("data-screening-status=\"REVIEW_HINT\""));
     assert_eq!(snapshot(&pool).await, before);
 }
 

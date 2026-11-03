@@ -141,3 +141,9 @@ Regelwerksbezogene Anforderungen/Quellen, begruendete Indikation und
 fachliche Freigabe bleiben offen; dies ist keine vollstaendige W2a-Abnahme.
 Das 27-Bereiche-Modell bleibt die Arbeitsstruktur, der konkrete
 Referenzabgleich und die SoA bleiben gesonderte Artefakte.
+
+W2a-Pruefhinweise (03.11.2026): drei [versionierte Kriterien](COMPANY_REQUIREMENT_SCREENING.md)
+fuer ISO-/ISMS-Ziel, BSIG-Groessenhinweis und CRA-Produktkontext mit Quellen,
+Begruendung und offenen Fragen. Keine Rechtsraumzuordnung, Freistellung
+oder persistierte Reviewentscheidung. Strukturierte Rechtsraum-/Einrichtungs-/
+Rollenangaben und bestaetigte Anforderungsentscheidungen bleiben naechste Gates.

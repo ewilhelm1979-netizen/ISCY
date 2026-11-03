@@ -1,4 +1,5 @@
 //! W1: resumable company-profile drafts. No regulatory decision is inferred.
+mod screening;
 use axum::{
     extract::{DefaultBodyLimit, Form, Path, State},
     http::{HeaderMap, StatusCode},
@@ -709,10 +710,11 @@ async fn context_review(
         "ORIENTATION" => "Fuer die Orientierung: Rechtsraeume, konkrete Taetigkeiten, Groessen-/Gruppenbezug und Ausnahmen je Regelwerk fachlich pruefen.",
         _ => "Zunaechst das Ziel des Durchlaufs festlegen: Orientierung, ISO-Readiness oder ISMS-Aufbau.",
     };
+    let screening = screening::render(p);
     page(
         &context,
         &format!(
-            r#"<section class="hero compact"><h1>Unternehmenskontext pruefen</h1><p>Entwurf {id} · gespeicherte Profilrevision {} · {open} offene Angaben</p><p>Ziel und geografische Einordnung sind Angaben des Mandanten. Ein nationales Unternehmen ist ein vollwertiger Fall; unbekannte Auslandsaktivitaet bedeutet nicht Nein.</p><a href="{ROOT}{id}/">Profil ergaenzen / fortsetzen</a> · <a href="{ROOT}">Alle Entwuerfe</a></section><section class="panel wide"><h2>Gespeicherte Kontextfakten</h2><table><caption>Faktenstand dieser Profilrevision</caption><thead><tr><th>Angabe</th><th>Wert</th><th>Erfassungsstand</th></tr></thead><tbody>{rows}</tbody></table><p>Erfasst bedeutet weder fachlich bestaetigt noch vollstaendig fuer eine Betroffenheitsentscheidung. Null und Nein sind eigenstaendige Angaben; leere Werte bleiben offen. Laenderangaben werden nicht automatisch einem Rechtsraum zugeordnet.</p></section><section class="panel wide"><h2>Naechste fachliche Pruefung</h2><p>{next}</p><p>Gesetzliche, vertragliche und geschaeftliche Anforderungen mit Quelle, Geltungsstand, Einheitenbezug und Begruendung erfassen. Bei grenzueberschreitender Taetigkeit Niederlassungen und Zielmaerkte je Rechtsraum betrachten. Produkt-/KI-/OT-/Automotive-Angaben brauchen die konkrete Rolle und Taetigkeit.</p><p>Diese Ansicht erzeugt keine Betroffenheitsentscheidung, Freigabe, SoA oder Massnahme und veraendert keinen gespeicherten Stand.</p></section>"#,
+            r#"<section class="hero compact"><h1>Unternehmenskontext pruefen</h1><p>Entwurf {id} · gespeicherte Profilrevision {} · {open} offene Angaben</p><p>Ziel und geografische Einordnung sind Angaben des Mandanten. Ein nationales Unternehmen ist ein vollwertiger Fall; unbekannte Auslandsaktivitaet bedeutet nicht Nein.</p><a href="{ROOT}{id}/">Profil ergaenzen / fortsetzen</a> · <a href="{ROOT}">Alle Entwuerfe</a></section><section class="panel wide"><h2>Gespeicherte Kontextfakten</h2><table><caption>Faktenstand dieser Profilrevision</caption><thead><tr><th>Angabe</th><th>Wert</th><th>Erfassungsstand</th></tr></thead><tbody>{rows}</tbody></table><p>Erfasst bedeutet weder fachlich bestaetigt noch vollstaendig fuer eine Betroffenheitsentscheidung. Null und Nein sind eigenstaendige Angaben; leere Werte bleiben offen. Laenderangaben werden nicht automatisch einem Rechtsraum zugeordnet.</p></section><section class="panel wide"><h2>Naechste fachliche Pruefung</h2><p>{next}</p><p>Gesetzliche, vertragliche und geschaeftliche Anforderungen mit Quelle, Geltungsstand, Einheitenbezug und Begruendung erfassen. Bei grenzueberschreitender Taetigkeit Niederlassungen und Zielmaerkte je Rechtsraum betrachten. Produkt-/KI-/OT-/Automotive-Angaben brauchen die konkrete Rolle und Taetigkeit.</p><p>Diese Ansicht erzeugt keine Betroffenheitsentscheidung, Freigabe, SoA oder Massnahme und veraendert keinen gespeicherten Stand.</p></section>{screening}"#,
             draft.revision
         ),
     )

@@ -32,6 +32,16 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
   neue Rechtsentscheidung; aeltere JSON-Profile lesbar, Downgradegrenze dokumentiert
 - Bedienung und Grenzen in `docs/COMPANY_CONTEXT_REVIEW.md`
 
+## Unternehmens-Wizard: versionierte Anforderungs-Pruefhinweise
+
+- drei begrenzte Kriterien fuer ISO-/ISMS-Planung, deutschen BSIG-Groessenhinweis
+  und CRA-Produktkontext an der aktuell gespeicherten Profilrevision
+- Quellenabruf, Kriterienversion, Begruendung und offene Prueffragen sichtbar;
+  Nein, kleine und unbekannte Angaben erzeugen keine Nichtbetroffenheit
+- lesend in bestehender Kontextansicht, keine Migration, neue Profilfelder,
+  historische Entscheidung oder automatische SoA; Details in
+  `docs/COMPANY_REQUIREMENT_SCREENING.md`
+
 ## Abhaengigkeiten: korrigierter Tabellenparser
 
 - `calamine` von 0.37.0 auf 0.38.0 aktualisiert; behebt den von

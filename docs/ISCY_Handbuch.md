@@ -261,6 +261,13 @@ noch nicht fachlich bestaetigt; es entsteht keine Betroffenheitsentscheidung
 oder SoA. Bedienung, JSON-Kompatibilitaet und weitere Gates:
 `docs/COMPANY_CONTEXT_REVIEW.md`.
 
+Die Kontextansicht zeigt ausserdem versionierte Pruefkriterien mit Quellen,
+Begruendungen und offenen Fragen fuer ISO-/ISMS-Planung, einen deutschen
+BSIG-Groessenhinweis und CRA-Produktkontext. Kleine oder unbekannte Werte
+ergeben keine Nichtbetroffenheit; weitere Rechtsraeume und Regelwerke bleiben
+offen. Die Hinweise sind lesend und werden nicht als Bewertungsbeschluss
+gespeichert. Details: `docs/COMPANY_REQUIREMENT_SCREENING.md`.
+
 Fehler zeigen die Eingaben erneut. Aenderungen aus einer veralteten Fassung
 werden nicht ueber neuere Angaben geschrieben; stattdessen aktuelle Fassung
 bewusst neu laden. Abschluesse und fremde Mandanten bleiben gesperrt.
