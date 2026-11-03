@@ -99,7 +99,7 @@ pub(crate) async fn sessions(State(state): State<AppState>, headers: HeaderMap) 
     page(
         &context,
         &format!(
-            r#"<section class="hero compact"><h1>Assessment-Durchlaeufe</h1><p>Vorhandene Bewertungen und ihre Ergebnisse ansehen.</p><p><a href="/assessments/">Zum Assessment-Register</a> · <a href="/assessments/soa/">Statement of Applicability</a></p></section><section class="panel wide"><h2>Vorhandene Durchlaeufe</h2><p>Die letzten 50 aktualisierten Durchlaeufe werden angezeigt.</p><table><caption>Assessment-Durchlaeufe des angemeldeten Mandanten</caption><thead><tr><th scope="col">Durchlauf</th><th scope="col">Status</th><th scope="col">Schritt</th><th scope="col">Fortschritt</th><th scope="col">Gestartet von</th><th scope="col">Aktualisiert</th></tr></thead><tbody>{rows}</tbody></table></section>"#
+            r#"<section class="hero compact"><h1>Assessment-Durchlaeufe</h1><p>Vorhandene Bewertungen und ihre Ergebnisse ansehen.</p><p><a href="/assessments/company-wizard/">Unternehmensprofil erfassen / fortsetzen</a></p><p><a href="/assessments/">Zum Assessment-Register</a> · <a href="/assessments/soa/">Statement of Applicability</a></p></section><section class="panel wide"><h2>Vorhandene Durchlaeufe</h2><p>Die letzten 50 aktualisierten Durchlaeufe werden angezeigt.</p><table><caption>Assessment-Durchlaeufe des angemeldeten Mandanten</caption><thead><tr><th scope="col">Durchlauf</th><th scope="col">Status</th><th scope="col">Schritt</th><th scope="col">Fortschritt</th><th scope="col">Gestartet von</th><th scope="col">Aktualisiert</th></tr></thead><tbody>{rows}</tbody></table></section>"#
         ),
     )
 }

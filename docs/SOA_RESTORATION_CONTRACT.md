@@ -113,3 +113,23 @@ vollstaendig wiederhergestellter End-to-End-Versionsworkflow freigegeben.
 Direkte Eingriffe eines Datenbankbetreibers und externe Katalogadministration
 sind keine durch diese kleine Anwendungssperre abgesicherte Versionsarchitektur.
 Ein vollstaendiger historischer Snapshot-Vertrag bleibt ein eigener Arbeitspunkt.
+
+
+## Fachlicher Zielpfad nach Recherche vom 02.11.2026
+
+Der Unternehmens-Wizard gilt fuer nationale und grenzueberschreitende
+Kontexte. W1 liefert Eingaben, der heutige SoA-Generator weiterhin einen
+eigenstaendigen Katalogentwurf. Ein vorhandenes `session_id`-Schemafeld
+stellt noch keine implementierte Herleitung aus dem Wizard dar.
+
+Die geplante Verbindung muss Scope, Anforderungen, Risikobehandlung und
+Control-Entscheidungen nachvollziehbar an die SoA binden. Das heutige
+`is_applicable=true` ist eine Draft-Vorbelegung und ersetzt keine begruendete
+Pruefung. Referenzcontrols, organisationsspezifische Controls und ihre
+Umsetzung sind fachlich zu unterscheiden. Alle bisherigen Schreibsperren
+und der Schutz historischer Freigaben bleiben verbindlich.
+
+Quellen, konkreter Codeabgleich, Kataloggrenze und Abnahmefaelle:
+[Unternehmenskontext bis zur SoA](COMPANY_CONTEXT_TO_SOA_RESEARCH.md).
+Diese Praezisierung implementiert noch keinen neuen Generator oder
+Freigabeprozess.
