@@ -253,6 +253,14 @@ und Automotive-Kontext. Unbekannte Zahlen bleiben leer; Ja/Nein/Noch unbekannt
 sind unterschiedliche Antworten. Laenderangaben sind deklarierte Fakten,
 keine automatisch gepruefte Rechtsraumzuordnung.
 
+Ziel (Orientierung, ISO-Readiness oder ISMS) und geografische Einordnung
+(unbekannt, national oder grenzueberschreitend) koennen nun ausdruecklich
+gespeichert werden. **Gespeicherten Unternehmenskontext pruefen** zeigt
+die Fakten und offenen Angaben der aktuellen Profilrevision. Erfasst ist
+noch nicht fachlich bestaetigt; es entsteht keine Betroffenheitsentscheidung
+oder SoA. Bedienung, JSON-Kompatibilitaet und weitere Gates:
+`docs/COMPANY_CONTEXT_REVIEW.md`.
+
 Fehler zeigen die Eingaben erneut. Aenderungen aus einer veralteten Fassung
 werden nicht ueber neuere Angaben geschrieben; stattdessen aktuelle Fassung
 bewusst neu laden. Abschluesse und fremde Mandanten bleiben gesperrt.
