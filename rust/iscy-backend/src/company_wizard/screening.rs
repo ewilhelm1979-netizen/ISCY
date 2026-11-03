@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn bsig_hint_observes_exact_employee_and_combined_financial_boundaries() {
-        for (employees, revenue, balance, expected) in [
+        for (case, (employees, revenue, balance, expected)) in [
             (Some(49), Some("10.00"), Some("10.00"), false),
             (Some(50), None, None, true),
             (Some(0), Some("10.01"), Some("10.00"), false),
@@ -161,7 +161,10 @@ mod tests {
             (None, Some("99.99"), None, false),
             (Some(0), Some("0"), Some("0"), false),
             (None, Some("invalid"), Some("99"), false),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let p = CompanyProfile {
                 employee_count: employees,
                 annual_revenue_million: revenue.map(str::to_owned),
@@ -171,7 +174,7 @@ mod tests {
             assert_eq!(
                 entries(&p)[1].state == ReviewState::ReviewHint,
                 expected,
-                "{employees:?}/{revenue:?}/{balance:?}"
+                "BSIG boundary case {case}"
             );
         }
     }
