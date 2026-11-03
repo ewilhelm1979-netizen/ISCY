@@ -1,6 +1,6 @@
 # ISCY Handbuch
 
-Version: Arbeitsstand Oktober 2026 (ISCY V23.7.34 `development_unreleased`; letzter Stable Release V23.7.33 / Rust 0.3.22)
+Version: Arbeitsstand November 2026 (ISCY V23.7.34 `development_unreleased`; letzter Stable Release V23.7.33 / Rust 0.3.22)
 
 Dieses Handbuch erklaert ISCY fachlich und in einfacher Sprache. Es ist fuer Menschen geschrieben, die nicht aus einem ISMS-, Compliance- oder Informationssicherheits-Umfeld kommen.
 
@@ -11,8 +11,8 @@ ISCY wurde in dieser Codebasis mit Unterstuetzung von OpenAI Codex entwickelt, n
 Der Development-Stand ist keine vollstaendige Funktions-, Security- oder
 Produktionsfreigabe. Fachliche Begriffe und historische Ausbaustufen sind von
 tatsaechlich vorhandenen Rust-Schreibablaeufen zu unterscheiden. Insbesondere
-ist `/` derzeit eine Linkuebersicht. Die Migrationsluecke beim Assessment-Wizard
-besteht weiterhin (5.2). Die eigenstaendige SoA-Erzeugung und Control-Bearbeitung
+ist `/` derzeit eine Linkuebersicht. Der Profil-/Fortsetzen-Schritt des Unternehmens-Wizards ist wieder
+verfuegbar; Betroffenheit, Bewertung und Ergebnisgenerierung fehlen noch (5.2). Die eigenstaendige SoA-Erzeugung und Control-Bearbeitung
 sind mit einer verbindlichen DRAFT-Schreibgrenze wiederhergestellt; ein
 Nachfolgeversions-/Freigabeablauf fehlt noch (5.10). Das bedeutet keine Aufhebung
 der weitergehenden bestehenden Produktanforderungen. Die historischen
@@ -213,11 +213,63 @@ Anfragekontext; URL-Parameter stellen keine Identitaet her.
 Die vorhandenen JSON-Daten koennen weiter ueber `GET /api/v1/wizard/sessions` und
 `GET /api/v1/wizard/sessions/{session_id}/results` gelesen werden, soweit der
 entsprechende vollstaendige Datenbestand vorhanden ist. Diese Pfade bieten keinen POST zur
-Anlage eines Wizard-Durchlaufs. Die Rust-Schreiblogik und Teile des benoetigten
-Schemas fehlen ebenfalls; allein das Eintragen eines POST-Handlers behebt diese
-Migrationsluecke nicht. Bis zur separat zu pruefenden Wiederherstellung ist der
-gefuhrte Bewertungsablauf nicht verfuegbar. Die Organisationsprofil-Pflege unter
+Anlage eines Wizard-Durchlaufs. Der vollstaendige
+gefuhrte Bewertungsablauf bleibt offen. Sein erster Schreibschritt ist nun
+unter `/assessments/company-wizard/` separat wiederhergestellt: Die Organisationsprofil-Pflege unter
 `/organizations/` ist vorhanden, ersetzt den Wizard aber nicht.
+
+Der Unternehmens-Wizard unterstuetzt nationale Unternehmen ebenso wie
+Unternehmen mit moeglichen grenzueberschreitenden Taetigkeiten. Ein einzelnes
+Land ist ein vollwertiger Fall. Fuer einen spaeteren SoA-Entwurf kommen zu
+Profil und Betroffenheit der festgelegte ISMS-Scope, relevante Anforderungen,
+Risiken/Risikobehandlung und die begruendete Control-Auswahl hinzu. Diese
+Verbindung ist noch nicht implementiert; der heutige SoA-Generator erzeugt
+einen separaten Katalogentwurf. Recherchierter Zielpfad und Grenzen:
+`docs/COMPANY_CONTEXT_TO_SOA_RESEARCH.md`.
+
+ISCY-27 ist die eigene Arbeitsstruktur fuer 27 Steuerungsbereiche. Die
+Heatmap zaehlt deklarierte Status; sie bestaetigt keine Normkonformitaet.
+Die Fachpruefung `docs/ISCY27_FRAMEWORK_REVIEW.md` dokumentiert konkrete
+NIS2-Referenzfehler und Kennzahlgrenzen. Migration 0049 korrigiert zehn
+unveraenderte Originalzuordnungen fuer neue und bestehende Datenbanken.
+Eigene Anpassungen bleiben erhalten und brauchen eine gesonderte Pruefung;
+Referenzkollisionen brechen die Korrektur vollstaendig ab. Operatorhinweise:
+`docs/ISCY27_REFERENCE_CORRECTION.md`.
+
+Die Control-Ansicht trennt nun Umsetzung und Wirksamkeit laut Angabe von
+Evidence-Verknuepfungen. Gepruefte Wirksamkeit bleibt **nicht erfasst**,
+solange kein eigener Control-Pruefprozess vorliegt. Gruppen zeigen N/A und
+gespeicherte Reife ohne N/A; fehlende Statusstaende zaehlen nicht als
+Reife 0. Neue API-Kennzahlen und Kompatibilitaetsgrenzen:
+`docs/ISCY27_ASSESSMENT_METRICS.md`. Fachliche Stufenanker, begruendete
+Anwendbarkeit und ein ausdruecklicher Wirksamkeitsreview bleiben offen.
+
+W1: Im Assessment-Register **Unternehmens-Wizard starten / fortsetzen**
+waehlen, einen Entwurf anlegen, bekannte Angaben erfassen und **Entwurf
+speichern**. Die Liste oeffnet gespeicherte Entwuerfe erneut. Erfasst werden
+Rechtseinheit, Hauptsitz und operative Laender, Taetigkeit, Mitarbeiterzahl,
+Umsatz/Bilanz in Mio. EUR und deren Bezugsgrundlage sowie Produkt-, KI-, OT-
+und Automotive-Kontext. Unbekannte Zahlen bleiben leer; Ja/Nein/Noch unbekannt
+sind unterschiedliche Antworten. Laenderangaben sind deklarierte Fakten,
+keine automatisch gepruefte Rechtsraumzuordnung.
+
+Ziel (Orientierung, ISO-Readiness oder ISMS) und geografische Einordnung
+(unbekannt, national oder grenzueberschreitend) koennen nun ausdruecklich
+gespeichert werden. **Gespeicherten Unternehmenskontext pruefen** zeigt
+die Fakten und offenen Angaben der aktuellen Profilrevision. Erfasst ist
+noch nicht fachlich bestaetigt; es entsteht keine Betroffenheitsentscheidung
+oder SoA. Bedienung, JSON-Kompatibilitaet und weitere Gates:
+`docs/COMPANY_CONTEXT_REVIEW.md`.
+
+Fehler zeigen die Eingaben erneut. Aenderungen aus einer veralteten Fassung
+werden nicht ueber neuere Angaben geschrieben; stattdessen aktuelle Fassung
+bewusst neu laden. Abschluesse und fremde Mandanten bleiben gesperrt.
+Die eigene Profilfassung wird mit Versionszaehler und Auditmetadaten
+transaktional gespeichert, ohne das Stammprofil oder fruehere Ergebnisse zu
+aendern. Migration 0048 ergaenzt den Speicher fuer SQLite und PostgreSQL.
+Dies erzeugt keine fachliche Betroffenheitsindikation, Scores, Massnahmen,
+Reports oder Roadmaps. Diese Schritte sind noch W2/W3.
+Weitere Grenzen: `docs/COMPANY_WIZARD_RESTORATION.md`.
 
 Der gefuehrte Agent-Onboarding-Assistent unter `/zero-trust/` ist eine andere,
 tatsaechlich implementierte Funktion und kein Assessment-Wizard.

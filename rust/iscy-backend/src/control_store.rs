@@ -26,6 +26,23 @@ pub struct ControlLibrary {
     pub frameworks: Vec<String>,
     pub groups: Vec<ControlGroupSummary>,
     pub controls: Vec<ControlSummary>,
+    pub assessment_metrics: ControlAssessmentMetrics,
+}
+
+/// Read-model facts, not a compliance score. Existing status/evidence flags
+/// are declarations; no control-effectiveness review is recorded here.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ControlAssessmentMetrics {
+    pub declared_implemented_controls: i64,
+    pub declared_effective_controls: i64,
+    pub declared_evidenced_controls: i64,
+    pub controls_with_linked_evidence: i64,
+    pub not_applicable_controls: i64,
+    pub non_excluded_controls: i64,
+    pub controls_without_status_record: i64,
+    pub recorded_non_excluded_controls: i64,
+    pub recorded_non_excluded_average_maturity: Option<f64>,
+    pub verified_effective_controls: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,6 +52,7 @@ pub struct ControlGroupSummary {
     pub control_count: i64,
     pub covered_count: i64,
     pub average_maturity: f64,
+    pub assessment_metrics: ControlAssessmentMetrics,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +68,7 @@ pub struct ControlSummary {
     pub owner_role: String,
     pub maturity_target: i64,
     pub status: String,
+    pub has_status_record: bool,
     pub status_label: String,
     pub maturity_score: i64,
     pub evidence_status: String,
@@ -702,6 +721,7 @@ fn attach_mappings(controls: &mut [ControlSummary], mappings: Vec<ControlMapping
 }
 
 fn build_library(controls: Vec<ControlSummary>) -> ControlLibrary {
+    let assessment_metrics = control_assessment_metrics(controls.iter());
     let total_controls = controls.len() as i64;
     let covered_controls = controls
         .iter()
@@ -743,12 +763,18 @@ fn build_library(controls: Vec<ControlSummary>) -> ControlLibrary {
 
     let groups = group_map
         .into_iter()
-        .map(|(code, group)| ControlGroupSummary {
-            code,
-            name: group.name,
-            control_count: group.control_count,
-            covered_count: group.covered_count,
-            average_maturity: average_score(group.maturity_sum, group.control_count),
+        .map(|(code, group)| {
+            let assessment_metrics = control_assessment_metrics(
+                controls.iter().filter(|control| control.group_code == code),
+            );
+            ControlGroupSummary {
+                code,
+                name: group.name,
+                control_count: group.control_count,
+                covered_count: group.covered_count,
+                average_maturity: average_score(group.maturity_sum, group.control_count),
+                assessment_metrics,
+            }
         })
         .collect::<Vec<_>>();
 
@@ -761,7 +787,46 @@ fn build_library(controls: Vec<ControlSummary>) -> ControlLibrary {
         frameworks,
         groups,
         controls,
+        assessment_metrics,
     }
+}
+
+fn control_assessment_metrics<'a>(
+    controls: impl Iterator<Item = &'a ControlSummary>,
+) -> ControlAssessmentMetrics {
+    let mut metrics = ControlAssessmentMetrics::default();
+    let mut maturity_sum = 0;
+    for control in controls {
+        metrics.controls_without_status_record += i64::from(!control.has_status_record);
+        metrics.declared_implemented_controls += i64::from(is_control_covered(&control.status));
+        metrics.declared_effective_controls +=
+            i64::from(control.status.trim().eq_ignore_ascii_case("EFFECTIVE"));
+        metrics.declared_evidenced_controls += i64::from(
+            control
+                .evidence_status
+                .trim()
+                .eq_ignore_ascii_case("EVIDENCED"),
+        );
+        metrics.controls_with_linked_evidence += i64::from(control.evidence_count > 0);
+        if control.status.trim().eq_ignore_ascii_case("NOT_APPLICABLE") {
+            metrics.not_applicable_controls += 1;
+        } else {
+            metrics.non_excluded_controls += 1;
+            if control.has_status_record {
+                metrics.recorded_non_excluded_controls += 1;
+                maturity_sum += control.maturity_score;
+            }
+        }
+    }
+    if metrics.recorded_non_excluded_controls > 0 {
+        metrics.recorded_non_excluded_average_maturity = Some(average_score(
+            maturity_sum,
+            metrics.recorded_non_excluded_controls,
+        ));
+    }
+    // reviewed_at (an edit timestamp), EVIDENCED and linked files do not record an
+    // independent effectiveness decision. None means unavailable, not zero.
+    metrics
 }
 
 #[derive(Debug, Clone)]
@@ -788,6 +853,7 @@ fn control_from_pg_row(row: PgRow) -> Result<ControlSummary, sqlx::Error> {
         maturity_target: row.try_get("maturity_target")?,
         status_label: status_label(&status).to_string(),
         status,
+        has_status_record: row.try_get("has_status_record")?,
         maturity_score: row.try_get("maturity_score")?,
         evidence_status_label: evidence_status_label(&evidence_status).to_string(),
         evidence_status,
@@ -820,6 +886,7 @@ fn control_from_sqlite_row(row: SqliteRow) -> Result<ControlSummary, sqlx::Error
         maturity_target: row.try_get("maturity_target")?,
         status_label: status_label(&status).to_string(),
         status,
+        has_status_record: row.try_get("has_status_record")?,
         maturity_score: row.try_get("maturity_score")?,
         evidence_status_label: evidence_status_label(&evidence_status).to_string(),
         evidence_status,
@@ -884,6 +951,7 @@ fn controls_sqlite_sql() -> &'static str {
         control.owner_role,
         control.maturity_target,
         COALESCE(status.status, 'GAP') AS status,
+        (status.control_id IS NOT NULL) AS has_status_record,
         COALESCE(status.maturity_score, 0) AS maturity_score,
         COALESCE(status.evidence_status, 'MISSING') AS evidence_status,
         COALESCE(status.notes, '') AS tenant_notes,
@@ -934,6 +1002,7 @@ fn controls_postgres_sql() -> &'static str {
         control.owner_role,
         control.maturity_target::bigint AS maturity_target,
         COALESCE(status.status, 'GAP') AS status,
+        (status.control_id IS NOT NULL) AS has_status_record,
         COALESCE(status.maturity_score, 0)::bigint AS maturity_score,
         COALESCE(status.evidence_status, 'MISSING') AS evidence_status,
         COALESCE(status.notes, '') AS tenant_notes,
@@ -1043,8 +1112,8 @@ fn coverage_level_label(coverage_level: &str) -> &'static str {
 
 fn status_label(status: &str) -> &'static str {
     match status.trim().to_ascii_uppercase().as_str() {
-        "EFFECTIVE" => "Wirksam",
-        "IMPLEMENTED" => "Umgesetzt",
+        "EFFECTIVE" => "Wirksam laut Angabe",
+        "IMPLEMENTED" => "Umgesetzt laut Angabe",
         "PARTIAL" => "Teilweise",
         "NOT_APPLICABLE" => "Nicht anwendbar",
         "GAP" => "Fehlt",
@@ -1070,7 +1139,7 @@ fn normalize_control_evidence_status(value: &str) -> anyhow::Result<String> {
 
 fn evidence_status_label(status: &str) -> &'static str {
     match status.trim().to_ascii_uppercase().as_str() {
-        "EVIDENCED" => "Nachgewiesen",
+        "EVIDENCED" => "Vorhanden laut Angabe",
         "PARTIAL" => "Teilweise",
         "MISSING" => "Fehlt",
         _ => "Unklar",

@@ -104,6 +104,40 @@ Der aktuelle V23.7.34-Development-Schwerpunkt ist Machinery & CRA
 Safety-Security Co-Engineering (Migration `0046`) sowie die tenantgebundene
 SoA-Rust-Wiederherstellung fuer SQLite und PostgreSQL (Migration `0047`).
 Die lesenden Assessment-Durchlaufansichten sind wieder verfuegbar; der
-separate schreibende Assessment-Wizard bleibt offen. Funktionen bis
+Profil-/Fortsetzen-Schritt des Unternehmens-Wizards ist als W1 wiederhergestellt;
+fachliche Betroffenheit und Ergebnisgenerierung (W2/W3) bleiben offen. Funktionen bis
 einschliesslich Migration `0045` sind bereits im Stable-Tag V23.7.33
 enthalten.
+
+
+## Praezisierung 02.11.2026: nationaler Kontext und Herleitung der SoA
+
+Naechste fachliche Prioritaet ist die Verbindung der vorhandenen Module:
+W2a strukturierte Fakten/Anforderungsindikation, W2b ISMS-Scope/Risiken,
+W2c begruendete Controls/Referenzabgleich, danach W3 gebundener SoA-Entwurf
+und regulaerer Versions-/Freigabeprozess. Ein nationales Unternehmen ist
+ein vollwertiger Anwendungsfall; Auslandsaktivitaeten sind optional oder
+noch unbekannt. Die heutige SoA-Erzeugung ist noch ein separater
+Katalogentwurf. Die mitgelieferte ISO-Seed-Baseline belegt keinen
+vollstaendigen Annex-A-Abgleich.
+
+Begruendung und Quellen:
+[Recherche Unternehmenskontext bis SoA](COMPANY_CONTEXT_TO_SOA_RESEARCH.md).
+Kein neuer vollstaendiger ISMS-/Rechts-/Zertifizierungsclaim.
+
+Vor W2c: [ISCY-27-Fachpruefung](ISCY27_FRAMEWORK_REVIEW.md) abarbeiten.
+Die zehn eindeutigen NIS2-Referenzfehler sind fuer unveraenderte
+Originalzuordnungen durch [Migration 0049](ISCY27_REFERENCE_CORRECTION.md)
+korrigiert. Eigene Anpassungen und zwei gemischte Begruendungen bleiben
+gesondert offen. Die [neuen Bewertungskennzahlen](ISCY27_ASSESSMENT_METRICS.md)
+trennen nun deklarierte Umsetzung, Nachweisangabe, Evidence-Verknuepfung
+und nicht erfasste gepruefte Wirksamkeit. Naechste Gates sind ein eigener
+belegter Wirksamkeitsreview, begruendete Anwendbarkeit und die W2a-Fakten-
+und Anforderungsindikation.
+
+W2a-Faktenbaustein (03.11.2026): Ziel und geografischen Kontext im Profil
+erfassen und [gespeicherte Kontextfakten pruefen](COMPANY_CONTEXT_REVIEW.md).
+Regelwerksbezogene Anforderungen/Quellen, begruendete Indikation und
+fachliche Freigabe bleiben offen; dies ist keine vollstaendige W2a-Abnahme.
+Das 27-Bereiche-Modell bleibt die Arbeitsstruktur, der konkrete
+Referenzabgleich und die SoA bleiben gesonderte Artefakte.

@@ -22,6 +22,75 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## Unternehmens-Wizard: Ziel und Kontextpruefung
+
+- validierte optionale Profilangaben fuer Orientierung/ISO-Readiness/ISMS
+  und noch unbekannte/nationale/grenzueberschreitende Taetigkeit
+- neue lesende tenantgebundene Kontextpruefung an der gespeicherten Revision;
+  offene Angaben, 0 und Nein bleiben unterscheidbar
+- vorhandene Profil-CAS-/CSRF-/Auditgrenzen erhalten; keine Migration oder
+  neue Rechtsentscheidung; aeltere JSON-Profile lesbar, Downgradegrenze dokumentiert
+- Bedienung und Grenzen in `docs/COMPANY_CONTEXT_REVIEW.md`
+
+## Abhaengigkeiten: korrigierter Tabellenparser
+
+- `calamine` von 0.37.0 auf 0.38.0 aktualisiert; behebt den von
+  [RustSec RUSTSEC-2026-0436](https://rustsec.org/advisories/RUSTSEC-2026-0436.html)
+  gemeldeten Panic-/OOM-Fehler im CFB/OLE2-Parser. Daraus folgt keine Aussage
+  zur Erreichbarkeit dieses Parserpfads ueber einen ISCY-Endpunkt.
+- [Upstream-Release 0.38.0](https://github.com/tafia/calamine/releases/tag/v0.38.0)
+  geprueft: MIT-Lizenz und Rust-Mindestversion 1.88 bleiben erhalten;
+  ausschliesslich dieses crates.io-Paket samt Registry-Pruefsumme im Lockfile
+  geaendert, keine neuen transitiven Pakete oder Advisory-Ausnahmen.
+- bestehende Importgroessen-/Archivgrenzen und unterstuetzte Formate erhalten;
+  veroeffentlichter SBOM-Snapshot bleibt gemaess Development-Lifecycle historisch.
+
+## ISCY-27: Aussagekraeftige Bewertungskennzahlen
+
+- additive `assessment_metrics` fuer Library und Gruppen trennen deklarierte
+  Umsetzung/Wirksamkeit/Nachweisstatus, Evidence-Verknuepfungen und N/A
+- gespeicherte Reife ohne N/A und ohne fehlende Statusstaende; offener
+  Wert bei fehlendem Nenner; gepruefte
+  Wirksamkeit bleibt ausdruecklich nicht erfasst statt automatisch bestaetigt
+- Control-Ansicht und Beschriftungen praezisiert; alte API-Felder und
+  gespeicherte Entscheidungen erhalten; keine Migration
+- Datenvertrag und Grenzen in `docs/ISCY27_ASSESSMENT_METRICS.md`
+
+## ISCY-27: NIS2-Referenzkorrektur
+
+- additive Migration `0049_rust_iscy27_nis2_reference_correction` fuer
+  SQLite/PostgreSQL korrigiert zehn unveraenderte Originalzuordnungen
+- exakter Inhalts-/Control-Abgleich erhaelt eigene Anpassungen; ein
+  Konflikt verwirft alle Korrekturen und verhindert das Migrationsreceipt
+- historische Seeds und Mandantenbewertungen bleiben erhalten; Details,
+  Grenzen und Operatorhinweise in `docs/ISCY27_REFERENCE_CORRECTION.md`
+
+## Fachliche Praezisierung: Unternehmenskontext bis zur SoA
+
+- Wizard-Bezeichnung schliesst nationale Unternehmen ausdruecklich ein;
+  grenzueberschreitende Taetigkeiten sind ein Kontextmerkmal
+- primaerquellenbasierte Recherche und Codeabgleich fuer Scope,
+  Anforderungen, Risiken, Controls und SoA; fehlende Modulverbindungen,
+  Referenzkatalog-Abdeckung und naechste Abnahmefaelle dokumentiert
+- ISCY-27 mit 27 Controls / 82 Mappings inventarisiert; konkrete
+  NIS2-Referenzerrata und Grenzen der Status-/Reifegradkennzahlen samt
+  spaeterem versioniertem Reparaturpfad dokumentiert
+- keine neue Rechtsregel, SoA-Auswahlentscheidung, Migration oder Freigabe;
+  bestehende Schreib- und Tenantgrenzen erhalten
+
+## Unternehmens-Wizard W1: Profil erfassen und fortsetzen
+
+- neuer Einstieg `/assessments/company-wizard/` fuer tenantgebundene
+  Unternehmensentwuerfe mit Hauptsitz/operativen Laendern, Taetigkeit,
+  Groessen-/Bezugsangaben sowie Produkt-/KI-/OT-/Automotive-Kontext
+- unbekannte Zahlen/Antworten bleiben von Null/Nein unterscheidbar;
+  Fehler behalten die Eingaben, Versionskonflikte verhindern Ueberschreiben
+- additive Migration `0048_rust_company_wizard_profile` fuer SQLite und
+  PostgreSQL; transaktionale Auditmetadaten, abgeschlossene Staende gesperrt
+- Session-/Rollen-/CSRF-Pruefung; keine Aenderung des Organisations-Stammprofils
+  oder historischer Ergebnisse. Fachliche Betroffenheitsregeln und
+  Ergebnis-/Massnahmenuebernahme bleiben W2/W3 und werden nicht vorgetaeuscht.
+
 ## Vorhandene Assessment-Durchlaeufe im Web
 
 - neue authentifizierte Leseseiten `/assessments/runs/` und

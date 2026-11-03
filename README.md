@@ -50,9 +50,14 @@ Use `./scripts/easy_start.sh --native check` or `--compose check` to select a
 runtime explicitly; a failed Compose preflight stops the launch.
 Agent deployment starts with the existing `/zero-trust/onboarding/` wizard;
 [offline agent checks](deploy/agent/README.md) now accept private token files.
-The international company/applicability wizard is still being restored;
-[its status and scope](docs/COMPANY_WIZARD_RESTORATION.md) are separate from
-agent onboarding.
+The company/applicability wizard supports national and cross-border contexts.
+Resumable profile drafts are available at `/assessments/company-wizard/`;
+regulatory evaluation and the scope/risk/control-to-SoA workflow remain open.
+See [status and scope](docs/COMPANY_WIZARD_RESTORATION.md) and the
+[source-backed architecture review](docs/COMPANY_CONTEXT_TO_SOA_RESEARCH.md).
+The [ISCY-27 framework review](docs/ISCY27_FRAMEWORK_REVIEW.md) records
+specific reference corrections and the limits of status/maturity metrics.
+Agent onboarding is a separate workflow.
 
 Open `http://127.0.0.1:9000/login/` and use the development-only demo account:
 
