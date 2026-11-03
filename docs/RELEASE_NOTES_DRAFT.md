@@ -32,6 +32,19 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
   neue Rechtsentscheidung; aeltere JSON-Profile lesbar, Downgradegrenze dokumentiert
 - Bedienung und Grenzen in `docs/COMPANY_CONTEXT_REVIEW.md`
 
+## Abhaengigkeiten: korrigierter Tabellenparser
+
+- `calamine` von 0.37.0 auf 0.38.0 aktualisiert; behebt den von
+  [RustSec RUSTSEC-2026-0436](https://rustsec.org/advisories/RUSTSEC-2026-0436.html)
+  gemeldeten Panic-/OOM-Fehler im CFB/OLE2-Parser. Daraus folgt keine Aussage
+  zur Erreichbarkeit dieses Parserpfads ueber einen ISCY-Endpunkt.
+- [Upstream-Release 0.38.0](https://github.com/tafia/calamine/releases/tag/v0.38.0)
+  geprueft: MIT-Lizenz und Rust-Mindestversion 1.88 bleiben erhalten;
+  ausschliesslich dieses crates.io-Paket samt Registry-Pruefsumme im Lockfile
+  geaendert, keine neuen transitiven Pakete oder Advisory-Ausnahmen.
+- bestehende Importgroessen-/Archivgrenzen und unterstuetzte Formate erhalten;
+  veroeffentlichter SBOM-Snapshot bleibt gemaess Development-Lifecycle historisch.
+
 ## ISCY-27: Aussagekraeftige Bewertungskennzahlen
 
 - additive `assessment_metrics` fuer Library und Gruppen trennen deklarierte
