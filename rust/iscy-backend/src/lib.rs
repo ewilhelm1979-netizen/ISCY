@@ -33696,18 +33696,16 @@ async fn web_controls(
             let evidence_gap_count = library
                 .controls
                 .iter()
-                .filter(|control| control.evidence_status != "EVIDENCED")
+                .filter(|control| {
+                    !control.status.trim().eq_ignore_ascii_case("NOT_APPLICABLE")
+                        && control.evidence_count == 0
+                })
                 .count() as i64;
             let roadmap_open_count = library
                 .controls
                 .iter()
                 .map(|control| control.roadmap_open_task_count)
                 .sum::<i64>();
-            let effective_count = library
-                .controls
-                .iter()
-                .filter(|control| control.status == "EFFECTIVE")
-                .count() as i64;
             let framework_mapping_count = library
                 .controls
                 .iter()
@@ -33720,7 +33718,7 @@ async fn web_controls(
                       <thead><tr><th>Signal</th><th>Status</th><th>Naechster Fokus</th></tr></thead>
                       <tbody>
                         <tr><td>Control-Gaps</td><td>{}</td><td>{}</td></tr>
-                        <tr><td>Evidence-Luecken</td><td>{}</td><td>{}</td></tr>
+                        <tr><td>Evidence-Luecken (Verknuepfungen)</td><td>{}</td><td>{}</td></tr>
                         <tr><td>Roadmap-Backlog</td><td>{}</td><td>{}</td></tr>
                         <tr><td>Regulatory Mapping</td><td>{}</td><td>{} Mappings ueber {} Frameworks gepflegt</td></tr>
                       </tbody>
@@ -33728,13 +33726,13 @@ async fn web_controls(
                   </article>"#,
                 signal_badge(library.gap_controls == 0),
                 if library.gap_controls == 0 {
-                    "Alle Controls mindestens teilweise abgedeckt"
+                    "Keine als GAP markierten Controls"
                 } else {
                     "Gap-Tasks erzeugen und Owner pruefen"
                 },
                 signal_badge(evidence_gap_count == 0),
                 if evidence_gap_count == 0 {
-                    "Evidence-Stand stabil halten"
+                    "Verknuepfte Nachweise inhaltlich pruefen"
                 } else {
                     "Nachweise direkt an Controls verknuepfen"
                 },
@@ -33744,7 +33742,7 @@ async fn web_controls(
                 } else {
                     "Offene Tasks priorisieren und Fristen setzen"
                 },
-                signal_badge(framework_mapping_count > 0 && effective_count > 0),
+                signal_badge(framework_mapping_count > 0),
                 framework_mapping_count,
                 library.framework_count,
             );
@@ -33753,12 +33751,16 @@ async fn web_controls(
                 .iter()
                 .map(|group| {
                     format!(
-                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{:.2}</td></tr>"#,
+                        r#"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>"#,
                         html_escape(&group.code),
                         html_escape(&group.name),
                         group.control_count,
-                        group.covered_count,
-                        group.average_maturity,
+                        group.assessment_metrics.declared_implemented_controls,
+                        group.assessment_metrics.controls_with_linked_evidence,
+                        group.assessment_metrics.not_applicable_controls,
+                        group.assessment_metrics.controls_without_status_record,
+                        group.assessment_metrics.recorded_non_excluded_average_maturity
+                            .map_or_else(|| "Nicht erfasst".to_string(), |score| format!("{score:.2}/5")),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -33881,12 +33883,20 @@ async fn web_controls(
                 })
                 .collect::<Vec<_>>()
                 .join("");
+            let verified_effectiveness_card = format!(
+                r#"<article class="panel metric"><span>Gepruefte Wirksamkeit</span><strong>{}</strong></article>"#,
+                library
+                    .assessment_metrics
+                    .verified_effective_controls
+                    .map_or_else(|| "Nicht erfasst".to_string(), |count| count.to_string())
+            );
             let body = format!(
                 r#"
                 <section class="hero compact">
                   <h1>ISCY-27 Controls</h1>
                   <p>Funktionaler Steuerungskern fuer NIS2, DORA, AI Act, CRA, DSGVO, TISAX und ISO 27001.</p>
                   <p class="muted">Frameworks: {}</p>
+                  <p>Umsetzungs-, Wirksamkeits- und Nachweisstatus sind Angaben des Mandanten. Eine Evidence-Verknuepfung bestaetigt weder Nachweisqualitaet noch gepruefte Wirksamkeit.</p>
                 </section>
                 <section class="metrics">
                   {}
@@ -33900,7 +33910,7 @@ async fn web_controls(
                   <article class="panel wide">
                     <h2>Control-Gruppen</h2>
                     <table>
-                      <thead><tr><th>Code</th><th>Gruppe</th><th>Controls</th><th>Abgedeckt</th><th>Maturity</th></tr></thead>
+                      <thead><tr><th>Code</th><th>Gruppe</th><th>Controls</th><th>Umgesetzt laut Angabe</th><th>Mit Evidence</th><th>N/A</th><th>Ohne Statusstand</th><th>Gespeicherte Reife ohne N/A</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                   </article>
@@ -33915,7 +33925,7 @@ async fn web_controls(
                   <article class="panel wide">
                     <h2>Regulatory Crosswalk</h2>
                     <table>
-                      <thead><tr><th>Control</th><th>Framework</th><th>Quelle</th><th>Referenz</th><th>Coverage</th><th>Rationale</th></tr></thead>
+                      <thead><tr><th>Control</th><th>Framework</th><th>Quelle</th><th>Referenz</th><th>Zuordnungsart</th><th>Rationale</th></tr></thead>
                       <tbody>{}</tbody>
                     </table>
                   </article>
@@ -33923,13 +33933,22 @@ async fn web_controls(
                 "#,
                 html_escape(&library.frameworks.join(", ")),
                 metric_card("Controls", library.total_controls),
-                metric_card("Abgedeckt", library.covered_controls),
-                metric_card("Gaps", library.gap_controls),
-                metric_card("Maturity", library.average_maturity.round() as i64),
-                metric_card("Frameworks", library.framework_count),
+                metric_card(
+                    "Umgesetzt laut Angabe",
+                    library.assessment_metrics.declared_implemented_controls
+                ),
+                metric_card(
+                    "Mit Evidence verknuepft",
+                    library.assessment_metrics.controls_with_linked_evidence
+                ),
+                metric_card(
+                    "Wirksam laut Angabe",
+                    library.assessment_metrics.declared_effective_controls
+                ),
+                verified_effectiveness_card,
                 control_signal_panel,
                 if group_rows.is_empty() {
-                    web_empty_row(5, "Keine Control-Gruppen vorhanden.")
+                    web_empty_row(8, "Keine Control-Gruppen vorhanden.")
                 } else {
                     group_rows
                 },
@@ -46778,8 +46797,8 @@ fn control_status_options_for(selected_status: &str) -> String {
     [
         ("GAP", "Fehlt"),
         ("PARTIAL", "Teilweise"),
-        ("IMPLEMENTED", "Umgesetzt"),
-        ("EFFECTIVE", "Wirksam"),
+        ("IMPLEMENTED", "Umgesetzt laut Angabe"),
+        ("EFFECTIVE", "Wirksam laut Angabe"),
         ("NOT_APPLICABLE", "Nicht anwendbar"),
     ]
     .iter()
@@ -46799,7 +46818,7 @@ fn control_evidence_status_options_for(selected_status: &str) -> String {
     [
         ("MISSING", "Fehlt"),
         ("PARTIAL", "Teilweise"),
-        ("EVIDENCED", "Nachgewiesen"),
+        ("EVIDENCED", "Vorhanden laut Angabe"),
     ]
     .iter()
     .map(|(code, label)| {

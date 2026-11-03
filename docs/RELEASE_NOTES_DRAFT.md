@@ -22,6 +22,17 @@ V23.7.34 beginnt ohne uebernommenen Release-Candidate-Status. Teststatus und
 Reproduzierbarkeitsstatus sind auf erneute Validierung zurueckgesetzt. Ein
 Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
 
+## ISCY-27: Aussagekraeftige Bewertungskennzahlen
+
+- additive `assessment_metrics` fuer Library und Gruppen trennen deklarierte
+  Umsetzung/Wirksamkeit/Nachweisstatus, Evidence-Verknuepfungen und N/A
+- gespeicherte Reife ohne N/A und ohne fehlende Statusstaende; offener
+  Wert bei fehlendem Nenner; gepruefte
+  Wirksamkeit bleibt ausdruecklich nicht erfasst statt automatisch bestaetigt
+- Control-Ansicht und Beschriftungen praezisiert; alte API-Felder und
+  gespeicherte Entscheidungen erhalten; keine Migration
+- Datenvertrag und Grenzen in `docs/ISCY27_ASSESSMENT_METRICS.md`
+
 ## ISCY-27: NIS2-Referenzkorrektur
 
 - additive Migration `0049_rust_iscy27_nis2_reference_correction` fuer

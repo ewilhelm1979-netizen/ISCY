@@ -129,7 +129,10 @@ Vor W2c: [ISCY-27-Fachpruefung](ISCY27_FRAMEWORK_REVIEW.md) abarbeiten.
 Die zehn eindeutigen NIS2-Referenzfehler sind fuer unveraenderte
 Originalzuordnungen durch [Migration 0049](ISCY27_REFERENCE_CORRECTION.md)
 korrigiert. Eigene Anpassungen und zwei gemischte Begruendungen bleiben
-gesondert offen. Naechster Schritt: deklarierte Umsetzung, Nachweis und
-gepruefte Wirksamkeit in den Kennzahlen trennen.
+gesondert offen. Die [neuen Bewertungskennzahlen](ISCY27_ASSESSMENT_METRICS.md)
+trennen nun deklarierte Umsetzung, Nachweisangabe, Evidence-Verknuepfung
+und nicht erfasste gepruefte Wirksamkeit. Naechste Gates sind ein eigener
+belegter Wirksamkeitsreview, begruendete Anwendbarkeit und die W2a-Fakten-
+und Anforderungsindikation.
 Das 27-Bereiche-Modell bleibt die Arbeitsstruktur, der konkrete
 Referenzabgleich und die SoA bleiben gesonderte Artefakte.
