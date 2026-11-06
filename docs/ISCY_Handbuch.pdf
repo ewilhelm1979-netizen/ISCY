@@ -6135,7 +6135,7 @@ endobj
 << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 83 0 R >>
 endobj
 83 0 obj
-<< /Length 958 >>
+<< /Length 1668 >>
 stream
 BT
 /F1 9 Tf
@@ -6174,6 +6174,28 @@ T*
 (Erzeugung darf keine Drift erzeugen. Historische Releases, Tags,) Tj
 T*
 (Published-Snapshots und der freigegebene SBOM-Snapshot bleiben unveraendert.) Tj
+T*
+() Tj
+T*
+() Tj
+T*
+(Strukturierte Einzelfallangaben im Unternehmens-Wizard:) Tj
+T*
+() Tj
+T*
+(Im Profil Dienste-/Produktbezug, Niederlassung in Deutschland, eigene Einschaetzung zu) Tj
+T*
+(BSIG-Anlage 1/2, EU-Produktmarkt und CRA-Rollen als Mehrfachauswahl erfassen. Ja, Nein und) Tj
+T*
+(unbekannt bleiben verschieden; leere Auswahl ist kein negatives Ergebnis. Die Kontextansicht) Tj
+T*
+(und ausdruecklich gespeicherte Pruefstaende zeigen diese Selbstauskunft. Sie erzeugt keine) Tj
+T*
+(Betroffenheitsentscheidung oder SoA. Alte Formulare erhalten ausgelassene Einzelfallangaben;) Tj
+T*
+(beim Downgrade die Grenze aelterer strikter JSON-Decoder beachten. Details:) Tj
+T*
+(docs/COMPANYREGULATORYFACTS.md.) Tj
 T*
 ET
 endstream
@@ -6267,5 +6289,5 @@ xref
 trailer
 << /Size 84 /Root 1 0 R >>
 startxref
-169954
+170665
 %%EOF

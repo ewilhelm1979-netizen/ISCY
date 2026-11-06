@@ -116,3 +116,6 @@ zweckgebundenen Formulartoken. Fremde Mandanten-/Akteur-IDs aus URL oder
 Formular ersetzen den authentifizierten Kontext nicht.
 W2/W3 bleiben offen; W1 erzeugt keine Bewertungen, Massnahmen, Reports,
 Roadmap-Aufgaben oder automatische Governance-Entscheidungen.
+
+
+W2a-Faktenfortsetzung (06.11.2026): [strukturierte Einzelfallangaben](COMPANY_REGULATORY_FACTS.md) fuer Dienste-/Produktbezug, Niederlassung, BSIG-Anlagen, EU-Markt und CRA-Rollen. Keine vollstaendige W2a-/W2-Abnahme und keine neue Datenbankmigration. Alte Profile/Snapshots bleiben lesbar; aeltere strikte Decoder lesen neue ausgefuellte JSON-Bloecke nicht.

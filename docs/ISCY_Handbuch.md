@@ -2481,3 +2481,8 @@ stillschweigend. Der PDF-Snapshot-Test vergleicht das versionierte PDF bytegenau
 mit der Ausgabe des aktuellen Generators aus diesem Markdown. Wiederholte
 Erzeugung darf keine Drift erzeugen. Historische Releases, Tags,
 Published-Snapshots und der freigegebene SBOM-Snapshot bleiben unveraendert.
+
+
+## Strukturierte Einzelfallangaben im Unternehmens-Wizard
+
+Im Profil Dienste-/Produktbezug, Niederlassung in Deutschland, eigene Einschaetzung zu BSIG-Anlage 1/2, EU-Produktmarkt und CRA-Rollen als Mehrfachauswahl erfassen. Ja, Nein und unbekannt bleiben verschieden; leere Auswahl ist kein negatives Ergebnis. Die Kontextansicht und ausdruecklich gespeicherte Pruefstaende zeigen diese Selbstauskunft. Sie erzeugt keine Betroffenheitsentscheidung oder SoA. Alte Formulare erhalten ausgelassene Einzelfallangaben; beim Downgrade die Grenze aelterer strikter JSON-Decoder beachten. Details: `docs/COMPANY_REGULATORY_FACTS.md`.

@@ -45,3 +45,6 @@ Massnahme oder Aenderung historischer Assessment-Ergebnisse.
 Weitere W2a-Gates sind strukturierte Rechtsraum-/Einrichtungs-/Rollenangaben,
 versionierte fallbezogene Anforderungsentscheidungen und menschliche
 Bestaetigung. Scope-/Risiko-/Control-Bindung und SoA folgen gesondert.
+
+
+Ergaenzung 06.11.2026: [Einzelfallangaben](COMPANY_REGULATORY_FACTS.md) werden strukturiert gespeichert. Die hier beschriebenen Kriterien und deren Quellenabruf bleiben unveraendert; die neuen Angaben werden noch nicht in automatische Hinweise oder Entscheidungen eingerechnet.

@@ -152,3 +152,6 @@ W2a-Dokumentationsschritt (05.11.2026): [gespeicherte Pruefstaende](COMPANY_CONT
 binden Profilrevision und damalige Kriterien/Quellen dauerhaft mit Anlageaudit.
 Keine Reviewfreigabe oder SoA-Ableitung. Strukturierte Einzelfallangaben,
 bestaetigte Anforderungen sowie Scope-/Risiko-/Control-Bindung bleiben offen.
+
+
+W2a-Einzelfallangaben (06.11.2026): [Dienste-/Produktbezug und strukturierte Angaben](COMPANY_REGULATORY_FACTS.md) fuer Niederlassung, BSIG-Anlagen, EU-Markt und CRA-Rollen gespeichert. Die bestehenden Kriterien bleiben unveraendert. Vollstaendige Rechtsraum-/Einrichtungs-/Sonderfallpruefung, bestaetigte Anforderungen und Scope-/Risiko-/Control-Bindung bleiben offen.
