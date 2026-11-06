@@ -147,3 +147,8 @@ fuer ISO-/ISMS-Ziel, BSIG-Groessenhinweis und CRA-Produktkontext mit Quellen,
 Begruendung und offenen Fragen. Keine Rechtsraumzuordnung, Freistellung
 oder persistierte Reviewentscheidung. Strukturierte Rechtsraum-/Einrichtungs-/
 Rollenangaben und bestaetigte Anforderungsentscheidungen bleiben naechste Gates.
+
+W2a-Dokumentationsschritt (05.11.2026): [gespeicherte Pruefstaende](COMPANY_CONTEXT_SNAPSHOTS.md)
+binden Profilrevision und damalige Kriterien/Quellen dauerhaft mit Anlageaudit.
+Keine Reviewfreigabe oder SoA-Ableitung. Strukturierte Einzelfallangaben,
+bestaetigte Anforderungen sowie Scope-/Risiko-/Control-Bindung bleiben offen.

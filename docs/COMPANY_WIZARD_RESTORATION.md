@@ -13,6 +13,10 @@ Die Kontextansicht ergaenzt jetzt drei [versionierte Pruefhinweise mit Quellen](
 Sie unterscheiden Planung, positive Hinweise und offene Sachverhalte;
 fallbezogene Rechtsraum-/Rollenpruefung und bestaetigte Entscheidungen bleiben offen.
 
+Seit 05.11.2026 lassen sich [Pruefstaende dauerhaft festhalten](COMPANY_CONTEXT_SNAPSHOTS.md):
+Profilrevision, Kriterien und Quellen werden mit Anlageaudit gebunden,
+ohne fachliche Bestaetigung oder Ergebnisgenerierung. Migration 0050.
+
 Der Wizard richtet sich an nationale Unternehmen und an solche mit
 moeglichen oder bestaetigten grenzueberschreitenden Taetigkeiten. Ein
 nationaler Fall braucht keinen zweiten Rechtsraum. Unbekannte Angaben

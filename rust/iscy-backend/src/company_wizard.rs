@@ -181,6 +181,8 @@ macro_rules! database {
     };
 }
 
+pub(crate) mod snapshots;
+
 const SELECT_DRAFT: &str = "SELECT p.session_id,p.revision,p.profile_json,s.status,s.current_step
  FROM wizard_companyprofile p JOIN wizard_assessmentsession s
  ON s.id=p.session_id AND s.tenant_id=p.tenant_id WHERE p.tenant_id=";
@@ -407,6 +409,7 @@ pub(crate) fn routes() -> Router<AppState> {
             "/assessments/company-wizard/{id}/context/",
             get(context_review),
         )
+        .merge(snapshots::routes())
         .layer(DefaultBodyLimit::max(65536))
 }
 
@@ -603,26 +606,7 @@ fn selection(name: &str, label: &str, selected: &str, choices: &[(&str, &str)]) 
     )
 }
 
-async fn context_review(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(id): Path<i64>,
-) -> Response {
-    let (context, store) = match access(&state, &headers, false).await {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
-    let draft = match store.company_draft(context.tenant_id, id).await {
-        Ok(Some(value)) => value,
-        Ok(None) => {
-            return error(
-                StatusCode::NOT_FOUND,
-                "Unternehmensentwurf wurde nicht gefunden.",
-            )
-        }
-        Err(err) => return store_error(err),
-    };
-    let p = &draft.profile;
+fn context_facts(p: &CompanyProfile) -> (String, usize) {
     let caption = |value: &str, choices: &[(&str, &str)]| {
         choices
             .iter()
@@ -705,16 +689,44 @@ async fn context_review(
             )
         })
         .collect::<String>();
+    (rows, open)
+}
+
+async fn context_review(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> Response {
+    let (context, store) = match access(&state, &headers, false).await {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let draft = match store.company_draft(context.tenant_id, id).await {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return error(
+                StatusCode::NOT_FOUND,
+                "Unternehmensentwurf wurde nicht gefunden.",
+            )
+        }
+        Err(err) => return store_error(err),
+    };
+    let p = &draft.profile;
+    let (rows, open) = context_facts(p);
     let next = match p.assessment_goal.as_str() {
         "ISO_READINESS" | "ISMS" => "Fuer den ISO-/ISMS-Pfad: Scope, relevante Anforderungen und Risikobehandlung festlegen; erst daraus notwendige Controls und den SoA-Entwurf ableiten.",
         "ORIENTATION" => "Fuer die Orientierung: Rechtsraeume, konkrete Taetigkeiten, Groessen-/Gruppenbezug und Ausnahmen je Regelwerk fachlich pruefen.",
         _ => "Zunaechst das Ziel des Durchlaufs festlegen: Orientierung, ISO-Readiness oder ISMS-Aufbau.",
     };
     let screening = screening::render(p);
+    let snapshots = match snapshots::controls(&state, &headers, &context, &store, &draft).await {
+        Ok(value) => value,
+        Err(err) => return store_error(err),
+    };
     page(
         &context,
         &format!(
-            r#"<section class="hero compact"><h1>Unternehmenskontext pruefen</h1><p>Entwurf {id} · gespeicherte Profilrevision {} · {open} offene Angaben</p><p>Ziel und geografische Einordnung sind Angaben des Mandanten. Ein nationales Unternehmen ist ein vollwertiger Fall; unbekannte Auslandsaktivitaet bedeutet nicht Nein.</p><a href="{ROOT}{id}/">Profil ergaenzen / fortsetzen</a> · <a href="{ROOT}">Alle Entwuerfe</a></section><section class="panel wide"><h2>Gespeicherte Kontextfakten</h2><table><caption>Faktenstand dieser Profilrevision</caption><thead><tr><th>Angabe</th><th>Wert</th><th>Erfassungsstand</th></tr></thead><tbody>{rows}</tbody></table><p>Erfasst bedeutet weder fachlich bestaetigt noch vollstaendig fuer eine Betroffenheitsentscheidung. Null und Nein sind eigenstaendige Angaben; leere Werte bleiben offen. Laenderangaben werden nicht automatisch einem Rechtsraum zugeordnet.</p></section><section class="panel wide"><h2>Naechste fachliche Pruefung</h2><p>{next}</p><p>Gesetzliche, vertragliche und geschaeftliche Anforderungen mit Quelle, Geltungsstand, Einheitenbezug und Begruendung erfassen. Bei grenzueberschreitender Taetigkeit Niederlassungen und Zielmaerkte je Rechtsraum betrachten. Produkt-/KI-/OT-/Automotive-Angaben brauchen die konkrete Rolle und Taetigkeit.</p><p>Diese Ansicht erzeugt keine Betroffenheitsentscheidung, Freigabe, SoA oder Massnahme und veraendert keinen gespeicherten Stand.</p></section>{screening}"#,
+            r#"<section class="hero compact"><h1>Unternehmenskontext pruefen</h1><p>Entwurf {id} · gespeicherte Profilrevision {} · {open} offene Angaben</p><p>Ziel und geografische Einordnung sind Angaben des Mandanten. Ein nationales Unternehmen ist ein vollwertiger Fall; unbekannte Auslandsaktivitaet bedeutet nicht Nein.</p><a href="{ROOT}{id}/">Profil ergaenzen / fortsetzen</a> · <a href="{ROOT}">Alle Entwuerfe</a></section><section class="panel wide"><h2>Gespeicherte Kontextfakten</h2><table><caption>Faktenstand dieser Profilrevision</caption><thead><tr><th>Angabe</th><th>Wert</th><th>Erfassungsstand</th></tr></thead><tbody>{rows}</tbody></table><p>Erfasst bedeutet weder fachlich bestaetigt noch vollstaendig fuer eine Betroffenheitsentscheidung. Null und Nein sind eigenstaendige Angaben; leere Werte bleiben offen. Laenderangaben werden nicht automatisch einem Rechtsraum zugeordnet.</p></section><section class="panel wide"><h2>Naechste fachliche Pruefung</h2><p>{next}</p><p>Gesetzliche, vertragliche und geschaeftliche Anforderungen mit Quelle, Geltungsstand, Einheitenbezug und Begruendung erfassen. Bei grenzueberschreitender Taetigkeit Niederlassungen und Zielmaerkte je Rechtsraum betrachten. Produkt-/KI-/OT-/Automotive-Angaben brauchen die konkrete Rolle und Taetigkeit.</p><p>Diese Ansicht erzeugt keine Betroffenheitsentscheidung, Freigabe, SoA oder Massnahme und veraendert keinen gespeicherten Stand.</p></section>{screening}{snapshots}"#,
             draft.revision
         ),
     )

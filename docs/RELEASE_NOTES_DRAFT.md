@@ -32,6 +32,16 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
   neue Rechtsentscheidung; aeltere JSON-Profile lesbar, Downgradegrenze dokumentiert
 - Bedienung und Grenzen in `docs/COMPANY_CONTEXT_REVIEW.md`
 
+## Unternehmens-Wizard: dauerhaft gespeicherte Pruefstaende
+
+- additive Migration 0050 fuer SQLite/PostgreSQL speichert Profilrevision,
+  damalige Kriterien und Quellen samt atomarem Anlageaudit
+- ausdrueckliche Anlage mit Session/Schreibrolle/CSRF und Revisions-/
+  Kriterienabgleich; doppelte Anfragen erzeugen denselben Stand
+- historische tenantgebundene Ansicht berechnet alte Hinweise nicht neu;
+  keine fachliche Bestaetigung, Freigabe, SoA oder Massnahme
+- Bedienung und Grenzen in `docs/COMPANY_CONTEXT_SNAPSHOTS.md`
+
 ## Unternehmens-Wizard: versionierte Anforderungs-Pruefhinweise
 
 - drei begrenzte Kriterien fuer ISO-/ISMS-Planung, deutschen BSIG-Groessenhinweis

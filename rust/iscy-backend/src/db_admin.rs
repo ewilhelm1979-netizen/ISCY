@@ -310,6 +310,11 @@ const MIGRATIONS: &[Migration] = &[
         sqlite_sql: include_str!("../seeds/iscy27_nis2_reference_correction_v1.sql"),
         postgres_sql: include_str!("../seeds/iscy27_nis2_reference_correction_v1.sql"),
     },
+    Migration {
+        version: "0050_rust_company_context_snapshot",
+        sqlite_sql: crate::company_wizard::snapshots::SQLITE_SCHEMA,
+        postgres_sql: crate::company_wizard::snapshots::POSTGRES_SCHEMA,
+    },
 ];
 
 const SQLITE_MACHINERY_CRA_SAFETY_SECURITY_SCHEMA: &str = r#"

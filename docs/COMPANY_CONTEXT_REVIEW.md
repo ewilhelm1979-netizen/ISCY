@@ -17,8 +17,14 @@ Nach Speichern fuehrt **Gespeicherten Unternehmenskontext pruefen** zu
 `/assessments/company-wizard/{id}/context/`. Die Ansicht zeigt die aktuelle
 gespeicherte Profilrevision, die einzelnen Kontextfakten und offene Angaben.
 Nicht gespeicherte Eingaben aus einem anderen Browserfenster gehoeren nicht
-zu diesem Stand. Es wird kein historischer Snapshot oder Reviewbeschluss
+zu diesem Stand. Beim reinen Abruf wird kein historischer Snapshot oder Reviewbeschluss
 erzeugt; ein erneuter Abruf zeigt die dann aktuelle gespeicherte Revision.
+
+Mit **Diesen Pruefstand dauerhaft speichern** kann eine schreibberechtigte
+Person diesen Stand nun ausdruecklich festhalten. Profilrevision, Kriterien
+und Quellen bleiben darin spaeter unveraendert lesbar. Dies ist keine
+fachliche Bestaetigung; Bedienung und Migration:
+[Gespeicherte Pruefstaende](COMPANY_CONTEXT_SNAPSHOTS.md).
 
 Ein nationales Unternehmen kann den ISO-/ISMS-Pfad nutzen, ohne ein zweites
 operatives Land angeben zu muessen. Unbekannte Auslandsaktivitaet bleibt
@@ -40,7 +46,8 @@ Rechtspflicht, SoA, Massnahme oder Freigabe.
 bestehenden Profil-JSON. Aeltere Profile ohne die Felder werden als offen
 gelesen. Neue Saves verwenden weiterhin die vorhandene CAS-Revision,
 Session-/Rollen-/Tenantpruefung, CSRF und transaktionale Auditmetadaten.
-Es gibt keine neue Datenbankmigration. Aeltere W1-Binaries mit striktem
+Das Profilformat bleibt unveraendert; dauerhaft gespeicherte Pruefstaende
+verwenden die separate Migration 0050. Aeltere W1-Binaries mit striktem
 JSON-Schema koennen neu gespeicherte Profile mit den zusaetzlichen Feldern
 nicht lesen; ein Downgrade braucht deshalb eine eigene Kompatibilitaetspruefung.
 
