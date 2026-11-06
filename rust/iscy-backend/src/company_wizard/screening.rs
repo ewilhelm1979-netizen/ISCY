@@ -2,11 +2,13 @@
 use super::CompanyProfile;
 use crate::html_escape;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 
 pub(super) const VERSION: &str = "W2A-2026-11-03.1";
 const CHECKED_ON: &str = "2026-11-03";
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum ReviewState {
     PlanningChoice,
     ReviewHint,
@@ -38,6 +40,49 @@ struct Entry {
     state: ReviewState,
     reason: &'static str,
     questions: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FrozenCriteria {
+    pub version: String,
+    checked_on: String,
+    entries: Vec<FrozenEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct FrozenEntry {
+    id: String,
+    title: String,
+    source_version: String,
+    source_url: String,
+    criterion: String,
+    state: ReviewState,
+    state_label: String,
+    reason: String,
+    questions: Vec<String>,
+}
+
+pub(super) fn freeze(profile: &CompanyProfile) -> FrozenCriteria {
+    FrozenCriteria {
+        version: VERSION.into(),
+        checked_on: CHECKED_ON.into(),
+        entries: entries(profile)
+            .into_iter()
+            .map(|e| FrozenEntry {
+                id: e.id.into(),
+                title: e.title.into(),
+                source_version: e.source_version.into(),
+                source_url: e.source_url.into(),
+                criterion: e.criterion.into(),
+                state_label: e.state.label().into(),
+                state: e.state,
+                reason: e.reason.into(),
+                questions: e.questions.iter().map(|q| (*q).into()).collect(),
+            })
+            .collect(),
+    }
 }
 
 fn over_ten(value: &Option<String>) -> bool {
@@ -110,20 +155,53 @@ fn entries(p: &CompanyProfile) -> [Entry; 3] {
 }
 
 pub(super) fn render(profile: &CompanyProfile) -> String {
-    let cards = entries(profile).iter().map(|entry| {
+    render_frozen(&freeze(profile))
+}
+
+pub(super) fn render_frozen(frozen: &FrozenCriteria) -> String {
+    let cards = frozen.entries.iter().map(|entry| {
         let questions = entry.questions.iter().map(|q| format!("<li>{}</li>", html_escape(q))).collect::<String>();
-        format!(r#"<article data-screening-rule="{}" data-screening-status="{}"><h3>{}</h3><p><strong>{}</strong></p><p>Kriterium: {}</p><p>Begruendung aus den gespeicherten Angaben: {}</p><p>Quelle: <a href="{}" rel="noreferrer">{}</a> · Quellenabruf {CHECKED_ON}</p><ul>{questions}</ul></article>"#,
-            entry.id, entry.state.code(), html_escape(entry.title), html_escape(entry.state.label()),
-            html_escape(entry.criterion), html_escape(entry.reason), html_escape(entry.source_url), html_escape(entry.source_version))
+        let source = if reqwest::Url::parse(&entry.source_url).is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some() && u.username().is_empty() && u.password().is_none()) {
+            format!(r#"<a href="{}" rel="noreferrer">{}</a>"#, html_escape(&entry.source_url), html_escape(&entry.source_version))
+        } else { html_escape(&entry.source_version) };
+        format!(r#"<article data-screening-rule="{}" data-screening-status="{}"><h3>{}</h3><p><strong>{}</strong></p><p>Kriterium: {}</p><p>Begruendung aus den gespeicherten Angaben: {}</p><p>Quelle: {source} · Quellenabruf {}</p><ul>{questions}</ul></article>"#,
+            html_escape(&entry.id), entry.state.code(), html_escape(&entry.title), html_escape(&entry.state_label),
+            html_escape(&entry.criterion), html_escape(&entry.reason), html_escape(&frozen.checked_on))
     }).collect::<String>();
     format!(
-        r#"<section class="panel wide"><h2>Versionierte Anforderungs-Pruefhinweise</h2><p>Kriterienversion {VERSION} · Quellenabruf {CHECKED_ON}. Hinweise zu dieser gespeicherten Profilrevision, kein gespeicherter Bewertungsbeschluss. Ein Quellenabrufdatum ist kein gesetzliches Inkrafttretensdatum; spaetere Quellen- und Kriterienaenderungen brauchen eine neue Version.</p>{cards}<p>Dies ist eine begrenzte Pruefliste fuer ISO-/ISMS-Planung, einen deutschen BSIG-Groessenhinweis und CRA-Produktkontext. Weitere Regelwerke und Rechtsraeume sind fachlich offen. Laenderfreitext, Taetigkeit und Profilvollstaendigkeit bestaetigen keine Rechtsraumzuordnung oder Betroffenheit. Fachliche Pruefung, Begruendung und menschliche Bestaetigung sind weitere Schritte; es entstehen keine Rechtspflicht, Nichtbetroffenheitsentscheidung, SoA oder Massnahmen.</p></section>"#
+        r#"<section class="panel wide"><h2>Versionierte Anforderungs-Pruefhinweise</h2><p>Kriterienversion {} · Quellenabruf {}. Ein Quellenabrufdatum ist kein gesetzliches Inkrafttretensdatum; spaetere Quellen- und Kriterienaenderungen brauchen eine neue Version.</p>{cards}<p>Dies ist eine begrenzte Pruefliste fuer ISO-/ISMS-Planung, einen deutschen BSIG-Groessenhinweis und CRA-Produktkontext. Weitere Regelwerke und Rechtsraeume sind fachlich offen. Laenderfreitext, Taetigkeit und Profilvollstaendigkeit bestaetigen keine Rechtsraumzuordnung oder Betroffenheit. Fachliche Pruefung, Begruendung und menschliche Bestaetigung sind weitere Schritte; es entstehen keine Rechtspflicht, Nichtbetroffenheitsentscheidung, SoA oder Massnahmen.</p></section>"#,
+        html_escape(&frozen.version),
+        html_escape(&frozen.checked_on)
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frozen_criteria_roundtrip_preserves_old_hints_and_escapes_stored_content() {
+        let p = CompanyProfile {
+            assessment_goal: "ISO_READINESS".into(),
+            ..Default::default()
+        };
+        let frozen = freeze(&p);
+        let raw = serde_json::to_string(&frozen).unwrap();
+        let restored: FrozenCriteria = serde_json::from_str(&raw).unwrap();
+        assert!(
+            render_frozen(&frozen) == render_frozen(&restored),
+            "Frozen criteria changed"
+        );
+        assert_ne!(render_frozen(&restored), render(&CompanyProfile::default()));
+        let mut changed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        changed["entries"][0]["source_url"] = "javascript:alert(1)".into();
+        changed["entries"][0]["title"] = "<script>fixture</script>".into();
+        changed["version"] = "<img src=x onerror=fixture>".into();
+        let changed: FrozenCriteria = serde_json::from_value(changed).unwrap();
+        let html = render_frozen(&changed);
+        assert!(!html.contains("href=\"javascript:") && !html.contains("<script>fixture</script>"));
+        assert!(html.contains("&lt;script&gt;fixture&lt;/script&gt;") && html.contains("&lt;img"));
+    }
 
     #[test]
     fn national_and_cross_border_iso_paths_need_no_size_or_second_country() {

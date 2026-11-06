@@ -3,7 +3,9 @@
 Stand und Quellenabruf: 03.11.2026. Kriterienversion `W2A-2026-11-03.1`.
 Die bestehende tenantgebundene Kontextansicht zeigt jetzt drei begrenzte,
 begruendete Pruefhinweise zur gerade gelesenen gespeicherten Profilrevision.
-Es gibt keine neue Route, Schreiboperation, Migration oder Profilfelder.
+Die Berechnung bleibt lesend und benoetigt keine neuen Profilfelder.
+Seit 05.11.2026 koennen [Pruefstaende ausdruecklich festgehalten](COMPANY_CONTEXT_SNAPSHOTS.md)
+werden; dieser separate Schreibschritt verwendet Migration 0050.
 
 | Kriterium | Auswertung gespeicherter Angaben | Quelle / weiterer Pruefbedarf |
 | --- | --- | --- |
@@ -35,7 +37,7 @@ Besucher loesen keine externen Abrufe aus; Quellen sind statische Links.
 
 Die Ansicht berechnet Hinweise bei jedem Abruf neu. Aendert sich das Profil,
 erscheint die neue Profilrevision; ein historischer Bewertungsbeschluss oder
-Snapshot wird nicht gespeichert. Bestehende Session-/Rollen-/Tenantgrenzen,
+Snapshot wird beim reinen Abruf nicht gespeichert. Bestehende Session-/Rollen-/Tenantgrenzen,
 private/no-store-Caches und HTML-Escaping bleiben verbindlich. Es entstehen
 keine Pflicht, Nichtbetroffenheitsentscheidung, Bewertung, Freigabe, SoA,
 Massnahme oder Aenderung historischer Assessment-Ergebnisse.

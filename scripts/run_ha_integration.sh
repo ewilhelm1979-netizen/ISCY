@@ -98,8 +98,8 @@ fi
 migration_count="$("$STACK" compose exec --no-TTY postgres psql --tuples-only --no-align \
   --username iscy_test --dbname iscy_race \
   --command 'SELECT COUNT(*) FROM iscy_schema_migrations')"
-[[ "$migration_count" == "49" ]] || {
-  printf 'HA-Migrationsvertrag: erwartet 49, gefunden %s\n' "$migration_count" >&2
+[[ "$migration_count" == "50" ]] || {
+  printf 'HA-Migrationsvertrag: erwartet 50, gefunden %s\n' "$migration_count" >&2
   exit 1
 }
 

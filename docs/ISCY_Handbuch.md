@@ -268,6 +268,12 @@ ergeben keine Nichtbetroffenheit; weitere Rechtsraeume und Regelwerke bleiben
 offen. Die Hinweise sind lesend und werden nicht als Bewertungsbeschluss
 gespeichert. Details: `docs/COMPANY_REQUIREMENT_SCREENING.md`.
 
+Mit **Diesen Pruefstand dauerhaft speichern** koennen Schreibberechtigte
+die gespeicherten Angaben samt Profilrevision, Kriterien und Quellen
+festhalten. Historische Pruefstaende bleiben nach Profil- oder
+Kriterienaenderungen lesbar. Speichern bestaetigt keine fachliche Pruefung
+oder Freigabe. Migration 0050 und Details: `docs/COMPANY_CONTEXT_SNAPSHOTS.md`.
+
 Fehler zeigen die Eingaben erneut. Aenderungen aus einer veralteten Fassung
 werden nicht ueber neuere Angaben geschrieben; stattdessen aktuelle Fassung
 bewusst neu laden. Abschluesse und fremde Mandanten bleiben gesperrt.

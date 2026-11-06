@@ -135,10 +135,12 @@ fn payload(csrf: &str, revision: i64) -> Vec<(&'static str, String)> {
     ]
     .into()
 }
-async fn snapshot(pool: &SqlitePool) -> (String, String, i64) {
+async fn snapshot(pool: &SqlitePool) -> (String, String, i64, i64, i64) {
     (sqlx::query_scalar("SELECT COALESCE(json_group_array(json_object('id',session_id,'rev',revision,'json',profile_json)),'[]') FROM wizard_companyprofile ORDER BY session_id").fetch_one(pool).await.unwrap(),
      sqlx::query_scalar("SELECT COALESCE(json_group_array(json_object('id',id,'status',status,'step',current_step,'summary',executive_summary,'result',applicability_result,'updated',updated_at)),'[]') FROM wizard_assessmentsession ORDER BY id").fetch_one(pool).await.unwrap(),
-     sqlx::query_scalar("SELECT COUNT(*) FROM wizard_profileevent").fetch_one(pool).await.unwrap())
+     sqlx::query_scalar("SELECT COUNT(*) FROM wizard_profileevent").fetch_one(pool).await.unwrap(),
+     sqlx::query_scalar("SELECT COUNT(*) FROM wizard_contextsnapshot").fetch_one(pool).await.unwrap(),
+     sqlx::query_scalar("SELECT COUNT(*) FROM wizard_contextsnapshotevent").fetch_one(pool).await.unwrap())
 }
 
 #[tokio::test]
@@ -529,7 +531,7 @@ async fn company_migration_is_restartable_and_preserves_historical_results() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(version, "0049_rust_iscy27_nis2_reference_correction");
+    assert_eq!(version, "0050_rust_company_context_snapshot");
 }
 
 #[test]
@@ -668,7 +670,7 @@ async fn postgres_company_profile_migration_cas_and_audit_rollback() {
         .unwrap();
     assert_eq!(
         outcome.applied_migrations.last(),
-        Some(&"0049_rust_iscy27_nis2_reference_correction")
+        Some(&"0050_rust_company_context_snapshot")
     );
     sqlx::raw_sql("INSERT INTO organizations_tenant(id,name,slug) VALUES(42,'PG company','pg-company'),(99,'PG foreign','pg-foreign'); INSERT INTO accounts_user(id,tenant_id,username,role) VALUES(7,42,'writer','CONTRIBUTOR'),(8,99,'foreign','CONTRIBUTOR');").execute(&pool).await.unwrap();
     let store = WizardStore::Postgres(pool.clone());
@@ -695,6 +697,48 @@ async fn postgres_company_profile_migration_cas_and_audit_rollback() {
         .await
         .unwrap());
     assert!(sqlx::query("INSERT INTO wizard_companyprofile(session_id,tenant_id,revision,profile_json) VALUES($1,99,1,'{}')").bind(id).execute(&pool).await.is_err());
+    sqlx::raw_sql("CREATE FUNCTION deny_context_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'PRIVATE-SNAPSHOT-AUDIT'; END $$; CREATE TRIGGER deny_context_audit BEFORE INSERT ON wizard_contextsnapshotevent FOR EACH ROW EXECUTE FUNCTION deny_context_audit();").execute(&pool).await.unwrap();
+    assert!(store
+        .freeze_company_context(42, 7, id, 2, "W2A-2026-11-03.1")
+        .await
+        .is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM wizard_contextsnapshot")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        0
+    );
+    sqlx::raw_sql("DROP TRIGGER deny_context_audit ON wizard_contextsnapshotevent; DROP FUNCTION deny_context_audit();").execute(&pool).await.unwrap();
+    let (a, b) = tokio::join!(
+        store.freeze_company_context(42, 7, id, 2, "W2A-2026-11-03.1"),
+        store.freeze_company_context(42, 7, id, 2, "W2A-2026-11-03.1")
+    );
+    let frozen_id = a.unwrap().unwrap();
+    assert_eq!(Some(frozen_id), b.unwrap());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM wizard_contextsnapshotevent")
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(store
+        .company_context_snapshot(99, id, frozen_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store
+        .company_context_snapshot(42, id + 1, frozen_id)
+        .await
+        .unwrap()
+        .is_none());
+    let frozen_json: String =
+        sqlx::query_scalar("SELECT snapshot_json FROM wizard_contextsnapshot WHERE id=$1")
+            .bind(frozen_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     sqlx::raw_sql("CREATE FUNCTION deny_profile_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'PRIVATE-AUDIT-FAILURE'; END $$; CREATE TRIGGER deny_profile_audit BEFORE INSERT ON wizard_profileevent FOR EACH ROW EXECUTE FUNCTION deny_profile_audit();").execute(&pool).await.unwrap();
     assert!(store
         .save_company_draft(42, 7, id, 2, CompanyProfile::default())
@@ -722,6 +766,17 @@ async fn postgres_company_profile_migration_cas_and_audit_rollback() {
         .await
         .unwrap();
     assert!(again.applied_migrations.is_empty());
+    assert!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT snapshot_json FROM wizard_contextsnapshot WHERE id=$1"
+        )
+        .bind(frozen_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+            == frozen_json,
+        "Frozen PostgreSQL snapshot changed"
+    );
     sqlx::query("UPDATE wizard_assessmentsession SET status='COMPLETED' WHERE id=$1")
         .bind(id)
         .execute(&pool)
@@ -731,6 +786,15 @@ async fn postgres_company_profile_migration_cas_and_audit_rollback() {
         .save_company_draft(42, 7, id, 2, CompanyProfile::default())
         .await
         .is_err());
+    assert!(store
+        .freeze_company_context(42, 7, id, 2, "W2A-2026-11-03.1")
+        .await
+        .is_err());
+    assert!(store
+        .company_context_snapshot(42, id, frozen_id)
+        .await
+        .unwrap()
+        .is_some());
     drop(store);
     pool.close().await;
 }
@@ -849,6 +913,375 @@ async fn requirement_hints_follow_the_saved_revision_without_writing_decisions()
     assert_eq!(snapshot(&pool).await, before);
 }
 
+fn snapshot_payload(csrf: &str, revision: i64) -> String {
+    encode(&[
+        ("csrf_token", csrf.into()),
+        ("revision", revision.to_string()),
+        ("criteria_version", "W2A-2026-11-03.1".into()),
+    ])
+}
+
+#[tokio::test]
+async fn saved_context_snapshots_freeze_facts_sources_and_revision_without_approval() {
+    let (app, pool, token) = fixture().await;
+    let (id, csrf) = create(&app, &pool, &token).await;
+    let path = format!("{ROOT}{id}/context/snapshots/");
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &format!("{ROOT}{id}/"),
+            Some(&token),
+            encode(&payload(&csrf, 1))
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    let before_profile = sqlx::query_scalar::<_, String>(
+        "SELECT profile_json FROM wizard_companyprofile WHERE session_id=?1",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            request(
+                &app,
+                "POST",
+                &path,
+                Some(&token),
+                snapshot_payload(&csrf, 2)
+            )
+            .await
+            .0,
+            StatusCode::SEE_OTHER
+        );
+    }
+    let sid: i64 = sqlx::query_scalar("SELECT id FROM wizard_contextsnapshot WHERE session_id=?1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let raw: String =
+        sqlx::query_scalar("SELECT snapshot_json FROM wizard_contextsnapshot WHERE id=?1")
+            .bind(sid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let frozen: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(frozen["profile_revision"], 2);
+    assert_eq!(frozen["schema_version"], 1);
+    assert_eq!(frozen["criteria"]["version"], "W2A-2026-11-03.1");
+    assert_eq!(frozen["criteria"]["entries"].as_array().unwrap().len(), 3);
+    assert_eq!(snapshot(&pool).await.3, 1);
+    assert_eq!(snapshot(&pool).await.4, 1);
+    let store = WizardStore::from_sqlite_pool(pool.clone());
+    assert!(store
+        .save_company_draft(
+            42,
+            7,
+            id,
+            2,
+            CompanyProfile {
+                company_name: "Updated name".into(),
+                ..Default::default()
+            }
+        )
+        .await
+        .unwrap());
+    let read = format!("{path}{sid}/");
+    let before = snapshot(&pool).await;
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(&read)
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cache = response.headers()["cache-control"].to_str().unwrap();
+    assert!(cache.contains("private") && cache.contains("no-store"));
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 200000)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("Profilrevision 2"));
+    assert!(html.contains("&lt;script&gt;unsafe&lt;/script&gt;"));
+    assert!(!html.contains("Updated name") && !html.contains("<script>unsafe</script>"));
+    assert!(html.contains("Quellenabruf 2026-11-03"));
+    assert!(snapshot(&pool).await == before, "Stored state changed");
+    assert!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT snapshot_json FROM wizard_contextsnapshot WHERE id=?1"
+        )
+        .bind(sid)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+            == raw,
+        "Frozen snapshot changed"
+    );
+    assert!(
+        serde_json::from_str::<Value>(&before_profile).unwrap() == frozen["profile"],
+        "Frozen profile differs"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT applicability_result FROM wizard_assessmentsession WHERE id=500"
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "HISTORICAL"
+    );
+    assert_eq!(
+        request(&app, "POST", &read, Some(&token), String::new())
+            .await
+            .0,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+}
+
+#[tokio::test]
+async fn snapshot_routes_enforce_auth_roles_csrf_tenants_catalog_and_parent_binding() {
+    let (app, pool, token) = fixture().await;
+    let (id, csrf) = create(&app, &pool, &token).await;
+    let path = format!("{ROOT}{id}/context/snapshots/");
+    let auth = AuthStore::from_sqlite_pool(pool.clone());
+    let foreign = auth.create_session(99, 8).await.unwrap().unwrap().token;
+    let reader = auth.create_session(42, 9).await.unwrap().unwrap().token;
+    let denied = auth.create_session(42, 10).await.unwrap().unwrap().token;
+    let foreign_csrf = form_csrf(&app, &foreign).await;
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &path,
+            Some(&foreign),
+            snapshot_payload(&foreign_csrf, 1)
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let before = snapshot(&pool).await;
+    for (session, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some(reader.as_str()), StatusCode::FORBIDDEN),
+        (Some(denied.as_str()), StatusCode::FORBIDDEN),
+    ] {
+        assert_eq!(
+            request(&app, "POST", &path, session, snapshot_payload(&csrf, 1))
+                .await
+                .0,
+            expected
+        );
+    }
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &path,
+            Some(&token),
+            snapshot_payload("invalid", 1)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &path,
+            Some(&token),
+            snapshot_payload(&csrf, 9)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &path,
+            Some(&token),
+            snapshot_payload(&csrf, 1).replace("W2A-2026-11-03.1", "OLD-CATALOG")
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert!(snapshot(&pool).await == before, "Stored state changed");
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &path,
+            Some(&token),
+            snapshot_payload(&csrf, 1)
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    let sid: i64 = sqlx::query_scalar("SELECT id FROM wizard_contextsnapshot WHERE session_id=?1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let read = format!("{path}{sid}/");
+    for (session, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some(denied.as_str()), StatusCode::FORBIDDEN),
+        (Some(foreign.as_str()), StatusCode::NOT_FOUND),
+        (Some(reader.as_str()), StatusCode::OK),
+    ] {
+        assert_eq!(
+            request(&app, "GET", &read, session, String::new()).await.0,
+            expected
+        );
+    }
+    let (other, _) = create(&app, &pool, &token).await;
+    assert_eq!(
+        request(
+            &app,
+            "GET",
+            &format!("{ROOT}{other}/context/snapshots/{sid}/"),
+            Some(&token),
+            String::new()
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("{read}?tenant_id=99&user_id=8"))
+                .header("authorization", format!("Bearer {reader}"))
+                .header("x-iscy-tenant-id", "99")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let store = WizardStore::from_sqlite_pool(pool.clone());
+    assert!(store
+        .freeze_company_context(42, 8, id, 1, "W2A-2026-11-03.1")
+        .await
+        .unwrap()
+        .is_none());
+    sqlx::query(
+        "UPDATE wizard_assessmentsession SET status='COMPLETED',current_step='results' WHERE id=?1",
+    )
+    .bind(id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &path,
+            Some(&token),
+            snapshot_payload(&csrf, 1)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        request(&app, "GET", &read, Some(&reader), String::new())
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn snapshot_creation_rolls_back_on_audit_failure_and_coalesces_parallel_posts() {
+    let (app, pool, token) = fixture().await;
+    let (id, csrf) = create(&app, &pool, &token).await;
+    let path = format!("{ROOT}{id}/context/snapshots/");
+    sqlx::raw_sql("CREATE TRIGGER deny_snapshot_audit BEFORE INSERT ON wizard_contextsnapshotevent BEGIN SELECT RAISE(ABORT,'PRIVATE-SNAPSHOT-AUDIT'); END;").execute(&pool).await.unwrap();
+    let before = snapshot(&pool).await;
+    let (status, body) = request(
+        &app,
+        "POST",
+        &path,
+        Some(&token),
+        snapshot_payload(&csrf, 1),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!body.contains("PRIVATE-SNAPSHOT-AUDIT"));
+    assert!(snapshot(&pool).await == before, "Stored state changed");
+    sqlx::raw_sql("DROP TRIGGER deny_snapshot_audit;")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let store = WizardStore::from_sqlite_pool(pool.clone());
+    let (a, b) = tokio::join!(
+        store.freeze_company_context(42, 7, id, 1, "W2A-2026-11-03.1"),
+        store.freeze_company_context(42, 7, id, 1, "W2A-2026-11-03.1")
+    );
+    assert_eq!(a.unwrap(), b.unwrap());
+    assert_eq!(snapshot(&pool).await.3, 1);
+    assert_eq!(snapshot(&pool).await.4, 1);
+    assert_eq!(snapshot(&pool).await.2, before.2);
+}
+
+#[tokio::test]
+async fn snapshot_migration_upgrades_existing_profiles_and_is_restartable() {
+    let (app, pool, token) = fixture().await;
+    let (id, _) = create(&app, &pool, &token).await;
+    let before = snapshot(&pool).await;
+    sqlx::raw_sql("DROP TABLE wizard_contextsnapshotevent; DROP TABLE wizard_contextsnapshot; DELETE FROM iscy_schema_migrations WHERE version='0050_rust_company_context_snapshot';").execute(&pool).await.unwrap();
+    let applied = db_admin::run_sqlite_migrations(&pool).await.unwrap();
+    assert_eq!(applied, vec!["0050_rust_company_context_snapshot"]);
+    assert!(snapshot(&pool).await == before, "Stored state changed");
+    let store = WizardStore::from_sqlite_pool(pool.clone());
+    let sid = store
+        .freeze_company_context(42, 7, id, 1, "W2A-2026-11-03.1")
+        .await
+        .unwrap()
+        .unwrap();
+    let raw: String =
+        sqlx::query_scalar("SELECT snapshot_json FROM wizard_contextsnapshot WHERE id=?1")
+            .bind(sid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(db_admin::run_sqlite_migrations(&pool)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT snapshot_json FROM wizard_contextsnapshot WHERE id=?1"
+        )
+        .bind(sid)
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+            == raw,
+        "Migration altered a saved snapshot"
+    );
+}
+
 #[tokio::test]
 async fn context_review_enforces_real_sessions_roles_tenants_and_read_only_methods() {
     let (app, pool, token) = fixture().await;
@@ -926,7 +1359,7 @@ async fn context_review_enforces_real_sessions_roles_tenants_and_read_only_metho
         .0,
         StatusCode::NOT_FOUND
     );
-    assert_eq!(snapshot(&pool).await, before);
+    assert!(snapshot(&pool).await == before, "Stored state changed");
     sqlx::query(
         "UPDATE wizard_assessmentsession SET status='COMPLETED',current_step='results' WHERE id=?1",
     )
@@ -997,6 +1430,6 @@ async fn legacy_profiles_default_to_open_context_and_invalid_choices_never_chang
             .0,
             StatusCode::BAD_REQUEST
         );
-        assert_eq!(snapshot(&pool).await, before);
+        assert!(snapshot(&pool).await == before, "Stored state changed");
     }
 }
