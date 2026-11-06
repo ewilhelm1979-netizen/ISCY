@@ -6,7 +6,7 @@ use axum::{
 use iscy_backend::{
     app_router_with_state,
     auth_store::AuthStore,
-    company_wizard::{CompanyProfile, ROOT},
+    company_wizard::{CompanyProfile, RegulatoryContext, ROOT},
     db_admin,
     hardening::{AppMode, CommunitySecurityConfig},
     wizard_store::WizardStore,
@@ -680,6 +680,11 @@ async fn postgres_company_profile_migration_cas_and_audit_rollback() {
         activity_context: "CROSS_BORDER".to_owned(),
         operation_countries: vec!["DE".to_owned(), "CH".to_owned()],
         annual_revenue_million: Some("1.20".to_owned()),
+        regulatory_context: RegulatoryContext {
+            established_in_germany: Some(true),
+            cra_roles: vec!["IMPORTER".into()],
+            ..Default::default()
+        },
         ..CompanyProfile::default()
     };
     let (a, b) = tokio::join!(
@@ -919,6 +924,223 @@ fn snapshot_payload(csrf: &str, revision: i64) -> String {
         ("revision", revision.to_string()),
         ("criteria_version", "W2A-2026-11-03.1".into()),
     ])
+}
+
+#[tokio::test]
+async fn regulatory_case_facts_roundtrip_preserve_unknown_no_and_historical_snapshots() {
+    let (app, pool, token) = fixture().await;
+    let (id, csrf) = create(&app, &pool, &token).await;
+    let path = format!("{ROOT}{id}/");
+    let legacy_store = WizardStore::from_sqlite_pool(pool.clone());
+    let legacy_snapshot = legacy_store
+        .freeze_company_context(42, 7, id, 1, "W2A-2026-11-03.1")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut fields = payload(&csrf, 1);
+    fields.extend([
+        ("regulatory_context_present", "1".into()),
+        ("regulatory_scope", "<script>case</script>".into()),
+        ("established_in_germany", "no".into()),
+        ("bsig_annex_1_activity", "yes".into()),
+        ("cra_eu_market", "yes".into()),
+        ("cra_role_manufacturer", "yes".into()),
+        ("cra_role_importer", "yes".into()),
+        ("regulatory_notes", "<img src=x onerror=case>".into()),
+    ]);
+    assert_eq!(
+        request(&app, "POST", &path, Some(&token), encode(&fields))
+            .await
+            .0,
+        StatusCode::SEE_OTHER
+    );
+    let store = WizardStore::from_sqlite_pool(pool.clone());
+    let draft = store.company_draft(42, id).await.unwrap().unwrap();
+    assert_eq!(draft.revision, 2);
+    let (_, legacy_html) = request(
+        &app,
+        "GET",
+        &format!("{path}context/snapshots/{legacy_snapshot}/"),
+        Some(&token),
+        String::new(),
+    )
+    .await;
+    assert!(
+        legacy_html.contains("Profilrevision 1") && !legacy_html.contains("&lt;script&gt;case")
+    );
+    assert_eq!(
+        draft.profile.regulatory_context.established_in_germany,
+        Some(false)
+    );
+    assert_eq!(draft.profile.regulatory_context.bsig_annex_2_activity, None);
+    assert_eq!(
+        draft.profile.regulatory_context.cra_roles,
+        vec!["MANUFACTURER", "IMPORTER"]
+    );
+    let before = snapshot(&pool).await;
+    let (_, editor) = request(&app, "GET", &path, Some(&token), String::new()).await;
+    assert!(editor.contains("name=\"cra_role_importer\" value=\"yes\" checked"));
+    assert!(!editor.contains("CRA-Rollen (Codes"));
+    let (_, html) = request(
+        &app,
+        "GET",
+        &format!("{path}context/"),
+        Some(&token),
+        String::new(),
+    )
+    .await;
+    assert!(html.contains("&lt;script&gt;case&lt;/script&gt;"));
+    assert!(html.contains("Hersteller, Einfuehrer"));
+    assert!(html
+        .contains("<th scope=\"row\">Niederlassung in Deutschland laut Angabe</th><td>Nein</td>"));
+    assert!(html.contains("<th scope=\"row\">Taetigkeit aus BSIG-Anlage 2 laut Angabe</th><td>Unbekannt / noch offen</td>"));
+    assert!(!html.contains("<script>case</script>") && !html.contains("<img src=x onerror=case>"));
+    assert!(snapshot(&pool).await == before, "GET changed stored data");
+    let sid = store
+        .freeze_company_context(42, 7, id, 2, "W2A-2026-11-03.1")
+        .await
+        .unwrap()
+        .unwrap();
+    // An old client omits the entire group: retain existing case facts.
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            &path,
+            Some(&token),
+            encode(&payload(&csrf, 2))
+        )
+        .await
+        .0,
+        StatusCode::SEE_OTHER
+    );
+    let retained = store.company_draft(42, id).await.unwrap().unwrap();
+    assert!(
+        retained.profile.regulatory_context == draft.profile.regulatory_context,
+        "Legacy form erased case facts"
+    );
+    // A current complete form can explicitly clear all new facts to unknown.
+    let mut clear = payload(&csrf, 3);
+    clear.push(("regulatory_context_present", "1".into()));
+    assert_eq!(
+        request(&app, "POST", &path, Some(&token), encode(&clear))
+            .await
+            .0,
+        StatusCode::SEE_OTHER
+    );
+    assert!(
+        store
+            .company_draft(42, id)
+            .await
+            .unwrap()
+            .unwrap()
+            .profile
+            .regulatory_context
+            == RegulatoryContext::default()
+    );
+    let old = format!("{path}context/snapshots/{sid}/");
+    let (_, html) = request(&app, "GET", &old, Some(&token), String::new()).await;
+    assert!(
+        html.contains("&lt;script&gt;case&lt;/script&gt;")
+            && html.contains("Hersteller, Einfuehrer")
+    );
+    assert!(store
+        .company_context_snapshot(99, id, sid)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn invalid_regulatory_case_inputs_leave_profile_and_audit_unchanged() {
+    let (app, pool, token) = fixture().await;
+    let (id, csrf) = create(&app, &pool, &token).await;
+    let path = format!("{ROOT}{id}/");
+    let before = snapshot(&pool).await;
+    for (key, value) in [
+        ("regulatory_scope", "x".repeat(256)),
+        ("regulatory_notes", "x".repeat(2001)),
+        ("regulatory_notes", "hidden\0value".into()),
+        ("established_in_germany", "unknown".into()),
+        ("bsig_annex_1_activity", "true".into()),
+        ("cra_eu_market", "maybe".into()),
+        ("cra_role_importer", "definitely".into()),
+        ("regulatory_context_present", "2".into()),
+    ] {
+        let mut fields = payload(&csrf, 1);
+        fields.push((key, value));
+        let (status, html) = request(&app, "POST", &path, Some(&token), encode(&fields)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{key}");
+        assert!(html.contains("Ihre Eingaben wurden nicht gespeichert"));
+        assert!(
+            snapshot(&pool).await == before,
+            "Invalid case facts changed stored data"
+        );
+    }
+    let mut fields = payload(&csrf, 1);
+    fields.push(("regulatory_notes", "private-case-marker".into()));
+    let auth = AuthStore::from_sqlite_pool(pool.clone());
+    let foreign = auth.create_session(99, 8).await.unwrap().unwrap().token;
+    let reader = auth.create_session(42, 9).await.unwrap().unwrap().token;
+    for (session, status) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some(reader.as_str()), StatusCode::FORBIDDEN),
+        (Some(foreign.as_str()), StatusCode::FORBIDDEN),
+    ] {
+        assert_eq!(
+            request(&app, "POST", &path, session, encode(&fields))
+                .await
+                .0,
+            status
+        );
+        assert!(
+            snapshot(&pool).await == before,
+            "Rejected write changed case facts"
+        );
+    }
+}
+
+#[test]
+fn regulatory_case_json_is_optional_bounded_and_closed_to_unknown_fields() {
+    let old = serde_json::to_value(CompanyProfile::default()).unwrap();
+    assert!(old.get("regulatory_context").is_none());
+    let decoded: CompanyProfile = serde_json::from_value(old.clone()).unwrap();
+    assert!(decoded.regulatory_context == RegulatoryContext::default());
+    let mut forged = old.clone();
+    forged["regulatory_context"] = serde_json::json!({"approved":true});
+    assert!(serde_json::from_value::<CompanyProfile>(forged).is_err());
+    for context in [
+        RegulatoryContext {
+            cra_roles: vec!["CERTIFIED".into()],
+            ..Default::default()
+        },
+        RegulatoryContext {
+            cra_roles: vec!["IMPORTER".into(); 7],
+            ..Default::default()
+        },
+    ] {
+        assert!(CompanyProfile {
+            regulatory_context: context,
+            ..Default::default()
+        }
+        .normalize()
+        .is_err());
+    }
+    let normalized = CompanyProfile {
+        regulatory_context: RegulatoryContext {
+            cra_roles: vec![" importer ".into(), "IMPORTER".into()],
+            established_in_germany: Some(false),
+            notes: "Line one\r\nLine two".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+    .normalize()
+    .unwrap();
+    assert_eq!(normalized.regulatory_context.cra_roles, vec!["IMPORTER"]);
+    assert!(normalized.regulatory_context.notes == "Line one\nLine two");
+    let value = serde_json::to_value(normalized).unwrap();
+    assert_eq!(value["regulatory_context"]["established_in_germany"], false);
 }
 
 #[tokio::test]

@@ -61,3 +61,6 @@ Organisations-Stammprofil, historische Assessment-Ergebnisse, Controls,
 Risiken, Evidence und SoA werden von diesem Schritt nicht veraendert.
 Der [durchgaengige Zielpfad](COMPANY_CONTEXT_TO_SOA_RESEARCH.md) und die
 [weiteren Wiederherstellungs-Gates](COMPANY_WIZARD_RESTORATION.md) bleiben offen.
+
+
+Seit 06.11.2026 erfasst das Profil zusaetzlich [strukturierte Einzelfallangaben](COMPANY_REGULATORY_FACTS.md) fuer Deutschland-/BSIG- und CRA-Produkt-/Rollenfragen. Sie erscheinen an derselben gespeicherten Revision; Selbstauskunft und offene Angaben bleiben getrennt von fachlicher Entscheidung.

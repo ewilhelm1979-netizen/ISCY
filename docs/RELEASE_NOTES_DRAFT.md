@@ -32,6 +32,13 @@ Release-Bundle darf im Status `development_unreleased` nicht erzeugt werden.
   neue Rechtsentscheidung; aeltere JSON-Profile lesbar, Downgradegrenze dokumentiert
 - Bedienung und Grenzen in `docs/COMPANY_CONTEXT_REVIEW.md`
 
+## Unternehmens-Wizard: strukturierte Einzelfallangaben
+
+- Dienste-/Produktbezug, Deutschland-Niederlassung, BSIG-Anlage 1/2 und EU-Produktmarkt als Selbstauskunft; CRA-Rollen per Mehrfachauswahl
+- optionale profilgebundene JSON-Daten ohne DDL-Migration, alte Formulare erhalten ausgelassene Angaben; bewusste Leerung bleibt moeglich
+- Kontext und Pruefstaende bilden Angaben ab; bestehende Kriterien und Quellenabruf unveraendert, keine automatische Betroffenheit/SoA
+- Grenzen und Bedienung in `docs/COMPANY_REGULATORY_FACTS.md`
+
 ## Unternehmens-Wizard: dauerhaft gespeicherte Pruefstaende
 
 - additive Migration 0050 fuer SQLite/PostgreSQL speichert Profilrevision,

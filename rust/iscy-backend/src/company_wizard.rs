@@ -1,4 +1,5 @@
 //! W1: resumable company-profile drafts. No regulatory decision is inferred.
+mod regulatory_context;
 mod screening;
 use axum::{
     extract::{DefaultBodyLimit, Form, Path, State},
@@ -9,6 +10,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use hmac::{Hmac, KeyInit, Mac};
+pub use regulatory_context::RegulatoryContext;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sqlx::{QueryBuilder, Row};
@@ -28,6 +30,8 @@ pub struct CompanyProfile {
     pub assessment_goal: String,
     #[serde(default)]
     pub activity_context: String,
+    #[serde(default, skip_serializing_if = "RegulatoryContext::is_empty")]
+    pub regulatory_context: RegulatoryContext,
     pub company_name: String,
     pub headquarters_country: String,
     pub operation_countries: Vec<String>,
@@ -157,6 +161,7 @@ impl CompanyProfile {
             }
         }
         self.operation_countries = countries;
+        self.regulatory_context = self.regulatory_context.normalize()?;
         if serde_json::to_vec(&self)?.len() > 16384 {
             return Err(
                 DraftError::Invalid("Das Unternehmensprofil ist insgesamt zu gross.").into(),
@@ -619,7 +624,7 @@ fn context_facts(p: &CompanyProfile) -> (String, usize) {
             .map(|value| if value { "Ja" } else { "Nein" }.to_string())
             .unwrap_or_default()
     };
-    let facts = [
+    let mut facts = vec![
         ("Ziel des Durchlaufs", caption(&p.assessment_goal, GOALS)),
         (
             "Geografische Einordnung laut Angabe",
@@ -667,6 +672,7 @@ fn context_facts(p: &CompanyProfile) -> (String, usize) {
         ("OT-/IACS-Kontext", flag(p.ot_iacs_scope)),
         ("Automotive-Kontext", flag(p.automotive_scope)),
     ];
+    facts.extend(p.regulatory_context.facts());
     let mut open = 0;
     let rows = facts
         .iter()
@@ -861,6 +867,60 @@ fn render_editor(
         "Automotive-Kontext",
         optional_bool(&f.automotive_scope).ok().flatten(),
     );
+    fields += "<h2>Einzelfallangaben fuer die BSIG-/CRA-Pruefung</h2><p>Fuer die oben benannte Rechtseinheit und die konkret beschriebenen Dienste/Produkte. Selbstauskunft, fachlich noch ungeprueft: Eine Ja- oder Nein-Antwort legt weder Rechtsraum, Einrichtungsart, Ausnahme noch Betroffenheit fest. Andere Rechtsraeume und Sonderfaelle bleiben gesondert zu pruefen.</p>";
+    fields += &input(
+        "regulatory_scope",
+        "Betrachtete Dienste / Produkte und Einheitenbezug",
+        &f.regulatory_scope,
+        "text",
+        255,
+    );
+    for (name, label, value) in [
+        (
+            "established_in_germany",
+            "Niederlassung in Deutschland",
+            &f.established_in_germany,
+        ),
+        (
+            "bsig_annex_1_activity",
+            "Taetigkeit aus BSIG-Anlage 1 nach eigener Einschaetzung",
+            &f.bsig_annex_1_activity,
+        ),
+        (
+            "bsig_annex_2_activity",
+            "Taetigkeit aus BSIG-Anlage 2 nach eigener Einschaetzung",
+            &f.bsig_annex_2_activity,
+        ),
+        (
+            "cra_eu_market",
+            "Digitale Produkte fuer den EU-Markt bereitgestellt / geplant",
+            &f.cra_eu_market,
+        ),
+    ] {
+        fields += &tri_state(name, label, optional_bool(value).ok().flatten());
+    }
+    fields += "<input type=\"hidden\" name=\"regulatory_context_present\" value=\"1\"><fieldset><legend>CRA-Rollen laut Angabe (Mehrfachauswahl; keine Auswahl = noch unbekannt)</legend>";
+    for (code, value) in f.role_values() {
+        let label = regulatory_context::CRA_ROLES
+            .iter()
+            .find(|(key, _)| *key == code)
+            .unwrap()
+            .1;
+        fields += &format!(
+            "<label><input type=\"checkbox\" name=\"cra_role_{}\" value=\"yes\"{}>{}</label>",
+            code.to_ascii_lowercase(),
+            if value == "yes" { " checked" } else { "" },
+            html_escape(label)
+        );
+    }
+    fields += "</fieldset><p>Rollen koennen fuer unterschiedliche Produkte bestehen; den Bezug unten erlaeutern.</p>";
+    fields += &textarea(
+        "regulatory_notes",
+        "Einrichtungsunterart, Produkte, Rollenbezug, Quellen und offene Sonderfaelle",
+        &f.regulatory_notes,
+        2000,
+    );
+    fields += "<p>Pruefgrundlagen: <a href=\"https://www.gesetze-im-internet.de/bsig_2025/__28.html\">BSIG § 28</a> mit Anlagen 1/2 und <a href=\"https://eur-lex.europa.eu/eli/reg/2024/2847/oj\">CRA, insbesondere Artikel 2/3</a>. Die bestehenden Pruefhinweise werden durch diese Angaben noch nicht erweitert; eine bestaetigte Anforderungsentscheidung bleibt ein eigener Schritt.</p>";
     let form = if context.can_write() && draft.editable {
         form_token(state,headers).map(|token|format!(r#"<form method="post" action="{ROOT}{id}/"><input type="hidden" name="csrf_token" value="{}"><input type="hidden" name="revision" value="{}">{fields}<button type="submit">Entwurf speichern</button></form>"#,html_escape(&token),f.revision)).unwrap_or_else(||"<p>Zum Bearbeiten bitte mit einer ISCY-Session anmelden.</p>".to_owned())
     } else {
@@ -906,6 +966,32 @@ struct ProfileForm {
     assessment_goal: String,
     #[serde(default)]
     activity_context: String,
+    #[serde(default)]
+    regulatory_scope: String,
+    #[serde(default)]
+    established_in_germany: String,
+    #[serde(default)]
+    bsig_annex_1_activity: String,
+    #[serde(default)]
+    bsig_annex_2_activity: String,
+    #[serde(default)]
+    cra_eu_market: String,
+    #[serde(default)]
+    regulatory_context_present: String,
+    #[serde(default)]
+    cra_role_manufacturer: String,
+    #[serde(default)]
+    cra_role_authorized_representative: String,
+    #[serde(default)]
+    cra_role_importer: String,
+    #[serde(default)]
+    cra_role_distributor: String,
+    #[serde(default)]
+    cra_role_open_source_steward: String,
+    #[serde(default)]
+    cra_role_other: String,
+    #[serde(default)]
+    regulatory_notes: String,
     company_name: String,
     headquarters_country: String,
     operation_countries: String,
@@ -946,6 +1032,55 @@ impl ProfileForm {
             revision: draft.revision,
             assessment_goal: p.assessment_goal.clone(),
             activity_context: p.activity_context.clone(),
+            regulatory_scope: p.regulatory_context.activity_scope.clone(),
+            established_in_germany: flag(p.regulatory_context.established_in_germany),
+            bsig_annex_1_activity: flag(p.regulatory_context.bsig_annex_1_activity),
+            bsig_annex_2_activity: flag(p.regulatory_context.bsig_annex_2_activity),
+            cra_eu_market: flag(p.regulatory_context.cra_eu_market),
+            regulatory_context_present: "1".into(),
+            cra_role_manufacturer: flag(
+                p.regulatory_context
+                    .cra_roles
+                    .iter()
+                    .any(|v| v == "MANUFACTURER")
+                    .then_some(true),
+            ),
+            cra_role_authorized_representative: flag(
+                p.regulatory_context
+                    .cra_roles
+                    .iter()
+                    .any(|v| v == "AUTHORIZED_REPRESENTATIVE")
+                    .then_some(true),
+            ),
+            cra_role_importer: flag(
+                p.regulatory_context
+                    .cra_roles
+                    .iter()
+                    .any(|v| v == "IMPORTER")
+                    .then_some(true),
+            ),
+            cra_role_distributor: flag(
+                p.regulatory_context
+                    .cra_roles
+                    .iter()
+                    .any(|v| v == "DISTRIBUTOR")
+                    .then_some(true),
+            ),
+            cra_role_open_source_steward: flag(
+                p.regulatory_context
+                    .cra_roles
+                    .iter()
+                    .any(|v| v == "OPEN_SOURCE_STEWARD")
+                    .then_some(true),
+            ),
+            cra_role_other: flag(
+                p.regulatory_context
+                    .cra_roles
+                    .iter()
+                    .any(|v| v == "OTHER")
+                    .then_some(true),
+            ),
+            regulatory_notes: p.regulatory_context.notes.clone(),
             company_name: p.company_name.clone(),
             headquarters_country: p.headquarters_country.clone(),
             operation_countries: p.operation_countries.join("\n"),
@@ -963,10 +1098,59 @@ impl ProfileForm {
             automotive_scope: flag(p.automotive_scope),
         }
     }
-    fn profile(&self) -> anyhow::Result<CompanyProfile> {
+    fn role_values(&self) -> [(&str, &str); 6] {
+        [
+            ("MANUFACTURER", &self.cra_role_manufacturer),
+            (
+                "AUTHORIZED_REPRESENTATIVE",
+                &self.cra_role_authorized_representative,
+            ),
+            ("IMPORTER", &self.cra_role_importer),
+            ("DISTRIBUTOR", &self.cra_role_distributor),
+            ("OPEN_SOURCE_STEWARD", &self.cra_role_open_source_steward),
+            ("OTHER", &self.cra_role_other),
+        ]
+    }
+    fn profile(&self, previous: &CompanyProfile) -> anyhow::Result<CompanyProfile> {
+        if !["", "1"].contains(&self.regulatory_context_present.as_str()) {
+            return Err(DraftError::Invalid("Ungueltiger Einzelfall-Formularstand.").into());
+        }
+        // Old clients omit the whole new group; omission must not erase facts.
+        let supplied = self.regulatory_context_present == "1"
+            || [
+                &self.regulatory_scope,
+                &self.established_in_germany,
+                &self.bsig_annex_1_activity,
+                &self.bsig_annex_2_activity,
+                &self.cra_eu_market,
+                &self.regulatory_notes,
+            ]
+            .iter()
+            .any(|v| !v.is_empty())
+            || self.role_values().iter().any(|(_, v)| !v.is_empty());
+        let regulatory_context = if supplied {
+            let mut roles = Vec::new();
+            for (code, value) in self.role_values() {
+                if optional_bool(value)? == Some(true) {
+                    roles.push(code.to_owned());
+                }
+            }
+            RegulatoryContext {
+                activity_scope: self.regulatory_scope.clone(),
+                established_in_germany: optional_bool(&self.established_in_germany)?,
+                bsig_annex_1_activity: optional_bool(&self.bsig_annex_1_activity)?,
+                bsig_annex_2_activity: optional_bool(&self.bsig_annex_2_activity)?,
+                cra_eu_market: optional_bool(&self.cra_eu_market)?,
+                cra_roles: roles,
+                notes: self.regulatory_notes.clone(),
+            }
+        } else {
+            previous.regulatory_context.clone()
+        };
         Ok(CompanyProfile {
             assessment_goal: self.assessment_goal.clone(),
             activity_context: self.activity_context.clone(),
+            regulatory_context,
             company_name: self.company_name.clone(),
             headquarters_country: self.headquarters_country.clone(),
             operation_countries: self
@@ -1040,7 +1224,7 @@ async fn save(
         )
             .into_response()
     };
-    let profile = match form.profile() {
+    let profile = match form.profile(&draft.profile) {
         Ok(p) => p,
         Err(e) => {
             return if let Some(err) = e.downcast_ref::<DraftError>() {
